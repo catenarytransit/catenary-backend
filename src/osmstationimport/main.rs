@@ -421,17 +421,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     }
 
-    // Collect old import IDs to delete AFTER inserting new data
-    // This ensures there's always at least 1 row available for queries
     use catenary::schema::gtfs::osm_stations::dsl as stations_dsl;
-    let old_import_ids: Vec<i32> = imports_dsl::osm_station_imports
-        .select(imports_dsl::import_id)
-        .load(conn)
-        .await?;
-    println!(
-        "Found {} old imports to delete after new data is inserted",
-        old_import_ids.len()
-    );
 
     // Create import record
     println!("Creating import record...");
@@ -643,22 +633,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .await?;
 
     // Delete old entries now that new data is available
-    if !old_import_ids.is_empty() {
-        println!("\nDeleting old entries...");
-        let deleted_stations = diesel::delete(
-            stations_dsl::osm_stations.filter(stations_dsl::import_id.eq_any(&old_import_ids)),
-        )
-        .execute(conn)
-        .await?;
-        println!("Deleted {} old stations", deleted_stations);
+    println!("\nDeleting old entries...");
+    let deleted_stations =
+        diesel::delete(stations_dsl::osm_stations.filter(stations_dsl::import_id.ne(import_id)))
+            .execute(conn)
+            .await?;
+    println!("Deleted {} old stations", deleted_stations);
 
-        let deleted_imports = diesel::delete(
-            imports_dsl::osm_station_imports.filter(imports_dsl::import_id.eq_any(&old_import_ids)),
-        )
-        .execute(conn)
-        .await?;
-        println!("Deleted {} old import records", deleted_imports);
-    }
+    let deleted_imports = diesel::delete(
+        imports_dsl::osm_station_imports.filter(imports_dsl::import_id.ne(import_id)),
+    )
+    .execute(conn)
+    .await?;
+    println!("Deleted {} old import records", deleted_imports);
 
     println!("\nImport complete! {} stations imported.", stations.len());
     println!(
