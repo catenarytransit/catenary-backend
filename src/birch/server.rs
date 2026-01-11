@@ -939,6 +939,7 @@ async fn main() -> std::io::Result<()> {
             .service(route_info::route_info)
             .service(route_info::route_info_v2)
             .service(shapes::get_shape)
+            .service(shapes::get_shapes)
             .service(proxy_for_watchduty_tiles)
             .service(gtfs_rt_api::gtfs_rt)
             .service(shapes_local_rail)
