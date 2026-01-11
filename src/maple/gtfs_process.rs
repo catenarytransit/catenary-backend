@@ -69,6 +69,7 @@ fn execute_pfaedle_rs(
     osm_path: &str,
     mots: Option<Vec<String>>,
     drop_shapes: bool,
+    write_colours: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let mut command_pfaedle = Command::new("pfaedle-rs");
 
@@ -85,7 +86,9 @@ fn execute_pfaedle_rs(
     //run = run.arg("--skip-small-roads");
     run = run.arg("--low-priority");
 
-    run = run.arg("--write-colours");
+    if write_colours {
+        run = run.arg("--write-colours");
+    }
 
     if let Some(mots) = mots {
         run = run.arg("--mots").arg(mots.iter().join(","));
@@ -143,6 +146,7 @@ pub async fn gtfs_process_feed(
                     String::from("tram"),
                 ]),
                 true,
+                true,
             )?;
 
             let _ = execute_pfaedle_rs(
@@ -154,6 +158,7 @@ pub async fn gtfs_process_feed(
                     String::from("trolleybus"),
                 ]),
                 false,
+                true,
             )?;
         }
         "f-münchner~verkehrsgesellschaft~mvg" => {
@@ -161,6 +166,16 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-germany-latest.osm.pbf",
                 None,
+                false,
+                true,
+            )?;
+        }
+        "f-sf~bay~area~rg" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                true,
                 false,
             )?;
         }
@@ -170,6 +185,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-north-america-latest.osm.pbf",
                 None,
                 true,
+                false,
             )?;
         }
         "f-dp3-cta" => {
@@ -178,6 +194,7 @@ pub async fn gtfs_process_feed(
                 "./cta-rail-filtered-illinois-latest.osm.pbf",
                 Some(vec!["metro".to_string()]),
                 true,
+                false,
             )?;
         }
         "f-u05-tcl~systral" => {
@@ -186,6 +203,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-bus~dft~gov~uk~england" | "f-bus~dft~gov~uk~scotland" | "f-bus~dft~gov~uk~wales" => {
@@ -193,6 +211,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-great-britain-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -209,6 +228,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-hauts~de~france~pas~de~calais" => {
@@ -217,6 +237,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-mobigo~nièvre" => {
@@ -225,6 +246,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-mobigo~yonne" => {
@@ -233,6 +255,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-hauts~de~france~somme" => {
@@ -241,6 +264,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-ametis" => {
@@ -249,6 +273,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-artis~arras" => {
@@ -256,6 +281,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -265,6 +291,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 false,
+                true,
             )?;
         }
         "f-keolis~dijon~fr" => {
@@ -272,6 +299,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -281,6 +309,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-france-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-f24-octranspo" => {
@@ -289,6 +318,7 @@ pub async fn gtfs_process_feed(
                 "./pfaedle-filtered-ontario-latest.osm.pbf",
                 None,
                 true,
+                false,
             )?;
         }
         //japan
@@ -298,6 +328,7 @@ pub async fn gtfs_process_feed(
                 "./railway-filtered-japan-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-mir~tsukuba" => {
@@ -305,6 +336,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railway-filtered-japan-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -314,6 +346,7 @@ pub async fn gtfs_process_feed(
                 "./railway-filtered-japan-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-tokyo~metro" => {
@@ -321,6 +354,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railway-filtered-japan-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -330,6 +364,7 @@ pub async fn gtfs_process_feed(
                 "./railway-filtered-japan-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-ouigo" => {
@@ -337,6 +372,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -346,6 +382,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-europe-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-mavcsoport" => {
@@ -353,6 +390,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -362,6 +400,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-europe-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-u3j-lodzka~kolej~aglomeracyjna" => {
@@ -369,6 +408,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -378,6 +418,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-europe-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-pkp~intercity~pl" => {
@@ -385,6 +426,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
+                true,
                 true,
             )?;
         }
@@ -397,6 +439,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-europe-latest.osm.pbf",
                 None,
                 true,
+                true,
             )?;
         }
         "f-u0-switzerland" => {
@@ -406,6 +449,7 @@ pub async fn gtfs_process_feed(
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![String::from("rail")]),
                 false,
+                true,
             )?;
 
             let _ = execute_pfaedle_rs(
@@ -418,6 +462,7 @@ pub async fn gtfs_process_feed(
                         .collect::<Vec<String>>(),
                 ),
                 false,
+                true,
             )?;
         }
         _ => {
