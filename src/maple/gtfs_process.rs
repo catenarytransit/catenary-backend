@@ -50,7 +50,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -91,14 +91,18 @@ fn execute_pfaedle_rs(
         run = run.arg("--mots").arg(mots.iter().join(","));
     }
 
-    let run = run.output();
+    // Use spawn() with inherited stdio to stream output in real-time
+    run = run.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+
+    let mut child = run.spawn()?;
 
     println!("ran pfaedle for {}", gtfs_path);
 
-    let run_output = run?;
+    let status = child.wait()?;
 
-    let _ = io::stdout().write_all(&run_output.stdout);
-    let _ = io::stderr().write_all(&run_output.stderr);
+    if !status.success() {
+        return Err(format!("pfaedle-rs exited with status: {}", status).into());
+    }
 
     Ok(())
 }
@@ -149,6 +153,14 @@ pub async fn gtfs_process_feed(
                     String::from("coach"),
                     String::from("trolleybus"),
                 ]),
+                false,
+            )?;
+        }
+        "f-münchner~verkehrsgesellschaft~mvg" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-germany-latest.osm.pbf",
+                None,
                 false,
             )?;
         }
