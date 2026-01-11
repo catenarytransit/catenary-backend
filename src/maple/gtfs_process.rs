@@ -166,6 +166,9 @@ pub async fn gtfs_process_feed(
                     "Karlsruher Verkehrsverbund",
                     "Hochbahn U-Bahn",
                     "RNV LU-MA (Strab)",
+                    "Nachtverkehr Ausstieg",
+                    // VBB
+                    "S-Bahn Berlin GmbH",
                 ],
             );
 
