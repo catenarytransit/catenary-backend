@@ -263,10 +263,7 @@ fn requires_authentication(feed_id: &str, url: &str) -> bool {
 /// Fallback to wget for downloading files when reqwest fails
 /// This can bypass some server-side restrictions that block reqwest
 async fn try_wget_fallback(url: &str, feed_id: &str) -> Option<bytes::Bytes> {
-    println!(
-        "Attempting wget fallback for {}: {}",
-        feed_id, url
-    );
+    println!("Attempting wget fallback for {}: {}", feed_id, url);
 
     // Create a temp file to store the download
     let temp_path = format!("/tmp/wget_fallback_{}.zip", feed_id);
@@ -291,7 +288,11 @@ async fn try_wget_fallback(url: &str, feed_id: &str) -> Option<bytes::Bytes> {
                     Ok(data) => {
                         // Clean up temp file
                         let _ = tokio::fs::remove_file(&temp_path).await;
-                        println!("wget fallback successful for {}: {} bytes", feed_id, data.len());
+                        println!(
+                            "wget fallback successful for {}: {} bytes",
+                            feed_id,
+                            data.len()
+                        );
                         Some(bytes::Bytes::from(data))
                     }
                     Err(e) => {
@@ -336,7 +337,11 @@ async fn try_to_download(
         url_with_key.push_str(
             "acl:consumerKey=gwskedh0p97nh8n6null8ehnspe3p4joi127psyd2sjh3mqw500c5o2b8qv1uv1e",
         );
-        return client.get(&url_with_key).send().await.map(DownloadResult::Response);
+        return client
+            .get(&url_with_key)
+            .send()
+            .await
+            .map(DownloadResult::Response);
     }
 
     // Use browser-like client for feeds that are known to have anti-bot protection
@@ -455,7 +460,7 @@ async fn try_to_download(
         }
         Err(error) => {
             let connection_reset = is_connection_reset(&error);
-            
+
             println!(
                 "Error with downloading {}: {}, {:?}, trying again with browser-like client",
                 feed_id, &new_url, error
@@ -476,7 +481,9 @@ async fn try_to_download(
                 Err(e) => {
                     // If connection reset or if original was connection reset, try wget fallback
                     let retry_connection_reset = is_connection_reset(&e);
-                    if (connection_reset || retry_connection_reset) && !requires_authentication(feed_id, url) {
+                    if (connection_reset || retry_connection_reset)
+                        && !requires_authentication(feed_id, url)
+                    {
                         if let Some(wget_bytes) = try_wget_fallback(&new_url, feed_id).await {
                             return Ok(DownloadResult::WgetBytes(wget_bytes));
                         }
