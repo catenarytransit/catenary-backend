@@ -149,7 +149,7 @@ pub async fn gtfs_process_feed(
                     String::from("coach"),
                     String::from("trolleybus"),
                 ]),
-                true,
+                false,
             )?;
         }
         "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
