@@ -988,12 +988,12 @@ pub async fn new_rt_data(
                                         _ => vehicle.id.clone(),
                                     },
                                     label: match realtime_feed_id.as_str() {
-                                        "f-trimet~rt" => vehicle.id.clone(),
+                                        "f-trimet~rt" | "f-f24-octranspo~rt" => vehicle.id.clone(),
                                         "f-c28-bctransit~victoriaregionaltransitsystem~rt" => {
                                             vehicle.label.as_ref().map(|x| {
                                                 x.as_str().replace("313135", "").to_string()
                                             })
-                                        }
+                                        },
                                         _ => vehicle.label.clone(),
                                     },
                                     license_plate: vehicle.license_plate.clone(),
