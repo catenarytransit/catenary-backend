@@ -76,15 +76,20 @@ pub fn remove_banned_agencies(
     let mut rdr = csv::Reader::from_reader(agency_file);
 
     let mut agencies_to_keep: Vec<RawAgency> = Vec::new();
+    let mut banned_agency_ids: BTreeSet<String> = BTreeSet::new();
 
     for result in rdr.deserialize() {
         if let Ok(record) = result {
             let record: RawAgency = record;
-            if !banned_agencies.contains(&record.agency_id.as_str()) {
+            if banned_agencies.contains(&record.agency_name.as_str()) {
+                banned_agency_ids.insert(record.agency_id.clone());
+            } else {
                 agencies_to_keep.push(record);
             }
         }
     }
+
+    println!("Found {} agencies to remove", banned_agency_ids.len());
 
     // Write agencies back to file
     let agency_new_path = format!("{}/agency_cleaned.txt", folder_path);
@@ -116,8 +121,8 @@ pub fn remove_banned_agencies(
             let record: RawRoute = record;
 
             // Check if agency is in banned agencies
-            if banned_agencies.contains(
-                &record
+            if banned_agency_ids.contains(
+                record
                     .agency_id
                     .as_ref()
                     .unwrap_or(&"".to_string())
