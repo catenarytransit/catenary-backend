@@ -90,6 +90,7 @@ pub fn remove_banned_agencies(
     }
 
     println!("Found {} agencies to remove", banned_agency_ids.len());
+    println!("Banned Agency IDs: {:?}", banned_agency_ids);
 
     // Write agencies back to file
     let agency_new_path = format!("{}/agency_cleaned.txt", folder_path);
@@ -116,18 +117,27 @@ pub fn remove_banned_agencies(
 
     let mut routes = Vec::new();
 
+    let mut debug_route_count = 0;
     for result in rdr.deserialize() {
         if let Ok(record) = result {
             let record: RawRoute = record;
+            
+            let current_agency_id = record
+                    .agency_id
+                    .clone()
+                    .unwrap_or_else(|| "".to_string());
+
+            if debug_route_count < 10 {
+                println!("Debug Route: ID={}, AgencyID='{}', Match={}", 
+                    record.route_id, 
+                    current_agency_id,
+                    banned_agency_ids.contains(&current_agency_id)
+                );
+                debug_route_count += 1;
+            }
 
             // Check if agency is in banned agencies
-            if banned_agency_ids.contains(
-                record
-                    .agency_id
-                    .as_ref()
-                    .unwrap_or(&"".to_string())
-                    .as_str(),
-            ) {
+            if banned_agency_ids.contains(&current_agency_id) {
                 route_ids_to_remove.insert(record.route_id.clone());
             } else {
                 routes.push(record);
