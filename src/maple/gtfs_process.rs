@@ -5,7 +5,7 @@
 // Initial version 3 of ingest written by Kyler Chin
 use crate::DownloadedFeedsInformation;
 #[cfg(not(target_env = "msvc"))]
-use tikv_jemalloc_ctl::{epoch, tcache};
+use tikv_jemalloc_ctl::{epoch, thread};
 
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
@@ -1026,7 +1026,7 @@ pub async fn gtfs_process_feed(
         _ => 20,
     };
 
-    let gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(number_of_days));
+    let mut gtfs = minimum_day_filter(gtfs, today - chrono::Duration::days(number_of_days));
 
     println!(
         "Finished reading GTFS for {}, took {:?}",
@@ -1150,7 +1150,6 @@ pub async fn gtfs_process_feed(
     #[cfg(not(target_env = "msvc"))]
     {
         epoch::advance().unwrap();
-        tcache::flush().unwrap();
     }
 
     let conn_pool = arc_conn_pool.as_ref();
