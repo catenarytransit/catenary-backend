@@ -753,14 +753,16 @@ pub async fn download_return_eligible_feeds(
                                 }
                             }
 
+                            let duration = start.elapsed();
+
+                            println!("Attempting Download of {}", parse_url);
+
                             let response = try_to_download(
                                 &staticfeed.feed_id,
                                 &client,
                                 &staticfeed.url,
                                 &parse_url,
-                            ).await;
-            
-                            let duration = start.elapsed();
+                            ).await;            
 
                             let duration_ms = duration.as_millis();
             
