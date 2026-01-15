@@ -4,6 +4,9 @@
 
 // Initial version 3 of ingest written by Kyler Chin
 use crate::DownloadedFeedsInformation;
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemalloc_ctl::{epoch, tcache};
+
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
@@ -1136,6 +1139,19 @@ pub async fn gtfs_process_feed(
         shape_id_to_route_ids_lookup,
         route_ids_to_shape_ids,
     } = shape_to_colour(feed_id, &gtfs);
+
+    // Free memory from trips as they are no longer needed
+    // The data has been extracted into reduction and shape_to_colour results
+    println!("Dropping trips for {} to save memory...", feed_id);
+    gtfs.trips.clear();
+    gtfs.trips.shrink_to_fit();
+    
+    // Force jemalloc garbage collection
+    #[cfg(not(target_env = "msvc"))]
+    {
+        epoch::advance().unwrap();
+        tcache::flush().unwrap();
+    }
 
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
