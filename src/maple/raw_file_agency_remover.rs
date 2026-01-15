@@ -75,14 +75,31 @@ pub fn remove_banned_agencies(
 
     let mut rdr = csv::Reader::from_reader(agency_file);
 
-    let mut agencies: Vec<RawAgency> = Vec::new();
+    let mut agencies_to_keep: Vec<RawAgency> = Vec::new();
 
     for result in rdr.deserialize() {
         if let Ok(record) = result {
             let record: RawAgency = record;
-            agencies.push(record);
+            if !banned_agencies.contains(&record.agency_id.as_str()) {
+                agencies_to_keep.push(record);
+            }
         }
     }
+
+    // Write agencies back to file
+    let agency_new_path = format!("{}/agency_cleaned.txt", folder_path);
+    let mut writer = csv::Writer::from_path(&agency_new_path)
+        .map_err(|e| format!("Unable to create file: {}", e))?;
+
+    for agency in agencies_to_keep {
+        writer
+            .serialize(agency)
+            .map_err(|e| format!("Unable to write to file: {}", e))?;
+    }
+    writer
+        .flush()
+        .map_err(|e| format!("Unable to flush file: {}", e))?;
+    fs::rename(&agency_new_path, &agency_file_path)?;
 
     let mut route_ids_to_remove: BTreeSet<String> = BTreeSet::new();
 
@@ -112,6 +129,21 @@ pub fn remove_banned_agencies(
             }
         }
     }
+
+    // Write routes back to file
+    let routes_new_path = format!("{}/routes_cleaned.txt", folder_path);
+    let mut writer = csv::Writer::from_path(&routes_new_path)
+        .map_err(|e| format!("Unable to create file: {}", e))?;
+
+    for route in routes {
+        writer
+            .serialize(route)
+            .map_err(|e| format!("Unable to write to file: {}", e))?;
+    }
+    writer
+        .flush()
+        .map_err(|e| format!("Unable to flush file: {}", e))?;
+    fs::rename(&routes_new_path, &routes_file_path)?;
 
     println!("Found {} routes to remove", route_ids_to_remove.len());
 

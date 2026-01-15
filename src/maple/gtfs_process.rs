@@ -138,7 +138,7 @@ pub async fn gtfs_process_feed(
     match feed_id {
         "f-gtfs~de" => {
             // Remove banned agencies (duplicates from other feeds) before processing
-            let _ = crate::raw_file_agency_remover::remove_banned_agencies(
+            crate::raw_file_agency_remover::remove_banned_agencies(
                 path.as_str(),
                 &[
                     "SNCF",
@@ -170,7 +170,7 @@ pub async fn gtfs_process_feed(
                     // VBB
                     "S-Bahn Berlin GmbH",
                 ],
-            );
+            )?;
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
