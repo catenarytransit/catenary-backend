@@ -113,34 +113,39 @@ pub fn remove_banned_agencies(
     let routes_file_path = format!("{}/routes.txt", folder_path);
     let routes_file = File::open(&routes_file_path)
         .map_err(|e| format!("Unable to open file: {} - {}", routes_file_path, e))?;
-    let mut rdr = csv::Reader::from_reader(routes_file);
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_reader(routes_file);
+
+    let headers = rdr.headers()?.clone();
+    let agency_id_idx = headers.iter().position(|h| h == "agency_id");
+    let route_id_idx = headers
+        .iter()
+        .position(|h| h == "route_id")
+        .ok_or("routes.txt missing route_id column")?;
 
     let mut routes = Vec::new();
 
-    let mut debug_route_count = 0;
-    for result in rdr.deserialize() {
-        if let Ok(record) = result {
-            let record: RawRoute = record;
-            
-            let current_agency_id = record
-                    .agency_id
-                    .clone()
-                    .unwrap_or_else(|| "".to_string());
+    for result in rdr.records() {
+        match result {
+            Ok(record) => {
+                let route_id = record.get(route_id_idx).unwrap_or("").to_string();
+                let agency_id = if let Some(idx) = agency_id_idx {
+                    record.get(idx).unwrap_or("")
+                } else {
+                    ""
+                };
 
-            if debug_route_count < 10 {
-                println!("Debug Route: ID={}, AgencyID='{}', Match={}", 
-                    record.route_id, 
-                    current_agency_id,
-                    banned_agency_ids.contains(&current_agency_id)
-                );
-                debug_route_count += 1;
+                // Check if agency is in banned agencies
+                if banned_agency_ids.contains(agency_id) {
+                    println!("Removing route {} due to banned agency {}", route_id, agency_id);
+                    route_ids_to_remove.insert(route_id);
+                } else {
+                    routes.push(record);
+                }
             }
-
-            // Check if agency is in banned agencies
-            if banned_agency_ids.contains(&current_agency_id) {
-                route_ids_to_remove.insert(record.route_id.clone());
-            } else {
-                routes.push(record);
+            Err(e) => {
+                eprintln!("Error reading route record: {}", e);
             }
         }
     }
@@ -150,9 +155,14 @@ pub fn remove_banned_agencies(
     let mut writer = csv::Writer::from_path(&routes_new_path)
         .map_err(|e| format!("Unable to create file: {}", e))?;
 
+    // Write header
+    writer
+        .write_record(&headers)
+        .map_err(|e| format!("Unable to write header: {}", e))?;
+
     for route in routes {
         writer
-            .serialize(route)
+            .write_record(&route)
             .map_err(|e| format!("Unable to write to file: {}", e))?;
     }
     writer
