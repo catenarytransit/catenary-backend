@@ -80,18 +80,29 @@ use dmfr_dataset_reader::read_folders;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Name of the person to greet
     #[arg(long)]
-    transitland: String,
+    transitland: Option<String>,
     #[arg(long)]
     use_girolle: Option<bool>,
     #[arg(long)]
     no_elastic: bool,
+
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Only run OSM station matching for a specific feed (prevents re-ingestion)
+    MatchOsm {
+        #[arg(long)]
+        feed_id: String,
+    },
 }
 
 fn get_threads_gtfs() -> usize {
@@ -231,10 +242,25 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         _ => None
     };
 
+    // Check for subcommand
+    if let Some(Commands::MatchOsm { feed_id }) = args.command {
+        return run_match_only(feed_id).await;
+    }
+
+    // Default ingestion path
+    // Validate transitland arg manually effectively
+    let transitland_path = match args.transitland {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: --transitland <PATH> is required for ingestion.");
+            std::process::exit(1);
+        }
+    };
+
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
     println!("Reading transitland directory");
-    let dmfr_result = read_folders(&args.transitland)?;
+    let dmfr_result = read_folders(&transitland_path)?;
 
     //delete overlapping feeds
     let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);
@@ -276,7 +302,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             &arc_conn_pool,
             &feeds_to_discard,
             &restrict_to_feed_ids,
-            &args.transitland,
+            &transitland_path,
             &girolle_data,
             use_girolle,
         )
@@ -996,7 +1022,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Refresh the metadata tables after the ingestion is done
 
-            let dmfr_result = read_folders(&args.transitland)?;
+            let dmfr_result = read_folders(&transitland_path)?;
 
             //delete overlapping feeds
             let dmfr_result = delete_overlapping_feeds_dmfr::delete_overlapping_feeds(dmfr_result);
@@ -1034,6 +1060,83 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         println!("Deleting temp data");
         fs::remove_dir_all(gtfs_temp_storage).unwrap();
         fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();
+    }
+
+    Ok(())
+}
+
+async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    println!("Running OSM matching for feed: {}", feed_id);
+
+    println!("Initializing database connection");
+    // get connection pool from database pool
+    let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
+    let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
+
+    let conn_pool = arc_conn_pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let mut conn = conn_pre.unwrap();
+
+    // 1. Get chateau ID and latest successful attempt ID
+    let ingested_entry = {
+         use catenary::schema::gtfs::ingested_static::dsl::*;
+         ingested_static
+            .filter(onestop_feed_id.eq(&feed_id))
+            .filter(ingestion_successfully_finished.eq(true))
+            .filter(deleted.eq(false))
+            .filter(ingestion_version.eq(MAPLE_INGESTION_VERSION))
+            .order(ingest_end_unix_time_ms.desc())
+            .select(catenary::models::IngestedStatic::as_select())
+            .first::<catenary::models::IngestedStatic>(&mut conn)
+            .await
+    };
+
+    let ingested_entry = match ingested_entry {
+        Ok(entry) => entry,
+        Err(_) => {
+            eprintln!("No successful ingestion found for feed: {}", feed_id);
+            return Ok(());
+        }
+    };
+
+    let attempt_id_val = ingested_entry.attempt_id;
+
+    // fetch chateau from static_feeds
+    let static_feed_entry = {
+        use catenary::schema::gtfs::static_feeds::dsl::*;
+        static_feeds
+            .find(&feed_id)
+            .select(catenary::models::StaticFeed::as_select())
+            .first::<catenary::models::StaticFeed>(&mut conn)
+            .await
+    };
+
+    let chateau_id_val = match static_feed_entry {
+        Ok(entry) => entry.chateau,
+        Err(_) => {
+            eprintln!("No static feed entry found for feed: {}", feed_id);
+            return Ok(()); // Or error out
+        }
+    };
+
+    println!(
+        "Found context - Attempt: {}, Chateau: {}",
+        attempt_id_val, chateau_id_val
+    );
+
+    // 2. Run matching
+    println!("Starting matching...");
+    if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
+        &mut conn,
+        &feed_id,
+        &attempt_id_val,
+        &chateau_id_val,
+    )
+    .await
+    {
+        eprintln!("Error during OSM matching: {:?}", e);
+    } else {
+        println!("OSM matching completed successfully.");
     }
 
     Ok(())

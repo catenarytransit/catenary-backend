@@ -1,0 +1,1162 @@
+   Compiling catenary-backend v0.4.0 (/home/kyler/catenary-backend)
+warning: unused `#[macro_use]` import
+  --> src/lib.rs:37:1
+   |
+37 | #[macro_use]
+   | ^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `std::net::IpAddr`
+  --> src/aspen/lib.rs:15:5
+   |
+15 | use std::net::IpAddr;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `FeedEntity` and `FeedMessage`
+ --> src/id_cleanup/mod.rs:2:21
+  |
+2 | use gtfs_realtime::{FeedEntity, FeedMessage};
+  |                     ^^^^^^^^^^  ^^^^^^^^^^^
+
+warning: unused import: `Utc`
+ --> src/custom_alerts/metrolink_alerts.rs:1:24
+  |
+1 | use chrono::{TimeZone, Utc};
+  |                        ^^^
+
+warning: unused import: `self`
+ --> src/custom_alerts/metrolink_alerts.rs:3:23
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                       ^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/custom_alerts/metrolink_alerts.rs:4:5
+  |
+4 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `auth::Credentials` and `cat::CatIndicesParts`
+ --> src/elasticutils/mod.rs:3:5
+  |
+3 |     auth::Credentials,
+  |     ^^^^^^^^^^^^^^^^^
+4 |     cat::CatIndicesParts,
+  |     ^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Read` and `Write`
+  --> src/routing_common/transit_graph.rs:16:43
+   |
+16 | use std::io::{self, BufReader, BufWriter, Read, Write};
+   |                                           ^^^^  ^^^^^
+
+warning: unused import: `schema::gtfs::trip_frequencies::start_time`
+  --> src/lib.rs:72:5
+   |
+72 | use schema::gtfs::trip_frequencies::start_time;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeSet`
+  --> src/lib.rs:74:5
+   |
+74 | use std::collections::BTreeSet;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::BTreeMap`
+ --> src/schedule_filtering/mod.rs:4:5
+  |
+4 | use std::collections::BTreeMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src/schedule_filtering/mod.rs:6:5
+  |
+6 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+  --> src/schedule_filtering/mod.rs:91:8
+   |
+91 |     if (delete_shapes_and_stops) {
+   |        ^                       ^
+   |
+   = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+   |
+91 -     if (delete_shapes_and_stops) {
+91 +     if delete_shapes_and_stops  {
+   |
+
+warning: unused import: `crate::models::TileStorage`
+ --> src/tile_save_and_get.rs:1:5
+  |
+1 | use crate::models::TileStorage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `prost::Message`
+ --> src/timestamp_extraction.rs:1:5
+  |
+1 | use prost::Message;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedHeader`
+ --> src/timestamp_extraction.rs:3:5
+  |
+3 | use gtfs_realtime::FeedHeader;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedMessage`
+ --> src/timestamp_extraction.rs:4:5
+  |
+4 | use gtfs_realtime::FeedMessage;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::path::PathBuf`
+  --> src/lib.rs:95:5
+   |
+95 | use std::path::PathBuf;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtCacheEntry`
+ --> src/aspen_dataset.rs:1:5
+  |
+1 | use crate::RtCacheEntry;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::RtKey`
+ --> src/aspen_dataset.rs:2:5
+  |
+2 | use crate::RtKey;
+  |     ^^^^^^^^^^^^
+
+warning: unused import: `gtfs_realtime::FeedEntity`
+ --> src/aspen_dataset.rs:6:5
+  |
+6 | use gtfs_realtime::FeedEntity;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::sync::Arc`
+ --> src/aspen_dataset.rs:8:5
+  |
+8 | use std::sync::Arc;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused doc comment
+   --> src/lib.rs:751:5
+    |
+751 |     ///Date(1729199040000)/
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+752 |     //extract all the numbers
+753 |     let mut numbers = date.chars().filter(|x| x.is_numeric()).collect::<String>();
+    |     ------------------------------------------------------------------------------ rustdoc does not generate documentation for statements
+    |
+    = help: use `//` for a plain comment
+    = note: `#[warn(unused_doc_comments)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated trait `geo::HaversineDestination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:869:10
+    |
+869 | use geo::HaversineDestination;
+    |          ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: variable does not need to be mutable
+   --> src/custom_alerts/metrolink_alerts.rs:609:9
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |         ----^^^^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: use of deprecated method `geo::HaversineDestination::haversine_destination`: Please use the `Haversine.destination` method from the `Destination` trait instead
+   --> src/lib.rs:876:37
+    |
+876 |     let distance_calc_point = point.haversine_destination(direction, distance_metres);
+    |                                     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `rayon::prelude`
+ --> src/gtfs_rt_rough_hash/mod.rs:3:5
+  |
+3 | use rayon::prelude::*;
+  |     ^^^^^^^^^^^^^^
+
+warning: unused import: `StreamExt`
+ --> src/custom_alerts/metrolink_alerts.rs:3:29
+  |
+3 | use futures::stream::{self, StreamExt};
+  |                             ^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/maple_syrup/mod.rs:371:21
+    |
+371 |                 let mut itinerary = entry.get_mut();
+    |                     ----^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: unused variable: `stop_headsign_reference_idx`
+   --> src/maple_syrup/mod.rs:196:13
+    |
+196 |         let stop_headsign_reference_idx = if stop_headsigns_unique_list.len() <= 1 {
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_stop_headsign_reference_idx`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `desc`
+   --> src/custom_alerts/metrolink_alerts.rs:504:39
+    |
+504 | pub fn determine_effect(header: &str, desc: Option<&str>) -> i32 {
+    |                                       ^^^^ help: if this is intentional, prefix it with an underscore: `_desc`
+
+warning: unused variable: `finished_id_list`
+   --> src/custom_alerts/metrolink_alerts.rs:609:9
+    |
+609 |     let mut finished_id_list = raw_from_homepage.iter().map(|x| x.id.clone()).collect_vec();
+    |         ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_finished_id_list`
+
+warning: unused variable: `delete_response`
+  --> src/elasticutils/mod.rs:32:13
+   |
+32 |         let delete_response = client
+   |             ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_response`
+
+warning: unused variable: `delete_from_pg`
+  --> src/shape_fetcher/mod.rs:68:9
+   |
+68 |     let delete_from_pg = diesel::delete(
+   |         ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_pg`
+
+warning: unused variable: `shape`
+   --> src/schedule_filtering/mod.rs:101:33
+    |
+101 |             .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
+    |                                 ^^^^^ help: if this is intentional, prefix it with an underscore: `_shape`
+
+warning: unused variable: `stop`
+  --> src/schedule_filtering/mod.rs:95:32
+   |
+95 |             .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
+   |                                ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:88:28
+   |
+88 |         .filter(|(trip_id, trip)| trips_to_keep.contains(trip_id))
+   |                            ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:82:29
+   |
+82 |         .filter(|(route_id, route)| route_ids_to_keep.contains(route_id))
+   |                             ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip`
+  --> src/schedule_filtering/mod.rs:33:25
+   |
+33 |         .map(|(trip_id, trip)| trip_id)
+   |                         ^^^^ help: if this is intentional, prefix it with an underscore: `_trip`
+
+warning: unused variable: `trip_id`
+  --> src/schedule_filtering/mod.rs:32:19
+   |
+32 |         .filter(|(trip_id, trip)| route_ids_to_keep.contains(&trip.route_id))
+   |                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `route`
+  --> src/schedule_filtering/mod.rs:19:26
+   |
+19 |         .map(|(route_id, route)| route_id)
+   |                          ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `route_id`
+  --> src/schedule_filtering/mod.rs:18:19
+   |
+18 |         .filter(|(route_id, route)| route_types.contains(&route.route_type))
+   |                   ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: variable does not need to be mutable
+   --> src/schedule_filtering/mod.rs:181:9
+    |
+181 |     let mut trips_removed: BTreeSet<String> = gtfs
+    |         ----^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: unused variable: `trip_id`
+   --> src/schedule_filtering/mod.rs:191:10
+    |
+191 |     for (trip_id, trip) in &gtfs.trips {
+    |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:49:5
+   |
+49 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `conn`
+  --> src/tile_save_and_get.rs:69:5
+   |
+69 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+   |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+  --> src/tile_save_and_get.rs:71:5
+   |
+71 |     z: u8,
+   |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: unused variable: `conn`
+   --> src/tile_save_and_get.rs:111:5
+    |
+111 |     conn: &mut bb8::PooledConnection<'_, AsyncDieselConnectionManager<AsyncPgConnection>>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_conn`
+
+warning: unused variable: `z`
+   --> src/tile_save_and_get.rs:113:5
+    |
+113 |     z: u8,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_z`
+
+warning: unused variable: `c`
+   --> src/tile_save_and_get.rs:114:5
+    |
+114 |     c: TileCategory,
+    |     ^ help: if this is intentional, prefix it with an underscore: `_c`
+
+warning: unused variable: `bbox`
+   --> src/tile_save_and_get.rs:117:9
+    |
+117 |     let bbox = slippy_map_tiles::BBox::new(
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_bbox`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:148:25
+    |
+148 |             if let Some(prev_trip_id) = current_trip_id {
+    |                         ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unused variable: `prev_trip_id`
+   --> src/lib.rs:178:17
+    |
+178 |     if let Some(prev_trip_id) = current_trip_id {
+    |                 ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_prev_trip_id`
+
+warning: unreachable pattern
+   --> src/lib.rs:251:17
+    |
+250 |                 _ => None,
+    |                 - matches any value
+251 |                 None => None,
+    |                 ^^^^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+    = note: the full name for the type has been written to '/home/kyler/catenary-backend/target/debug/deps/catenary-cf454b6e69895cae.long-type-8722384585490380949.txt'
+    = note: consider using `--verbose` to print the full type name to the console
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:571:21
+    |
+571 |                 let mut calendar_unified = oe.get_mut();
+    |                     ----^^^^^^^^^^^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:582:38
+    |
+582 |             btree_map::Entry::Vacant(mut ve) => {
+    |                                      ----^^
+    |                                      |
+    |                                      help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:941:29
+    |
+941 |                         let mut calendar_unified = oe.get_mut();
+    |                             ----^^^^^^^^^^^^^^^^
+    |                             |
+    |                             help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src/lib.rs:952:46
+    |
+952 |                     btree_map::Entry::Vacant(mut ve) => {
+    |                                              ----^^
+    |                                              |
+    |                                              help: remove this `mut`
+
+warning: `catenary-backend` (lib) generated 58 warnings (run `cargo fix --lib -p catenary-backend` to apply 51 suggestions)
+warning: unused import: `std::path::Path`
+ --> src/maple/correction_of_transfers.rs:9:5
+  |
+9 | use std::path::Path;
+  |     ^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused imports: `Author`, `Field`, and `Footer`
+  --> src/maple/main.rs:60:26
+   |
+60 | use discord_webhook_rs::{Author, Embed, Field, Footer, Webhook};
+   |                          ^^^^^^         ^^^^^  ^^^^^^
+
+warning: unused import: `csv::ReaderBuilder`
+ --> src/maple/gtfs_handlers/flatten.rs:1:5
+  |
+1 | use csv::ReaderBuilder;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `csv::WriterBuilder`
+ --> src/maple/gtfs_handlers/flatten.rs:2:5
+  |
+2 | use csv::WriterBuilder;
+  |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `dmfr_dataset_reader::ReturnDmfrAnalysis`
+ --> src/maple/gtfs_handlers/flatten.rs:4:5
+  |
+4 | use dmfr_dataset_reader::ReturnDmfrAnalysis;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `std::io::BufWriter`
+  --> src/maple/gtfs_handlers/flatten.rs:11:5
+   |
+11 | use std::io::BufWriter;
+   |     ^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `BTreeSet` and `HashMap`
+ --> src/maple/gtfs_handlers/gtfs_de_cleanup.rs:2:24
+  |
+2 | use std::collections::{BTreeSet, HashMap};
+  |                        ^^^^^^^^  ^^^^^^^
+
+warning: unused imports: `HashMap` and `HashSet`
+ --> src/maple/gtfs_ingestion_sequence/calendar_into_postgres.rs:4:24
+  |
+4 | use std::collections::{HashMap, HashSet};
+  |                        ^^^^^^^  ^^^^^^^
+
+warning: unused import: `crossbeam`
+ --> src/maple/gtfs_ingestion_sequence/stops_into_postgres.rs:9:5
+  |
+9 | use crossbeam;
+  |     ^^^^^^^^^
+
+warning: unused import: `gtfs_translations::translation_csv_text_to_translations`
+  --> src/maple/gtfs_ingestion_sequence/stops_into_postgres.rs:17:5
+   |
+17 | use gtfs_translations::translation_csv_text_to_translations;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `thread`
+ --> src/maple/gtfs_process.rs:8:32
+  |
+8 | use tikv_jemalloc_ctl::{epoch, thread};
+  |                                ^^^^^^
+
+warning: unused import: `crate::gtfs_handlers::colour_correction`
+  --> src/maple/gtfs_process.rs:10:5
+   |
+10 | use crate::gtfs_handlers::colour_correction;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `regex::Regex`
+  --> src/maple/gtfs_process.rs:47:5
+   |
+47 | use regex::Regex;
+   |     ^^^^^^^^^^^^
+
+warning: unused import: `rgb::RGB`
+  --> src/maple/gtfs_process.rs:48:5
+   |
+48 | use rgb::RGB;
+   |     ^^^^^^^^
+
+warning: unused imports: `Write` and `self`
+  --> src/maple/gtfs_process.rs:54:15
+   |
+54 | use std::io::{self, Write};
+   |               ^^^^  ^^^^^
+
+warning: unnecessary parentheses around `if` condition
+   --> src/maple/gtfs_process.rs:929:16
+    |
+929 |             if (route.long_name.as_deref() == Some("Metro C Line")) {
+    |                ^                                                  ^
+    |
+    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default
+help: remove these parentheses
+    |
+929 -             if (route.long_name.as_deref() == Some("Metro C Line")) {
+929 +             if route.long_name.as_deref() == Some("Metro C Line") {
+    |
+
+warning: unnecessary parentheses around `if` condition
+   --> src/maple/gtfs_process.rs:933:16
+    |
+933 |             if (route.long_name.as_deref() == Some("Metro K Line")) {
+    |                ^                                                  ^
+    |
+help: remove these parentheses
+    |
+933 -             if (route.long_name.as_deref() == Some("Metro K Line")) {
+933 +             if route.long_name.as_deref() == Some("Metro K Line") {
+    |
+
+warning: unused import: `AsyncConnection`
+  --> src/maple/refresh_metadata_tables.rs:14:20
+   |
+14 | use diesel_async::{AsyncConnection, RunQueryDsl};
+   |                    ^^^^^^^^^^^^^^^
+
+warning: unused import: `AsyncConnection`
+  --> src/maple/transitland_download.rs:10:20
+   |
+10 | use diesel_async::{AsyncConnection, RunQueryDsl};
+   |                    ^^^^^^^^^^^^^^^
+
+warning: unused import: `reqwest::redirect::Policy`
+  --> src/maple/transitland_download.rs:13:5
+   |
+13 | use reqwest::redirect::Policy;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Serialize`
+  --> src/maple/transitland_download.rs:14:26
+   |
+14 | use serde::{Deserialize, Serialize};
+   |                          ^^^^^^^^^
+
+warning: unused import: `std::time::SystemTime`
+  --> src/maple/transitland_download.rs:24:5
+   |
+24 | use std::time::SystemTime;
+   |     ^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `ParseError`
+  --> src/maple/transitland_download.rs:28:11
+   |
+28 | use url::{ParseError, Url};
+   |           ^^^^^^^^^^
+
+warning: unnecessary parentheses around `if` condition
+   --> src/maple/transitland_download.rs:694:32
+    |
+694 | ...                   if (skip_due_to_girolle) {
+    |                          ^                   ^
+    |
+help: remove these parentheses
+    |
+694 -                             if (skip_due_to_girolle) {
+694 +                             if skip_due_to_girolle {
+    |
+
+warning: unnecessary parentheses around `if` condition
+   --> src/maple/main.rs:556:28
+    |
+556 |                         if (flatten_feed_result.is_err()) {
+    |                            ^                            ^
+    |
+help: remove these parentheses
+    |
+556 -                         if (flatten_feed_result.is_err()) {
+556 +                         if flatten_feed_result.is_err() {
+    |
+
+warning: use of deprecated function `zip_extract::extract`: zip-extract will no longer be maintained, since zip>=2.4.0 supports all its features via ZipArchive.
+   --> src/maple/gtfs_handlers/flatten.rs:104:18
+    |
+104 |     zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
+    |                  ^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `zip_extract::extract`: zip-extract will no longer be maintained, since zip>=2.4.0 supports all its features via ZipArchive.
+   --> src/maple/gtfs_handlers/flatten.rs:220:18
+    |
+220 |     zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
+    |                  ^^^^^^^
+
+warning: use of deprecated function `zip_extract::extract`: zip-extract will no longer be maintained, since zip>=2.4.0 supports all its features via ZipArchive.
+   --> src/maple/gtfs_handlers/flatten.rs:273:26
+    |
+273 |             zip_extract::extract(Cursor::new(buf), &target_dir, true)?;
+    |                          ^^^^^^^
+
+warning: use of deprecated trait `geo::HaversineDistance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+  --> src/maple/osm_station_matching.rs:15:11
+   |
+15 | use geo::{HaversineDistance, point};
+   |           ^^^^^^^^^^^^^^^^^
+
+warning: variable does not need to be mutable
+   --> src/maple/gtfs_process.rs:944:21
+    |
+944 |                 let mut agency = agency;
+    |                     ----^^^^^^
+    |                     |
+    |                     help: remove this `mut`
+    |
+    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+   --> src/maple/gtfs_process.rs:636:17
+    |
+636 |             let mut gtfs = gtfs;
+    |                 ----^^^^
+    |                 |
+    |                 help: remove this `mut`
+
+error[E0308]: mismatched types
+    --> src/maple/main.rs:1025:44
+     |
+1025 |             let dmfr_result = read_folders(&args.transitland)?;
+     |                               ------------ ^^^^^^^^^^^^^^^^^ expected `&str`, found `&Option<String>`
+     |                               |
+     |                               arguments to this function are incorrect
+     |
+     = note: expected reference `&str`
+                found reference `&std::option::Option<std::string::String>`
+note: function defined here
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dmfr-dataset-reader-0.2.5/src/lib.rs:172:8
+     |
+ 172 | pub fn read_folders(path: &str) -> Result<ReturnDmfrAnalysis, Box<dyn Error + Send + Sync>> {
+     |        ^^^^^^^^^^^^
+
+error[E0277]: the trait bound `(..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ...): CompatibleType<..., ...>` is not satisfied
+    --> src/maple/main.rs:1089:14
+     |
+1089 |             .first::<catenary::models::IngestedStatic>(&mut conn)
+     |              ^^^^^ unsatisfied trait bound
+     |
+     = help: the trait `CompatibleType<IngestedStatic, Pg>` is not implemented for `(..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ...)`
+     = note: this is a mismatch between what your query returns and what your type expects the query to return
+     = note: the fields in your struct need to match the fields returned by your query in count, order and type
+     = note: consider using `#[diesel(check_for_backend(Pg))]` on either `#[derive(Selectable)]` or `#[derive(QueryableByName)]` 
+             on your struct `IngestedStatic` and in your query `.select(IngestedStatic::as_select())` to get a better error message
+     = help: the following other types implement trait `CompatibleType<U, DB>`:
+               `Nullable<(ST, ST1)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7, ST8)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+             and 58 others
+     = note: required for `SelectStatement<FromClause<table>, ..., ..., ..., ..., ...>` to implement `diesel_async::methods::LoadQuery<'_, _, IngestedStatic>`
+     = note: the full name for the type has been written to '/home/kyler/catenary-backend/target/debug/deps/maple-9dcfd585b143e042.long-type-14567810228182062842.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `(..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ...): CompatibleType<..., ...>` is not satisfied
+    --> src/maple/main.rs:1089:56
+     |
+1089 |             .first::<catenary::models::IngestedStatic>(&mut conn)
+     |              -----                                     ^^^^^^^^^ unsatisfied trait bound
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = help: the trait `CompatibleType<IngestedStatic, Pg>` is not implemented for `(..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ..., ...)`
+     = note: this is a mismatch between what your query returns and what your type expects the query to return
+     = note: the fields in your struct need to match the fields returned by your query in count, order and type
+     = note: consider using `#[diesel(check_for_backend(Pg))]` on either `#[derive(Selectable)]` or `#[derive(QueryableByName)]` 
+             on your struct `IngestedStatic` and in your query `.select(IngestedStatic::as_select())` to get a better error message
+     = help: the following other types implement trait `CompatibleType<U, DB>`:
+               `Nullable<(ST, ST1)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7, ST8)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+             and 58 others
+     = note: required for `SelectStatement<FromClause<table>, ..., ..., ..., ..., ...>` to implement `diesel_async::methods::LoadQuery<'_, _, IngestedStatic>`
+note: required by a bound in `diesel_async::RunQueryDsl::first`
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/diesel-async-0.7.4/src/run_query_dsl/mod.rs:586:35
+     |
+ 578 |     fn first<'query, 'conn, U>(
+     |        ----- required by a bound in this associated function
+...
+ 586 |         diesel::dsl::Limit<Self>: methods::LoadQuery<'query, Conn, U> + Send + 'query,
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RunQueryDsl::first`
+     = note: the full name for the type has been written to '/home/kyler/catenary-backend/target/debug/deps/maple-9dcfd585b143e042.long-type-14567810228182062842.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `(Text, Text, Nullable<Text>, ..., ..., ...): CompatibleType<..., ...>` is not satisfied
+    --> src/maple/main.rs:1108:14
+     |
+1108 |             .first::<catenary::models::StaticFeed>(&mut conn)
+     |              ^^^^^ the trait `CompatibleType<StaticFeed, Pg>` is not implemented for `(Text, Text, Nullable<Text>, Array<Nullable<Text>>, Text, ...)`
+     |
+     = note: this is a mismatch between what your query returns and what your type expects the query to return
+     = note: the fields in your struct need to match the fields returned by your query in count, order and type
+     = note: consider using `#[diesel(check_for_backend(Pg))]` on either `#[derive(Selectable)]` or `#[derive(QueryableByName)]` 
+             on your struct `StaticFeed` and in your query `.select(StaticFeed::as_select())` to get a better error message
+     = help: the following other types implement trait `CompatibleType<U, DB>`:
+               `Nullable<(ST, ST1)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7, ST8)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+             and 58 others
+     = note: required for `SelectStatement<FromClause<table>, ..., ..., ..., ..., ...>` to implement `diesel_async::methods::LoadQuery<'_, _, StaticFeed>`
+     = note: the full name for the type has been written to '/home/kyler/catenary-backend/target/debug/deps/maple-9dcfd585b143e042.long-type-330365311107997550.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0277]: the trait bound `(Text, Text, Nullable<Text>, ..., ..., ...): CompatibleType<..., ...>` is not satisfied
+    --> src/maple/main.rs:1108:52
+     |
+1108 |             .first::<catenary::models::StaticFeed>(&mut conn)
+     |              -----                                 ^^^^^^^^^ the trait `CompatibleType<StaticFeed, Pg>` is not implemented for `(Text, Text, Nullable<Text>, Array<Nullable<Text>>, Text, ...)`
+     |              |
+     |              required by a bound introduced by this call
+     |
+     = note: this is a mismatch between what your query returns and what your type expects the query to return
+     = note: the fields in your struct need to match the fields returned by your query in count, order and type
+     = note: consider using `#[diesel(check_for_backend(Pg))]` on either `#[derive(Selectable)]` or `#[derive(QueryableByName)]` 
+             on your struct `StaticFeed` and in your query `.select(StaticFeed::as_select())` to get a better error message
+     = help: the following other types implement trait `CompatibleType<U, DB>`:
+               `Nullable<(ST, ST1)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+               `Nullable<(ST, ST1, ST2, ST3, ST4, ST5, ST6, ST7, ST8)>` implements `CompatibleType<std::option::Option<__T>, __DB>`
+             and 58 others
+     = note: required for `SelectStatement<FromClause<table>, ..., ..., ..., ..., ...>` to implement `diesel_async::methods::LoadQuery<'_, _, StaticFeed>`
+note: required by a bound in `diesel_async::RunQueryDsl::first`
+    --> /home/kyler/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/diesel-async-0.7.4/src/run_query_dsl/mod.rs:586:35
+     |
+ 578 |     fn first<'query, 'conn, U>(
+     |        ----- required by a bound in this associated function
+...
+ 586 |         diesel::dsl::Limit<Self>: methods::LoadQuery<'query, Conn, U> + Send + 'query,
+     |                                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ required by this bound in `RunQueryDsl::first`
+     = note: the full name for the type has been written to '/home/kyler/catenary-backend/target/debug/deps/maple-9dcfd585b143e042.long-type-330365311107997550.txt'
+     = note: consider using `--verbose` to print the full type name to the console
+
+error[E0308]: arguments to this function are incorrect
+    --> src/maple/main.rs:1127:21
+     |
+1127 |     if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
+     |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+1128 |         &mut conn,
+1129 |         feed_id,
+     |         ------- expected `&str`, found `String`
+1130 |         attempt_id_val,
+     |         -------------- expected `&str`, found `String`
+1131 |         chateau_id_val,
+     |         -------------- expected `&str`, found `String`
+     |
+note: function defined here
+    --> src/maple/osm_station_matching.rs:694:14
+     |
+ 694 | pub async fn match_stops_for_feed(
+     |              ^^^^^^^^^^^^^^^^^^^^
+ 695 |     conn: &mut AsyncPgConnection,
+ 696 |     feed_id: &str,
+     |     -------------
+ 697 |     attempt_id: &str,
+     |     ----------------
+ 698 |     chateau_id: &str,
+     |     ----------------
+help: consider borrowing here
+     |
+1129 |         &feed_id,
+     |         +
+help: consider borrowing here
+     |
+1130 |         &attempt_id_val,
+     |         +
+help: consider borrowing here
+     |
+1131 |         &chateau_id_val,
+     |         +
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/gtfs_handlers/hull_from_gtfs.rs:104:10
+    |
+104 |         .haversine_distance(&Point::new(bbox.max().x, bbox.min().y));
+    |          ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/gtfs_handlers/hull_from_gtfs.rs:106:10
+    |
+106 |         .haversine_distance(&Point::new(bbox.min().x, bbox.max().y));
+    |          ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/gtfs_handlers/hull_from_gtfs.rs:242:30
+    |
+242 |         let distance = point.haversine_distance(&next_point);
+    |                              ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/osm_station_matching.rs:355:23
+    |
+355 |     let distance = p1.haversine_distance(&p2);
+    |                       ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/osm_station_matching.rs:543:39
+    |
+543 |             let distance = stop_point.haversine_distance(&station_point);
+    |                                       ^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated method `geo::HaversineDistance::haversine_distance`: Please use the `Haversine.distance` method from the `Distance` trait instead
+   --> src/maple/osm_station_matching.rs:560:39
+    |
+560 |             let distance = stop_point.haversine_distance(&platform_point);
+    |                                       ^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `diesel::query_dsl::methods::FilterDsl`
+ --> src/maple/update_schedules_with_new_chateau_id.rs:8:5
+  |
+8 | use diesel::query_dsl::methods::FilterDsl;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `key`
+  --> src/maple/delete_overlapping_feeds_dmfr.rs:13:15
+   |
+13 |             |(key, feed)| match feed.tags.get("exclude_from_global_query") {
+   |               ^^^ help: if this is intentional, prefix it with an underscore: `_key`
+   |
+   = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `attempt_id`
+  --> src/maple/assign_production_tables.rs:26:5
+   |
+26 |     attempt_id: &str,
+   |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_attempt_id`
+
+warning: unused variable: `i`
+   --> src/maple/assign_production_tables.rs:109:10
+    |
+109 |     for (i, ingested_item) in sorted_feeds.into_iter().rev().enumerate() {
+    |          ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `i`
+   --> src/maple/assign_production_tables.rs:177:18
+    |
+177 |             for (i, feed_time_range) in feed_time_ranges.iter().enumerate() {
+    |                  ^ help: if this is intentional, prefix it with an underscore: `_i`
+
+warning: unused variable: `delete_from_stops`
+  --> src/maple/cleanup.rs:21:9
+   |
+21 |     let delete_from_stops = elasticsearch
+   |         ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_stops`
+
+warning: unused variable: `delete_from_agencies`
+  --> src/maple/cleanup.rs:44:9
+   |
+44 |     let delete_from_agencies = elasticsearch
+   |         ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_agencies`
+
+warning: unused variable: `delete_from_routes`
+  --> src/maple/cleanup.rs:67:9
+   |
+67 |     let delete_from_routes = elasticsearch
+   |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_routes`
+
+warning: unused variable: `delete_from_stops`
+  --> src/maple/cleanup.rs:97:9
+   |
+97 |     let delete_from_stops = elasticsearch
+   |         ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_stops`
+
+warning: unused variable: `delete_from_agencies`
+   --> src/maple/cleanup.rs:109:9
+    |
+109 |     let delete_from_agencies = elasticsearch
+    |         ^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_agencies`
+
+warning: unused variable: `delete_from_routes`
+   --> src/maple/cleanup.rs:121:9
+    |
+121 |     let delete_from_routes = elasticsearch
+    |         ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_delete_from_routes`
+
+warning: unused variable: `read`
+   --> src/maple/gtfs_handlers/flatten.rs:101:9
+    |
+101 |     let read = file.read_to_end(&mut buf)?;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_read`
+
+warning: variable does not need to be mutable
+   --> src/maple/gtfs_handlers/flatten.rs:129:17
+    |
+129 |             let mut finished_data = reader
+    |                 ----^^^^^^^^^^^^^
+    |                 |
+    |                 help: remove this `mut`
+
+warning: unused variable: `subfolder_name`
+   --> src/maple/gtfs_handlers/flatten.rs:176:13
+    |
+176 |         let subfolder_name = subfolder_path.file_name().unwrap();
+    |             ^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_subfolder_name`
+
+warning: variable does not need to be mutable
+   --> src/maple/gtfs_handlers/flatten.rs:359:13
+    |
+359 |         let mut reader = std::io::BufReader::new(file);
+    |             ----^^^^^^
+    |             |
+    |             help: remove this `mut`
+
+warning: unused variable: `feed`
+   --> src/maple/gtfs_handlers/flatten.rs:204:5
+    |
+204 |     feed: Rc<Feed>,
+    |     ^^^^ help: if this is intentional, prefix it with an underscore: `_feed`
+
+warning: unused variable: `read`
+   --> src/maple/gtfs_handlers/flatten.rs:216:9
+    |
+216 |     let read = file.read_to_end(&mut buf)?;
+    |         ^^^^ help: if this is intentional, prefix it with an underscore: `_read`
+
+warning: unused variable: `id`
+  --> src/maple/gtfs_handlers/hull_from_gtfs.rs:58:25
+   |
+58 |             .flat_map(|(id, points)| {
+   |                         ^^ help: if this is intentional, prefix it with an underscore: `_id`
+
+warning: unused variable: `route_id`
+  --> src/maple/gtfs_handlers/remove_agencies.rs:67:18
+   |
+67 |         .retain(|route_id, route| match &route.agency_id {
+   |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `stop`
+  --> src/maple/gtfs_handlers/remove_agencies.rs:61:27
+   |
+61 |         .retain(|stop_id, stop| match stops_to_agency_ids.get(stop_id) {
+   |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_stop`
+
+warning: unused variable: `trip_id`
+  --> src/maple/gtfs_handlers/remove_agencies.rs:51:18
+   |
+51 |         .retain(|trip_id, trip| match gtfs.routes.get(&trip.route_id) {
+   |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+  --> src/maple/gtfs_handlers/remove_agencies.rs:25:10
+   |
+25 |     for (trip_id, trip) in gtfs.trips.iter() {
+   |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `route_id`
+   --> src/maple/gtfs_handlers/remove_agencies.rs:147:18
+    |
+147 |         .retain(|route_id, route| match &route.agency_id {
+    |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_handlers/remove_agencies.rs:122:18
+    |
+122 |         .retain(|trip_id, trip| match gtfs.routes.get(&trip.route_id) {
+    |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+  --> src/maple/gtfs_handlers/remove_agencies.rs:96:10
+   |
+96 |     for (trip_id, trip) in gtfs.trips.iter() {
+   |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+  --> src/maple/gtfs_handlers/shape_colour_calculator.rs:67:10
+   |
+67 |     for (trip_id, trip) in &gtfs.trips {
+   |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+  --> src/maple/gtfs_handlers/stops_associated_items.rs:13:10
+   |
+13 |     for (trip_id, trip) in &gtfs.trips {
+   |          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `service_id`
+  --> src/maple/gtfs_ingestion_sequence/calendar_into_postgres.rs:22:10
+   |
+22 |     for (service_id, calendar) in &gtfs.calendar {
+   |          ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_service_id`
+
+warning: unused variable: `service_id`
+  --> src/maple/gtfs_ingestion_sequence/calendar_into_postgres.rs:51:10
+   |
+51 |     for (service_id, calendar_dates) in &gtfs.calendar_dates {
+   |          ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_service_id`
+
+warning: unused variable: `tz`
+   --> src/maple/gtfs_ingestion_sequence/stops_into_postgres.rs:130:26
+    |
+130 |                     Some(tz) => stop.timezone.clone(),
+    |                          ^^ help: if this is intentional, prefix it with an underscore: `_tz`
+
+warning: unused variable: `route_id`
+   --> src/maple/gtfs_process.rs:924:22
+    |
+924 |             .retain(|route_id, route| route.long_name.as_deref() != Some("Emergency Management"));
+    |                      ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `route_id`
+   --> src/maple/gtfs_process.rs:788:47
+    |
+788 |             gtfs.routes.iter_mut().for_each(|(route_id, route)| {
+    |                                               ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:694:26
+    |
+694 |                 .retain(|trip_id, trip| trip.route_id != "119-120");
+    |                          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `route`
+   --> src/maple/gtfs_process.rs:691:43
+    |
+691 |             gtfs.routes.retain(|route_id, route| route_id != "119-120");
+    |                                           ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `route`
+   --> src/maple/gtfs_process.rs:668:43
+    |
+668 |             gtfs.routes.retain(|route_id, route| route_id != "ACE");
+    |                                           ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:666:32
+    |
+666 |             gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:643:32
+    |
+643 |             gtfs.trips.retain(|trip_id, trip| {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:625:26
+    |
+625 |                 .retain(|trip_id, trip| !route_ids_to_delete.contains(&trip.route_id.as_str()));
+    |                          ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `this_download_data`
+   --> src/maple/gtfs_process.rs:123:5
+    |
+123 |     this_download_data: &DownloadedFeedsInformation,
+    |     ^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_this_download_data`
+
+warning: unused variable: `conn_pool`
+   --> src/maple/gtfs_process.rs:133:9
+    |
+133 |     let conn_pool = arc_conn_pool.as_ref();
+    |         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_conn_pool`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:656:18
+    |
+656 |             for (trip_id, trip) in gtfs.trips.iter_mut() {
+    |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:701:18
+    |
+701 |             for (trip_id, trip) in gtfs.trips.iter_mut() {
+    |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:775:18
+    |
+775 |             for (trip_id, trip) in gtfs.trips.iter_mut() {
+    |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `trip_id`
+   --> src/maple/gtfs_process.rs:850:18
+    |
+850 |             for (trip_id, trip) in gtfs.trips.iter_mut() {
+    |                  ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `route_id`
+   --> src/maple/gtfs_process.rs:928:14
+    |
+928 |         for (route_id, route) in gtfs.routes.iter_mut() {
+    |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `route_id`
+   --> src/maple/gtfs_process.rs:971:14
+    |
+971 |         for (route_id, route) in gtfs.routes.iter_mut() {
+    |              ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_route_id`
+
+warning: unused variable: `trip_id`
+    --> src/maple/gtfs_process.rs:1009:14
+     |
+1009 |         for (trip_id, trip) in gtfs.trips.iter_mut() {
+     |              ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_trip_id`
+
+warning: unused variable: `route`
+    --> src/maple/gtfs_process.rs:2072:5
+     |
+2072 |     route: &gtfs_structures::Route,
+     |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_route`
+
+warning: unused variable: `feed_id`
+   --> src/maple/refresh_metadata_tables.rs:191:19
+    |
+191 |         .filter(|(feed_id, feed)| match feed.spec {
+    |                   ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_feed_id`
+
+warning: unused variable: `existing_chateaus_map`
+  --> src/maple/refresh_metadata_tables.rs:42:9
+   |
+42 |     let existing_chateaus_map = existing_chateaus
+   |         ^^^^^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_existing_chateaus_map`
+
+warning: unused variable: `parsed_url`
+   --> src/maple/transitland_download.rs:329:5
+    |
+329 |     parsed_url: &Url,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_parsed_url`
+
+warning: unused variable: `error`
+   --> src/maple/transitland_download.rs:875:49
+    |
+875 | ...                   Err(error) => {
+    |                           ^^^^^ help: if this is intentional, prefix it with an underscore: `_error`
+
+warning: unused variable: `e`
+   --> src/maple/transitland_download.rs:914:33
+    |
+914 | ...                   Err(e) => {
+    |                           ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `string`
+   --> src/maple/transitland_download.rs:580:24
+    |
+580 |                 .map(|(string, feed)| StaticFeedToDownload {
+    |                        ^^^^^^ help: if this is intentional, prefix it with an underscore: `_string`
+
+warning: unused variable: `entries`
+   --> src/maple/transitland_download.rs:558:12
+    |
+558 |         Ok(entries) => {
+    |            ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_entries`
+
+Some errors have detailed explanations: E0277, E0308.
+For more information about an error, try `rustc --explain E0277`.
+warning: `catenary-backend` (bin "maple") generated 92 warnings
+error: could not compile `catenary-backend` (bin "maple") due to 6 previous errors; 92 warnings emitted
