@@ -185,12 +185,19 @@ pub async fn departures_at_osm_station(
         .min(max_lookahead);
 
     // First, fetch the OSM station info
-    let osm_station_result: diesel::prelude::QueryResult<Vec<catenary::models::OsmStation>> =
-        catenary::schema::gtfs::osm_stations::dsl::osm_stations
-            .filter(catenary::schema::gtfs::osm_stations::osm_id.eq(query.osm_station_id))
-            .select(catenary::models::OsmStation::as_select())
-            .load::<catenary::models::OsmStation>(conn)
-            .await;
+    let osm_station_query = catenary::schema::gtfs::osm_stations::dsl::osm_stations
+        .filter(catenary::schema::gtfs::osm_stations::osm_id.eq(query.osm_station_id))
+        .select(catenary::models::OsmStation::as_select())
+        .load::<catenary::models::OsmStation>(conn);
+
+    // Find all GTFS stops linked to this OSM station
+    let stops_query = catenary::schema::gtfs::stops::dsl::stops
+        .filter(catenary::schema::gtfs::stops::osm_station_id.eq(query.osm_station_id))
+        .filter(catenary::schema::gtfs::stops::allowed_spatial_query.eq(true))
+        .select(catenary::models::Stop::as_select())
+        .load::<catenary::models::Stop>(conn);
+
+    let (osm_station_result, stops_result) = tokio::join!(osm_station_query, stops_query);
 
     let osm_station_info = match &osm_station_result {
         Ok(stations) if !stations.is_empty() => {
@@ -209,15 +216,6 @@ pub async fn departures_at_osm_station(
         }
         _ => None,
     };
-
-    // Find all GTFS stops linked to this OSM station
-    let stops_result: diesel::prelude::QueryResult<Vec<catenary::models::Stop>> =
-        catenary::schema::gtfs::stops::dsl::stops
-            .filter(catenary::schema::gtfs::stops::osm_station_id.eq(query.osm_station_id))
-            .filter(catenary::schema::gtfs::stops::allowed_spatial_query.eq(true))
-            .select(catenary::models::Stop::as_select())
-            .load::<catenary::models::Stop>(conn)
-            .await;
 
     let linked_stops = match stops_result {
         Ok(s) => s,
@@ -323,7 +321,24 @@ pub async fn departures_at_osm_station(
         });
     }
 
-    let results = join_all(futures).await;
+    // Fetch realtime data from aspen
+    let mut chateau_metadata = HashMap::new();
+    let mut etcd_futures = Vec::new();
+    for chateau_id in stops_to_search.keys() {
+        let mut etcd_clone = etcd.clone();
+        let chateau_id = chateau_id.clone();
+        etcd_futures.push(async move {
+            let etcd_data = etcd_clone
+                .get(
+                    format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
+                    None,
+                )
+                .await;
+            (chateau_id, etcd_data)
+        });
+    }
+
+    let (results, etcd_results) = join!(join_all(futures), join_all(etcd_futures));
 
     for (
         chateau_id,
@@ -387,25 +402,6 @@ pub async fn departures_at_osm_station(
         }
         active_services_by_chateau.insert(chateau_id.clone(), active_services);
     }
-
-    // Fetch realtime data from aspen
-    let mut chateau_metadata = HashMap::new();
-    let mut etcd_futures = Vec::new();
-    for chateau_id in stops_to_search.keys() {
-        let mut etcd_clone = etcd.clone();
-        let chateau_id = chateau_id.clone();
-        etcd_futures.push(async move {
-            let etcd_data = etcd_clone
-                .get(
-                    format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
-                    None,
-                )
-                .await;
-            (chateau_id, etcd_data)
-        });
-    }
-
-    let etcd_results = join_all(etcd_futures).await;
 
     for (chateau_id, etcd_data) in etcd_results {
         if let Ok(etcd_data) = etcd_data {
@@ -919,6 +915,36 @@ pub async fn departures_at_osm_station(
             }
         }
     }
+
+    // Deduplicate events: keep only one trip per (scheduled_time, route, headsign), preferring realtime
+    let mut unique_events: HashMap<(Option<u64>, String, Option<String>), StopEvent> =
+        HashMap::new();
+
+    for event in events {
+        let key = (
+            event.scheduled_departure,
+            event.route_id.clone(),
+            event.headsign.clone(),
+        );
+
+        match unique_events.entry(key) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                let existing = entry.get();
+                let existing_has_rt =
+                    existing.realtime_departure.is_some() || existing.realtime_arrival.is_some();
+                let new_has_rt =
+                    event.realtime_departure.is_some() || event.realtime_arrival.is_some();
+
+                if !existing_has_rt && new_has_rt {
+                    entry.insert(event);
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(event);
+            }
+        }
+    }
+    let mut events: Vec<StopEvent> = unique_events.into_values().collect();
 
     // Filter and sort events
     let gt = greater_than_time;
