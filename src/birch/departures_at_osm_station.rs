@@ -603,9 +603,23 @@ pub async fn departures_at_osm_station(
         alert_indices.insert(chateau_id.clone(), AlertIndex::new(chateau_alerts));
     }
 
+    let itins_btreemap_by_chateau = std::sync::Arc::new(itins_btreemap_by_chateau);
+    let itin_meta_btreemap_by_chateau = std::sync::Arc::new(itin_meta_btreemap_by_chateau);
+    let direction_meta_btreemap_by_chateau = std::sync::Arc::new(direction_meta_btreemap_by_chateau);
+    let calendar_structure = std::sync::Arc::new(calendar_structure);
+    let stops_to_search = std::sync::Arc::new(stops_to_search);
+    let alert_indices = std::sync::Arc::new(alert_indices);
+    let chateau_to_trips_aspenised = std::sync::Arc::new(chateau_to_trips_aspenised);
     let events_result = web::block(move || {
         trip_compressed_btreemap_by_chateau.par_iter().flat_map(|(chateau_id, trips_compressed_data)| {
             let active_services = active_services_by_chateau.get(chateau_id);
+            let itins_btreemap_by_chateau = itins_btreemap_by_chateau.clone();
+            let itin_meta_btreemap_by_chateau = itin_meta_btreemap_by_chateau.clone();
+            let direction_meta_btreemap_by_chateau = direction_meta_btreemap_by_chateau.clone();
+            let calendar_structure = calendar_structure.clone();
+            let stops_to_search = stops_to_search.clone();
+            let alert_indices = alert_indices.clone();
+            let chateau_to_trips_aspenised = chateau_to_trips_aspenised.clone();
 
             trips_compressed_data.par_iter().flat_map(move |(trip_id, trip_compressed)| {
                 let mut local_events = Vec::new();

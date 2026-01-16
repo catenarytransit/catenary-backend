@@ -390,6 +390,7 @@ pub struct MovedStopData {
 }
 
 /// Index for efficient alert lookups by route or trip
+#[derive(Clone)]
 pub struct AlertIndex {
     by_route: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
     by_trip: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
