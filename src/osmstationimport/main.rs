@@ -650,6 +650,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let max_dist_meters = 1000.0;
 
     for (i, station) in stations.iter().enumerate() {
+        // Exception: Keep if it has ref or local_ref (platform numbers)
+        if station.ref_.is_some() || station.local_ref.is_some() {
+            continue;
+        }
+
         if let Some(name) = &station.name {
             let lat = station.point.y;
             let lon = station.point.x;
