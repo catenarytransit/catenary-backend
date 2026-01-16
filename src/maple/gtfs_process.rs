@@ -360,18 +360,13 @@ pub async fn gtfs_process_feed(
             )?;
         }
         "f-f24-octranspo" => {
-            let _ = execute_pfaedle_rs(
-                path.as_str(),
-                "./railonly-north-america-latest.osm.pbf",
-                Some(vec![String::from("rail"), String::from("metro"), String::from("light_rail")]),
-                true,
-                false,
-            )?;
+            let _ = std::fs::remove_file(format!("{}/shapes.txt", path));
+            
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-ontario-latest.osm.pbf",
-                Some(vec!["bus".to_string()]),
+                Some(vec!["bus".to_string(), "tram".to_string()]),
                 true,
                 false,
             )?;
