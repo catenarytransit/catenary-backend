@@ -118,6 +118,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let args = Args::parse();
 
     let discord_log_env = std::env::var("DISCORD_LOG");
+    
+    // Check for subcommand
+    if let Some(Commands::MatchOsm { feed_id }) = args.command {
+        return run_match_only(feed_id).await;
+    }
 
     let elasticclient = if !args.no_elastic {
         let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
@@ -241,11 +246,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     }
         _ => None
     };
-
-    // Check for subcommand
-    if let Some(Commands::MatchOsm { feed_id }) = args.command {
-        return run_match_only(feed_id).await;
-    }
 
     // Default ingestion path
     // Validate transitland arg manually effectively
