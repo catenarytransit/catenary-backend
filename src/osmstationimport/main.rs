@@ -44,6 +44,7 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
+use regex::Regex;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Import OSM railway stations from PBF files", long_about = None)]
@@ -473,6 +474,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     continue;
                 }
 
+                // Filter out railway=station with railway:ref:parent (subsidiary stations)
+                if node.tags.get("railway").map_or(false, |v| v == "station")
+                    && node.tags.contains_key("railway:ref:parent")
+                {
+                    continue;
+                }
+
                 let mode = match classify_mode(&node.tags) {
                     Some(m) => m,
                     None => continue,
@@ -605,6 +613,100 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .filter(|s| s.parent_osm_id.is_some())
             .count()
     );
+
+    // =========================================================================
+    // PASS 4: Deduplicate stations
+    // =========================================================================
+    println!("\n=== Pass 4: Deduplicating stations ===");
+    
+    // Helper function for distance
+    fn haversine_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+        let r = 6371000.0; // Earth radius in meters
+        let d_lat = (lat2 - lat1).to_radians();
+        let d_lon = (lon2 - lon1).to_radians();
+        let a = (d_lat / 2.0).sin().powi(2)
+            + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
+        let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+        r * c
+    }
+
+    // Build a map of existing names to coordinates for lookup
+    let mut existing_stations_by_name: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
+    for s in &stations {
+        if let Some(name) = &s.name {
+            existing_stations_by_name
+                .entry(name.clone())
+                .or_default()
+                .push((s.point.y, s.point.x));
+        }
+    }
+
+    let mut to_remove = HashSet::new();
+    // Rule 1: Remove "....Hbf Gleis X-X...." if another station with the same name before Hbf or Hauptbahnhof exists
+    let re_hbf = Regex::new(r"^(.*?)\s+(?:Hbf|Hauptbahnhof)\s+Gleis.*").unwrap();
+    // Rule 2: Remove "X (tief)" if "X" exists
+    let re_tief = Regex::new(r"^(.*?)\s+\(tief\)$").unwrap();
+
+    let max_dist_meters = 1000.0;
+
+    for (i, station) in stations.iter().enumerate() {
+        if let Some(name) = &station.name {
+            let lat = station.point.y;
+            let lon = station.point.x;
+
+            // Helper check closure
+            let check_duplicates = |target_name: &str, rule_desc: &str| -> bool {
+                if let Some(coords_list) = existing_stations_by_name.get(target_name) {
+                    for (other_lat, other_lon) in coords_list {
+                        let dist = haversine_distance_meters(lat, lon, *other_lat, *other_lon);
+                        if dist < max_dist_meters {
+                            println!(
+                                "Marking duplicate station for removal: {} (found base station: {} at {:.0}m distance) [{}]",
+                                name, target_name, dist, rule_desc
+                            );
+                            return true;
+                        }
+                    }
+                }
+                false
+            };
+
+            // Rule 1: Hbf Gleis
+            if let Some(caps) = re_hbf.captures(name) {
+                 let base_name = caps.get(1).unwrap().as_str().trim();
+                 let hbf_name = format!("{} Hbf", base_name);
+                 let hauptbahnhof_name = format!("{} Hauptbahnhof", base_name);
+                 
+                 if check_duplicates(&hbf_name, "Rule 1") || check_duplicates(&hauptbahnhof_name, "Rule 1") {
+                     to_remove.insert(i);
+                     continue;
+                 }
+            }
+
+            // Rule 2: (tief)
+            if let Some(caps) = re_tief.captures(name) {
+                let base_name = caps.get(1).unwrap().as_str().trim();
+                if check_duplicates(base_name, "Rule 2") {
+                    to_remove.insert(i);
+                    continue;
+                }
+            }
+        }
+    }
+
+    if !to_remove.is_empty() {
+        println!("Removing {} duplicate stations...", to_remove.len());
+        let old_len = stations.len();
+        let mut new_stations = Vec::with_capacity(old_len - to_remove.len());
+        for (i, station) in stations.into_iter().enumerate() {
+            if !to_remove.contains(&i) {
+                new_stations.push(station);
+            }
+        }
+        stations = new_stations;
+    } else {
+        println!("No duplicate stations found.");
+    }
 
     // Insert stations in batches
 
