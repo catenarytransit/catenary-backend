@@ -652,6 +652,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     for (i, station) in stations.iter().enumerate() {
         if let Some(name) = &station.name {
+            // Exception: If the station has a local_ref or ref, do not deduplicate it
+            if station.local_ref.is_some() || station.ref_.is_some() {
+                continue;
+            }
+
             let lat = station.point.y;
             let lon = station.point.x;
 
