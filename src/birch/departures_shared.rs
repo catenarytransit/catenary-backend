@@ -92,6 +92,8 @@ pub async fn fetch_stop_data_for_chateau(
         let direction_ids_to_search: Vec<String> = itin_meta
             .iter()
             .filter_map(|x| x.direction_pattern_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
             .collect();
 
         let direction_meta =
