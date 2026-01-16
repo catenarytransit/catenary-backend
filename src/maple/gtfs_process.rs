@@ -359,18 +359,6 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-f24-octranspo" => {
-            let _ = std::fs::remove_file(format!("{}/shapes.txt", path));
-            
-
-            let _ = execute_pfaedle_rs(
-                path.as_str(),
-                "./pfaedle-filtered-ontario-latest.osm.pbf",
-                Some(vec!["bus".to_string(), "tram".to_string()]),
-                true,
-                false,
-            )?;
-        }
         //japan
         "f-jr~east" => {
             let _ = execute_pfaedle_rs(
