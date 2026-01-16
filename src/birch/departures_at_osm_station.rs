@@ -43,6 +43,7 @@ use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::join;
+use std::time::Instant;
 
 // Use shared types from departures_shared module
 use crate::departures_shared::{
@@ -116,6 +117,17 @@ struct StopEvent {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct DeparturesAtOsmStationDebug {
+    pub total_time_ms: u128,
+    pub etcd_connection_time_ms: u128,
+    pub db_connection_time_ms: u128,
+    pub initial_osm_query_ms: u128,
+    pub stop_data_fetch_ms: u128,
+    pub aspen_data_fetch_ms: u128,
+    pub event_generation_ms: u128,
+}
+
+#[derive(Serialize, Clone, Debug)]
 struct DeparturesAtOsmStationResponse {
     osm_station: Option<OsmStationInfoForResponse>,
     stops: Vec<StopInfoResponse>,
@@ -124,6 +136,7 @@ struct DeparturesAtOsmStationResponse {
     shapes: BTreeMap<EcoString, BTreeMap<EcoString, String>>,
     alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>>,
     agencies: BTreeMap<String, BTreeMap<String, catenary::models::Agency>>,
+    debug: DeparturesAtOsmStationDebug,
 }
 
 #[actix_web::get("/departures_at_osm_station")]
@@ -135,6 +148,7 @@ pub async fn departures_at_osm_station(
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
+    let start = Instant::now();
     let etcd_reuser = etcd_reuser.as_ref();
 
     let mut etcd = None;
@@ -166,9 +180,15 @@ pub async fn departures_at_osm_station(
 
     let mut etcd = etcd.unwrap();
 
+    let etcd_connection_time = start.elapsed();
+    let db_timer = Instant::now();
+
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
+
+    let db_connection_time = db_timer.elapsed();
+    let initial_osm_query_timer = Instant::now();
 
     let now_secs = catenary::duration_since_unix_epoch().as_secs();
     let greater_than_time = query.greater_than_time.unwrap_or(now_secs - 3600);
@@ -197,12 +217,13 @@ pub async fn departures_at_osm_station(
         .select(catenary::models::Stop::as_select())
         .load::<catenary::models::Stop>(conn);
 
-    let timer_one = Instant::now();
     let (osm_station_result, stops_result) = tokio::join!(osm_station_query, stops_query);
+
+    let initial_osm_query_time = initial_osm_query_timer.elapsed();
 
     println!(
         "Initial OSM queries took {} ms",
-        timer_one.elapsed().as_millis()
+        initial_osm_query_time.as_millis()
     );
 
     let osm_station_info = match &osm_station_result {
@@ -241,6 +262,15 @@ pub async fn departures_at_osm_station(
             shapes: BTreeMap::new(),
             alerts: BTreeMap::new(),
             agencies: BTreeMap::new(),
+            debug: DeparturesAtOsmStationDebug {
+                total_time_ms: start.elapsed().as_millis(),
+                etcd_connection_time_ms: etcd_connection_time.as_millis(),
+                db_connection_time_ms: db_connection_time.as_millis(),
+                initial_osm_query_ms: initial_osm_query_time.as_millis(),
+                stop_data_fetch_ms: 0,
+                aspen_data_fetch_ms: 0,
+                event_generation_ms: 0,
+            },
         });
     }
 
@@ -315,6 +345,8 @@ pub async fn departures_at_osm_station(
     let mut calender_responses: Vec<_> = vec![];
     let mut calendar_dates_responses: Vec<_> = vec![];
 
+    let stop_data_fetch_timer = Instant::now();
+
     let mut futures = Vec::new();
     for (chateau_id_to_search, stop_ids_to_search) in &stops_to_search {
         let pool = pool.get_ref().clone();
@@ -372,6 +404,8 @@ pub async fn departures_at_osm_station(
         calendar_dates_responses.push(calendar_dates);
     }
 
+    let stop_data_fetch_time = stop_data_fetch_timer.elapsed();
+
     let calendar_structure =
         make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
             .unwrap_or_default();
@@ -427,6 +461,8 @@ pub async fn departures_at_osm_station(
         HashMap::new();
     let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> =
         BTreeMap::new();
+
+    let aspen_data_fetch_timer = Instant::now();
 
     let mut aspen_futures = Vec::new();
     for (chateau_id, trips_compressed_data) in &trip_compressed_btreemap_by_chateau {
@@ -535,6 +571,9 @@ pub async fn departures_at_osm_station(
                 .insert(chateau_id.clone(), nonscheduled_trips_data);
         }
     }
+
+    let aspen_data_fetch_time = aspen_data_fetch_timer.elapsed();
+    let event_generation_timer = Instant::now();
 
     // Build stop info responses
     let stop_info_responses: Vec<StopInfoResponse> = linked_stops
@@ -964,24 +1003,43 @@ pub async fn departures_at_osm_station(
         in_range(t1) || in_range(t2) || in_range(t3) || in_range(t4)
     });
 
-    events.sort_by_key(|x| {
-        x.realtime_departure.unwrap_or(
-            x.realtime_arrival.unwrap_or(
-                x.scheduled_departure
-                    .unwrap_or(x.scheduled_arrival.unwrap_or(0)),
-            ),
-        )
+    events.sort_by(|a, b| {
+        let time_a = a
+            .scheduled_departure
+            .or(a.realtime_departure)
+            .or(a.scheduled_arrival)
+            .or(a.realtime_arrival)
+            .unwrap_or(0);
+        let time_b = b
+            .scheduled_departure
+            .or(b.realtime_departure)
+            .or(b.scheduled_arrival)
+            .or(b.realtime_arrival)
+            .unwrap_or(0);
+        time_a.cmp(&time_b)
     });
 
-    let response = DeparturesAtOsmStationResponse {
+    let event_generation_time = event_generation_timer.elapsed();
+
+    HttpResponse::Ok().json(DeparturesAtOsmStationResponse {
         osm_station: osm_station_info,
         stops: stop_info_responses,
         events,
         routes,
-        shapes,
+        shapes: match include_shapes {
+            true => shapes,
+            false => BTreeMap::new(),
+        },
         alerts,
         agencies,
-    };
-
-    HttpResponse::Ok().json(response)
+        debug: DeparturesAtOsmStationDebug {
+            total_time_ms: start.elapsed().as_millis(),
+            etcd_connection_time_ms: etcd_connection_time.as_millis(),
+            db_connection_time_ms: db_connection_time.as_millis(),
+            initial_osm_query_ms: initial_osm_query_time.as_millis(),
+            stop_data_fetch_ms: stop_data_fetch_time.as_millis(),
+            aspen_data_fetch_ms: aspen_data_fetch_time.as_millis(),
+            event_generation_ms: event_generation_time.as_millis(),
+        },
+    })
 }
