@@ -197,7 +197,13 @@ pub async fn departures_at_osm_station(
         .select(catenary::models::Stop::as_select())
         .load::<catenary::models::Stop>(conn);
 
+    let timer_one = Instant::now();
     let (osm_station_result, stops_result) = tokio::join!(osm_station_query, stops_query);
+
+    println!(
+        "Initial OSM queries took {} ms",
+        timer_one.elapsed().as_millis()
+    );
 
     let osm_station_info = match &osm_station_result {
         Ok(stations) if !stations.is_empty() => {

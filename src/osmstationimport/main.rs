@@ -474,7 +474,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     continue;
                 }
 
-
                 let mode = match classify_mode(&node.tags) {
                     Some(m) => m,
                     None => continue,

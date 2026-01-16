@@ -118,7 +118,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let args = Args::parse();
 
     let discord_log_env = std::env::var("DISCORD_LOG");
-    
+
     // Check for subcommand
     if let Some(Commands::MatchOsm { feed_id }) = args.command {
         return run_match_only(feed_id).await;
@@ -1079,8 +1079,8 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
 
     // 1. Get chateau ID and latest successful attempt ID
     let ingested_entry = {
-         use catenary::schema::gtfs::ingested_static::dsl::*;
-         ingested_static
+        use catenary::schema::gtfs::ingested_static::dsl::*;
+        ingested_static
             .filter(onestop_feed_id.eq(&feed_id))
             .filter(ingestion_successfully_finished.eq(true))
             .filter(deleted.eq(false))
