@@ -138,7 +138,10 @@ pub fn remove_banned_agencies(
 
                 // Check if agency is in banned agencies
                 if banned_agency_ids.contains(agency_id) {
-                    println!("Removing route {} due to banned agency {}", route_id, agency_id);
+                    println!(
+                        "Removing route {} due to banned agency {}",
+                        route_id, agency_id
+                    );
                     route_ids_to_remove.insert(route_id);
                 } else {
                     routes.push(record);

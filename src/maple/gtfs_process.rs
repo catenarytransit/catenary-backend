@@ -1145,7 +1145,7 @@ pub async fn gtfs_process_feed(
     println!("Dropping trips for {} to save memory...", feed_id);
     gtfs.trips.clear();
     gtfs.trips.shrink_to_fit();
-    
+
     // Force jemalloc garbage collection
     #[cfg(not(target_env = "msvc"))]
     {

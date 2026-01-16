@@ -993,7 +993,7 @@ pub async fn new_rt_data(
                                             vehicle.label.as_ref().map(|x| {
                                                 x.as_str().replace("313135", "").to_string()
                                             })
-                                        },
+                                        }
                                         _ => vehicle.label.clone(),
                                     },
                                     license_plate: vehicle.license_plate.clone(),

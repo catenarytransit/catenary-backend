@@ -38,13 +38,13 @@ use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
+use regex::Regex;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
-use regex::Regex;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Import OSM railway stations from PBF files", long_about = None)]
@@ -477,6 +477,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 // Filter out railway=station with railway:ref:parent (subsidiary stations)
                 if node.tags.get("railway").map_or(false, |v| v == "station")
                     && node.tags.contains_key("railway:ref:parent")
+                    && !node.tags.contains_key("local_ref")
                 {
                     continue;
                 }
@@ -618,7 +619,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // PASS 4: Deduplicate stations
     // =========================================================================
     println!("\n=== Pass 4: Deduplicating stations ===");
-    
+
     // Helper function for distance
     fn haversine_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
         let r = 6371000.0; // Earth radius in meters
@@ -650,11 +651,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let max_dist_meters = 1000.0;
 
     for (i, station) in stations.iter().enumerate() {
-        // Exception: Keep if it has ref or local_ref (platform numbers)
-        if station.ref_.is_some() || station.local_ref.is_some() {
-            continue;
-        }
-
         if let Some(name) = &station.name {
             let lat = station.point.y;
             let lon = station.point.x;
@@ -678,14 +674,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
             // Rule 1: Hbf Gleis
             if let Some(caps) = re_hbf.captures(name) {
-                 let base_name = caps.get(1).unwrap().as_str().trim();
-                 let hbf_name = format!("{} Hbf", base_name);
-                 let hauptbahnhof_name = format!("{} Hauptbahnhof", base_name);
-                 
-                 if check_duplicates(&hbf_name, "Rule 1") || check_duplicates(&hauptbahnhof_name, "Rule 1") {
-                     to_remove.insert(i);
-                     continue;
-                 }
+                let base_name = caps.get(1).unwrap().as_str().trim();
+                let hbf_name = format!("{} Hbf", base_name);
+                let hauptbahnhof_name = format!("{} Hauptbahnhof", base_name);
+
+                if check_duplicates(&hbf_name, "Rule 1")
+                    || check_duplicates(&hauptbahnhof_name, "Rule 1")
+                {
+                    to_remove.insert(i);
+                    continue;
+                }
             }
 
             // Rule 2: (tief)
