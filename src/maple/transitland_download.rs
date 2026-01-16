@@ -993,12 +993,7 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             );
         }
         "f-u3h-koleje~dolnoslaskie" => {
-            headers.insert(
-                "Authorization",
-                "Basic a2Q6QmFld29uZ29od3VnM0Fv".parse().unwrap(),
-            );
-            //login: kd
-            //password: Baewongohwug3Ao
+            request = request.basic_auth("kd_catenarymaps", Some("phahthohB2"));
             //https://kolejedolnoslaskie.pl/rozklady-gtfs/
         }
         "f-mavcsoport" => {
