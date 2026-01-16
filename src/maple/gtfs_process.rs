@@ -362,8 +362,16 @@ pub async fn gtfs_process_feed(
         "f-f24-octranspo" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                Some(vec![String::from("rail"), String::from("metro")]),
+                true,
+                false,
+            )?;
+
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
                 "./pfaedle-filtered-ontario-latest.osm.pbf",
-                None,
+                Some(vec!["bus".to_string()]),
                 true,
                 false,
             )?;
