@@ -604,16 +604,16 @@ pub async fn departures_at_osm_station(
     }
 
     let events_result = web::block(move || {
-        trip_compressed_btreemap_by_chateau.par_iter().map(|(chateau_id, trips_compressed_data)| {
-            let mut local_events = Vec::new();
-            let mut valid_trips: HashMap<String, Vec<ValidTripSet>> = HashMap::new();
+        trip_compressed_btreemap_by_chateau.par_iter().flat_map(|(chateau_id, trips_compressed_data)| {
             let active_services = active_services_by_chateau.get(chateau_id);
 
-            for (trip_id, trip_compressed) in trips_compressed_data.iter() {
+            trips_compressed_data.par_iter().flat_map(move |(trip_id, trip_compressed)| {
+                let mut local_events = Vec::new();
+
                 // Optimization: Skip trips with inactive services
                 if let Some(set) = active_services {
                     if !set.contains(trip_compressed.service_id.as_str()) {
-                        continue;
+                        return Vec::new();
                     }
                 }
 
@@ -630,7 +630,7 @@ pub async fn departures_at_osm_station(
                     .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
                 {
                     Some(x) => x,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let itinerary_rows = match itins_btreemap_by_chateau
@@ -638,12 +638,12 @@ pub async fn departures_at_osm_station(
                     .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
                 {
                     Some(x) => x,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let direction_pattern_id = match &itin_for_this_trip.direction_pattern_id {
                     Some(id) => id,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let direction_meta = match direction_meta_btreemap_by_chateau
@@ -651,12 +651,12 @@ pub async fn departures_at_osm_station(
                     .and_then(|m| m.get(direction_pattern_id.as_str()))
                 {
                     Some(x) => x,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let itin_ref = match itinerary_rows.last() {
                     Some(x) => x,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let time_since_start = match itin_ref.departure_time_since_start {
@@ -669,12 +669,12 @@ pub async fn departures_at_osm_station(
 
                 let timezone = match chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str()) {
                     Ok(tz) => tz,
-                    Err(_) => continue,
+                    Err(_) => return Vec::new(),
                 };
 
                 let time_delta = match chrono::TimeDelta::new(time_since_start.into(), 0) {
                     Some(td) => td,
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
@@ -689,7 +689,7 @@ pub async fn departures_at_osm_station(
 
                 let service = match calendar_structure.get(chateau_id.as_str()) {
                     Some(cal) => cal.get(trip_compressed.service_id.as_str()),
-                    None => continue,
+                    None => return Vec::new(),
                 };
 
                 if let Some(service) = service {
@@ -703,7 +703,7 @@ pub async fn departures_at_osm_station(
 
                     if !dates.is_empty() {
                         for date in dates {
-                            let t = ValidTripSet {
+                            let valid_trip = ValidTripSet {
                                 chateau_id: chateau_id.clone(),
                                 trip_id: (&trip_compressed.trip_id).into(),
                                 timezone: chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str())
@@ -743,231 +743,218 @@ pub async fn departures_at_osm_station(
                                 service_id: trip_compressed.service_id.clone(),
                             };
 
-                            match valid_trips.entry(trip_compressed.trip_id.clone()) {
-                                std::collections::hash_map::Entry::Occupied(mut oe) => {
-                                    oe.get_mut().push(t);
-                                }
-                                std::collections::hash_map::Entry::Vacant(ve) => {
-                                    ve.insert(vec![t]);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+                            // Generate events for this valid trip
+                            if valid_trip.frequencies.is_none() {
+                                for itin_option in valid_trip.itinerary_options.iter() {
+                                    // Check if this stop is in our search set (O(1) with HashSet)
+                                    let stop_in_search = stops_to_search
+                                        .get(chateau_id)
+                                        .map(|stops| stops.contains(itin_option.stop_id.as_str()))
+                                        .unwrap_or(false);
 
-            // Loop through valid trips and create events
-            for valid_trips_vec in valid_trips.values() {
-                for valid_trip in valid_trips_vec.iter() {
-                    if valid_trip.frequencies.is_none() {
-                        for itin_option in valid_trip.itinerary_options.iter() {
-                            // Check if this stop is in our search set (O(1) with HashSet)
-                            let stop_in_search = stops_to_search
-                                .get(chateau_id)
-                                .map(|stops| stops.contains(itin_option.stop_id.as_str()))
-                                .unwrap_or(false);
+                                    if !stop_in_search {
+                                        continue;
+                                    }
 
-                            if !stop_in_search {
-                                continue;
-                            }
+                                    let mut trip_cancelled: bool = false;
+                                    let mut trip_deleted: bool = false;
+                                    let mut stop_cancelled: bool = false;
+                                    let mut departure_time_rt: Option<u64> = None;
+                                    let mut platform: Option<String> = None;
+                                    let mut arrival_time_rt: Option<u64> = None;
+                                    let mut trip_update_for_event: Option<&AspenisedTripUpdate> = None;
+                                    let mut vehicle_num: Option<String> = None;
 
-                            let mut trip_cancelled: bool = false;
-                            let mut trip_deleted: bool = false;
-                            let mut stop_cancelled: bool = false;
-                            let mut departure_time_rt: Option<u64> = None;
-                            let mut platform: Option<String> = None;
-                            let mut arrival_time_rt: Option<u64> = None;
-                            let mut trip_update_for_event: Option<&AspenisedTripUpdate> = None;
-                            let mut vehicle_num: Option<String> = None;
+                                    if let Some(index) = alert_indices.get(chateau_id) {
+                                        let relevant_alerts =
+                                            index.search(&valid_trip.route_id, &valid_trip.trip_id);
+                                        for alert in relevant_alerts {
+                                            if alert.effect == Some(1) {
+                                                let event_time =
+                                                    valid_trip.reference_start_of_service_date.timestamp()
+                                                        as u64
+                                                        + valid_trip.trip_start_time as u64
+                                                        + itin_option.departure_time_since_start.unwrap_or(0)
+                                                            as u64;
 
-                            if let Some(index) = alert_indices.get(chateau_id) {
-                                let relevant_alerts =
-                                    index.search(&valid_trip.route_id, &valid_trip.trip_id);
-                                for alert in relevant_alerts {
-                                    if alert.effect == Some(1) {
-                                        let event_time =
-                                            valid_trip.reference_start_of_service_date.timestamp()
-                                                as u64
-                                                + valid_trip.trip_start_time as u64
-                                                + itin_option.departure_time_since_start.unwrap_or(0)
-                                                    as u64;
-
-                                        let is_active = alert.active_period.iter().any(|ap| {
-                                            let start = ap.start.unwrap_or(0);
-                                            let end = ap.end.unwrap_or(u64::MAX);
-                                            event_time >= start && event_time <= end
-                                        });
-                                        if is_active {
-                                            trip_cancelled = true;
+                                                let is_active = alert.active_period.iter().any(|ap| {
+                                                    let start = ap.start.unwrap_or(0);
+                                                    let end = ap.end.unwrap_or(u64::MAX);
+                                                    event_time >= start && event_time <= end
+                                                });
+                                                if is_active {
+                                                    trip_cancelled = true;
+                                                }
+                                            }
                                         }
                                     }
-                                }
-                            }
 
-                            if let Some(gtfs_trip_aspenised) =
-                                chateau_to_trips_aspenised.get(chateau_id.as_str())
-                            {
-                                if let Some(trip_update_ids) = gtfs_trip_aspenised
-                                    .trip_id_to_trip_update_ids
-                                    .get(valid_trip.trip_id.as_str())
-                                {
-                                    if !trip_update_ids.is_empty() {
-                                        let does_trip_set_use_dates = gtfs_trip_aspenised
-                                            .trip_updates
-                                            .get(&trip_update_ids[0])
-                                            .unwrap()
-                                            .trip
-                                            .start_date
-                                            .is_some();
+                                    if let Some(gtfs_trip_aspenised) =
+                                        chateau_to_trips_aspenised.get(chateau_id.as_str())
+                                    {
+                                        if let Some(trip_update_ids) = gtfs_trip_aspenised
+                                            .trip_id_to_trip_update_ids
+                                            .get(valid_trip.trip_id.as_str())
+                                        {
+                                            if !trip_update_ids.is_empty() {
+                                                let does_trip_set_use_dates = gtfs_trip_aspenised
+                                                    .trip_updates
+                                                    .get(&trip_update_ids[0])
+                                                    .unwrap()
+                                                    .trip
+                                                    .start_date
+                                                    .is_some();
 
-                                        let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
-                                            trip_update_ids
-                                                .iter()
-                                                .map(|x| {
-                                                    (
-                                                        x,
-                                                        gtfs_trip_aspenised
-                                                            .trip_updates
-                                                            .get(x)
-                                                            .unwrap(),
-                                                    )
-                                                })
-                                                .filter(|(_x, trip_update)| {
-                                                    match does_trip_set_use_dates {
-                                                        true => {
-                                                            trip_update.trip.start_date
-                                                                == Some(valid_trip.trip_service_date)
-                                                        }
-                                                        false => estimate_service_date(
-                                                            valid_trip,
-                                                            trip_update,
-                                                            itin_option,
-                                                            calendar_structure
-                                                                .get(chateau_id.as_str())
-                                                                .unwrap(),
-                                                            chateau_id,
-                                                        ),
+                                                let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
+                                                    trip_update_ids
+                                                        .iter()
+                                                        .map(|x| {
+                                                            (
+                                                                x,
+                                                                gtfs_trip_aspenised
+                                                                    .trip_updates
+                                                                    .get(x)
+                                                                    .unwrap(),
+                                                            )
+                                                        })
+                                                        .filter(|(_x, trip_update)| {
+                                                            match does_trip_set_use_dates {
+                                                                true => {
+                                                                    trip_update.trip.start_date
+                                                                        == Some(valid_trip.trip_service_date)
+                                                                }
+                                                                false => estimate_service_date(
+                                                                    &valid_trip,
+                                                                    trip_update,
+                                                                    itin_option,
+                                                                    calendar_structure
+                                                                        .get(chateau_id.as_str())
+                                                                        .unwrap(),
+                                                                    chateau_id,
+                                                                ),
+                                                            }
+                                                        })
+                                                        .collect();
+
+                                                if !trip_updates.is_empty() {
+                                                    trip_update_for_event = Some(trip_updates[0].1);
+                                                    let trip_update = trip_updates[0].1;
+
+                                                    if let Some(vehicle) = &trip_update.vehicle {
+                                                        vehicle_num = vehicle.label.clone();
                                                     }
-                                                })
-                                                .collect();
 
-                                        if !trip_updates.is_empty() {
-                                            trip_update_for_event = Some(trip_updates[0].1);
-                                            let trip_update = trip_updates[0].1;
+                                                    if trip_update.trip.schedule_relationship
+                                                        == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled)
+                                                    {
+                                                        trip_cancelled = true;
+                                                    } else if trip_update.trip.schedule_relationship
+                                                        == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
+                                                    {
+                                                        trip_deleted = true;
+                                                    }
 
-                                            if let Some(vehicle) = &trip_update.vehicle {
-                                                vehicle_num = vehicle.label.clone();
-                                            }
-
-                                            if trip_update.trip.schedule_relationship
-                                                == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled)
-                                            {
-                                                trip_cancelled = true;
-                                            } else if trip_update.trip.schedule_relationship
-                                                == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
-                                            {
-                                                trip_deleted = true;
-                                            }
-
-                                            if let Some(matching_stu) =
-                                                trip_update.stop_time_update.iter().find(|stu| {
-                                                    stu.stop_sequence
-                                                        == Some(itin_option.gtfs_stop_sequence as u16)
-                                                        || stu.stop_id.as_ref().map(|s| s.as_str())
-                                                            == Some(itin_option.stop_id.as_str())
-                                                })
-                                            {
-                                                if let Some(arr) = &matching_stu.arrival {
-                                                    arrival_time_rt = arr.time.map(|t| t as u64);
-                                                }
-                                                if let Some(dep) = &matching_stu.departure {
-                                                    departure_time_rt = dep.time.map(|t| t as u64);
-                                                }
-                                                if let Some(plat) = &matching_stu.platform_string {
-                                                    platform = Some(plat.to_string());
-                                                }
-                                                if matching_stu.schedule_relationship
-                                                    == Some(
-                                                        AspenisedStopTimeScheduleRelationship::Skipped,
-                                                    )
-                                                {
-                                                    stop_cancelled = true;
+                                                    if let Some(matching_stu) =
+                                                        trip_update.stop_time_update.iter().find(|stu| {
+                                                            stu.stop_sequence
+                                                                == Some(itin_option.gtfs_stop_sequence as u16)
+                                                                || stu.stop_id.as_ref().map(|s| s.as_str())
+                                                                    == Some(itin_option.stop_id.as_str())
+                                                        })
+                                                    {
+                                                        if let Some(arr) = &matching_stu.arrival {
+                                                            arrival_time_rt = arr.time.map(|t| t as u64);
+                                                        }
+                                                        if let Some(dep) = &matching_stu.departure {
+                                                            departure_time_rt = dep.time.map(|t| t as u64);
+                                                        }
+                                                        if let Some(plat) = &matching_stu.platform_string {
+                                                            platform = Some(plat.to_string());
+                                                        }
+                                                        if matching_stu.schedule_relationship
+                                                            == Some(
+                                                                AspenisedStopTimeScheduleRelationship::Skipped,
+                                                            )
+                                                        {
+                                                            stop_cancelled = true;
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+
+                                    let scheduled_departure_time = itin_option.departure_time_since_start.map(
+                                        |departure_time_since_start| {
+                                            valid_trip.reference_start_of_service_date.timestamp() as u64
+                                                + valid_trip.trip_start_time as u64
+                                                + departure_time_since_start as u64
+                                        },
+                                    );
+
+                                    let scheduled_arrival_time =
+                                        itin_option
+                                            .arrival_time_since_start
+                                            .map(|arrival_time_since_start| {
+                                                valid_trip.reference_start_of_service_date.timestamp() as u64
+                                                    + valid_trip.trip_start_time as u64
+                                                    + arrival_time_since_start as u64
+                                            });
+
+                                    let is_last_stop = itin_option.gtfs_stop_sequence
+                                        == valid_trip
+                                            .itinerary_options
+                                            .last()
+                                            .map(|x| x.gtfs_stop_sequence)
+                                            .unwrap_or(0);
+
+                                    local_events.push(StopEvent {
+                                        scheduled_arrival: scheduled_arrival_time,
+                                        scheduled_departure: scheduled_departure_time,
+                                        realtime_arrival: arrival_time_rt,
+                                        realtime_departure: departure_time_rt,
+                                        trip_modified: false,
+                                        stop_cancelled,
+                                        trip_cancelled,
+                                        trip_deleted,
+                                        stop_id: itin_option.stop_id.to_string(),
+                                        trip_id: valid_trip.trip_id.to_string(),
+                                        chateau: chateau_id.clone(),
+                                        last_stop: is_last_stop,
+                                        platform_code: None,
+                                        headsign: itin_option.trip_headsign.clone().or_else(|| {
+                                            direction_meta_btreemap_by_chateau
+                                                .get(chateau_id.as_str())
+                                                .and_then(|m| m.get(&valid_trip.direction_pattern_id))
+                                                .map(|d| d.headsign_or_destination.clone())
+                                        }),
+                                        route_id: valid_trip.route_id.clone().to_string(),
+                                        vehicle_number: vehicle_num,
+                                        level_id: None,
+                                        uses_primary_stop: true,
+                                        unscheduled_trip: false,
+                                        moved_info: None,
+                                        platform_string_realtime: platform,
+                                        trip_short_name: valid_trip.trip_short_name.clone(),
+                                        service_date: Some(valid_trip.trip_service_date),
+                                        scheduled_trip_shape_id: direction_meta_btreemap_by_chateau
+                                            .get(chateau_id.as_str())
+                                            .and_then(|m| m.get(&valid_trip.direction_pattern_id))
+                                            .and_then(|d| d.gtfs_shape_id.clone())
+                                            .map(|x| x.into()),
+                                    });
                                 }
                             }
-
-                            let scheduled_departure_time = itin_option.departure_time_since_start.map(
-                                |departure_time_since_start| {
-                                    valid_trip.reference_start_of_service_date.timestamp() as u64
-                                        + valid_trip.trip_start_time as u64
-                                        + departure_time_since_start as u64
-                                },
-                            );
-
-                            let scheduled_arrival_time =
-                                itin_option
-                                    .arrival_time_since_start
-                                    .map(|arrival_time_since_start| {
-                                        valid_trip.reference_start_of_service_date.timestamp() as u64
-                                            + valid_trip.trip_start_time as u64
-                                            + arrival_time_since_start as u64
-                                    });
-
-                            let is_last_stop = itin_option.gtfs_stop_sequence
-                                == valid_trip
-                                    .itinerary_options
-                                    .last()
-                                    .map(|x| x.gtfs_stop_sequence)
-                                    .unwrap_or(0);
-
-                            local_events.push(StopEvent {
-                                scheduled_arrival: scheduled_arrival_time,
-                                scheduled_departure: scheduled_departure_time,
-                                realtime_arrival: arrival_time_rt,
-                                realtime_departure: departure_time_rt,
-                                trip_modified: false,
-                                stop_cancelled,
-                                trip_cancelled,
-                                trip_deleted,
-                                stop_id: itin_option.stop_id.to_string(),
-                                trip_id: valid_trip.trip_id.to_string(),
-                                chateau: chateau_id.clone(),
-                                last_stop: is_last_stop,
-                                platform_code: None,
-                                headsign: itin_option.trip_headsign.clone().or_else(|| {
-                                    direction_meta_btreemap_by_chateau
-                                        .get(chateau_id.as_str())
-                                        .and_then(|m| m.get(&valid_trip.direction_pattern_id))
-                                        .map(|d| d.headsign_or_destination.clone())
-                                }),
-                                route_id: valid_trip.route_id.clone().to_string(),
-                                vehicle_number: vehicle_num,
-                                level_id: None,
-                                uses_primary_stop: true,
-                                unscheduled_trip: false,
-                                moved_info: None,
-                                platform_string_realtime: platform,
-                                trip_short_name: valid_trip.trip_short_name.clone(),
-                                service_date: Some(valid_trip.trip_service_date),
-                                scheduled_trip_shape_id: direction_meta_btreemap_by_chateau
-                                    .get(chateau_id.as_str())
-                                    .and_then(|m| m.get(&valid_trip.direction_pattern_id))
-                                    .and_then(|d| d.gtfs_shape_id.clone())
-                                    .map(|x| x.into()),
-                            });
                         }
                     }
                 }
-            }
-            local_events
-        }).collect::<Vec<Vec<StopEvent>>>()
+                local_events
+            })
+        }).collect::<Vec<StopEvent>>()
     }).await;
 
     let mut events: Vec<StopEvent> = match events_result {
-        Ok(e) => e.into_iter().flatten().collect(),
+        Ok(e) => e,
         Err(e) => {
             eprintln!("Error in event generation: {:?}", e);
             vec![]
