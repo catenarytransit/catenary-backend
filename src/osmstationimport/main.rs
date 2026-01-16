@@ -474,18 +474,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     continue;
                 }
 
-                // Filter out railway=station with railway:ref:parent (subsidiary stations)
-                if node.tags.get("railway").map_or(false, |v| v == "station")
-                    && node.tags.contains_key("railway:ref:parent")
-                    && !node.tags.contains_key("local_ref") && !node.tags.contains_key("ref")
-                {
-                    if let Some(name) = node.tags.get("name") {
-                        println!("Skipped subsidiary station: {}", name);
-                    } else {
-                        println!("Skipped subsidiary station: {}", node.id.0);
-                    }
-                    continue;
-                }
 
                 let mode = match classify_mode(&node.tags) {
                     Some(m) => m,
