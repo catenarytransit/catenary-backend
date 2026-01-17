@@ -769,7 +769,7 @@ pub async fn departures_at_stop(
                             frequencies: freq_converted.clone(),
                             trip_service_date: date.0,
                             //TODO, fix eventually, cannot be all the itin rows
-                            itinerary_options: itinerary_rows
+                            itinerary_options: std::sync::Arc::new(itinerary_rows
                                 .iter()
                                 .map(|itin_row| ItinOption {
                                     arrival_time_since_start: itin_row.arrival_time_since_start,
@@ -789,7 +789,7 @@ pub async fn departures_at_stop(
                                     },
                                     trip_headsign_translations: None,
                                 })
-                                .collect::<Vec<_>>(),
+                                .collect::<Vec<_>>()),
                             reference_start_of_service_date: date.1,
                             itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
                             direction_pattern_id: itin_for_this_trip

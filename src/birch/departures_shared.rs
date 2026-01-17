@@ -368,7 +368,7 @@ pub struct ValidTripSet {
     pub trip_id: CompactString,
     pub frequencies: Option<Vec<gtfs_structures::Frequency>>,
     pub trip_service_date: NaiveDate,
-    pub itinerary_options: Vec<ItinOption>,
+    pub itinerary_options: Arc<Vec<ItinOption>>,
     pub reference_start_of_service_date: chrono::DateTime<chrono_tz::Tz>,
     pub itinerary_pattern_id: String,
     pub direction_pattern_id: String,

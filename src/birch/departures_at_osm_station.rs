@@ -621,6 +621,79 @@ pub async fn departures_at_osm_station(
             let alert_indices = alert_indices.clone();
             let chateau_to_trips_aspenised = chateau_to_trips_aspenised.clone();
 
+            // Build cache
+            let mut pattern_cache = HashMap::new();
+            if let Some(itins) = itins_btreemap_by_chateau.get(chateau_id) {
+                if let Some(metas) = itin_meta_btreemap_by_chateau.get(chateau_id) {
+                    for (pattern_id, rows) in itins {
+                        if rows.is_empty() { continue; }
+                        
+                        // Get Meta
+                        let meta = match metas.get(pattern_id) {
+                            Some(m) => m,
+                            None => continue,
+                        };
+                        
+                        // Parse Timezone
+                        let timezone = match chrono_tz::Tz::from_str(meta.timezone.as_str()) {
+                            Ok(tz) => tz,
+                            Err(_) => continue,
+                        };
+
+                        // Get Direction Meta
+                        let direction_meta = match direction_meta_btreemap_by_chateau
+                            .get(chateau_id)
+                            .and_then(|m| meta.direction_pattern_id.as_ref().and_then(|id| m.get(id))) 
+                        {
+                            Some(d) => d,
+                            None => continue,
+                        };
+
+                        // Build Options
+                        let options: Vec<ItinOption> = rows.iter().map(|itin_row| {
+                             ItinOption {
+                                arrival_time_since_start: itin_row.arrival_time_since_start,
+                                departure_time_since_start: itin_row.departure_time_since_start,
+                                interpolated_time_since_start: itin_row.interpolated_time_since_start,
+                                stop_id: itin_row.stop_id.clone(),
+                                gtfs_stop_sequence: itin_row.gtfs_stop_sequence,
+                                trip_headsign: match &itin_row.stop_headsign_idx {
+                                    Some(idx) => direction_meta
+                                        .stop_headsigns_unique_list
+                                        .as_ref()
+                                        .and_then(|list| list.get(*idx as usize))
+                                        .cloned()
+                                        .flatten(),
+                                    None => None,
+                                },
+                                trip_headsign_translations: None,
+                            }
+                        }).collect();
+
+                        // Calculate Reference Time (from last stop)
+                        // Original logic used rows.last()
+                        let last_row = rows.last().unwrap(); // Safe because checked is_empty
+                        let time_since_start = match last_row.departure_time_since_start {
+                            Some(t) => t,
+                            None => match last_row.arrival_time_since_start {
+                                Some(t) => t,
+                                None => last_row.interpolated_time_since_start.unwrap_or(0),
+                            },
+                        };
+
+                        pattern_cache.insert(pattern_id.clone(), (
+                            std::sync::Arc::new(options),
+                            timezone,
+                            time_since_start,
+                            meta.clone(),
+                            direction_meta.clone()
+                        ));
+                    }
+                }
+            }
+            
+            let pattern_cache = std::sync::Arc::new(pattern_cache);
+
             trips_compressed_data.par_iter().flat_map(move |(trip_id, trip_compressed)| {
                 let mut local_events = Vec::new();
 
@@ -639,54 +712,18 @@ pub async fn departures_at_osm_station(
 
                 let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
 
-                let itin_for_this_trip = match itin_meta_btreemap_by_chateau
-                    .get(chateau_id)
-                    .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
-                {
+                // Use Cache
+                let (options, timezone, time_since_start, itin_for_this_trip, direction_meta) = match pattern_cache.get(&trip_compressed.itinerary_pattern_id) {
                     Some(x) => x,
                     None => return Vec::new(),
                 };
-
-                let itinerary_rows = match itins_btreemap_by_chateau
-                    .get(chateau_id)
-                    .and_then(|m| m.get(&trip_compressed.itinerary_pattern_id))
-                {
-                    Some(x) => x,
-                    None => return Vec::new(),
-                };
-
+                
                 let direction_pattern_id = match &itin_for_this_trip.direction_pattern_id {
                     Some(id) => id,
                     None => return Vec::new(),
                 };
 
-                let direction_meta = match direction_meta_btreemap_by_chateau
-                    .get(chateau_id)
-                    .and_then(|m| m.get(direction_pattern_id.as_str()))
-                {
-                    Some(x) => x,
-                    None => return Vec::new(),
-                };
-
-                let itin_ref = match itinerary_rows.last() {
-                    Some(x) => x,
-                    None => return Vec::new(),
-                };
-
-                let time_since_start = match itin_ref.departure_time_since_start {
-                    Some(departure_time_since_start) => departure_time_since_start,
-                    None => match itin_ref.arrival_time_since_start {
-                        Some(arrival) => arrival,
-                        None => itin_ref.interpolated_time_since_start.unwrap_or(0),
-                    },
-                };
-
-                let timezone = match chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str()) {
-                    Ok(tz) => tz,
-                    Err(_) => return Vec::new(),
-                };
-
-                let time_delta = match chrono::TimeDelta::new(time_since_start.into(), 0) {
+                let time_delta = match chrono::TimeDelta::new((*time_since_start).into(), 0) {
                     Some(td) => td,
                     None => return Vec::new(),
                 };
@@ -694,7 +731,7 @@ pub async fn departures_at_osm_station(
                 let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
                     trip_id: trip_id.clone(),
                     chateau: chateau_id.clone(),
-                    timezone,
+                    timezone: *timezone,
                     frequency: freq_converted.clone(),
                     itinerary_id: itin_for_this_trip.itinerary_pattern_id.clone(),
                     direction_id: direction_pattern_id.clone(),
@@ -720,37 +757,13 @@ pub async fn departures_at_osm_station(
                             let valid_trip = ValidTripSet {
                                 chateau_id: chateau_id.clone(),
                                 trip_id: (&trip_compressed.trip_id).into(),
-                                timezone: chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str())
-                                    .ok(),
+                                timezone: Some(*timezone),
                                 frequencies: freq_converted.clone(),
                                 trip_service_date: date.0,
-                                itinerary_options: itinerary_rows
-                                    .iter()
-                                    .map(|itin_row| ItinOption {
-                                        arrival_time_since_start: itin_row.arrival_time_since_start,
-                                        departure_time_since_start: itin_row.departure_time_since_start,
-                                        interpolated_time_since_start: itin_row
-                                            .interpolated_time_since_start,
-                                        stop_id: itin_row.stop_id.clone(),
-                                        gtfs_stop_sequence: itin_row.gtfs_stop_sequence,
-                                        trip_headsign: match &itin_row.stop_headsign_idx {
-                                            Some(idx) => direction_meta
-                                                .stop_headsigns_unique_list
-                                                .as_ref()
-                                                .and_then(|list| list.get(*idx as usize))
-                                                .cloned()
-                                                .flatten(),
-                                            None => None,
-                                        },
-                                        trip_headsign_translations: None,
-                                    })
-                                    .collect::<Vec<_>>(),
+                                itinerary_options: options.clone(),
                                 reference_start_of_service_date: date.1,
-                                itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
-                                direction_pattern_id: itin_for_this_trip
-                                    .direction_pattern_id
-                                    .clone()
-                                    .unwrap(),
+                                itinerary_pattern_id: itin_for_this_trip.itinerary_pattern_id.clone(),
+                                direction_pattern_id: direction_pattern_id.clone(),
                                 route_id: itin_for_this_trip.route_id.clone(),
                                 trip_start_time: trip_compressed.start_time,
                                 trip_short_name: trip_compressed.trip_short_name.clone(),
@@ -937,10 +950,7 @@ pub async fn departures_at_osm_station(
                                         last_stop: is_last_stop,
                                         platform_code: None,
                                         headsign: itin_option.trip_headsign.clone().or_else(|| {
-                                            direction_meta_btreemap_by_chateau
-                                                .get(chateau_id.as_str())
-                                                .and_then(|m| m.get(&valid_trip.direction_pattern_id))
-                                                .map(|d| d.headsign_or_destination.clone())
+                                            Some(direction_meta.headsign_or_destination.clone())
                                         }),
                                         route_id: valid_trip.route_id.clone().to_string(),
                                         vehicle_number: vehicle_num,
@@ -951,10 +961,7 @@ pub async fn departures_at_osm_station(
                                         platform_string_realtime: platform,
                                         trip_short_name: valid_trip.trip_short_name.clone(),
                                         service_date: Some(valid_trip.trip_service_date),
-                                        scheduled_trip_shape_id: direction_meta_btreemap_by_chateau
-                                            .get(chateau_id.as_str())
-                                            .and_then(|m| m.get(&valid_trip.direction_pattern_id))
-                                            .and_then(|d| d.gtfs_shape_id.clone())
+                                        scheduled_trip_shape_id: direction_meta.gtfs_shape_id.clone()
                                             .map(|x| x.into()),
                                     });
                                 }
