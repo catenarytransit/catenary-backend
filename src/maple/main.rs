@@ -103,6 +103,11 @@ enum Commands {
         #[arg(long)]
         feed_id: String,
     },
+    /// Delete stale attempts for a specific feed
+    DeleteStaleAttempts {
+        #[arg(long)]
+        feed_id: String,
+    },
 }
 
 fn get_threads_gtfs() -> usize {
@@ -120,8 +125,35 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let discord_log_env = std::env::var("DISCORD_LOG");
 
     // Check for subcommand
-    if let Some(Commands::MatchOsm { feed_id }) = args.command {
-        return run_match_only(feed_id).await;
+    if let Some(Commands::MatchOsm { feed_id }) = &args.command {
+        return run_match_only(feed_id.clone()).await;
+    }
+
+    if let Some(Commands::DeleteStaleAttempts { feed_id }) = &args.command {
+        // get connection pool from database pool
+        let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
+        let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
+
+        let conn_pool = arc_conn_pool.as_ref();
+        let conn_pre = conn_pool.get().await;
+        let conn = &mut conn_pre.unwrap();
+
+        use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+
+        let active_attempts = ingested_static
+            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(feed_id))
+            .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+            .select(catenary::schema::gtfs::ingested_static::dsl::attempt_id)
+            .load::<String>(conn)
+            .await?;
+        
+        println!("Active attempts for {}: {:?}", feed_id, active_attempts);
+
+        return cleanup::delete_stale_attempts_for_feed(
+             feed_id,
+             &active_attempts,
+             Arc::clone(&arc_conn_pool),
+        ).await;
     }
 
     let elasticclient = if !args.no_elastic {
