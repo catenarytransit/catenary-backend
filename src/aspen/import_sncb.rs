@@ -193,17 +193,35 @@ pub async fn run_sncb_importer(
         {
             // Fetch trips from postgres
              if let Ok(mut conn) = pool.get().await {
-                   let today = now_utc.format("%Y%m%d").to_string();
-                   // Filter by date range. Day of week check is omitted for simplicity but date range is critical.
+                   let today_date_str = now_utc.format("%Y-%m-%d").to_string();
+                   let day_of_week = now_utc.format("%A").to_string().to_lowercase();
+                   
+                   // GTFS Logic:
+                   // Service is valid IF:
+                   // ( (Calendar is valid for range AND day_of_week is true) AND NOT (exception_type = 2 for today) )
+                   // OR
+                   // ( exception_type = 1 for today )
+                   
                    let q = diesel::sql_query(format!(
                        "SELECT DISTINCT t.trip_short_name 
-                        FROM trips_compressed t
-                        JOIN calendar c ON t.service_id = c.service_id
+                        FROM gtfs.trips_compressed t
+                        LEFT JOIN gtfs.calendar c ON t.service_id = c.service_id AND t.onestop_feed_id = c.onestop_feed_id
+                        LEFT JOIN gtfs.calendar_dates cd ON t.service_id = cd.service_id AND t.onestop_feed_id = cd.onestop_feed_id AND cd.gtfs_date = '{}'
                         WHERE t.chateau = 'sncb'
-                        AND c.start_date <= '{}' AND c.end_date >= '{}'
+                        AND (
+                            (
+                                c.gtfs_start_date <= '{}' AND c.gtfs_end_date >= '{}' AND c.{} = true
+                                AND (cd.exception_type IS NULL OR cd.exception_type != 2)
+                            )
+                            OR
+                            (
+                                cd.exception_type = 1
+                            )
+                        )
                         AND t.trip_short_name IS NOT NULL", 
-                       today, today
+                       today_date_str, today_date_str, today_date_str, day_of_week
                    ));
+
 
                    let trips_result = q.load::<TripShortNameQuery>(&mut conn).await;
 
@@ -213,6 +231,8 @@ pub async fn run_sncb_importer(
                            trip_ids_to_fetch.insert(t.trip_short_name); 
                        }
                        println!("[SNCB] Fetched {} active SNCB trips to query", trip_ids_to_fetch.len());
+                   } else {
+                       eprintln!("[SNCB] Failed to fetch active SNCB trips from postgres");
                    }
              }
         }
