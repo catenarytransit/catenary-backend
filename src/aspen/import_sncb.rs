@@ -130,7 +130,7 @@ impl ProxyClient {
     async fn mark_cooldown(&self) {
         let mut cooldown = self.cooldown_until.lock().await;
         *cooldown = Some(Instant::now() + Duration::from_secs(300)); // 5 minutes backoff
-        println!("Backing off proxy {} for 5 minutes due to 429", self.name);
+        println!("[SNCB] Backing off proxy {} for 5 minutes due to 429", self.name);
     }
 
     async fn clear_cooldown(&self) {
@@ -143,7 +143,7 @@ pub async fn run_sncb_importer(
     sncb_data: Arc<SncbSharedData>,
     pool: Arc<CatenaryPostgresPool>,
 ) {
-    println!("Starting SNCB Importer...");
+    println!("[SNCB] Starting SNCB Importer...");
 
     let clients = vec![
         Arc::new(ProxyClient {
@@ -212,7 +212,7 @@ pub async fn run_sncb_importer(
                        for t in trips {
                            trip_ids_to_fetch.insert(t.trip_short_name); 
                        }
-                       println!("Fetched {} active SNCB trips to query", trip_ids_to_fetch.len());
+                       println!("[SNCB] Fetched {} active SNCB trips to query", trip_ids_to_fetch.len());
                    }
              }
         }
@@ -281,11 +281,11 @@ pub async fn run_sncb_importer(
                              }
                          } else {
                             // 404 or other error
-                            // println!("Failed to fetch {}: {}", short_name_clone, resp.status());
+                            println!("[SNCB] Failed to fetch {}: {}", short_name_clone, resp.status());
                          }
                      }
                      Err(e) => {
-                         println!("Request failed for {}: {}", short_name_clone, e);
+                         println!("[SNCB] Request failed for {}: {}", short_name_clone, e);
                      }
                  }
              });
