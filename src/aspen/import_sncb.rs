@@ -155,26 +155,6 @@ pub async fn run_sncb_importer(
             cooldown_until: Mutex::new(None),
             name: "Direct".to_string(),
         }),
-        Arc::new(ProxyClient {
-            client: Client::builder()
-                .user_agent("Catenary Maps <kyler@catenarymaps.org>")
-                .proxy(reqwest::Proxy::all("http://40.89.145.14:80").unwrap())
-                .build()
-                .unwrap(),
-            last_request: Mutex::new(Instant::now() - Duration::from_secs(1)),
-            cooldown_until: Mutex::new(None),
-            name: "Proxy1".to_string(),
-        }),
-        Arc::new(ProxyClient {
-            client: Client::builder()
-                .user_agent("Catenary Maps <kyler@catenarymaps.org>")
-                .proxy(reqwest::Proxy::all("http://141.253.118.174:80").unwrap())
-                .build()
-                .unwrap(),
-            last_request: Mutex::new(Instant::now() - Duration::from_secs(1)),
-            cooldown_until: Mutex::new(None),
-            name: "Proxy2".to_string(),
-        }),
     ];
 
     let mut trip_ids_to_fetch: AHashSet<String> = AHashSet::new();
@@ -301,11 +281,11 @@ pub async fn run_sncb_importer(
                              }
                          } else {
                             // 404 or other error
-                            println!("[SNCB] Failed to fetch {}: {}", short_name_clone, resp.status());
+                            println!("[SNCB] Failed to fetch {} ({}): {}", short_name_clone, client_clone.name, resp.status());
                          }
                      }
                      Err(e) => {
-                         println!("[SNCB] Request failed for {}: {}", short_name_clone, e);
+                         println!("[SNCB] Request failed for {} ({}): {}", short_name_clone, client_clone.name, e);
                      }
                  }
              });
