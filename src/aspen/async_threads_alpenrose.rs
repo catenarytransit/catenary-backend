@@ -4,7 +4,7 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
-use rayon::prelude::*;
+
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
+use crate::import_sncb::SncbSharedData;
 
 use crate::import_alpenrose::new_rt_data;
 
@@ -24,6 +25,7 @@ pub async fn alpenrose_process_threads(
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     _lease_id_for_this_worker: i64,
     redis_client: redis::Client,
+    sncb_data: Arc<SncbSharedData>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut set: JoinSet<_> = JoinSet::new();
 
@@ -34,6 +36,7 @@ pub async fn alpenrose_process_threads(
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
         let redis_client = redis_client.clone();
+        let sncb_data = sncb_data.clone();
 
         set.spawn(async move {
             loop {
@@ -44,6 +47,7 @@ pub async fn alpenrose_process_threads(
                     conn_pool.clone(),
                     chateau_queue_list.clone(),
                     redis_client.clone(),
+                    sncb_data.clone(),
                 )
                 .await;
 
@@ -69,6 +73,7 @@ pub async fn alpenrose_process_threads(
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
         let redis_client = redis_client.clone();
+        let sncb_data = sncb_data.clone();
         set.spawn(async move {
             loop {
                 let result = alpenrose_loop_process_thread(
@@ -78,6 +83,7 @@ pub async fn alpenrose_process_threads(
                     conn_pool.clone(),
                     chateau_queue_list.clone(),
                     redis_client.clone(),
+                    sncb_data.clone(),
                 )
                 .await;
 
@@ -99,6 +105,7 @@ pub async fn alpenrose_loop_process_thread(
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     redis_client: redis::Client,
+    sncb_data: Arc<SncbSharedData>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");
@@ -119,6 +126,7 @@ pub async fn alpenrose_loop_process_thread(
                     new_ingest_task.alerts_response_code,
                     Arc::clone(&conn_pool),
                     &redis_client,
+                    Some(sncb_data.clone()),
                 )
                 .await;
 

@@ -53,8 +53,7 @@ use tarpc::{
     tokio_serde::formats::Bincode,
 };
 use tokio::sync::Mutex;
-use tokio::time;
-use tracing_subscriber::filter;
+
 use uuid::Uuid;
 mod delay_calculation;
 mod import_alpenrose;
@@ -75,7 +74,7 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::parse_gtfs_rt_message;
 use rand::Rng;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 mod alerts_responder;
 mod aspen_assignment;
 use catenary::rt_recent_history::RtCacheEntry;
@@ -94,6 +93,7 @@ use std::time::Instant;
 mod alerts_processing;
 mod persistence;
 mod track_number;
+mod import_sncb;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
@@ -126,12 +126,13 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+    pub sncb_data: Arc<import_sncb::SncbSharedData>,
 }
 
 impl AspenRpc for AspenServer {
     async fn get_realtime_stops(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>> {
@@ -167,7 +168,7 @@ impl AspenRpc for AspenServer {
 
     async fn get_shape(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
         shape_id: String,
     ) -> Option<EcoString> {
@@ -356,7 +357,7 @@ impl AspenRpc for AspenServer {
 
     async fn get_all_trips_with_ids(
         self,
-        ctx: context::Context,
+        _ctx: context::Context,
         chateau_id: String,
         trip_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
@@ -1151,7 +1152,7 @@ impl AspenRpc for AspenServer {
                                     let filtered_vehicle_routes_cache = aspenised_data
                                         .vehicle_routes_cache
                                         .iter()
-                                        .filter(|(route_id, route_info)| {
+                                        .filter(|(_route_id, route_info)| {
                                             route_types_filter.contains(&route_info.route_type)
                                         })
                                         .map(|(a, b)| (a.clone(), b.clone()))
@@ -1168,7 +1169,7 @@ impl AspenRpc for AspenServer {
                             let filtered_vehicle_positions = aspenised_data
                                 .vehicle_positions
                                 .iter()
-                                .filter(|(gtfs_id, vehicle_position)| {
+                                .filter(|(_gtfs_id, vehicle_position)| {
                                     match &vehicle_position.trip {
                                         Some(trip) => match &trip.route_id {
                                             Some(route_id) => {
@@ -1203,7 +1204,7 @@ impl AspenRpc for AspenServer {
 
     async fn get_vehicle_locations_with_route_filtering(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
         existing_fasthash_of_routes: Option<u64>,
         route_ids: Option<Vec<String>>,
@@ -1217,7 +1218,7 @@ impl AspenRpc for AspenServer {
                 let vehicle_pos_new = aspenised_data
                     .vehicle_positions
                     .iter()
-                    .filter(|(key, value)| match &route_ids {
+                    .filter(|(_key, value)| match &route_ids {
                         Some(route_ids_filter_input) => match &value.trip {
                             None => false,
                             Some(trip) => match &trip.route_id {
@@ -1414,7 +1415,7 @@ impl AspenRpc for AspenServer {
 
     async fn full_aspen_dataset(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
     ) -> Option<AspenisedData> {
         match self
@@ -1434,7 +1435,7 @@ impl AspenRpc for AspenServer {
 
     async fn full_aspen_dataset_backup(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
     ) -> Option<AspenisedData> {
         match self.backup_data_store.as_ref().get_async(&chateau_id).await {
@@ -1449,7 +1450,7 @@ impl AspenRpc for AspenServer {
 
     async fn insert_backup_aspen_dataset(
         self,
-        context: tarpc::context::Context,
+        _context: tarpc::context::Context,
         chateau_id: String,
         data: AspenisedData,
     ) -> () {
@@ -1598,6 +1599,15 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(SccHashMap::new());
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
+    let sncb_data: Arc<import_sncb::SncbSharedData> = Arc::new(SccHashMap::new());
+
+    // Spawn SNCB Importer
+    let sncb_data_importer = Arc::clone(&sncb_data);
+    let pool_importer = Arc::clone(&arc_conn_pool);
+    tokio::spawn(async move {
+        import_sncb::run_sncb_importer(sncb_data_importer, pool_importer).await;
+    });
+
     //run both the leader and the listener simultaniously
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
@@ -1657,6 +1667,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&alpenrose_to_process_queue_chateaux),
         etcd_lease_id_for_this_worker,
         redis_client.clone(),
+        Arc::clone(&sncb_data),
     ));
 
     let this_worker_id_copy = this_worker_id.clone();
@@ -1758,6 +1769,7 @@ async fn main() -> anyhow::Result<()> {
             let conn_pool_arced = Arc::clone(&arc_conn_pool);
 
             let etcd_addresses = Arc::clone(&Arc::clone(&etcd_addresses));
+            let sncb_data_server = Arc::clone(&sncb_data);
 
             move || async move {
                 listener
@@ -1787,6 +1799,7 @@ async fn main() -> anyhow::Result<()> {
                                 SccHashMap::new(),
                             ),
                             backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
+                            sncb_data: Arc::clone(&sncb_data_server),
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })
