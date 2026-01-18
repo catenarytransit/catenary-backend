@@ -48,6 +48,51 @@ pub fn load_chateau_data(
     Ok(Some(data))
 }
 
+use super::import_sncb::IRailVehicleResponse;
+use std::collections::HashMap;
+
+pub fn save_sncb_data(
+    data: &HashMap<String, IRailVehicleResponse>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dir = "data/sncb_data";
+    std::fs::create_dir_all(dir)?;
+
+    let file_path = format!("{}/sncb_cache.bin.zlib", dir);
+    let temp_file_path = format!("{}/sncb_cache.bin.zlib.tmp", dir);
+
+    let file = File::create(&temp_file_path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
+
+    let bytes = catenary::bincode_serialize(data)?;
+    encoder.write_all(&bytes)?;
+
+    encoder.finish()?;
+
+    std::fs::rename(temp_file_path, file_path)?;
+
+    Ok(())
+}
+
+pub fn load_sncb_data() -> Result<Option<HashMap<String, IRailVehicleResponse>>, Box<dyn std::error::Error + Send + Sync>> {
+    let file_path = "data/sncb_data/sncb_cache.bin.zlib";
+    let path = Path::new(file_path);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut decoder = flate2::read::ZlibDecoder::new(reader);
+    let mut buffer = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+
+    let data: HashMap<String, IRailVehicleResponse> = catenary::bincode_deserialize(&buffer)?;
+
+    Ok(Some(data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

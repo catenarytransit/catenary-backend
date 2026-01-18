@@ -116,7 +116,7 @@ impl ProxyClient {
         
         let last = self.last_request.lock().await;
         // Enforce roughly 3 req/s -> 333ms per request
-        if now.duration_since(*last) < Duration::from_millis(340) {
+        if now.duration_since(*last) < Duration::from_millis(400) {
             return false;
         }
         true
@@ -129,8 +129,8 @@ impl ProxyClient {
 
     async fn mark_cooldown(&self) {
         let mut cooldown = self.cooldown_until.lock().await;
-        *cooldown = Some(Instant::now() + Duration::from_secs(300)); // 5 minutes backoff
-        println!("[SNCB] Backing off proxy {} for 5 minutes due to 429", self.name);
+        *cooldown = Some(Instant::now() + Duration::from_secs(10)); // 10s backoff
+        println!("[SNCB] Backing off proxy {} for 10s due to 429", self.name);
     }
 
     async fn clear_cooldown(&self) {
