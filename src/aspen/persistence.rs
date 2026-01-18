@@ -118,22 +118,25 @@ mod tests {
 
         // Populate the cache with some dummy data
         data.itinerary_pattern_internal_cache
-            .itinerary_pattern_meta
+            .itinerary_patterns
             .insert(
                 "test_pattern".to_string(),
-                catenary::models::ItineraryPatternMeta {
-                    onestop_feed_id: "test_feed".to_string(),
-                    attempt_id: "test_attempt".to_string(),
-                    trip_ids: vec![],
-                    itinerary_pattern_id: "test_pattern".to_string(),
-                    chateau: "test_chateau".to_string(),
-                    trip_headsign: None,
-                    trip_headsign_translations: None,
-                    shape_id: None,
-                    timezone: "UTC".to_string(),
-                    route_id: "test_route".into(),
-                    direction_pattern_id: Some("test_direction".to_string()),
-                },
+                (
+                    catenary::models::ItineraryPatternMeta {
+                        onestop_feed_id: "test_feed".to_string(),
+                        attempt_id: "test_attempt".to_string(),
+                        trip_ids: vec![],
+                        itinerary_pattern_id: "test_pattern".to_string(),
+                        chateau: "test_chateau".to_string(),
+                        trip_headsign: None,
+                        trip_headsign_translations: None,
+                        shape_id: None,
+                        timezone: "UTC".to_string(),
+                        route_id: "test_route".into(),
+                        direction_pattern_id: Some("test_direction".to_string()),
+                    },
+                    vec![],
+                ),
             );
 
         save_chateau_data(chateau_id, &data).unwrap();
@@ -143,7 +146,7 @@ mod tests {
         assert!(
             loaded_data
                 .itinerary_pattern_internal_cache
-                .itinerary_pattern_meta
+                .itinerary_patterns
                 .is_empty()
         );
 

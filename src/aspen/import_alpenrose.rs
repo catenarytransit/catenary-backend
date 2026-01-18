@@ -1600,7 +1600,7 @@ pub async fn new_rt_data(
                 }
             }
 
-            if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
+                if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
                 .await
             {
@@ -1613,16 +1613,24 @@ pub async fn new_rt_data(
 
                         let processed_alert = crate::alerts_processing::process_alert(
                             aspenised_alert,
-                            &alert_id,
                             chateau_id,
-                            &mut impacted_route_id_to_alert_ids,
-                            &mut impact_trip_id_to_alert_ids,
                         );
 
                         alerts.insert(alert_id.clone(), processed_alert);
                     }
                 }
             }
+        }
+
+        alerts = crate::alerts_processing::deduplicate_alerts(alerts);
+
+        for (alert_id, alert) in alerts.iter() {
+            crate::alerts_processing::index_alert(
+                alert,
+                alert_id,
+                &mut impacted_route_id_to_alert_ids,
+                &mut impact_trip_id_to_alert_ids,
+            );
         }
 
         for route_id in route_ids_to_insert.iter() {

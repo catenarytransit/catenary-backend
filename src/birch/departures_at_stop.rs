@@ -9,7 +9,6 @@ use actix_web::HttpResponse;
 use actix_web::Responder;
 use actix_web::web;
 use actix_web::web::Query;
-use amtrak_gtfs_rt::asm::Stop;
 use catenary::CalendarUnified;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
