@@ -146,14 +146,15 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .select(catenary::schema::gtfs::ingested_static::dsl::attempt_id)
             .load::<String>(conn)
             .await?;
-        
+
         println!("Active attempts for {}: {:?}", feed_id, active_attempts);
 
         return cleanup::delete_stale_attempts_for_feed(
-             feed_id,
-             &active_attempts,
-             Arc::clone(&arc_conn_pool),
-        ).await;
+            feed_id,
+            &active_attempts,
+            Arc::clone(&arc_conn_pool),
+        )
+        .await;
     }
 
     let elasticclient = if !args.no_elastic {

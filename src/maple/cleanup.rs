@@ -13,8 +13,6 @@ use serde_json::json;
 use std::error::Error;
 use std::sync::Arc;
 
-
-
 pub async fn delete_attempt_objects_elasticsearch(
     feed_id: &str,
     attempt_id: &str,

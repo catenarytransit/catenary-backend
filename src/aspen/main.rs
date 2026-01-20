@@ -91,9 +91,9 @@ use std::io::Write;
 use std::time::Instant;
 
 mod alerts_processing;
+mod import_sncb;
 mod persistence;
 mod track_number;
-mod import_sncb;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
@@ -1625,11 +1625,13 @@ async fn main() -> anyhow::Result<()> {
         loop {
             tokio::time::sleep(Duration::from_secs(300)).await; // 5 minutes
             let mut data_to_save = HashMap::new();
-            
-            sncb_data_persistence.any_async(|k: &String, v: &import_sncb::IRailVehicleResponse| {
-                data_to_save.insert(k.clone(), v.clone());
-                false
-            }).await;
+
+            sncb_data_persistence
+                .any_async(|k: &String, v: &import_sncb::IRailVehicleResponse| {
+                    data_to_save.insert(k.clone(), v.clone());
+                    false
+                })
+                .await;
 
             if let Err(e) = persistence::save_sncb_data(&data_to_save) {
                 eprintln!("[SNCB] Failed to save persistence data: {}", e);

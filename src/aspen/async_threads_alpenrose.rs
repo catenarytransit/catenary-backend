@@ -4,7 +4,7 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
-
+use crate::import_sncb::SncbSharedData;
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use crate::import_sncb::SncbSharedData;
 
 use crate::import_alpenrose::new_rt_data;
 

@@ -34,6 +34,7 @@ use ecow::EcoString;
 use futures::StreamExt;
 use futures::future::join_all;
 use geo::coord;
+use rayon::prelude::*;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -42,9 +43,8 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
-use tokio::join;
 use std::time::Instant;
-use rayon::prelude::*;
+use tokio::join;
 
 // Use shared types from departures_shared module
 use crate::departures_shared::{
@@ -605,7 +605,8 @@ pub async fn departures_at_osm_station(
 
     let itins_btreemap_by_chateau = std::sync::Arc::new(itins_btreemap_by_chateau);
     let itin_meta_btreemap_by_chateau = std::sync::Arc::new(itin_meta_btreemap_by_chateau);
-    let direction_meta_btreemap_by_chateau = std::sync::Arc::new(direction_meta_btreemap_by_chateau);
+    let direction_meta_btreemap_by_chateau =
+        std::sync::Arc::new(direction_meta_btreemap_by_chateau);
     let calendar_structure = std::sync::Arc::new(calendar_structure);
     let stops_to_search = std::sync::Arc::new(stops_to_search);
     let alert_indices = std::sync::Arc::new(alert_indices);

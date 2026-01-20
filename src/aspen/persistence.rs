@@ -74,7 +74,8 @@ pub fn save_sncb_data(
     Ok(())
 }
 
-pub fn load_sncb_data() -> Result<Option<HashMap<String, IRailVehicleResponse>>, Box<dyn std::error::Error + Send + Sync>> {
+pub fn load_sncb_data()
+-> Result<Option<HashMap<String, IRailVehicleResponse>>, Box<dyn std::error::Error + Send + Sync>> {
     let file_path = "data/sncb_data/sncb_cache.bin.zlib";
     let path = Path::new(file_path);
 

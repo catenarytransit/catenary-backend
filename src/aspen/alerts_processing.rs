@@ -176,11 +176,11 @@ pub fn deduplicate_alerts(
                 // Let's assume order independent equality for robustness.
 
                 let active_period_match = {
-                   let mut ap_a = alert_a.active_period.clone();
-                   ap_a.sort_by(|a, b| a.start.cmp(&b.start));
-                   let mut ap_b = alert_b.active_period.clone();
-                   ap_b.sort_by(|a, b| a.start.cmp(&b.start));
-                   ap_a == ap_b
+                    let mut ap_a = alert_a.active_period.clone();
+                    ap_a.sort_by(|a, b| a.start.cmp(&b.start));
+                    let mut ap_b = alert_b.active_period.clone();
+                    ap_b.sort_by(|a, b| a.start.cmp(&b.start));
+                    ap_a == ap_b
                 };
 
                 let informed_entity_match = {
@@ -190,8 +190,10 @@ pub fn deduplicate_alerts(
                     // Given the context of GTFS-RT, usually order is consistent or strictly defined.
                     // Let's try hashset based for robustness if they are Hash-able.
                     // definied in aspen_dataset.rs, AspenEntitySelector is Hash.
-                    let set_a: std::collections::HashSet<_> = alert_a.informed_entity.iter().collect();
-                    let set_b: std::collections::HashSet<_> = alert_b.informed_entity.iter().collect();
+                    let set_a: std::collections::HashSet<_> =
+                        alert_a.informed_entity.iter().collect();
+                    let set_b: std::collections::HashSet<_> =
+                        alert_b.informed_entity.iter().collect();
                     set_a == set_b
                 };
 
@@ -227,7 +229,7 @@ pub fn deduplicate_alerts(
             // Merge component
             let mut merged_active_periods = std::collections::HashSet::new();
             let mut merged_informed_entities = std::collections::HashSet::new();
-            
+
             // Stable ID selection: sort IDs and pick the first one
             let mut ids = Vec::new();
 
@@ -246,24 +248,27 @@ pub fn deduplicate_alerts(
 
             ids.sort();
             let primary_id = ids[0].clone();
-            
+
             // Take the first alert as template
             let (_, mut template_alert) = group[component_indices[0]].clone();
-            
+
             // Update active periods
             template_alert.active_period = merged_active_periods.into_iter().collect();
             // Sort for determinism
-            template_alert.active_period.sort_by(|a, b| a.start.cmp(&b.start));
+            template_alert
+                .active_period
+                .sort_by(|a, b| a.start.cmp(&b.start));
 
             // Update informed entities
             template_alert.informed_entity = merged_informed_entities.into_iter().collect();
-            // Sort informed entities? They don't have a clear order. 
+            // Sort informed entities? They don't have a clear order.
             // We can leave them as is, or maybe sort by route_id/stop_id for determinism.
             // Let's implement a simple sort key.
             template_alert.informed_entity.sort_by(|a, b| {
-                a.route_id.cmp(&b.route_id)
-                 .then(a.stop_id.cmp(&b.stop_id))
-                 .then(a.triplet_cmp_key().cmp(&b.triplet_cmp_key()))
+                a.route_id
+                    .cmp(&b.route_id)
+                    .then(a.stop_id.cmp(&b.stop_id))
+                    .then(a.triplet_cmp_key().cmp(&b.triplet_cmp_key()))
             });
 
             deduplicated_alerts.insert(primary_id, template_alert);
@@ -279,7 +284,13 @@ trait TripletKey {
 
 impl TripletKey for catenary::aspen_dataset::AspenEntitySelector {
     fn triplet_cmp_key(&self) -> String {
-        format!("{:?}{:?}{:?}{:?}", self.agency_id, self.route_type, self.direction_id, self.trip.as_ref().map(|t| &t.trip_id))
+        format!(
+            "{:?}{:?}{:?}{:?}",
+            self.agency_id,
+            self.route_type,
+            self.direction_id,
+            self.trip.as_ref().map(|t| &t.trip_id)
+        )
     }
 }
 
@@ -319,45 +330,49 @@ mod tests {
 
     #[test]
     fn test_deduplicate_alerts_merging() {
-        use catenary::aspen_dataset::{AspenisedAlert, AspenTimeRange, AspenEntitySelector, AspenTranslatedString, AspenTranslation};
         use ahash::AHashMap;
-
-        let make_alert = |header: &str, start: u64, end: u64, route_id: Option<&str>| -> AspenisedAlert {
-            AspenisedAlert {
-                header_text: Some(AspenTranslatedString {
-                    translation: vec![AspenTranslation {
-                        text: header.to_string(),
-                        language: None,
-                    }],
-                }),
-                description_text: None,
-                active_period: vec![AspenTimeRange {
-                    start: Some(start),
-                    end: Some(end),
-                }],
-                informed_entity: vec![AspenEntitySelector {
-                    agency_id: None,
-                    route_id: route_id.map(|s| s.to_string()),
-                    route_type: None,
-                    trip: None,
-                    stop_id: None,
-                    direction_id: None,
-                }],
-                cause: None,
-                effect: None,
-                url: None,
-                tts_header_text: None,
-                tts_description_text: None,
-                severity_level: None,
-                image: None,
-                image_alternative_text: None,
-                cause_detail: None,
-                effect_detail: None,
-            }
+        use catenary::aspen_dataset::{
+            AspenEntitySelector, AspenTimeRange, AspenTranslatedString, AspenTranslation,
+            AspenisedAlert,
         };
 
+        let make_alert =
+            |header: &str, start: u64, end: u64, route_id: Option<&str>| -> AspenisedAlert {
+                AspenisedAlert {
+                    header_text: Some(AspenTranslatedString {
+                        translation: vec![AspenTranslation {
+                            text: header.to_string(),
+                            language: None,
+                        }],
+                    }),
+                    description_text: None,
+                    active_period: vec![AspenTimeRange {
+                        start: Some(start),
+                        end: Some(end),
+                    }],
+                    informed_entity: vec![AspenEntitySelector {
+                        agency_id: None,
+                        route_id: route_id.map(|s| s.to_string()),
+                        route_type: None,
+                        trip: None,
+                        stop_id: None,
+                        direction_id: None,
+                    }],
+                    cause: None,
+                    effect: None,
+                    url: None,
+                    tts_header_text: None,
+                    tts_description_text: None,
+                    severity_level: None,
+                    image: None,
+                    image_alternative_text: None,
+                    cause_detail: None,
+                    effect_detail: None,
+                }
+            };
+
         let mut alerts = AHashMap::new();
-        
+
         // Alert A: Time 1, Route 1
         let a = make_alert("Header", 100, 200, Some("R1"));
         alerts.insert("A".to_string(), a.clone());
@@ -385,9 +400,14 @@ mod tests {
 
         // Find the merged alert (A, B, C)
         // It should have 2 active periods and 2 informed entities.
-        let merged_alert = deduped.values().find(|x| x.active_period.len() > 1 && x.informed_entity.len() > 1);
-        
-        assert!(merged_alert.is_some(), "Could not find merged alert with multiple periods and entities");
+        let merged_alert = deduped
+            .values()
+            .find(|x| x.active_period.len() > 1 && x.informed_entity.len() > 1);
+
+        assert!(
+            merged_alert.is_some(),
+            "Could not find merged alert with multiple periods and entities"
+        );
         let merged_alert = merged_alert.unwrap();
 
         assert_eq!(merged_alert.active_period.len(), 2);

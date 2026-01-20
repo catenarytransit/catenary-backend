@@ -768,27 +768,30 @@ pub async fn departures_at_stop(
                             frequencies: freq_converted.clone(),
                             trip_service_date: date.0,
                             //TODO, fix eventually, cannot be all the itin rows
-                            itinerary_options: std::sync::Arc::new(itinerary_rows
-                                .iter()
-                                .map(|itin_row| ItinOption {
-                                    arrival_time_since_start: itin_row.arrival_time_since_start,
-                                    departure_time_since_start: itin_row.departure_time_since_start,
-                                    interpolated_time_since_start: itin_row
-                                        .interpolated_time_since_start,
-                                    stop_id: itin_row.stop_id.clone(),
-                                    gtfs_stop_sequence: itin_row.gtfs_stop_sequence,
-                                    trip_headsign: match &itin_row.stop_headsign_idx {
-                                        Some(idx) => direction_meta
-                                            .stop_headsigns_unique_list
-                                            .as_ref()
-                                            .and_then(|list| list.get(*idx as usize))
-                                            .cloned()
-                                            .flatten(),
-                                        None => None,
-                                    },
-                                    trip_headsign_translations: None,
-                                })
-                                .collect::<Vec<_>>()),
+                            itinerary_options: std::sync::Arc::new(
+                                itinerary_rows
+                                    .iter()
+                                    .map(|itin_row| ItinOption {
+                                        arrival_time_since_start: itin_row.arrival_time_since_start,
+                                        departure_time_since_start: itin_row
+                                            .departure_time_since_start,
+                                        interpolated_time_since_start: itin_row
+                                            .interpolated_time_since_start,
+                                        stop_id: itin_row.stop_id.clone(),
+                                        gtfs_stop_sequence: itin_row.gtfs_stop_sequence,
+                                        trip_headsign: match &itin_row.stop_headsign_idx {
+                                            Some(idx) => direction_meta
+                                                .stop_headsigns_unique_list
+                                                .as_ref()
+                                                .and_then(|list| list.get(*idx as usize))
+                                                .cloned()
+                                                .flatten(),
+                                            None => None,
+                                        },
+                                        trip_headsign_translations: None,
+                                    })
+                                    .collect::<Vec<_>>(),
+                            ),
                             reference_start_of_service_date: date.1,
                             itinerary_pattern_id: itin_ref.itinerary_pattern_id.clone(),
                             direction_pattern_id: itin_for_this_trip

@@ -49,7 +49,10 @@ pub async fn fetch_stop_data_for_chateau(
         .load::<catenary::models::ItineraryPatternRow>(&mut conn)
         .await
         .unwrap_or_default();
-    println!("PERF: itinerary_pattern fetch took {}ms", global_start.elapsed().as_millis());
+    println!(
+        "PERF: itinerary_pattern fetch took {}ms",
+        global_start.elapsed().as_millis()
+    );
     let t_section = std::time::Instant::now();
 
     let mut itins_btreemap = BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
@@ -80,7 +83,10 @@ pub async fn fetch_stop_data_for_chateau(
             .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
             .await
             .unwrap_or_default();
-        println!("PERF: itinerary_pattern_meta fetch took {}ms", t_section.elapsed().as_millis());
+        println!(
+            "PERF: itinerary_pattern_meta fetch took {}ms",
+            t_section.elapsed().as_millis()
+        );
         let t_section = std::time::Instant::now();
 
         let mut itin_meta_btreemap =
@@ -96,22 +102,75 @@ pub async fn fetch_stop_data_for_chateau(
             .into_iter()
             .collect();
 
-        let direction_meta =
+        let route_ids: Vec<CompactString> = itin_meta.iter().map(|x| x.route_id.clone()).collect();
+
+        // Prepare parallel fetches
+        // We need separate connections for concurrent execution or use a pool inside the join
+        // Since we only have 'conn1', we must rely on the pool to get new connections for parallel tasks
+        // or just accept valid parallelisation if we can clone the pool.
+
+        // However, 'pool' is passed to the function.
+        let pool_for_join = pool.clone();
+
+        let direction_ids_clone1 = direction_ids_to_search.clone();
+        let direction_ids_clone2 = direction_ids_to_search.clone();
+        let chateau_id_clone_dirs = chateau_id_clone.clone();
+        let chateau_id_clone_rows = chateau_id_clone.clone();
+        let chateau_id_clone_routes = chateau_id_clone.clone();
+        let chateau_id_clone_agencies = chateau_id_clone.clone();
+        let chateau_id_clone_shapes = chateau_id_clone.clone();
+
+        let direction_meta_task = async {
+            let mut conn = pool_for_join.get().await.unwrap();
             catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
                 .filter(
                     catenary::schema::gtfs::direction_pattern_meta::chateau
-                        .eq(chateau_id_clone.clone()),
+                        .eq(chateau_id_clone_dirs),
                 )
                 .filter(
                     catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
-                        .eq_any(&direction_ids_to_search),
+                        .eq_any(&direction_ids_clone1),
                 )
                 .select(catenary::models::DirectionPatternMeta::as_select())
-                .load::<catenary::models::DirectionPatternMeta>(&mut conn1)
+                .load::<catenary::models::DirectionPatternMeta>(&mut conn)
                 .await
-                .unwrap_or_default();
-        println!("PERF: direction_pattern_meta fetch took {}ms", t_section.elapsed().as_millis());
-        let t_section = std::time::Instant::now();
+                .unwrap_or_default()
+        };
+
+        let direction_rows_task = async {
+            let mut conn = pool_for_join.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(
+                    catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id_clone_rows),
+                )
+                .filter(
+                    catenary::schema::gtfs::direction_pattern::direction_pattern_id
+                        .eq_any(&direction_ids_clone2),
+                )
+                .select(catenary::models::DirectionPatternRow::as_select())
+                .load::<catenary::models::DirectionPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default()
+        };
+
+        let routes_task = async {
+            let mut conn = pool_for_join.get().await.unwrap();
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id_clone_routes))
+                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
+                .select(catenary::models::Route::as_select())
+                .load::<catenary::models::Route>(&mut conn)
+                .await
+                .unwrap_or_default()
+        };
+
+        // We first run direction meta to get shape IDs for shapes fetching, OR we could fetch shapes after
+        // But to maximize concurrency, we need shape IDs.
+        // Current logic: fetch direction_meta -> extract shape IDs -> fetch shapes.
+        // We can run (routes, direction_rows) parallel with direction_meta.
+
+        let (direction_meta, direction_rows, routes_ret) =
+            tokio::join!(direction_meta_task, direction_rows_task, routes_task);
 
         let mut direction_meta_btreemap =
             BTreeMap::<String, catenary::models::DirectionPatternMeta>::new();
@@ -124,54 +183,66 @@ pub async fn fetch_stop_data_for_chateau(
                 .insert(direction.direction_pattern_id.clone(), direction.clone());
         }
 
-        let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
+        let agencies_task = async {
+            let mut conn = pool_for_join.get().await.unwrap();
+            let agency_ids: Vec<String> = routes_ret
+                .iter()
+                .filter_map(|x| x.agency_id.clone())
+                .collect();
 
-        if include_shapes {
-            let shapes_result = catenary::schema::gtfs::shapes::dsl::shapes
-                .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id_clone.clone()))
-                .filter(
-                    catenary::schema::gtfs::shapes::shape_id
-                        .eq_any(&shape_ids_to_fetch_for_this_chateau),
-                )
-                .load::<catenary::models::Shape>(&mut conn1)
+            catenary::schema::gtfs::agencies::dsl::agencies
+                .filter(catenary::schema::gtfs::agencies::chateau.eq(chateau_id_clone_agencies))
+                .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
+                .select(catenary::models::Agency::as_select())
+                .load::<catenary::models::Agency>(&mut conn)
                 .await
-                .unwrap_or_default();
+                .unwrap_or_default()
+        };
 
-            for db_shape in shapes_result {
-                let shape_polyline = polyline::encode_coordinates(
-                    geo::LineString::new(
-                        db_shape
-                            .linestring
-                            .points
-                            .iter()
-                            .map(|point| coord! { x: point.x, y: point.y })
-                            .collect::<Vec<_>>(),
-                    ),
-                    5,
-                )
-                .unwrap();
-                shape_polyline_for_chateau.insert(db_shape.shape_id.clone().into(), shape_polyline);
+        let shapes_task = async {
+            if include_shapes {
+                let mut conn = pool_for_join.get().await.unwrap();
+                catenary::schema::gtfs::shapes::dsl::shapes
+                    .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_id_clone_shapes))
+                    .filter(
+                        catenary::schema::gtfs::shapes::shape_id
+                            .eq_any(&shape_ids_to_fetch_for_this_chateau),
+                    )
+                    .load::<catenary::models::Shape>(&mut conn)
+                    .await
+                    .unwrap_or_default()
+            } else {
+                vec![]
             }
-        }
-        println!("PERF: shapes fetch took {}ms", t_section.elapsed().as_millis());
-        let t_section = std::time::Instant::now();
+        };
 
-        let direction_row_query = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id_clone.clone()))
-            .filter(
-                catenary::schema::gtfs::direction_pattern::direction_pattern_id
-                    .eq_any(&direction_ids_to_search),
+        let (agencies_ret, shapes_result) = tokio::join!(agencies_task, shapes_task);
+
+        println!(
+            "PERF: parallel meta fetch block took {}ms",
+            t_section.elapsed().as_millis()
+        );
+
+        let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
+        for db_shape in shapes_result {
+            let shape_polyline = polyline::encode_coordinates(
+                geo::LineString::new(
+                    db_shape
+                        .linestring
+                        .points
+                        .iter()
+                        .map(|point| coord! { x: point.x, y: point.y })
+                        .collect::<Vec<_>>(),
+                ),
+                5,
             )
-            .select(catenary::models::DirectionPatternRow::as_select())
-            .load::<catenary::models::DirectionPatternRow>(&mut conn1)
-            .await
-            .unwrap_or_default();
-        println!("PERF: direction_pattern fetch took {}ms", t_section.elapsed().as_millis());
-        let t_section = std::time::Instant::now();
+            .unwrap();
+            shape_polyline_for_chateau.insert(db_shape.shape_id.clone().into(), shape_polyline);
+        }
 
         let mut direction_rows_for_chateau =
             BTreeMap::<String, Vec<catenary::models::DirectionPatternRow>>::new();
-        for direction_row in direction_row_query {
+        for direction_row in direction_rows {
             let entry = direction_rows_for_chateau
                 .entry(direction_row.direction_pattern_id.clone())
                 .or_insert_with(Vec::new);
@@ -181,36 +252,10 @@ pub async fn fetch_stop_data_for_chateau(
             entry.sort_by_key(|x| x.stop_sequence);
         }
 
-        let route_ids: Vec<CompactString> = itin_meta.iter().map(|x| x.route_id.clone()).collect();
-
-        let routes_ret = catenary::schema::gtfs::routes::dsl::routes
-            .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_id_clone.clone()))
-            .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
-            .select(catenary::models::Route::as_select())
-            .load::<catenary::models::Route>(&mut conn1)
-            .await
-            .unwrap_or_default();
-        println!("PERF: routes fetch took {}ms", t_section.elapsed().as_millis());
-        let t_section = std::time::Instant::now();
-
         let mut routes_btreemap = BTreeMap::<String, catenary::models::Route>::new();
         for route in &routes_ret {
             routes_btreemap.insert(route.route_id.clone().into(), route.clone());
         }
-
-        let agency_ids: Vec<String> = routes_ret
-            .iter()
-            .filter_map(|x| x.agency_id.clone())
-            .collect();
-
-        let agencies_ret = catenary::schema::gtfs::agencies::dsl::agencies
-            .filter(catenary::schema::gtfs::agencies::chateau.eq(chateau_id_clone.clone()))
-            .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
-            .select(catenary::models::Agency::as_select())
-            .load::<catenary::models::Agency>(&mut conn1)
-            .await
-            .unwrap_or_default();
-        println!("PERF: agencies fetch took {}ms", t_section.elapsed().as_millis());
 
         let mut agencies_btreemap = BTreeMap::<String, catenary::models::Agency>::new();
         for agency in &agencies_ret {
@@ -282,7 +327,10 @@ pub async fn fetch_stop_data_for_chateau(
                 .await
                 .unwrap_or_default()
         };
-        println!("PERF: trips_compressed fetch took {}ms", t_section.elapsed().as_millis());
+        println!(
+            "PERF: trips_compressed fetch took {}ms",
+            t_section.elapsed().as_millis()
+        );
         let t_section = std::time::Instant::now();
 
         let mut conn_calendar = pool_for_schedule.get().await.unwrap();
@@ -303,7 +351,10 @@ pub async fn fetch_stop_data_for_chateau(
             .load::<catenary::models::Calendar>(&mut conn_calendar)
             .await
             .unwrap_or_default();
-        println!("PERF: calendar fetch took {}ms", t_section.elapsed().as_millis());
+        println!(
+            "PERF: calendar fetch took {}ms",
+            t_section.elapsed().as_millis()
+        );
         let t_section = std::time::Instant::now();
 
         let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
@@ -315,7 +366,10 @@ pub async fn fetch_stop_data_for_chateau(
             .load::<catenary::models::CalendarDate>(&mut conn_calendar)
             .await
             .unwrap_or_default();
-        println!("PERF: calendar_dates fetch took {}ms", t_section.elapsed().as_millis());
+        println!(
+            "PERF: calendar_dates fetch took {}ms",
+            t_section.elapsed().as_millis()
+        );
 
         (trip_compressed_btreemap, calendar, calendar_dates)
     };
@@ -331,8 +385,11 @@ pub async fn fetch_stop_data_for_chateau(
         ),
         (trip_compressed_btreemap, calendar, calendar_dates),
     ) = tokio::join!(meta_task, schedule_task);
-    
-    println!("PERF: TOTAL fetch_stop_data_for_chateau took {}ms", global_start.elapsed().as_millis());
+
+    println!(
+        "PERF: TOTAL fetch_stop_data_for_chateau took {}ms",
+        global_start.elapsed().as_millis()
+    );
 
     (
         chateau_id,

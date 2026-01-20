@@ -607,7 +607,7 @@ pub async fn nearby_from_coords_v2(
             .join(",")
     );*/
 
-    let directions_meta_search_list =
+    let directions_meta_future = 
         futures::stream::iter(direction_ids_to_lookup.iter().map(|(chateau, set_of_directions)| {
             let pool_clone = pool.clone();
             let chateau = chateau.clone();
@@ -634,36 +634,9 @@ pub async fn nearby_from_coords_v2(
             }
         }))
         .buffer_unordered(32)
-        .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>()
-        .await;
+        .collect::<Vec<diesel::QueryResult<Vec<DirectionPatternMeta>>>>();
 
-    let mut direction_meta_lookup_table: AHashMap<String, AHashMap<String, DirectionPatternMeta>> =
-        AHashMap::new();
-
-    for result in directions_meta_search_list {
-        if let Ok(result) = result {
-            for row in result {
-                match direction_meta_lookup_table.entry(row.chateau.clone()) {
-                    Entry::Occupied(mut oe) => {}
-                    Entry::Vacant(mut ve) => {
-                        ve.insert(AHashMap::new());
-                    }
-                }
-
-                let chateau_sub_entry = direction_meta_lookup_table.get_mut(&row.chateau);
-
-                if let Some(chateau_sub_entry) = chateau_sub_entry {
-                    chateau_sub_entry.insert(row.direction_pattern_id.clone(), row);
-                }
-            }
-        }
-    }
-
-    println!("Search for matching itinerary ids");
-
-    let itin_meta_timer = Instant::now();
-
-    let itineraries_meta_search_list = futures::stream::iter(
+    let itineraries_meta_future = futures::stream::iter(
         hashmap_of_directions_lookup
             .iter()
             .map(|(chateau, set_of_directions)| {
@@ -694,8 +667,33 @@ pub async fn nearby_from_coords_v2(
             }),
     )
     .buffer_unordered(32)
-    .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>()
-    .await;
+    .collect::<Vec<diesel::QueryResult<Vec<ItineraryPatternMeta>>>>();
+
+    let itin_meta_timer = Instant::now();
+    let (directions_meta_search_list, itineraries_meta_search_list) =
+        tokio::join!(directions_meta_future, itineraries_meta_future);
+
+    let mut direction_meta_lookup_table: AHashMap<String, AHashMap<String, DirectionPatternMeta>> =
+        AHashMap::new();
+
+    for result in directions_meta_search_list {
+        if let Ok(result) = result {
+            for row in result {
+                match direction_meta_lookup_table.entry(row.chateau.clone()) {
+                    Entry::Occupied(mut oe) => {}
+                    Entry::Vacant(mut ve) => {
+                        ve.insert(AHashMap::new());
+                    }
+                }
+
+                let chateau_sub_entry = direction_meta_lookup_table.get_mut(&row.chateau);
+
+                if let Some(chateau_sub_entry) = chateau_sub_entry {
+                    chateau_sub_entry.insert(row.direction_pattern_id.clone(), row);
+                }
+            }
+        }
+    }
 
     println!(
         "Finished getting itinerary metas in {:?}",
