@@ -107,9 +107,10 @@ pub struct LocalDepartureItem {
     pub departure_schedule: Option<u64>,
     pub departure_realtime: Option<u64>,
     pub stop_id: CompactString,
+    pub stop_name: Option<String>,
     pub cancelled: bool,
     pub platform: Option<String>,
-    // Add other fields if needed for UI, keeping it lean for now
+    // Add other fields if needed for use, keeping it lean for now
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
@@ -183,6 +184,11 @@ pub async fn nearby_from_coords_v3(
     // Create a platform lookup map
     let stop_platform_map: HashMap<String, Option<String>> = stops.iter()
         .map(|s| (s.gtfs_id.clone(), s.platform_code.clone()))
+        .collect();
+
+    // Create a name lookup map
+    let stop_name_map: HashMap<String, Option<String>> = stops.iter()
+        .map(|s| (s.gtfs_id.clone(), s.name.clone()))
         .collect();
 
     for stop in &stops {
@@ -550,6 +556,7 @@ pub async fn nearby_from_coords_v3(
                                 departure_schedule: Some(departure_ts as u64),
                                 departure_realtime: rt_dep,
                                 stop_id: CompactString::from(row.stop_id.as_str()),
+                                stop_name: stop_name_map.get(row.stop_id.as_str()).cloned().flatten(),
                                 cancelled: is_cancelled,
                                 platform: display_platform,
                             };
