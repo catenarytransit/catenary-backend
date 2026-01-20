@@ -430,30 +430,7 @@ async fn fetch_chateau_data(
 
     // ... logic to find active trips ...
     
-    // 2.a Fetch Max Stop Sequences (Fix for is_last_stop)
-    // We need to know the true last stop of the itinerary, not just the last one we fetched (which was filtered by location).
-    let mut max_sequences: HashMap<String, i32> = HashMap::new();
-    // We already have `itins` which tells us relevant itinerary_pattern_ids
-    if !itins.is_empty() {
-        use catenary::schema::gtfs::itinerary_pattern::dsl::*;
-        let itin_ids: Vec<String> = itins.keys().cloned().collect();
-        // Chunk if necessary? usually safe to do one query or a few chunks
-        // But for concurrency we are inside a chateau task, so let's just do it.
-        // We reuse the pool or grab a connection? 
-        // `pool` is available.
-        
-        let pool_max = pool.clone();
-        let chateau_clone_max = chateau.clone();
-        
-        // This query runs in parallel with Aspen RT fetch if we spawn it or put it in `tokio::join!`?
-        // Let's put it before RT or join with RT. To minimize changes, I'll do it sequentially or parallel depending on complexity.
-        // Parallel with RT is best.
-        
-        // However, I need to check if we can easily query `max(stop_sequence)`.
-        // diesel: `itinerary_pattern.filter(...).group_by(itinerary_pattern_id).select((itinerary_pattern_id, max(stop_sequence)))`
-        
-        // Since I'm refactoring, let's just add it to the flow.
-    }
+
     
     // START OF REFACTOR to fetch Max Sequences & Identify Active Trips & Fetch RT concurrently
     // I will extract active IDs first (CPU), then dispatch RT fetch + Max Seq Fetch (IO/DB)
