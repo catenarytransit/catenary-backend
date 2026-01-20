@@ -226,7 +226,7 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
-        "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
+        "f-northern~indiana~commuter~transportation~district" | "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
@@ -423,16 +423,7 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-mavcsoport" => {
-            let _ = execute_pfaedle_rs(
-                path.as_str(),
-                "./railonly-europe-latest.osm.pbf",
-                None,
-                true,
-                true,
-            )?;
-        }
-        "f-pol~regio~pl" => {
+        "f-mavcsoport" | "f-u2e-idsjmk" | "f-pol~regio~pl" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
