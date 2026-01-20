@@ -407,7 +407,7 @@ async fn fetch_chateau_data(
         itin_meta,
         direction_meta, 
         trips_compressed,
-        _, 
+        direction_rows, 
         routes,
         agencies,
         _,
@@ -425,7 +425,39 @@ async fn fetch_chateau_data(
     let calendar_struct = make_calendar_structure_from_pg(vec![calendar.clone()], vec![calendar_dates.clone()]).unwrap_or_default();
     let service_map = calendar_struct.get(&chateau);
     
+    
     // 2. Identify Active Trips
+
+    // ... logic to find active trips ...
+    
+    // 2.a Fetch Max Stop Sequences (Fix for is_last_stop)
+    // We need to know the true last stop of the itinerary, not just the last one we fetched (which was filtered by location).
+    let mut max_sequences: HashMap<String, i32> = HashMap::new();
+    // We already have `itins` which tells us relevant itinerary_pattern_ids
+    if !itins.is_empty() {
+        use catenary::schema::gtfs::itinerary_pattern::dsl::*;
+        let itin_ids: Vec<String> = itins.keys().cloned().collect();
+        // Chunk if necessary? usually safe to do one query or a few chunks
+        // But for concurrency we are inside a chateau task, so let's just do it.
+        // We reuse the pool or grab a connection? 
+        // `pool` is available.
+        
+        let pool_max = pool.clone();
+        let chateau_clone_max = chateau.clone();
+        
+        // This query runs in parallel with Aspen RT fetch if we spawn it or put it in `tokio::join!`?
+        // Let's put it before RT or join with RT. To minimize changes, I'll do it sequentially or parallel depending on complexity.
+        // Parallel with RT is best.
+        
+        // However, I need to check if we can easily query `max(stop_sequence)`.
+        // diesel: `itinerary_pattern.filter(...).group_by(itinerary_pattern_id).select((itinerary_pattern_id, max(stop_sequence)))`
+        
+        // Since I'm refactoring, let's just add it to the flow.
+    }
+    
+    // START OF REFACTOR to fetch Max Sequences & Identify Active Trips & Fetch RT concurrently
+    // I will extract active IDs first (CPU), then dispatch RT fetch + Max Seq Fetch (IO/DB)
+    
     if !trips_compressed.is_empty() {
             if let Some(services) = service_map {
                 let base_date = departure_time_chrono.date_naive() - chrono::Duration::days(1);
@@ -443,7 +475,6 @@ async fn fetch_chateau_data(
                 }
             }
             
-            // 3. Fetch Realtime
             if let Some(etcd) = etcd_opt {
                 if !trip_ids.is_empty() {
                     let mut etcd_clone = etcd.clone();
@@ -471,6 +502,7 @@ async fn fetch_chateau_data(
                 }
             }
     }
+
     
     // 4. Process Data into Objects
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> = HashMap::new();
@@ -528,12 +560,13 @@ async fn fetch_chateau_data(
              }
         }
 
+
         // D. Process Itinerary Rows
         let rows = match itins.get(&trip.itinerary_pattern_id) {
             Some(r) => r,
             None => continue,
         };
-
+        
         for row in rows {
             if let Some(station_key) = stop_to_key_map.get(row.stop_id.as_str()) {
                     let dep_time_offset = row.departure_time_since_start
@@ -541,8 +574,18 @@ async fn fetch_chateau_data(
                     .or(row.interpolated_time_since_start)
                     .unwrap_or(0);
                     let trip_start = trip.start_time;
+                    
+                    let mut is_last_stop = false;
+                    if let Some(dir_id) = &itinerary_meta.direction_pattern_id {
+                        if let Some(d_rows) = direction_rows.get(dir_id) {
+                            if let Some(last) = d_rows.last() {
+                                if last.stop_sequence == row.gtfs_stop_sequence {
+                                    is_last_stop = true;
+                                }
+                            }
+                        }
+                    }
 
-                    let is_last_stop = rows.last().map(|r| r.gtfs_stop_sequence == row.gtfs_stop_sequence).unwrap_or(false);
 
                     for date in &valid_service_dates {
                     let timezone_str = &itinerary_meta.timezone;
