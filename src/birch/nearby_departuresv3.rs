@@ -59,8 +59,6 @@ pub struct NearbyDeparturesV3Response {
 pub struct StationDepartureGroupExport {
     pub station_name: String,
     pub osm_station_id: Option<i64>,
-    pub gtfs_stop_id_representative: String,
-    pub chateau_id: String,
     pub distance_m: f64,
     pub departures: Vec<DepartureItem>,
     pub lat: f64,
@@ -83,6 +81,7 @@ pub struct DepartureItem {
     pub stop_id: String,
     pub cancelled: bool,
     pub delayed: bool,
+    pub chateau_id: String,
 }
 
 // --- Local Transport Structs ---
@@ -540,6 +539,7 @@ pub async fn nearby_from_coords_v3(
                                  stop_id: row.stop_id.to_string(),
                                  cancelled: is_cancelled,
                                  delayed: is_delayed,
+                                 chateau_id: chateau_id.clone(),
                              };
                              ld_departures_by_group.entry((chateau_id.clone(), station_key.clone())).or_default().push(item);
                         } else {
@@ -594,8 +594,6 @@ pub async fn nearby_from_coords_v3(
             ld_output.push(StationDepartureGroupExport {
                 station_name: meta.0,
                 osm_station_id: osm_id,
-                gtfs_stop_id_representative: rep_id_fixed,
-                chateau_id: chateau,
                 distance_m: meta.3,
                 departures: deps,
                 lat: meta.1,
