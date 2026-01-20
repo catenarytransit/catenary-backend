@@ -56,6 +56,7 @@ pub struct StopDeserialised {
     pub name_translations: Option<HashMap<String, String>>,
     pub parent_station: Option<String>,
     pub agency_names: Vec<String>,
+    pub osm_station_id: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -650,6 +651,7 @@ pub async fn text_search_v1(
                             ),
                             parent_station: stop.parent_station,
                             agency_names: vec![],
+                            osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
                         },
                     );
                 }
@@ -765,6 +767,7 @@ pub async fn text_search_v1(
                         ),
                         parent_station: stop.parent_station.clone(),
                         agency_names: vec![],
+                        osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
                     };
 
                     //add route ids to parent stop

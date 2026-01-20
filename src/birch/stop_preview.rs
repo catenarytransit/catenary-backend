@@ -35,6 +35,7 @@ pub struct StopDeserialised {
     pub station_feature: bool,
     pub wheelchair_boarding: i16,
     pub name_translations: Option<HashMap<String, String>>,
+    pub osm_station_id: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -136,6 +137,7 @@ pub async fn query_stops_preview(
                             name_translations: catenary::serde_value_to_translated_hashmap(
                                 &stop.name_translations,
                             ),
+                            osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
                         },
                     );
                 }
@@ -249,6 +251,7 @@ pub async fn query_stops_preview(
                         name_translations: catenary::serde_value_to_translated_hashmap(
                             &stop.name_translations,
                         ),
+                        osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
                     };
 
                     //add route ids to parent stop

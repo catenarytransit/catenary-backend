@@ -324,6 +324,7 @@ struct StopTimeIntroduction {
     pub interpolated_stoptime_unix_seconds: Option<u64>,
     pub timepoint: Option<bool>,
     pub replaced_stop: bool,
+    pub osm_station_id: Option<i64>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -737,6 +738,7 @@ pub async fn get_trip_init(
                                 interpolated_stoptime_unix_seconds: None,
                                 timepoint: Some(false),
                                 replaced_stop: false,
+                                osm_station_id: stop.map(|x| x.osm_station_id).flatten(),
                             }
                         })
                         .collect::<Vec<_>>();
@@ -1220,6 +1222,7 @@ pub async fn get_trip_init(
             name: stop.name.clone(),
             translations: None,
             platform_code: stop.platform_code.clone(),
+            osm_station_id: stop.osm_station_id,
             timezone: match stop.timezone.as_ref() {
                 Some(tz) => match chrono_tz::Tz::from_str_insensitive(tz) {
                     Ok(tz) => Some(tz),
@@ -1735,6 +1738,7 @@ pub async fn get_trip_init(
                                                                     rt_platform_string: None,
                                                                     timepoint: Some(false),                           
                                                                     replaced_stop: true,
+                                                                    osm_station_id: None,
                                                                 });
                                                                 }
                                                                 

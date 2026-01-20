@@ -145,6 +145,7 @@ pub async fn osm_station_preview(
                 .collect(),
             station_feature: stop.station_feature,
             wheelchair_boarding: stop.wheelchair_boarding,
+            osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
             name_translations: catenary::serde_value_to_translated_hashmap(&stop.name_translations),
         };
 
@@ -216,6 +217,7 @@ pub async fn osm_station_preview(
                         .collect(),
                     station_feature: stop.station_feature,
                     wheelchair_boarding: stop.wheelchair_boarding,
+                    osm_station_id: stop.osm_station_id.map(|id| id.to_string()),
                     name_translations: catenary::serde_value_to_translated_hashmap(
                         &stop.name_translations,
                     ),
