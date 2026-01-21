@@ -49,11 +49,22 @@ struct NearbyFromCoordsV3 {
 }
 
 #[derive(Serialize, Clone, Debug)]
+pub struct StopOutputV3 {
+    pub gtfs_id: CompactString,
+    pub name: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub osm_station_id: Option<i64>,
+}
+
+#[derive(Serialize, Clone, Debug)]
 pub struct NearbyDeparturesV3Response {
     pub long_distance: Vec<StationDepartureGroupExport>,
     pub local: Vec<DepartureRouteGroupExportV3>,
     // Map<Chateau, Map<RouteId, RouteInfo>>
     pub routes: HashMap<String, HashMap<String, RouteInfoExport>>,
+    // Map<Chateau, Map<StopId, StopOutputV3>>
+    pub stops: HashMap<String, HashMap<String, StopOutputV3>>,
 }
 
 // --- Long Distance Structs ---
@@ -66,7 +77,6 @@ pub enum StationKey {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct StationDepartureGroupExport {
-
     pub station_name: String,
     pub osm_station_id: Option<i64>,
     pub distance_m: f64,
@@ -193,7 +203,7 @@ pub async fn nearby_from_coords_v3(
     };
 
     if stops.is_empty() {
-        return HttpResponse::Ok().json(NearbyDeparturesV3Response { long_distance: vec![], local: vec![], routes: HashMap::new() });
+        return HttpResponse::Ok().json(NearbyDeparturesV3Response { long_distance: vec![], local: vec![], routes: HashMap::new(), stops: HashMap::new() });
     }
 
     // 4. Group Stops & Helpers
@@ -201,6 +211,7 @@ pub async fn nearby_from_coords_v3(
     let mut station_groups: HashMap<(String, StationKey), Vec<catenary::models::Stop>> = HashMap::new();
     let mut station_group_metadata: HashMap<(String, StationKey), (String, f64, f64, f64)> = HashMap::new();
     let mut stop_dist_map: HashMap<String, f64> = HashMap::new(); // StopID -> Dist
+    let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
 
     // Create a platform lookup map
     let stop_platform_map: HashMap<String, Option<String>> = stops.iter()
@@ -217,6 +228,7 @@ pub async fn nearby_from_coords_v3(
         let stop_point = geo::Point::new(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y);
         let dist = input_point.haversine_distance(&stop_point);
         stop_dist_map.insert(stop.gtfs_id.clone(), dist);
+        stop_full_info_map.insert(stop.gtfs_id.clone(), stop.clone());
 
         /* Grouping Logic (Primarily for Long Distance, but useful structure) */
         let key = if let Some(osm_id) = stop.osm_station_id {
@@ -287,15 +299,15 @@ pub async fn nearby_from_coords_v3(
         let stop_to_key_map: HashMap<String, StationKey> = stops.iter().map(|s| (s.gtfs_id.clone(), if let Some(osm) = s.osm_station_id { StationKey::Osm(osm) } else if let Some(p) = &s.parent_station { StationKey::Parent(p.clone()) } else { StationKey::Stop(s.gtfs_id.clone()) } )).collect();
         let stop_platform_map: HashMap<String, Option<String>> = stops.iter().map(|s| (s.gtfs_id.clone(), s.platform_code.clone())).collect();
         let stop_name_map: HashMap<String, Option<String>> = stops.iter().map(|s| (s.gtfs_id.clone(), s.name.clone())).collect();
-
+        let full_info_map_clone = stop_full_info_map.clone();
 
         chateau_futures.push(async move {
-            fetch_chateau_data(pool, chateau_clone, stop_ids_vec, dep_time, etcd_clone, ld_arc_clone, stop_to_key_map, stop_platform_map, stop_name_map).await
+            fetch_chateau_data(pool, chateau_clone, stop_ids_vec, dep_time, etcd_clone, ld_arc_clone, stop_to_key_map, stop_platform_map, stop_name_map, full_info_map_clone).await
         });
 
     }
 
-    let pipeline_results: Vec<Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>)>> = futures::stream::iter(chateau_futures)
+    let pipeline_results: Vec<Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>, HashMap<String, StopOutputV3>)>> = futures::stream::iter(chateau_futures)
         .buffer_unordered(10)
         .collect()
         .await;
@@ -305,38 +317,14 @@ pub async fn nearby_from_coords_v3(
     let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> = HashMap::new();
     let mut local_route_meta: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new(); // Route, AgencyName
     let mut routes_output: HashMap<String, HashMap<String, RouteInfoExport>> = HashMap::new();
+    let mut stops_output: HashMap<String, HashMap<String, StopOutputV3>> = HashMap::new();
 
     for res in pipeline_results {
-        if let Some((ld_part, local_part, route_part)) = res {
-             // Extract chateau from one of the keys or we need to pass it back?
-             // The keys in ld_part are (Chateau, StationKey).
-             // But what if ld_part is empty?
-             // local_part keys are LocalRouteKey { chateau, ... }
-             // route_part keys are RouteId. We need Chateau to put it in routes_output.
-             // We can infer chateau from the first item found, or modify the return to include chateau string.
-             // But wait, the `fetch_chateau_data` takes `chateau` as input. It can return it.
-             // Let's assume we can get it from the map keys if present. 
-             // To be safe, let's just inspect the maps.
-             
+        if let Some((ld_part, local_part, route_part, stop_part)) = res {
              let mut chateau_opt = None;
              
              if let Some((c, _)) = ld_part.keys().next() { chateau_opt = Some(c.clone()); }
              else if let Some(k) = local_part.keys().next() { chateau_opt = Some(k.chateau.clone()); }
-             
-             // If completely empty result we might not know the chateau, but then route_part would likely be empty too 
-             // or we wouldn't care. 
-             // Actually, if we found active trips, we likely have data.
-             
-             // However, `fetch_chateau_data` closure captured `chateau_clone`. We can return it in the tuple to be safe.
-             // Let's modify `fetch_chateau_data` to return chateau string too for convenience? 
-             // Actually it's cleaner to just get it from the data if we are sure data exists.
-             // If `route_part` is not empty, we need the chateau.
-             
-             // Let's modify the signature of fetch_chateau_data return value slightly? 
-             // Or better: In `fetch_chateau_data` `route_info` is built. It knows the chateau.
-             // But `fetch_chateau_data` returns `Option<...>`.
-             
-             // Check below for fetch_chateau_data modification. I will wrap the return in a struct or just tuple with chateau.
              
              for (k, v) in ld_part {
                  chateau_opt = Some(k.0.clone());
@@ -351,7 +339,8 @@ pub async fn nearby_from_coords_v3(
              }
              
              if let Some(c) = chateau_opt {
-                 routes_output.entry(c).or_default().extend(route_part);
+                 routes_output.entry(c.clone()).or_default().extend(route_part);
+                 stops_output.entry(c).or_default().extend(stop_part);
              }
         }
     }
@@ -389,26 +378,38 @@ pub async fn nearby_from_coords_v3(
 
     // B. Local
     let mut local_output: Vec<DepartureRouteGroupExportV3> = Vec::new();
+    
+    // Logic to limit buses if we have rail or many stops
+    let has_rail = ld_output.iter().any(|g| g.osm_station_id.is_some());
+    let many_stops = stops.len() > 50;
+    let limit_buses = has_rail || many_stops;
+    let bus_cutoff_m = 2000.0;
+
     for (r_key, headsigns) in local_departures {
         let (route, a_name) = local_route_meta.get(&r_key).unwrap();
+        
+        // Calculate closest distance for this route
+        let mut min_dist = 9999999.0;
+        // Optimization: check if we even need to process headsigns if it's a bus and might be far? 
+        // We need min_dist to decide.
         
         let mut sorted_headsigns = HashMap::new();
         for (h, mut items) in headsigns {
             items.sort_by_key(|i| i.departure_schedule.unwrap_or(0));
-            items.truncate(10); // Limit? Maybe high limit for local or pagination
+            items.truncate(10); 
             sorted_headsigns.insert(h, items);
         }
 
-        // Calculate closest distance for this route
-        // We know the stops involved. We can look them up in `station_group_metadata` but that's convoluted.
-        // Simplified: iterate headsigns -> items -> stop_id -> dist_map
-        let mut min_dist = 9999999.0;
         for (_, items) in &sorted_headsigns {
             for item in items {
                 if let Some(d) = stop_dist_map.get(item.stop_id.as_str()) {
                     if *d < min_dist { min_dist = *d; }
                 }
             }
+        }
+        
+        if limit_buses && route.route_type == 3 && min_dist > bus_cutoff_m {
+            continue;
         }
 
         local_output.push(DepartureRouteGroupExportV3 {
@@ -431,6 +432,7 @@ pub async fn nearby_from_coords_v3(
         long_distance: ld_output,
         local: local_output,
         routes: routes_output,
+        stops: stops_output,
     })
 }
 
@@ -444,7 +446,8 @@ async fn fetch_chateau_data(
     stop_to_key_map: HashMap<String, StationKey>,
     stop_platform_map: HashMap<String, Option<String>>,
     stop_name_map: HashMap<String, Option<String>>,
-) -> Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>)> {
+    stop_full_info_map: HashMap<String, catenary::models::Stop>,
+) -> Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>, HashMap<String, StopOutputV3>)> {
     
     // 1. Fetch Static
     let (
@@ -475,8 +478,6 @@ async fn fetch_chateau_data(
     // 2. Identify Active Trips
 
     // ... logic to find active trips ...
-    
-
     
     // START OF REFACTOR to fetch Max Sequences & Identify Active Trips & Fetch RT concurrently
     // I will extract active IDs first (CPU), then dispatch RT fetch + Max Seq Fetch (IO/DB)
@@ -532,6 +533,7 @@ async fn fetch_chateau_data(
     let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> = HashMap::new();
     let mut local_route_meta_map: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new();
     let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new(); 
+    let mut stop_output_map: HashMap<String, StopOutputV3> = HashMap::new();
 
     let departure_time = departure_time_chrono.timestamp();
     
@@ -678,7 +680,9 @@ async fn fetch_chateau_data(
                         });
                     }
 
-                    if is_long_distance || matches!(station_key, StationKey::Osm(_)) {
+                    let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
+
+                    if !is_subway_or_tram && (is_long_distance || matches!(station_key, StationKey::Osm(_))) {
                              let item = DepartureItem {
                                  scheduled_departure: Some(departure_ts as u64),
                                  realtime_departure: rt_dep,
@@ -721,6 +725,19 @@ async fn fetch_chateau_data(
                                 .entry(headsign)
                                 .or_default()
                                 .push(item);
+
+                            // Populate Stop Output
+                            if !stop_output_map.contains_key(row.stop_id.as_str()) {
+                                if let Some(s) = stop_full_info_map.get(row.stop_id.as_str()) {
+                                    stop_output_map.insert(row.stop_id.to_string(), StopOutputV3 {
+                                        gtfs_id: CompactString::from(s.gtfs_id.as_str()),
+                                        name: s.name.clone().unwrap_or_default(),
+                                        lat: s.point.as_ref().unwrap().y,
+                                        lon: s.point.as_ref().unwrap().x,
+                                        osm_station_id: s.osm_station_id,
+                                    });
+                                }
+                            }
                         }
 
 
@@ -735,6 +752,6 @@ async fn fetch_chateau_data(
     Some((ld_departures_by_group, local_departures.into_iter().map(|(k, v)| {
           let (r, a) = local_route_meta_map.get(&k).unwrap().clone();
           (k, (r, a, v))
-    }).collect(), route_info_map))
+    }).collect(), route_info_map, stop_output_map))
 }
 
