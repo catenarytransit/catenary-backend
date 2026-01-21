@@ -767,7 +767,7 @@ async fn fetch_chateau_data(
 
                     let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
 
-                    if !is_subway_or_tram && (is_long_distance || matches!(station_key, StationKey::Osm(_))) {
+                    if !is_subway_or_tram && (is_long_distance || (matches!(station_key, StationKey::Osm(_)) && route.route_type != 3)) {
                              let item = DepartureItem {
                                  scheduled_departure: Some(departure_ts as u64),
                                  realtime_departure: rt_dep,
