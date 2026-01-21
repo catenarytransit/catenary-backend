@@ -2147,7 +2147,7 @@ pub async fn nearby_from_coords_v2(
                         }
 
                         let stop_group = stops_answer.get_mut(chateau_id).unwrap();
-\
+
                         if !stop_group.contains_key(group.trips[0].stop_id.as_str()) {
                             stop_group.insert(
                                 group.trips[0].stop_id.clone(),
