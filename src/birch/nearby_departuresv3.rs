@@ -379,6 +379,82 @@ pub async fn nearby_from_coords_v3(
             });
         }
     }
+    // MERGE OSM STATIONS logic
+    // We might have multiple Chateaux reporting the same OSM station (e.g. Amtrak, Metrolink both at Union Station)
+    // We want to merge these into a single StationDepartureGroupExport.
+    
+    // 1. Fetch authoritative OSM Station Data
+    let osm_ids_to_fetch: Vec<i64> = ld_output.iter().filter_map(|g| g.osm_station_id).collect();
+    let mut osm_station_info_map: HashMap<i64, catenary::models::OsmStation> = HashMap::new();
+    
+    if !osm_ids_to_fetch.is_empty() {
+        let osm_stations_data: Vec<catenary::models::OsmStation> = catenary::schema::gtfs::osm_stations::dsl::osm_stations
+            .filter(catenary::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids_to_fetch))
+            .load::<catenary::models::OsmStation>(&mut conn)
+            .await
+            .unwrap_or_default();
+            
+        for s in osm_stations_data {
+            osm_station_info_map.insert(s.osm_id, s);
+        }
+    }
+
+
+    let mut merged_ld_output: Vec<StationDepartureGroupExport> = Vec::with_capacity(ld_output.len());
+    let mut osm_station_map: HashMap<i64, usize> = HashMap::new(); // OSM ID -> Index in merged_ld_output
+
+    for group in ld_output {
+        if let Some(osm_id) = group.osm_station_id {
+            if let Some(&idx) = osm_station_map.get(&osm_id) {
+                // Merge into existing
+                let existing = &mut merged_ld_output[idx];
+                
+                // Append departures
+                existing.departures.extend(group.departures);
+                
+                // NOTE: We do NOT need to update distance/name here because we handle it below for ALL items involving this OSM ID
+                // actually we check if we need to update the distance to be the MINIMUM of all contributing stops
+                // But we will use the OSM Node coordinate for the final distance calculation.
+            } else {
+                // New OSM station
+                let idx = merged_ld_output.len();
+                let mut new_group = group.clone();
+                
+                // Override with Authoritative Data if available
+                if let Some(osm_info) = osm_station_info_map.get(&osm_id) {
+                     if let Some(n) = &osm_info.name {
+                         new_group.station_name = n.clone();
+                     }
+                     new_group.lat = osm_info.point.y;
+                     new_group.lon = osm_info.point.x;
+                     
+                     // Recalculate distance based on OSM Node location
+                     let osm_point = geo::Point::new(osm_info.point.x, osm_info.point.y);
+                     new_group.distance_m = input_point.haversine_distance(&osm_point);
+                     
+                     // Timezone lookup? Theoretically we should re-lookup if the location changed significantly, 
+                     // but likely the first stop's timezone is fine or we do a new lookup.
+                     // For performance we skip new timezone lookup unless we want to be very precise.
+                }
+
+                merged_ld_output.push(new_group);
+                osm_station_map.insert(osm_id, idx);
+            }
+        } else {
+            // Not an OSM station, just add it
+            merged_ld_output.push(group);
+        }
+    }
+
+    // Sort departures within merged groups (since we just appended)
+    for group in &mut merged_ld_output {
+        if group.osm_station_id.is_some() {
+             group.departures.sort_by_key(|d| d.scheduled_departure.unwrap_or(0));
+             group.departures.truncate(limit_per_station);
+        }
+    }
+
+    let mut ld_output = merged_ld_output;
     ld_output.sort_by(|a, b| a.distance_m.partial_cmp(&b.distance_m).unwrap());
 
     // B. Local
