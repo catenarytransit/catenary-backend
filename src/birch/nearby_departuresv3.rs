@@ -652,8 +652,11 @@ async fn fetch_chateau_data(
         calendar_dates
     ) = fetch_stop_data_for_chateau(pool, chateau.clone(), final_stop_ids, false).await;
     
-    let mut rt_trips = AHashMap::new();
+    let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
+    // We will just access rt_data.trip_updates directly later
+    // let mut rt_trips = AHashMap::new(); 
     let mut rt_alerts = Vec::new();
+
     
     let etcd_opt = etcd_arc.as_ref();
     let processing_start = Instant::now();
@@ -702,7 +705,17 @@ async fn fetch_chateau_data(
                                     let (t, a) = tokio::join!(t_fut, a_fut);
                                     
                                     if let Ok(Some(tr)) = t {
-                                        rt_trips = tr.trip_updates;
+                                        // Store the whole structure so we can use the lookup maps
+                                        // (trip_updates_lookup_by_trip_id_to_trip_update_ids)
+                                        // rt_trips = tr.trip_updates; // OLD WAY
+                                        
+                                        // We need to store the whole thing or the relevant parts.
+                                        // Since we can't change the signature of rt_trips easily without refactoring the whole function's variable declarations above,
+                                        // let's just shadow/store what we need.
+                                        // Actually, let's just reassign rt_trips to be the whole AspenisedData if possible, 
+                                        // but rt_trips above was AHashMap.
+                                        // We will create a new variable to hold the full data.
+                                        rt_data = Some(tr);
                                     }
                                     if let Ok(Some(al)) = a {
                                         rt_alerts = al.into_values().collect();
@@ -834,7 +847,55 @@ async fn fetch_chateau_data(
                     let mut is_cancelled = false;
                     let mut is_delayed = false;
                     
-                    if let Some(update) = rt_trips.get(trip_id.as_str()) {
+                    let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> = None;
+
+                    if let Some(data) = &rt_data {
+                         if let Some(update_ids) = data.trip_id_to_trip_update_ids.get(trip_id.as_str()) {
+                             // We might have multiple updates for the same trip_id (uncommon but possible with frequency/duplication)
+                             // or just one. We need to match the date.
+                             
+                             for uid in update_ids {
+                                 if let Some(update) = data.trip_updates.get(uid) {
+                                     // Date Check logic from V2
+                                     let mut match_found = false;
+                                     if let Some(start_date) = update.trip.start_date {
+                                         if start_date == *date {
+                                             match_found = true;
+                                         }
+                                     } else {
+                                         // If no date in update, infer.
+                                         // Logic: "score dates within 1 day". 
+                                         // Since we are iterating a specific `date` here (from valid_service_dates), 
+                                         // we just check if this update plausible belongs to this `date`.
+                                         
+                                         // Calculate the trip start time for this `date`
+                                         let day_in_tz_midnight = tz.from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap()).single().unwrap() - chrono::Duration::hours(12);
+                                         let trip_start_ts = day_in_tz_midnight.timestamp() + trip_start as i64;
+                                         
+                                         // Find the earliest RT time in the update to compare
+                                         let earliest_rt = update.stop_time_update.iter()
+                                             .filter_map(|s| s.departure.as_ref().and_then(|d| d.time).or(s.arrival.as_ref().and_then(|a| a.time)))
+                                             .min();
+                                             
+                                         if let Some(rt_ts_i64) = earliest_rt {
+                                             // If the RT time is roughly compatible (within 24h?) of the trip start
+                                              let diff = (rt_ts_i64 - trip_start_ts).abs();
+                                              if diff < 86400 { // 24 hours leeway is generous, maybe too generous, but safe.
+                                                  match_found = true;
+                                              }
+                                         }
+                                     }
+                                     
+                                     if match_found {
+                                         active_update = Some(update);
+                                         break; // Found it
+                                     }
+                                 }
+                             }
+                         }
+                    }
+
+                    if let Some(update) = active_update {
                         if let Some(stu) = update.stop_time_update.iter().find(|s| s.stop_id.as_deref() == Some(row.stop_id.as_str())) {
                             if let Some(d) = &stu.departure { if let Some(t) = d.time { rt_dep = Some(t as u64); } }
                             if let Some(a) = &stu.arrival { if let Some(t) = a.time { rt_arr = Some(t as u64); } }
