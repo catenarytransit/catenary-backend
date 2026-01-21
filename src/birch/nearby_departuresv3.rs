@@ -83,6 +83,7 @@ pub struct StationDepartureGroupExport {
     pub departures: Vec<DepartureItem>,
     pub lat: f64,
     pub lon: f64,
+    pub timezone: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -364,6 +365,9 @@ pub async fn nearby_from_coords_v3(
                  station_groups.get(&(chateau.clone(), key.clone())).and_then(|v| v.as_slice().first()).map(|s| s.gtfs_id.clone()).unwrap_or_default()
             } else { rep_id };
 
+            let timezone = tz_search::lookup(meta.1, meta.2)
+                .unwrap_or_else(|| String::from("Etc/GMT"));
+
             ld_output.push(StationDepartureGroupExport {
                 station_name: meta.0,
                 osm_station_id: osm_id,
@@ -371,6 +375,7 @@ pub async fn nearby_from_coords_v3(
                 departures: deps,
                 lat: meta.1,
                 lon: meta.2,
+                timezone,
             });
         }
     }
