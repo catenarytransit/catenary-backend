@@ -618,7 +618,7 @@ async fn fetch_chateau_data(
                              if d > departure_ts as u64 + 60 { is_delayed = true; }
                     }
 
-                    if is_long_distance {
+                    if is_long_distance || matches!(station_key, StationKey::Osm(_)) {
                              let item = DepartureItem {
                                  scheduled_departure: Some(departure_ts as u64),
                                  realtime_departure: rt_dep,
