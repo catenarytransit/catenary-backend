@@ -656,6 +656,10 @@ async fn fetch_chateau_data(
                             if let Some(d) = &stu.departure { if let Some(t) = d.time { rt_dep = Some(t as u64); } }
                             if let Some(a) = &stu.arrival { if let Some(t) = a.time { rt_arr = Some(t as u64); } }
                             
+                            if let Some(p) = &stu.platform_string {
+                                rt_platform = Some(p.to_string());
+                            }
+
                             if stu.schedule_relationship == Some(catenary::aspen_dataset::AspenisedStopTimeScheduleRelationship::Skipped) { 
                                 is_cancelled = true; 
                             }
