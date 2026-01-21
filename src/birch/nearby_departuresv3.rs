@@ -52,6 +52,8 @@ struct NearbyFromCoordsV3 {
 pub struct NearbyDeparturesV3Response {
     pub long_distance: Vec<StationDepartureGroupExport>,
     pub local: Vec<DepartureRouteGroupExportV3>,
+    // Map<Chateau, Map<RouteId, RouteInfo>>
+    pub routes: HashMap<String, HashMap<String, RouteInfoExport>>,
 }
 
 // --- Long Distance Structs ---
@@ -79,9 +81,7 @@ pub struct DepartureItem {
     pub realtime_departure: Option<u64>,
     pub scheduled_arrival: Option<u64>,
     pub realtime_arrival: Option<u64>,
-    pub route_short_name: Option<String>,
-    pub route_long_name: Option<String>,
-    pub agency_name: Option<String>,
+    pub service_date: chrono::NaiveDate,
     pub headsign: String,
     pub platform: Option<String>,
     pub trip_id: String,
@@ -91,6 +91,16 @@ pub struct DepartureItem {
     pub delayed: bool,
     pub chateau_id: String,
     pub last_stop: bool,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct RouteInfoExport {
+    pub short_name: Option<String>,
+    pub long_name: Option<String>,
+    pub agency_name: Option<String>,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+    pub route_type: i32,
 }
 
 // --- Local Transport Structs ---
@@ -183,7 +193,7 @@ pub async fn nearby_from_coords_v3(
     };
 
     if stops.is_empty() {
-        return HttpResponse::Ok().json(NearbyDeparturesV3Response { long_distance: vec![], local: vec![] });
+        return HttpResponse::Ok().json(NearbyDeparturesV3Response { long_distance: vec![], local: vec![], routes: HashMap::new() });
     }
 
     // 4. Group Stops & Helpers
@@ -285,8 +295,7 @@ pub async fn nearby_from_coords_v3(
 
     }
 
-    // Results is now a list of (Partial LD, Partial Local)
-    let pipeline_results: Vec<Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>)>> = futures::stream::iter(chateau_futures)
+    let pipeline_results: Vec<Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>)>> = futures::stream::iter(chateau_futures)
         .buffer_unordered(10)
         .collect()
         .await;
@@ -295,18 +304,54 @@ pub async fn nearby_from_coords_v3(
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> = HashMap::new();
     let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> = HashMap::new();
     let mut local_route_meta: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new(); // Route, AgencyName
-
+    let mut routes_output: HashMap<String, HashMap<String, RouteInfoExport>> = HashMap::new();
 
     for res in pipeline_results {
-        if let Some((ld_part, local_part)) = res {
+        if let Some((ld_part, local_part, route_part)) = res {
+             // Extract chateau from one of the keys or we need to pass it back?
+             // The keys in ld_part are (Chateau, StationKey).
+             // But what if ld_part is empty?
+             // local_part keys are LocalRouteKey { chateau, ... }
+             // route_part keys are RouteId. We need Chateau to put it in routes_output.
+             // We can infer chateau from the first item found, or modify the return to include chateau string.
+             // But wait, the `fetch_chateau_data` takes `chateau` as input. It can return it.
+             // Let's assume we can get it from the map keys if present. 
+             // To be safe, let's just inspect the maps.
+             
+             let mut chateau_opt = None;
+             
+             if let Some((c, _)) = ld_part.keys().next() { chateau_opt = Some(c.clone()); }
+             else if let Some(k) = local_part.keys().next() { chateau_opt = Some(k.chateau.clone()); }
+             
+             // If completely empty result we might not know the chateau, but then route_part would likely be empty too 
+             // or we wouldn't care. 
+             // Actually, if we found active trips, we likely have data.
+             
+             // However, `fetch_chateau_data` closure captured `chateau_clone`. We can return it in the tuple to be safe.
+             // Let's modify `fetch_chateau_data` to return chateau string too for convenience? 
+             // Actually it's cleaner to just get it from the data if we are sure data exists.
+             // If `route_part` is not empty, we need the chateau.
+             
+             // Let's modify the signature of fetch_chateau_data return value slightly? 
+             // Or better: In `fetch_chateau_data` `route_info` is built. It knows the chateau.
+             // But `fetch_chateau_data` returns `Option<...>`.
+             
+             // Check below for fetch_chateau_data modification. I will wrap the return in a struct or just tuple with chateau.
+             
              for (k, v) in ld_part {
+                 chateau_opt = Some(k.0.clone());
                  ld_departures_by_group.entry(k).or_default().extend(v);
              }
              for (k, (route, agency_name, headsigns)) in local_part {
+                 chateau_opt = Some(k.chateau.clone());
                  local_route_meta.entry(k.clone()).or_insert((route, agency_name));
                  for (h, items) in headsigns {
                      local_departures.entry(k.clone()).or_default().entry(h).or_default().extend(items);
                  }
+             }
+             
+             if let Some(c) = chateau_opt {
+                 routes_output.entry(c).or_default().extend(route_part);
              }
         }
     }
@@ -385,6 +430,7 @@ pub async fn nearby_from_coords_v3(
     HttpResponse::Ok().json(NearbyDeparturesV3Response {
         long_distance: ld_output,
         local: local_output,
+        routes: routes_output,
     })
 }
 
@@ -398,7 +444,7 @@ async fn fetch_chateau_data(
     stop_to_key_map: HashMap<String, StationKey>,
     stop_platform_map: HashMap<String, Option<String>>,
     stop_name_map: HashMap<String, Option<String>>,
-) -> Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>)> {
+) -> Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>)> {
     
     // 1. Fetch Static
     let (
@@ -484,7 +530,8 @@ async fn fetch_chateau_data(
     // 4. Process Data into Objects
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> = HashMap::new();
     let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> = HashMap::new();
-    let mut local_route_meta_map: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new(); 
+    let mut local_route_meta_map: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new();
+    let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new(); 
 
     let departure_time = departure_time_chrono.timestamp();
     
@@ -618,15 +665,26 @@ async fn fetch_chateau_data(
                              if d > departure_ts as u64 + 60 { is_delayed = true; }
                     }
 
+
+                    // --- Populate Route Info ---
+                    if !route_info_map.contains_key(&route_id.to_string()) {
+                        route_info_map.insert(route_id.to_string(), RouteInfoExport {
+                            short_name: route.short_name.clone().map(|x| x.to_string()),
+                            long_name: route.long_name.clone(),
+                            agency_name: agency_name.clone(),
+                            color: route.color.clone().map(|x| x.to_string()),
+                            text_color: route.text_color.clone().map(|x| x.to_string()),
+                            route_type: route.route_type as i32,
+                        });
+                    }
+
                     if is_long_distance || matches!(station_key, StationKey::Osm(_)) {
                              let item = DepartureItem {
                                  scheduled_departure: Some(departure_ts as u64),
                                  realtime_departure: rt_dep,
                                  scheduled_arrival: Some( (midnight_ts + trip_start as i64 + row.arrival_time_since_start.unwrap_or(dep_time_offset) as i64) as u64 ),
                                  realtime_arrival: rt_arr,
-                                 route_short_name: route.short_name.clone().map(|x| x.to_string()),
-                                 route_long_name: route.long_name.clone(),
-                                 agency_name: agency_name,
+                                 service_date: *date,
                                  headsign: headsign,
                                  platform: display_platform.clone(),
                                  trip_id: trip_id.to_string(),
@@ -677,6 +735,6 @@ async fn fetch_chateau_data(
     Some((ld_departures_by_group, local_departures.into_iter().map(|(k, v)| {
           let (r, a) = local_route_meta_map.get(&k).unwrap().clone();
           (k, (r, a, v))
-    }).collect()))
+    }).collect(), route_info_map))
 }
 
