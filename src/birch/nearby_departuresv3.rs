@@ -700,36 +700,62 @@ async fn fetch_chateau_data(
                     let mut etcd_clone = etcd.clone();
                     // Get Metadata
                     let meta_res = etcd_clone.get(format!("/aspen_assigned_chateaux/{}", chateau), None).await;
-                    if let Ok(resp) = meta_res {
-                        if let Some(kv) = resp.kvs().first() {
-                            if let Ok(meta) = catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value()) {
-                                // Connect Aspen
-                                if let Ok(client) = catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await {
-                                    let t_fut = client.get_all_trips_with_ids(tarpc::context::current(), chateau.clone(), trip_ids.clone());
-                                    let a_fut = client.get_all_alerts(tarpc::context::current(), chateau.clone());
-                                    let (t, a) = tokio::join!(t_fut, a_fut);
-                                    
-                                    if let Ok(Some(tr)) = t {
-                                        // Store the whole structure so we can use the lookup maps
-                                        // (trip_updates_lookup_by_trip_id_to_trip_update_ids)
-                                        // rt_trips = tr.trip_updates; // OLD WAY
-                                        
-                                        // We need to store the whole thing or the relevant parts.
-                                        // Since we can't change the signature of rt_trips easily without refactoring the whole function's variable declarations above,
-                                        // let's just shadow/store what we need.
-                                        // Actually, let's just reassign rt_trips to be the whole AspenisedData if possible, 
-                                        // but rt_trips above was AHashMap.
-                                        // We will create a new variable to hold the full data.
-                                        rt_data = Some(tr);
+                    match meta_res {
+                        Ok(resp) => {
+                            if let Some(kv) = resp.kvs().first() {
+                                match catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value()) {
+                                    Ok(meta) => {
+                                        // Connect Aspen
+                                        match catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await {
+                                            Ok(client) => {
+                                                let t_fut = client.get_all_trips_with_ids(tarpc::context::current(), chateau.clone(), trip_ids.clone());
+                                                let a_fut = client.get_all_alerts(tarpc::context::current(), chateau.clone());
+                                                let (t, a) = tokio::join!(t_fut, a_fut);
+                                                
+                                                match t {
+                                                    Ok(Some(tr)) => {
+                                                        println!("RT_DEBUG [{}]: Got {} trip updates", chateau, tr.trip_updates.len());
+                                                        rt_data = Some(tr);
+                                                    }
+                                                    Ok(None) => {
+                                                        println!("RT_DEBUG [{}]: Aspen returned None for trips", chateau);
+                                                    }
+                                                    Err(e) => {
+                                                        eprintln!("RT_DEBUG [{}]: Failed to get trips from aspen: {:?}", chateau, e);
+                                                    }
+                                                }
+                                                match a {
+                                                    Ok(Some(al)) => {
+                                                        rt_alerts = al.into_values().collect();
+                                                    }
+                                                    Ok(None) => {}
+                                                    Err(e) => {
+                                                        eprintln!("RT_DEBUG [{}]: Failed to get alerts from aspen: {:?}", chateau, e);
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                eprintln!("RT_DEBUG [{}]: Failed to connect to aspen at {:?}: {:?}", chateau, meta.socket, e);
+                                            }
+                                        }
                                     }
-                                    if let Ok(Some(al)) = a {
-                                        rt_alerts = al.into_values().collect();
+                                    Err(e) => {
+                                        eprintln!("RT_DEBUG [{}]: Failed to deserialize chateau metadata: {:?}", chateau, e);
                                     }
                                 }
+                            } else {
+                                println!("RT_DEBUG [{}]: No etcd kv found for chateau", chateau);
                             }
                         }
+                        Err(e) => {
+                            eprintln!("RT_DEBUG [{}]: Etcd get failed: {:?}", chateau, e);
+                        }
                     }
+                } else {
+                    println!("RT_DEBUG [{}]: No trip_ids to fetch", chateau);
                 }
+            } else {
+                println!("RT_DEBUG [{}]: No etcd connection available", chateau);
             }
     }
 
