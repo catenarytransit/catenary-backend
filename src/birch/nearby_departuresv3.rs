@@ -65,6 +65,16 @@ pub struct NearbyDeparturesV3Response {
     pub routes: HashMap<String, HashMap<String, RouteInfoExport>>,
     // Map<Chateau, Map<StopId, StopOutputV3>>
     pub stops: HashMap<String, HashMap<String, StopOutputV3>>,
+    pub debug: NearbyDeparturesDebug,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct NearbyDeparturesDebug {
+    pub total_time_ms: u128,
+    pub db_connection_time_ms: u128,
+    pub stops_fetch_time_ms: u128,
+    pub etcd_connection_time_ms: u128,
+    pub pipeline_processing_time_ms: u128,
 }
 
 // --- Long Distance Structs ---
@@ -162,10 +172,12 @@ pub async fn nearby_from_coords_v3(
     let limit_per_station = query.limit_per_station.unwrap_or(10);
     
     let conn_pool = pool.as_ref();
+    let db_connection_start = Instant::now();
     let mut conn = match conn_pool.get().await {
         Ok(c) => c,
         Err(_) => return HttpResponse::InternalServerError().body("DB Connection Failed"),
     };
+    let db_connection_time = db_connection_start.elapsed();
 
     let departure_time = query.departure_time.unwrap_or_else(|| catenary::duration_since_unix_epoch().as_secs());
     let departure_time_chrono = chrono::Utc.timestamp_opt(departure_time as i64, 0).unwrap();
@@ -192,6 +204,7 @@ pub async fn nearby_from_coords_v3(
         query.lon, query.lat, spatial_resolution
     );
 
+    let stops_fetch_start = Instant::now();
     let stops: Vec<catenary::models::Stop> = match catenary::schema::gtfs::stops::dsl::stops
         .filter(sql::<Bool>(&where_query))
         // No chateau filter anymore!
@@ -202,9 +215,22 @@ pub async fn nearby_from_coords_v3(
         Ok(s) => s,
         Err(e) => return HttpResponse::InternalServerError().body(format!("Stop fetch error: {:?}", e)),
     };
+    let stops_fetch_time = stops_fetch_start.elapsed();
 
     if stops.is_empty() {
-        return HttpResponse::Ok().json(NearbyDeparturesV3Response { long_distance: vec![], local: vec![], routes: HashMap::new(), stops: HashMap::new() });
+        return HttpResponse::Ok().json(NearbyDeparturesV3Response { 
+            long_distance: vec![], 
+            local: vec![], 
+            routes: HashMap::new(), 
+            stops: HashMap::new(),
+            debug: NearbyDeparturesDebug {
+                total_time_ms: start.elapsed().as_millis(),
+                db_connection_time_ms: db_connection_time.as_millis(),
+                stops_fetch_time_ms: stops_fetch_time.as_millis(),
+                etcd_connection_time_ms: 0,
+                pipeline_processing_time_ms: 0,
+            }
+        });
     }
 
     // 4. Group Stops & Helpers
@@ -257,6 +283,7 @@ pub async fn nearby_from_coords_v3(
 
 
     // 5. Connect to Etcd (Aspen) early for concurrency
+    let etcd_connection_start = Instant::now();
     let etcd_reuser = etcd_reuser.as_ref();
     let mut etcd = None;
     {
@@ -279,6 +306,7 @@ pub async fn nearby_from_coords_v3(
          }
     }
     let etcd_arc = Arc::new(etcd);
+    let etcd_connection_time = etcd_connection_start.elapsed();
 
     // 5. Fetch Data (Pipelined Static + Realtime)
     let mut chateau_stops: HashMap<String, HashSet<String>> = HashMap::new();
@@ -308,10 +336,12 @@ pub async fn nearby_from_coords_v3(
 
     }
 
+    let pipeline_start = Instant::now();
     let pipeline_results: Vec<Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>, HashMap<String, StopOutputV3>)>> = futures::stream::iter(chateau_futures)
         .buffer_unordered(10)
         .collect()
         .await;
+    let pipeline_processing_time = pipeline_start.elapsed();
 
     // Flatten results into structure
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> = HashMap::new();
@@ -514,6 +544,13 @@ pub async fn nearby_from_coords_v3(
         local: local_output,
         routes: routes_output,
         stops: stops_output,
+        debug: NearbyDeparturesDebug {
+            total_time_ms: start.elapsed().as_millis(),
+            db_connection_time_ms: db_connection_time.as_millis(),
+            stops_fetch_time_ms: stops_fetch_time.as_millis(),
+            etcd_connection_time_ms: etcd_connection_time.as_millis(),
+            pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
+        },
     })
 }
 
