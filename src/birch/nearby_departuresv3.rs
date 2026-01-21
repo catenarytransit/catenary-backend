@@ -254,6 +254,11 @@ pub async fn nearby_from_coords_v3(
         // Calculate distance
         let stop_point = geo::Point::new(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y);
         let dist = input_point.haversine_distance(&stop_point);
+
+        if stops.len() > 800 && dist > 1500.0 && stop.primary_route_type == Some(3) {
+            continue;
+        }
+
         stop_dist_map.insert(stop.gtfs_id.clone(), dist);
         stop_full_info_map.insert(stop.gtfs_id.clone(), stop.clone());
 
@@ -851,45 +856,79 @@ async fn fetch_chateau_data(
 
                     if let Some(data) = &rt_data {
                          if let Some(update_ids) = data.trip_id_to_trip_update_ids.get(trip_id.as_str()) {
-                             // We might have multiple updates for the same trip_id (uncommon but possible with frequency/duplication)
-                             // or just one. We need to match the date.
-                             
-                             for uid in update_ids {
-                                 if let Some(update) = data.trip_updates.get(uid) {
-                                     // Date Check logic from V2
-                                     let mut match_found = false;
-                                     if let Some(start_date) = update.trip.start_date {
-                                         if start_date == *date {
-                                             match_found = true;
-                                         }
-                                     } else {
-                                         // If no date in update, infer.
-                                         // Logic: "score dates within 1 day". 
-                                         // Since we are iterating a specific `date` here (from valid_service_dates), 
-                                         // we just check if this update plausible belongs to this `date`.
-                                         
-                                         // Calculate the trip start time for this `date`
-                                         let day_in_tz_midnight = tz.from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap()).single().unwrap() - chrono::Duration::hours(12);
-                                         let trip_start_ts = day_in_tz_midnight.timestamp() + trip_start as i64;
-                                         
-                                         // Find the earliest RT time in the update to compare
-                                         let earliest_rt = update.stop_time_update.iter()
-                                             .filter_map(|s| s.departure.as_ref().and_then(|d| d.time).or(s.arrival.as_ref().and_then(|a| a.time)))
-                                             .min();
+                             if !update_ids.is_empty() {
+                                 // V2-style: Check if the first update uses dates to decide matching strategy
+                                 let does_trip_set_use_dates = data.trip_updates
+                                     .get(&update_ids[0])
+                                     .map(|u| u.trip.start_date.is_some())
+                                     .unwrap_or(false);
+                                 
+                                 let trip_offset = dep_time_offset as u64;
+                                 
+                                 // Filter updates by date matching
+                                 let matching_updates: Vec<&catenary::aspen_dataset::AspenisedTripUpdate> = update_ids
+                                     .iter()
+                                     .filter_map(|uid| data.trip_updates.get(uid))
+                                     .filter(|update| {
+                                         if does_trip_set_use_dates {
+                                             // Direct date match
+                                             update.trip.start_date == Some(*date)
+                                         } else {
+                                             // V2-style date inference using RT timestamps
+                                             let naive_date_approx_guess = update.stop_time_update.iter()
+                                                 .filter(|x| x.departure.is_some() || x.arrival.is_some())
+                                                 .filter_map(|x| {
+                                                     x.departure.as_ref().and_then(|d| d.time)
+                                                         .or_else(|| x.arrival.as_ref().and_then(|a| a.time))
+                                                 })
+                                                 .min();
                                              
-                                         if let Some(rt_ts_i64) = earliest_rt {
-                                             // If the RT time is roughly compatible (within 24h?) of the trip start
-                                              let diff = (rt_ts_i64 - trip_start_ts).abs();
-                                              if diff < 86400 { // 24 hours leeway is generous, maybe too generous, but safe.
-                                                  match_found = true;
-                                              }
+                                             match naive_date_approx_guess {
+                                                 Some(least_num) => {
+                                                     let rt_least_naive_date = tz.timestamp_opt(least_num, 0).single();
+                                                     if let Some(rt_time) = rt_least_naive_date {
+                                                         let approx_service_date_start = rt_time - chrono::Duration::seconds(trip_offset as i64);
+                                                         let approx_service_date = approx_service_date_start.date_naive();
+                                                         
+                                                         // Score dates within 1 day window
+                                                         let day_before = approx_service_date - chrono::Duration::days(2);
+                                                         let mut best_date: Option<chrono::NaiveDate> = None;
+                                                         let mut best_score = i64::MAX;
+                                                         
+                                                         for i in 0..5 {
+                                                             let check_day = day_before + chrono::Duration::days(i);
+                                                             if let Some(services) = service_map {
+                                                                 if let Some(service) = services.get(trip.service_id.as_str()) {
+                                                                     if catenary::datetime_in_service(service, check_day) {
+                                                                         let day_in_tz_midnight = tz.from_local_datetime(&check_day.and_hms_opt(12, 0, 0).unwrap())
+                                                                             .single()
+                                                                             .map(|t| t - chrono::Duration::hours(12));
+                                                                         
+                                                                         if let Some(midnight) = day_in_tz_midnight {
+                                                                             let time_delta = (rt_time.timestamp() - midnight.timestamp()).abs();
+                                                                             if time_delta < best_score {
+                                                                                 best_score = time_delta;
+                                                                                 best_date = Some(check_day);
+                                                                             }
+                                                                         }
+                                                                     }
+                                                                 }
+                                                             }
+                                                         }
+                                                         
+                                                         best_date == Some(*date)
+                                                     } else {
+                                                         false
+                                                     }
+                                                 }
+                                                 None => false,
+                                             }
                                          }
-                                     }
-                                     
-                                     if match_found {
-                                         active_update = Some(update);
-                                         break; // Found it
-                                     }
+                                     })
+                                     .collect();
+                                 
+                                 if !matching_updates.is_empty() {
+                                     active_update = Some(matching_updates[0]);
                                  }
                              }
                          }
