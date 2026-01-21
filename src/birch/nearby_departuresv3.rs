@@ -147,16 +147,16 @@ pub struct LocalRouteKey {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct LocalDepartureItem {
-
     pub trip_id: CompactString,
     pub departure_schedule: Option<u64>,
     pub departure_realtime: Option<u64>,
+    pub arrival_schedule: Option<u64>,
+    pub arrival_realtime: Option<u64>,
     pub stop_id: CompactString,
     pub stop_name: Option<String>,
     pub cancelled: bool,
     pub platform: Option<String>,
     pub last_stop: bool,
-    // Add other fields if needed for use, keeping it lean for now
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
@@ -1005,6 +1005,8 @@ async fn fetch_chateau_data(
                                 trip_id: CompactString::from(trip_id.as_str()),
                                 departure_schedule: Some(departure_ts as u64),
                                 departure_realtime: rt_dep,
+                                arrival_schedule: Some((midnight_ts + trip_start as i64 + row.arrival_time_since_start.unwrap_or(dep_time_offset) as i64) as u64),
+                                arrival_realtime: rt_arr,
                                 stop_id: CompactString::from(row.stop_id.as_str()),
                                 stop_name: stop_name_map.get(row.stop_id.as_str()).cloned().flatten(),
                                 cancelled: is_cancelled,
