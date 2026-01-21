@@ -330,8 +330,10 @@ pub async fn nearby_from_coords_v3(
         let stop_name_map: HashMap<String, Option<String>> = stops.iter().map(|s| (s.gtfs_id.clone(), s.name.clone())).collect();
         let full_info_map_clone = stop_full_info_map.clone();
 
+        let stop_dist_map_clone = stop_dist_map.clone();
+
         chateau_futures.push(async move {
-            fetch_chateau_data(pool, chateau_clone, stop_ids_vec, dep_time, etcd_clone, ld_arc_clone, stop_to_key_map, stop_platform_map, stop_name_map, full_info_map_clone).await
+            fetch_chateau_data(pool, chateau_clone, stop_ids_vec, dep_time, etcd_clone, ld_arc_clone, stop_to_key_map, stop_platform_map, stop_name_map, full_info_map_clone, stop_dist_map_clone).await
         });
 
     }
@@ -564,10 +566,78 @@ async fn fetch_chateau_data(
     stop_to_key_map: HashMap<String, StationKey>,
     stop_platform_map: HashMap<String, Option<String>>,
     stop_name_map: HashMap<String, Option<String>>,
+
     stop_full_info_map: HashMap<String, catenary::models::Stop>,
+    stop_dist_map: HashMap<String, f64>,
 ) -> Option<(HashMap<(String, StationKey), Vec<DepartureItem>>, HashMap<LocalRouteKey, (catenary::models::Route, String, HashMap<String, Vec<LocalDepartureItem>>)>, HashMap<String, RouteInfoExport>, HashMap<String, StopOutputV3>)> {
     
-    // 1. Fetch Static
+    // OPTIMIZATION: Filter redundant stops for Local Transport (Bus/Tram/Subway)
+    // We only want the closest stop for each direction/headsign combination to avoid DB spam.
+    
+    let mut final_stop_ids = Vec::new();
+    let mut stops_to_check = Vec::new();
+
+    for stop_id in &stop_ids {
+        if let Some(stop) = stop_full_info_map.get(stop_id) {
+            match stop.primary_route_type {
+                Some(0) | Some(1) | Some(3) => stops_to_check.push(stop_id.clone()),
+                _ => final_stop_ids.push(stop_id.clone()),
+            }
+        } else {
+             // Fallback
+             final_stop_ids.push(stop_id.clone());
+        }
+    }
+
+    if !stops_to_check.is_empty() {
+        // Fetch directions for these stops to see which ones are redundant
+        let mut conn = pool.get().await.unwrap(); // Connection just for this optimization query
+        
+        let direction_rows: Vec<catenary::models::DirectionPatternRow> = catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+             .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
+             .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stops_to_check))
+             .select(catenary::models::DirectionPatternRow::as_select())
+             .load(&mut conn)
+             .await
+             .unwrap_or_default();
+
+        // Map: (DirectionPatternId, HeadsignIdx) -> (MinDist, StopId)
+        // We use String and Option<i16> as key
+        let mut best_stops: HashMap<(String, Option<i16>), (f64, String)> = HashMap::new();
+        
+        // Also keep track of stops that have NO direction info? 
+        // If a stop is not in direction_pattern, it won't be in direction_rows.
+        // If we strictly filter, we might drop it. But if it's not in direction_pattern, 
+        // likely it's not useful for our direction-based grouping anyway.
+        // V2 logic implies we only care about stops that resolved to a direction.
+        
+        for row in direction_rows {
+            if let Some(dist) = stop_dist_map.get(row.stop_id.as_str()) {
+                let key = (row.direction_pattern_id, row.stop_headsign_idx);
+                
+                match best_stops.entry(key) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        if *dist < e.get().0 {
+                            e.insert((*dist, row.stop_id.to_string()));
+                        }
+                    },
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                         e.insert((*dist, row.stop_id.to_string()));
+                    }
+                }
+            }
+        }
+        
+        let winners: HashSet<String> = best_stops.values().map(|(_, s)| s.clone()).collect();
+        final_stop_ids.extend(winners);
+        
+        // Safety: If a stop was in stops_to_check but didn't appear in ANY direction pattern,
+        // it gets dropped here. This is consistent with V2 logic which ignores such stops for local transport views.
+    } else {
+        // No local transport stops to check
+    }
+
+    // 1. Fetch Static using refined list
     let (
         chateau_id,
         itins,
@@ -580,7 +650,7 @@ async fn fetch_chateau_data(
         _,
         calendar,
         calendar_dates
-    ) = fetch_stop_data_for_chateau(pool, chateau.clone(), stop_ids, false).await;
+    ) = fetch_stop_data_for_chateau(pool, chateau.clone(), final_stop_ids, false).await;
     
     let mut rt_trips = AHashMap::new();
     let mut rt_alerts = Vec::new();
@@ -869,6 +939,30 @@ async fn fetch_chateau_data(
        }
 
     } // End trip loop
+
+    // Post-process local_departures to isolate closest stop per headsign (Local Transport isolation)
+    // Matches v2 logic: "only show the instance of departure from the closest stop"
+    for (_route_key, headsigns_map) in local_departures.iter_mut() {
+        for (_headsign, items) in headsigns_map.iter_mut() {
+             if items.is_empty() { continue; }
+             
+             let mut min_dist = f64::MAX;
+             let mut best_stop_id: Option<CompactString> = None;
+             
+             for item in items.iter() {
+                 if let Some(dist) = stop_dist_map.get(item.stop_id.as_str()) {
+                     if *dist < min_dist {
+                         min_dist = *dist;
+                         best_stop_id = Some(item.stop_id.clone());
+                     }
+                 }
+             }
+             
+             if let Some(target) = best_stop_id {
+                 items.retain(|i| i.stop_id == target);
+             }
+        }
+    }
 
     
     Some((ld_departures_by_group, local_departures.into_iter().map(|(k, v)| {
