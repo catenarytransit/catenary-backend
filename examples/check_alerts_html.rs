@@ -31,8 +31,17 @@ async fn main() -> Result<()> {
 
     // 3. Initialize Etcd Client
     let etcd_urls = env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_username = env::var("ETCD_USERNAME").ok();
+    let etcd_password = env::var("ETCD_PASSWORD").ok();
+
+    let connect_options = if let (Some(username), Some(password)) = (etcd_username, etcd_password) {
+        Some(etcd_client::ConnectOptions::new().with_user(username, password))
+    } else {
+        None
+    };
+
     println!("Connecting to Etcd at {}...", etcd_urls);
-    let mut etcd_client = etcd_client::Client::connect([&etcd_urls], None).await?;
+    let mut etcd_client = etcd_client::Client::connect([&etcd_urls], connect_options).await?;
 
     // 4. Iterate and Check Alerts
     for chateau_id in all_chateaus {
