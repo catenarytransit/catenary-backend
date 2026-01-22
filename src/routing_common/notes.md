@@ -185,10 +185,7 @@ Transfer Patterns are expensive to compute and cannot be re-run frequently. Howe
 "The graph partitioning problem asks for a balanced partition that minimizes the weighted sum of all cut edges." [4]
 
 # Bibliography
-[1]: H. Bast et al., “Fast Routing in Very Large Public Transportation Networks Using Transfer Patterns,” ESA 2010, pp. 290–301, Sep. 2010, doi: https://doi.org/10.1007/978-3-642-15775-2_25.
-[2]: H. Bast, M. Hertel, and S. Storandt, “Scalable Transfer Patterns,” 2016 Proceedings of the Eighteenth Workshop on Algorithm Engineering and Experiments (ALENEX), Dec. 2015, doi: https://doi.org/10.1137/1.9781611974317.2.
-[3]: U. Lauther, “An Extremely Fast, Exact Algorithm for Finding Shortest Paths in Static Networks with Geographical Background,” Siemens AG, Corporate Technology Software & Engineering, vol. 6, pp. 219–230, May 2004.
-[4]: E. Großmann, J. Sauer, C. Schulz, and P. Steil, “Arc-Flags Meet Trip-Based Public Transit Routing,” arXiv (Cornell University), Feb. 2023, doi: https://doi.org/10.48550/arxiv.2302.07168.
-
-
-Arc-Flags Meet Trip-Based Public Transit Routing
+[1]: H. Bast et al., “Fast Routing in Very Large Public Transportation Networks Using Transfer Patterns,” ESA 2010, pp. 290–301, Sep. 2010, doi: https://doi.org/10.1007/978-3-642-15775-2_25. 
+[2]: H. Bast, M. Hertel, and S. Storandt, “Scalable Transfer Patterns,” 2016 Proceedings of the Eighteenth Workshop on Algorithm Engineering and Experiments (ALENEX), Dec. 2015, doi: https://doi.org/10.1137/1.9781611974317.2. 
+[3]: U. Lauther, “An Extremely Fast, Exact Algorithm for Finding Shortest Paths in Static Networks with Geographical Background,” Siemens AG, Corporate Technology Software & Engineering, vol. 6, pp. 219–230, May 2004. 
+[4]: E. Großmann, J. Sauer, C. Schulz, and P. Steil, “Arc-Flags Meet Trip-Based Public Transit Routing,” arXiv (Cornell University), Feb. 2023, doi: https://doi.org/10.48550/arxiv.2302.07168. 
