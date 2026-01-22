@@ -330,7 +330,7 @@ pub async fn nearby_from_coords_v3(
         let chateau_clone = chateau.clone();
         let ld_arc_clone = long_distance_chateaux_arc.clone();
         
-        let stop_to_key_map: HashMap<String, StationKey> = stops.iter().map(|s| (s.gtfs_id.clone(), if let Some(osm) = s.osm_station_id { StationKey::Osm(osm) } else if let Some(p) = &s.parent_station { StationKey::Parent(p.clone()) } else { StationKey::Stop(s.gtfs_id.clone()) } )).collect();
+        let stop_to_key_map: HashMap<(String, String), StationKey> = stops.iter().map(|s| ((s.chateau.clone(), s.gtfs_id.clone()), if let Some(osm) = s.osm_station_id { StationKey::Osm(osm) } else if let Some(p) = &s.parent_station { StationKey::Parent(p.clone()) } else { StationKey::Stop(s.gtfs_id.clone()) } )).collect();
         let stop_platform_map: HashMap<String, Option<String>> = stops.iter().map(|s| (s.gtfs_id.clone(), s.platform_code.clone())).collect();
         let stop_name_map: HashMap<String, Option<String>> = stops.iter().map(|s| (s.gtfs_id.clone(), s.name.clone())).collect();
         let full_info_map_clone = stop_full_info_map.clone();
@@ -568,7 +568,7 @@ async fn fetch_chateau_data(
     departure_time_chrono: chrono::DateTime<chrono::Utc>,
     etcd_arc: Arc<Option<etcd_client::Client>>,
     long_distance_chateaux: Arc<HashSet<&str>>,
-    stop_to_key_map: HashMap<String, StationKey>,
+    stop_to_key_map: HashMap<(String, String), StationKey>,
     stop_platform_map: HashMap<String, Option<String>>,
     stop_name_map: HashMap<String, Option<String>>,
 
@@ -826,7 +826,7 @@ async fn fetch_chateau_data(
         };
         
         for row in rows {
-            if let Some(station_key) = stop_to_key_map.get(row.stop_id.as_str()) {
+            if let Some(station_key) = stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string())) {
                     let dep_time_offset = row.departure_time_since_start
                     .or(row.arrival_time_since_start)
                     .or(row.interpolated_time_since_start)
@@ -878,90 +878,61 @@ async fn fetch_chateau_data(
                     let mut is_cancelled = false;
                     let mut is_delayed = false;
                     
-                    let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> = None;
+                     let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> = None;
 
                     if let Some(data) = &rt_data {
                          if let Some(update_ids) = data.trip_id_to_trip_update_ids.get(trip_id.as_str()) {
-                             if !update_ids.is_empty() {
-                                 // V2-style: Check if the first update uses dates to decide matching strategy
-                                 let does_trip_set_use_dates = data.trip_updates
-                                     .get(&update_ids[0])
-                                     .map(|u| u.trip.start_date.is_some())
-                                     .unwrap_or(false);
-                                 
-                                 let trip_offset = dep_time_offset as u64;
-                                 
-                                 // Filter updates by date matching
-                                 let matching_updates: Vec<&catenary::aspen_dataset::AspenisedTripUpdate> = update_ids
-                                     .iter()
-                                     .filter_map(|uid| data.trip_updates.get(uid))
-                                     .filter(|update| {
-                                         if does_trip_set_use_dates {
-                                             // Direct date match
-                                             update.trip.start_date == Some(*date)
-                                         } else {
-                                             // V2-style date inference using RT timestamps
-                                             let naive_date_approx_guess = update.stop_time_update.iter()
-                                                 .filter(|x| x.departure.is_some() || x.arrival.is_some())
-                                                 .filter_map(|x| {
-                                                     x.departure.as_ref().and_then(|d| d.time)
-                                                         .or_else(|| x.arrival.as_ref().and_then(|a| a.time))
-                                                 })
-                                                 .min();
-                                             
-                                             match naive_date_approx_guess {
-                                                 Some(least_num) => {
-                                                     let rt_least_naive_date = tz.timestamp_opt(least_num, 0).single();
-                                                     if let Some(rt_time) = rt_least_naive_date {
-                                                         let approx_service_date_start = rt_time - chrono::Duration::seconds(trip_offset as i64);
-                                                         let approx_service_date = approx_service_date_start.date_naive();
-                                                         
-                                                         // Score dates within 1 day window
-                                                         let day_before = approx_service_date - chrono::Duration::days(2);
-                                                         let mut best_date: Option<chrono::NaiveDate> = None;
-                                                         let mut best_score = i64::MAX;
-                                                         
-                                                         for i in 0..5 {
-                                                             let check_day = day_before + chrono::Duration::days(i);
-                                                             if let Some(services) = service_map {
-                                                                 if let Some(service) = services.get(trip.service_id.as_str()) {
-                                                                     if catenary::datetime_in_service(service, check_day) {
-                                                                         let day_in_tz_midnight = tz.from_local_datetime(&check_day.and_hms_opt(12, 0, 0).unwrap())
-                                                                             .single()
-                                                                             .map(|t| t - chrono::Duration::hours(12));
-                                                                         
-                                                                         if let Some(midnight) = day_in_tz_midnight {
-                                                                             let time_delta = (rt_time.timestamp() - midnight.timestamp()).abs();
-                                                                             if time_delta < best_score {
-                                                                                 best_score = time_delta;
-                                                                                 best_date = Some(check_day);
-                                                                             }
-                                                                         }
-                                                                     }
-                                                                 }
-                                                             }
-                                                         }
-                                                         
-                                                         best_date == Some(*date)
-                                                     } else {
-                                                         false
-                                                     }
-                                                 }
-                                                 None => false,
-                                             }
-                                         }
-                                     })
-                                     .collect();
-                                 
-                                 if !matching_updates.is_empty() {
-                                     active_update = Some(matching_updates[0]);
+                             for uid in update_ids {
+                                 if let Some(u) = data.trip_updates.get(uid) {
+                                     // 1. Direct Date Match
+                                     if u.trip.start_date == Some(*date) {
+                                         active_update = Some(u);
+                                         break;
+                                     } 
+                                     
+                                    // 2. Estimation Match (fallback)
+                                     if u.trip.start_date.is_none() {
+                                          let valid_trip_temp = ValidTripSet {
+                                             chateau_id: chateau.clone(),
+                                             trip_id: trip.trip_id.clone().into(),
+                                             frequencies: None,
+                                             trip_service_date: *date,
+                                             itinerary_options: Arc::new(vec![]),
+                                             reference_start_of_service_date: tz.from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap()).unwrap() - chrono::Duration::hours(12),
+                                            itinerary_pattern_id: trip.itinerary_pattern_id.clone(),
+                                            direction_pattern_id: "".to_string(),
+                                            route_id: route_id.clone().into(),
+                                            timezone: Some(tz),
+                                            trip_start_time: trip.start_time,
+                                            trip_short_name: None,
+                                            service_id: trip.service_id.clone(),
+                                        };
+                                        let itin_option_temp = ItinOption {
+                                            arrival_time_since_start: row.arrival_time_since_start,
+                                            departure_time_since_start: row.departure_time_since_start,
+                                            interpolated_time_since_start: row.interpolated_time_since_start,
+                                            stop_id: row.stop_id.clone(),
+                                            gtfs_stop_sequence: row.gtfs_stop_sequence as u32,
+                                            trip_headsign: None,
+                                            trip_headsign_translations: None,
+                                        };
+                                        
+                                        if estimate_service_date(&valid_trip_temp, u, &itin_option_temp, service_map.unwrap(), &chateau) {
+                                            active_update = Some(u);
+                                            break;
+                                        }
+                                     }
                                  }
                              }
                          }
                     }
 
                     if let Some(update) = active_update {
-                        if let Some(stu) = update.stop_time_update.iter().find(|s| s.stop_id.as_deref() == Some(row.stop_id.as_str())) {
+                        // FIX: Added stop_sequence matching here
+                        if let Some(stu) = update.stop_time_update.iter().find(|s| {
+                             s.stop_sequence == Some(row.gtfs_stop_sequence as u16) ||
+                             s.stop_id.as_deref() == Some(row.stop_id.as_str())
+                        }) {
                             if let Some(d) = &stu.departure { if let Some(t) = d.time { rt_dep = Some(t as u64); } }
                             if let Some(a) = &stu.arrival { if let Some(t) = a.time { rt_arr = Some(t as u64); } }
                             
@@ -1001,7 +972,7 @@ async fn fetch_chateau_data(
                     let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
 
                     if !is_subway_or_tram && (is_long_distance || (matches!(station_key, StationKey::Osm(_)) && route.route_type != 3)) {
-                             let item = DepartureItem {
+                              let item = DepartureItem {
                                  scheduled_departure: Some(departure_ts as u64),
                                  realtime_departure: rt_dep,
                                  scheduled_arrival: Some( (midnight_ts + trip_start as i64 + row.arrival_time_since_start.unwrap_or(dep_time_offset) as i64) as u64 ),
