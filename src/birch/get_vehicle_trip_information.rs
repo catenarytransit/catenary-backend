@@ -1188,6 +1188,10 @@ pub async fn get_trip_init(
 
         vec_service_dates.sort_by_key(|x| x.2.abs().num_seconds());
 
+        if vec_service_dates.is_empty() {
+            return HttpResponse::NotFound().body("No service date found for this trip");
+        }
+
         let (start_naive_date, _, _) = vec_service_dates[0];
 
         start_naive_date
