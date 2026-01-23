@@ -514,7 +514,6 @@ pub async fn nearby_from_coords_v3(
         let mut sorted_headsigns = HashMap::new();
         for (h, mut items) in headsigns {
             items.sort_by_key(|i| i.departure_schedule.unwrap_or(0));
-            items.truncate(10); 
             sorted_headsigns.insert(h, items);
         }
 
