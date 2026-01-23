@@ -5,20 +5,22 @@ use prost::Message;
 pub async fn fetch_via_data(
     etcd: &mut etcd_client::KvClient,
     feed_id: &str,
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
+    gtfs: &gtfs_structures::Gtfs,
 ) {
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
         let worker_id = assigned_chateau_data.worker_id;
 
-        let via_gtfs_rt_data = via_rail_gtfsrt::get_via_rail_gtfs_rt().await;
+        let via_gtfs_rt_data = via_rail_gtfsrt::get_via_rail_gtfs_rt(gtfs).await;
 
         match via_gtfs_rt_data {
-            Ok(via_gtfs_rt) => {
+            Ok(via_rail_results) => {
                 //extract the binary data
-                let vehicle_data = via_gtfs_rt.clone().encode_to_vec();
-                let trip_data = via_gtfs_rt.clone().encode_to_vec();
+                let vehicle_data = via_rail_results.vehicle_positions.encode_to_vec();
+                let trip_data = via_rail_results.trip_updates.encode_to_vec();
+                let alert_data = via_rail_results.alerts.encode_to_vec();
 
                 let aspen_client =
                     catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
@@ -32,13 +34,13 @@ pub async fn fetch_via_data(
                         String::from(feed_id),
                         Some(vehicle_data),
                         Some(trip_data),
-                        None,
+                        Some(alert_data),
                         true,
                         true,
-                        false,
+                        true,
                         Some(200),
                         Some(200),
-                        None,
+                        Some(200),
                         duration_since_unix_epoch().as_millis() as u64,
                     )
                     .await;

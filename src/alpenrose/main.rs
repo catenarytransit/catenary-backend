@@ -84,6 +84,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
     let flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
     let chicago_trips_str: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
@@ -426,7 +427,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 // Chicago & MNR & Flixbus need the client
                 let client_dl = client.clone();
 
-                // Chicago
                 if assigned_feeds.contains("f-dp3-cta~rt") && !downloads_started.contains("chicago")
                 {
                     println!("Spawning Chicago download task...");
@@ -476,6 +476,28 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                                 }
                             }
                             Err(e) => eprintln!("Failed to download Chicago: {}", e),
+                        }
+                    });
+                }
+
+                // VIA Rail
+                if assigned_feeds.contains("f-viarail~rt") && !downloads_started.contains("viarail")
+                {
+                    println!("Spawning VIA Rail download task...");
+                    downloads_started.insert("viarail".to_string());
+                    let via_gtfs = via_gtfs.clone();
+                    tokio::spawn(async move {
+                        let gtfs = gtfs_structures::GtfsReader::default()
+                            .read_shapes(false)
+                            .read_from_url_async("https://www.viarail.ca/sites/all/files/gtfs/viarail.zip")
+                            .await;
+
+                        match gtfs {
+                            Ok(gtfs) => {
+                                println!("VIA Rail GTFS downloaded.");
+                                *via_gtfs.write().await = Some(gtfs);
+                            }
+                            Err(e) => eprintln!("Failed to download VIA Rail GTFS: {}", e),
                         }
                     });
                 }
@@ -606,6 +628,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&mnr_gtfs),
+                Arc::clone(&via_gtfs),
                 Arc::clone(&flixbus_us_aggregator),
                 Arc::clone(&flixbus_eu_aggregator),
                 etcd_urls.clone(),

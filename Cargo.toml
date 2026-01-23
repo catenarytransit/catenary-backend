@@ -155,7 +155,7 @@ simple-server-timing-header = "0.1.1"
 osmpbfreader = { version = "0.19.1", features = ["serde"] }
 mime = "0.3.17"
 gtfs-realtime = "0.2.0"
-via-rail-gtfsrt = "0.2.0"
+via-rail-gtfsrt = "0.3.0"
 wyhash2 = "0.2.1"
 console-subscriber = "0.5.0"
 strumbra = "0.6.0"

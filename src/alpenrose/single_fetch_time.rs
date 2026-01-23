@@ -106,6 +106,7 @@ pub async fn single_fetch_time(
     chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>>,
     flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>>,
     etcd_urls: Arc<Vec<String>>,
@@ -142,6 +143,7 @@ pub async fn single_fetch_time(
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
+                let via_gtfs = via_gtfs.clone();
                 let flixbus_us_aggregator = flixbus_us_aggregator.clone();
                 let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
 
@@ -536,12 +538,16 @@ pub async fn single_fetch_time(
                             }
 
                             "f-viarail~rt" => {
-                                custom_rt_feeds::viarail::fetch_via_data(
-                                    &mut kv_client,
-                                    &feed_id,
-                                    &client,
-                                )
-                                .await;
+                                let via_lock = via_gtfs.read().await;
+                                if let Some(gtfs) = via_lock.as_ref() {
+                                    custom_rt_feeds::viarail::fetch_via_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        &client,
+                                        gtfs,
+                                    )
+                                    .await;
+                                }
                             }
                             "f-mta~nyc~rt~lirr" => {
                                 let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(
