@@ -932,7 +932,15 @@ async fn fetch_chateau_data(
                              s.stop_sequence == Some(row.gtfs_stop_sequence as u16) ||
                              s.stop_id.as_deref() == Some(row.stop_id.as_str())
                         }) {
-                            if let Some(d) = &stu.departure { if let Some(t) = d.time { rt_dep = Some(t as u64); } }
+                            // Departure: use departure time, or fallback to arrival if not provided
+                            if let Some(d) = &stu.departure { 
+                                if let Some(t) = d.time { rt_dep = Some(t as u64); } 
+                            } else if let Some(a) = &stu.arrival { 
+                                // Fallback: use arrival as departure if departure not provided
+                                if let Some(t) = a.time { rt_dep = Some(t as u64); } 
+                            }
+                            
+                            // Arrival time
                             if let Some(a) = &stu.arrival { if let Some(t) = a.time { rt_arr = Some(t as u64); } }
                             
                             if let Some(p) = &stu.platform_string {
