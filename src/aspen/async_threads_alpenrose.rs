@@ -4,7 +4,6 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
-
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -24,7 +23,6 @@ pub async fn alpenrose_process_threads(
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     _lease_id_for_this_worker: i64,
     redis_client: redis::Client,
-
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut set: JoinSet<_> = JoinSet::new();
 
@@ -35,7 +33,6 @@ pub async fn alpenrose_process_threads(
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
         let redis_client = redis_client.clone();
-
 
         set.spawn(async move {
             loop {
@@ -102,7 +99,6 @@ pub async fn alpenrose_loop_process_thread(
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     redis_client: redis::Client,
-
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     loop {
         // println!("From-Alpenrose process thread");

@@ -886,8 +886,9 @@ pub async fn departures_at_osm_station(
                                                         trip_update.stop_time_update.iter().find(|stu| {
                                                             stu.stop_sequence
                                                                 == Some(itin_option.gtfs_stop_sequence as u16)
-                                                                || stu.stop_id.as_ref().map(|s| s.as_str())
-                                                                    == Some(itin_option.stop_id.as_str())
+                                                                || stu.stop_id.as_ref().map(|sid| 
+                                                                    crate::stop_matching::rt_stop_matches_scheduled_simple(sid, itin_option.stop_id.as_str())
+                                                                ).unwrap_or(false)
                                                         })
                                                     {
                                                         if let Some(arr) = &matching_stu.arrival {

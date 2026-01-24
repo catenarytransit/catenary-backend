@@ -127,7 +127,6 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
-
 }
 
 impl AspenRpc for AspenServer {
@@ -399,6 +398,11 @@ impl AspenRpc for AspenServer {
                 Some(TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
+                    stop_id_to_parent_id: authoritative_data
+                        .stop_id_to_parent_id
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
                 })
             }
         }
@@ -1601,7 +1605,6 @@ async fn main() -> anyhow::Result<()> {
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
 
-
     //run both the leader and the listener simultaniously
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
@@ -1661,7 +1664,6 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&alpenrose_to_process_queue_chateaux),
         etcd_lease_id_for_this_worker,
         redis_client.clone(),
-
     ));
 
     let this_worker_id_copy = this_worker_id.clone();
@@ -1764,7 +1766,6 @@ async fn main() -> anyhow::Result<()> {
 
             let etcd_addresses = Arc::clone(&Arc::clone(&etcd_addresses));
 
-
             move || async move {
                 listener
                     // Ignore accept errors.
@@ -1793,7 +1794,6 @@ async fn main() -> anyhow::Result<()> {
                                 SccHashMap::new(),
                             ),
                             backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
-
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })

@@ -20,6 +20,7 @@ use tarpc::{client, tokio_serde::formats::Bincode};
 pub struct TripsSelectionResponse {
     pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
     pub trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+    pub stop_id_to_parent_id: AHashMap<String, String>,
 }
 
 #[tarpc::service]

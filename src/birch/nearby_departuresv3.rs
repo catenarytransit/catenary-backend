@@ -1159,10 +1159,18 @@ async fn fetch_chateau_data(
                     }
 
                     if let Some(update) = active_update {
-                        // FIX: Added stop_sequence matching here
+                        // FIX: Added stop_sequence matching with parent-child support
                         if let Some(stu) = update.stop_time_update.iter().find(|s| {
                             s.stop_sequence == Some(row.gtfs_stop_sequence as u16)
-                                || s.stop_id.as_deref() == Some(row.stop_id.as_str())
+                                || s.stop_id
+                                    .as_ref()
+                                    .map(|sid| {
+                                        crate::stop_matching::rt_stop_matches_scheduled_simple(
+                                            sid,
+                                            row.stop_id.as_str(),
+                                        )
+                                    })
+                                    .unwrap_or(false)
                         }) {
                             // Departure: use departure time, or fallback to arrival if not provided
                             if let Some(d) = &stu.departure {

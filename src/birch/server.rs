@@ -87,6 +87,7 @@ mod connections_lookup;
 mod openrailwaymap_proxy;
 mod osm_station_preview;
 mod shapes;
+pub mod stop_matching;
 mod stop_preview;
 mod text_search;
 mod vehicle_api;

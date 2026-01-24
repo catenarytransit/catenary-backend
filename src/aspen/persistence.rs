@@ -48,8 +48,6 @@ pub fn load_chateau_data(
     Ok(Some(data))
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;

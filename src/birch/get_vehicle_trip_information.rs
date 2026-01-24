@@ -1874,14 +1874,20 @@ pub async fn get_trip_init(
                                                     Some(rt_stop_id) => {
                                                         match stop_time_update.stop_sequence {
                                                             Some(rt_stop_sequence) => {
-                                                                *rt_stop_id == *x.stop_id
+                                                                crate::stop_matching::rt_stop_matches_scheduled_simple(
+                                                                    &rt_stop_id,
+                                                                    &x.stop_id,
+                                                                )
                                                                     && x.gtfs_stop_sequence
                                                                         .is_some()
                                                                     && rt_stop_sequence as u16
                                                                         == x.gtfs_stop_sequence
                                                                             .unwrap()
                                                             }
-                                                            None => *rt_stop_id == *x.stop_id,
+                                                            None => crate::stop_matching::rt_stop_matches_scheduled_simple(
+                                                                &rt_stop_id,
+                                                                &x.stop_id,
+                                                            ),
                                                         }
                                                     }
                                                     None => match stop_time_update.stop_sequence {
