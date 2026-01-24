@@ -293,6 +293,9 @@ fn load_and_match_gtfs_to_osm(
     };
     let matcher = MapMatcher::new(osm_index, matcher_config);
 
+    // Build line lookup map for filtering
+    let line_map: ahash::HashMap<LineId, &Line> = lines.iter().map(|l| (l.id.clone(), l)).collect();
+
     let mut processed = 0;
     let total = shapes.len();
 
@@ -309,6 +312,51 @@ fn load_and_match_gtfs_to_osm(
                 12 => crate::osm_types::RailMode::Monorail,
                 _ => crate::osm_types::RailMode::Rail,
             };
+
+            // Rail filtering logic (exclude general rail, allow exceptions)
+            if mode == crate::osm_types::RailMode::Rail {
+                let mut allowed = false;
+                if let Some(line) = line_map.get(&line_id) {
+                    let c = line_id.chateau.as_str();
+                    // Check simple chateau exceptions
+                    if c == "metrolinktrains"
+                        || c == "exo~reseaudetransportmetropolitain"
+                        || c == "gotransit"
+                        || c == "upexpress"
+                        || c == "île~de~france~mobilités"
+                        || c == "longislandrailroad"
+                        || c == "metro~northrailroad"
+                        || c == "renfecercanias"
+                        || c == "fgc"
+                        || c == "utahtransitauthority"
+                        || c == "metra"
+                        || c == "northernindianacommutertransportationdistrict"
+                        || c == "jr~east"
+                        || c == "mir~tsukuba"
+                        || c == "new-south-wales"
+                        || c == "ptv"
+                        || c == "translink-queensland-au"
+                    {
+                        allowed = true;
+                    }
+                    // Check Deutschland / DB Regio S-Bahn / Switzerland
+                    else if (c == "deutschland" || c == "dbregioag" || c == "schweiz")
+                        && line.label.starts_with('S')
+                    {
+                        allowed = true;
+                    }
+                    // Check London Overground
+                    else if c == "nationalrailuk"
+                        && line.agency_id.as_deref() == Some("LO")
+                    {
+                        allowed = true;
+                    }
+                }
+
+                if !allowed {
+                    continue;
+                }
+            }
 
             if let Some(matched) = matcher.match_shape(line_id.clone(), &shape.geometry, mode) {
                 for edge_id in &matched.edges {

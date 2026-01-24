@@ -236,6 +236,7 @@ pub struct Line {
     pub label: String,
     pub color: String,
     pub route_type: i16,
+    pub agency_id: Option<String>,
 }
 
 /// Occurrence of a line on an edge, with optional direction

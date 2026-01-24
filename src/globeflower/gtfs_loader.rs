@@ -112,7 +112,7 @@ impl GtfsLoader {
                 if !seen_lines.contains(&line_key) {
                     seen_lines.insert(line_key);
 
-                    let (label, color) = if let Some(route) =
+                    let (label, color, agency_id) = if let Some(route) =
                         route_map.get(&(shape.chateau.clone(), route_id.clone()))
                     {
                         (
@@ -122,9 +122,10 @@ impl GtfsLoader {
                                 .or(route.long_name.clone())
                                 .unwrap_or_else(|| route_id.clone()),
                             route.color.clone().unwrap_or_else(|| "888888".to_string()),
+                            route.agency_id.clone(),
                         )
                     } else {
-                        (route_id.clone(), "888888".to_string())
+                        (route_id.clone(), "888888".to_string(), None)
                     };
 
                     lines.push(Line {
@@ -132,6 +133,7 @@ impl GtfsLoader {
                         label,
                         color,
                         route_type: shape.route_type,
+                        agency_id,
                     });
                 }
             }
