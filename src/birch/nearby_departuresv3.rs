@@ -975,6 +975,9 @@ async fn fetch_chateau_data(
                     }
                 }
             }
+            if chateau == "upexpress" {
+                is_long_distance = false;
+            }
         }
 
         // C. Service Date (Which specific date?)
