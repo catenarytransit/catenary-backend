@@ -46,6 +46,7 @@ struct NearbyFromCoordsV3 {
     departure_time: Option<u64>,
     radius: Option<f64>,
     limit_per_station: Option<usize>,
+    limit_per_headsign: Option<usize>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -171,6 +172,7 @@ pub async fn nearby_from_coords_v3(
 ) -> impl Responder {
     let start = Instant::now();
     let limit_per_station = query.limit_per_station.unwrap_or(10);
+    let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
     
     let conn_pool = pool.as_ref();
     let db_connection_start = Instant::now();
@@ -255,6 +257,18 @@ pub async fn nearby_from_coords_v3(
         // Calculate distance
         let stop_point = geo::Point::new(stop.point.as_ref().unwrap().x, stop.point.as_ref().unwrap().y);
         let dist = input_point.haversine_distance(&stop_point);
+
+        if stops.len() > 100 && dist > 4000.0 && stop.primary_route_type == Some(3) {
+            continue;
+        }
+
+        if stops.len() > 300 && dist > 2500.0 && stop.primary_route_type == Some(3) {
+            continue;
+        }
+
+        if stops.len() > 500 && dist > 2000.0 && stop.primary_route_type == Some(3) {
+            continue;
+        }
 
         if stops.len() > 800 && dist > 1500.0 && stop.primary_route_type == Some(3) {
             continue;
@@ -515,6 +529,7 @@ pub async fn nearby_from_coords_v3(
         let mut sorted_headsigns = HashMap::new();
         for (h, mut items) in headsigns {
             items.sort_by_key(|i| i.departure_schedule.unwrap_or(0));
+            items.truncate(limit_per_headsign);
             sorted_headsigns.insert(h, items);
         }
 
