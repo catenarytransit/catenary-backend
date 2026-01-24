@@ -346,9 +346,7 @@ fn load_and_match_gtfs_to_osm(
                         allowed = true;
                     }
                     // Check London Overground
-                    else if c == "nationalrailuk"
-                        && line.agency_id.as_deref() == Some("LO")
-                    {
+                    else if c == "nationalrailuk" && line.agency_id.as_deref() == Some("LO") {
                         allowed = true;
                     }
                 }

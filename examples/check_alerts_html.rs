@@ -1,7 +1,7 @@
 use ahash::AHashSet;
-use catenary::aspen::lib::{ChateauMetadataEtcd};
-use catenary::aspen_dataset::{AspenisedAlert};
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::aspen::lib::ChateauMetadataEtcd;
+use catenary::aspen_dataset::AspenisedAlert;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::collections::HashMap;
@@ -22,10 +22,7 @@ async fn main() -> Result<()> {
     // 2. Fetch all Chateaus
     println!("Fetching active chateaus...");
     use catenary::schema::gtfs::chateaus::dsl::*;
-    let all_chateaus: Vec<String> = chateaus
-        .select(chateau)
-        .load(&mut conn)
-        .await?;
+    let all_chateaus: Vec<String> = chateaus.select(chateau).load(&mut conn).await?;
 
     println!("Found {} chateaus.", all_chateaus.len());
 
@@ -85,13 +82,19 @@ async fn process_chateau(chateau_id: &str, etcd_client: &mut etcd_client::Client
     let client = match catenary::aspen::lib::spawn_aspen_client_from_ip(&metadata.socket).await {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Error connecting to Aspen RPC for {} at {:?}: {}", chateau_id, metadata.socket, e);
+            eprintln!(
+                "Error connecting to Aspen RPC for {} at {:?}: {}",
+                chateau_id, metadata.socket, e
+            );
             return;
         }
     };
 
     // fetch alerts
-    let alerts_map = match client.get_all_alerts(tarpc::context::current(), chateau_id.to_string()).await {
+    let alerts_map = match client
+        .get_all_alerts(tarpc::context::current(), chateau_id.to_string())
+        .await
+    {
         Ok(Some(alerts)) => alerts,
         Ok(None) => return, // No alerts
         Err(e) => {
@@ -116,7 +119,13 @@ fn check_alert_for_html(chateau_id: &str, alert_id: &str, alert: &AspenisedAlert
     if let Some(header) = &alert.header_text {
         for trans in &header.translation {
             if contains_html(&trans.text) {
-                println!("[{}] Alert {} (Header - {}): Found HTML: \"{}\"", chateau_id, alert_id, trans.language.as_deref().unwrap_or("?"), truncate(&trans.text, 100));
+                println!(
+                    "[{}] Alert {} (Header - {}): Found HTML: \"{}\"",
+                    chateau_id,
+                    alert_id,
+                    trans.language.as_deref().unwrap_or("?"),
+                    truncate(&trans.text, 100)
+                );
                 found_html = true;
             }
         }
@@ -125,7 +134,13 @@ fn check_alert_for_html(chateau_id: &str, alert_id: &str, alert: &AspenisedAlert
     if let Some(desc) = &alert.description_text {
         for trans in &desc.translation {
             if contains_html(&trans.text) {
-                println!("[{}] Alert {} (Description - {}): Found HTML: \"{}\"", chateau_id, alert_id, trans.language.as_deref().unwrap_or("?"), truncate(&trans.text, 100));
+                println!(
+                    "[{}] Alert {} (Description - {}): Found HTML: \"{}\"",
+                    chateau_id,
+                    alert_id,
+                    trans.language.as_deref().unwrap_or("?"),
+                    truncate(&trans.text, 100)
+                );
                 found_html = true;
             }
         }
@@ -137,16 +152,19 @@ fn contains_html(text: &str) -> bool {
     // A regex like <[^>]+> is common, but might be too broad.
     // Let's look for known tags or just general start/end tags.
     // Ideally we'd use a parser, but quick check:
-    
+
     // Check for common tags
-    let tags = ["<br", "<p", "<div", "<span", "<b", "<i", "<strong", "<em", "<a ", "<ul", "<li", "<h1", "<h2", "<h3", "href="];
+    let tags = [
+        "<br", "<p", "<div", "<span", "<b", "<i", "<strong", "<em", "<a ", "<ul", "<li", "<h1",
+        "<h2", "<h3", "href=",
+    ];
     let lower = text.to_lowercase();
     for tag in tags {
         if lower.contains(tag) {
             return true;
         }
     }
-    
+
     // Check for closing tags
     if lower.contains("/>") || lower.contains("</") {
         return true;

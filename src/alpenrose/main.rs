@@ -489,7 +489,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     tokio::spawn(async move {
                         let gtfs = gtfs_structures::GtfsReader::default()
                             .read_shapes(false)
-                            .read_from_url_async("https://www.viarail.ca/sites/all/files/gtfs/viarail.zip")
+                            .read_from_url_async(
+                                "https://www.viarail.ca/sites/all/files/gtfs/viarail.zip",
+                            )
                             .await;
 
                         match gtfs {

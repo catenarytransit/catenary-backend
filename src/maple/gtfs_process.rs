@@ -226,7 +226,11 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
-        "f-northern~indiana~commuter~transportation~district" | "f-dp3-metra" | "f-dr5-mtanyclirr" | "f-dr7-mtanyc~metro~north" | "f-dr5r-mtasubway" => {
+        "f-northern~indiana~commuter~transportation~district"
+        | "f-dp3-metra"
+        | "f-dr5-mtanyclirr"
+        | "f-dr7-mtanyc~metro~north"
+        | "f-dr5r-mtasubway" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",

@@ -40,11 +40,11 @@ pub struct MetrolinxDepartureDetail {
 }
 
 pub const ALL_METROLINX_STATIONS: &[&str] = &[
-    "WR", "WH", "WE", "UN", "UI", "ST", "SR", "SCTH", "SC", "RU", "RO", "RI", "PO", "PIN",
-    "PA", "OS", "OR", "OL", "OA", "NI", "NE", "MR", "MP", "MO", "ML", "MK", "MJ", "MI", "ME",
-    "MD", "MA", "LS", "LO", "LI", "LA", "KP", "KI", "KE", "KC", "HA", "GU", "GO", "GL", "GE",
-    "EX", "ET", "ER", "EG", "EA", "DW", "DI", "DA", "CO", "CL", "CF", "CE", "BU", "BR", "BO",
-    "BM", "BL", "BE", "BD", "BA", "AU", "AP", "AL", "AJ", "AG", "AD", "AC",
+    "WR", "WH", "WE", "UN", "UI", "ST", "SR", "SCTH", "SC", "RU", "RO", "RI", "PO", "PIN", "PA",
+    "OS", "OR", "OL", "OA", "NI", "NE", "MR", "MP", "MO", "ML", "MK", "MJ", "MI", "ME", "MD", "MA",
+    "LS", "LO", "LI", "LA", "KP", "KI", "KE", "KC", "HA", "GU", "GO", "GL", "GE", "EX", "ET", "ER",
+    "EG", "EA", "DW", "DI", "DA", "CO", "CL", "CF", "CE", "BU", "BR", "BO", "BM", "BL", "BE", "BD",
+    "BA", "AU", "AP", "AL", "AJ", "AG", "AD", "AC",
 ];
 
 /// Fetches platform assignments for a list of stop codes.
@@ -52,8 +52,8 @@ pub const ALL_METROLINX_STATIONS: &[&str] = &[
 pub async fn fetch_metrolinx_platforms(
     stops_to_fetch: Vec<String>,
 ) -> AHashMap<(String, String), String> {
-    use futures::{stream, StreamExt};
-    
+    use futures::{StreamExt, stream};
+
     let client = reqwest::Client::new();
 
     let bodies = stream::iter(stops_to_fetch.into_iter())
@@ -183,7 +183,8 @@ mod tests {
 }
 "##;
 
-        let response: MetrolinxStopResponse = serde_json::from_str(json_data).expect("Should parse");
+        let response: MetrolinxStopResponse =
+            serde_json::from_str(json_data).expect("Should parse");
         assert_eq!(response.stationCode, "UN");
         assert_eq!(response.train_departures.items.len(), 2);
 
@@ -195,5 +196,4 @@ mod tests {
         assert_eq!(item2.trip_number, "1439");
         assert_eq!(item2.platform, "-");
     }
-
 }
