@@ -44,7 +44,7 @@ lazy_static! {
     static ref START_TIME: SccHashMap<String, Instant> = SccHashMap::new();
 }
 
-use crate::import_sncb::SncbSharedData;
+
 
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 // Used to prevent data flickering when a feed momentarily drops a trip that was present
@@ -130,7 +130,7 @@ pub async fn new_rt_data(
     alerts_response_code: Option<u16>,
     pool: Arc<CatenaryPostgresPool>,
     redis_client: &redis::Client,
-    sncb_data: Option<Arc<SncbSharedData>>,
+
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     println!(
         "Started processing for chateau {} and feed {}",
@@ -1269,42 +1269,7 @@ pub async fn new_rt_data(
                                 "nmbs" => {
                                     // platform_string not available in CompactStopTimeUpdate
                                 }
-                                "sncb" => {
-                                    if let Some(sncb_data) = &sncb_data {
-                                        if let Some(compressed_trip) = compressed_trip {
-                                            if let Some(trip_short_name) =
-                                                &compressed_trip.trip_short_name
-                                            {
-                                                if let Some(entry) = (**sncb_data)
-                                                    .get_async(trip_short_name.as_str())
-                                                    .await
-                                                {
-                                                    let stops = &entry.get().stops;
-                                                    if let Some(current_stop_id) = &stu.stop_id {
-                                                        for stop in &stops.stop {
-                                                            let station_id_part = stop
-                                                                .stationinfo
-                                                                .id
-                                                                .split('.')
-                                                                .last()
-                                                                .unwrap_or("");
-                                                            let station_id_clean = station_id_part
-                                                                .trim_start_matches("00");
-                                                            if current_stop_id
-                                                                .contains(station_id_clean)
-                                                            {
-                                                                platform_resp = Some(
-                                                                    stop.platform.clone().into(),
-                                                                );
-                                                                break;
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+
                                 "gotransit" | "upexpress" => {
                                     if let Some(plats) = &fetch_supplemental_platforms_metrolinx {
                                         if let Some(trip_id) = &trip_id {
@@ -1726,146 +1691,7 @@ pub async fn new_rt_data(
         );
     }
 
-    if chateau_id == "sncb" {
-        if let Some(sncb_data) = &sncb_data {
-            let mut seen_short_names = AHashSet::new();
-            for trip_update in trip_updates.values() {
-                if let Some(props) = &trip_update.trip_properties {
-                    if let Some(sn) = &props.trip_short_name {
-                        seen_short_names.insert(sn.clone());
-                    }
-                }
-            }
 
-            let mut new_updates = Vec::new();
-
-            (**sncb_data)
-                .any_async(
-                    |short_name: &String, data: &crate::import_sncb::IRailVehicleResponse| {
-                        if !seen_short_names.contains(short_name) {
-                            new_updates.push((short_name.clone(), data.clone()));
-                        }
-                        false
-                    },
-                )
-                .await;
-
-            for (short_name, data) in new_updates {
-                let trip_id = format!("SNCB_GHOST_{}", short_name);
-                let update_id = CompactString::new(format!("SNCB_UPDATE_{}", short_name));
-
-                let stop_time_updates: Vec<AspenisedStopTimeUpdate> = data
-                    .stops
-                    .stop
-                    .iter()
-                    .map(|s| AspenisedStopTimeUpdate {
-                        stop_sequence: None,
-                        stop_id: Some(
-                            s.stationinfo
-                                .id
-                                .replace("BE.NMBS.00", "")
-                                .replace("BE.NMBS.", "")
-                                .into(),
-                        ),
-                        old_rt_data: false,
-                        arrival: Some(AspenStopTimeEvent {
-                            delay: Some((s.arrival_delay) as i32),
-                            time: Some(s.scheduled_arrival_time + s.arrival_delay),
-                            uncertainty: None,
-                        }),
-                        departure: Some(AspenStopTimeEvent {
-                            delay: Some((s.departure_delay) as i32),
-                            time: Some(s.scheduled_departure_time + s.departure_delay),
-                            uncertainty: None,
-                        }),
-                        platform_string: Some(s.platform.clone().into()),
-                        schedule_relationship: None,
-                        departure_occupancy_status: None,
-                        stop_time_properties: None,
-                    })
-                    .collect();
-
-                let trip_update = AspenisedTripUpdate {
-                    trip: AspenRawTripInfo {
-                        trip_id: Some(trip_id.clone()),
-                        route_id: Some("SNCB_UNKNOWN".to_string()),
-                        direction_id: None,
-                        start_date: None,
-                        start_time: None,
-                        schedule_relationship: Some(
-                            catenary::aspen_dataset::AspenisedTripScheduleRelationship::Added,
-                        ),
-                        modified_trip: None,
-                    },
-                    vehicle: Some(AspenisedVehicleDescriptor {
-                        id: Some(data.vehicle.clone()),
-                        label: Some(data.vehicleinfo.shortname.clone()),
-                        license_plate: None,
-                        wheelchair_accessible: None,
-                    }),
-                    trip_headsign: None,
-                    found_schedule_trip_id: false,
-                    stop_time_update: stop_time_updates,
-                    timestamp: Some(data.timestamp as u64),
-                    delay: None,
-                    trip_properties: Some(catenary::aspen_dataset::AspenTripProperties {
-                        trip_id: Some(trip_id.clone()),
-                        start_date: None,
-                        start_time: None,
-                        shape_id: None,
-                        trip_headsign: None,
-                        trip_short_name: Some(short_name.clone()),
-                    }),
-                    last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
-                };
-
-                trip_updates.insert(update_id.clone(), trip_update);
-
-                trip_updates_lookup_by_trip_id_to_trip_update_ids
-                    .entry(trip_id.as_str().into())
-                    .and_modify(|x| x.push(update_id.clone()))
-                    .or_insert(vec![update_id.clone()]);
-
-                let vehicle_pos = AspenisedVehiclePosition {
-                    trip: Some(AspenisedVehicleTripInfo {
-                        trip_id: Some(trip_id.clone()),
-                        route_id: Some("SNCB_UNKNOWN".to_string()),
-                        direction_id: None,
-                        start_date: None,
-                        start_time: None,
-                        schedule_relationship: Some(
-                            catenary::aspen_dataset::AspenisedTripScheduleRelationship::Added,
-                        ),
-                        trip_headsign: None,
-                        trip_short_name: Some(short_name.clone()),
-                        delay: None,
-                    }),
-                    vehicle: Some(AspenisedVehicleDescriptor {
-                        id: Some(data.vehicle.clone()),
-                        label: Some(data.vehicleinfo.shortname.clone()),
-                        license_plate: None,
-                        wheelchair_accessible: None,
-                    }),
-                    position: Some(CatenaryRtVehiclePosition {
-                        latitude: data.vehicleinfo.location_y as f32,
-                        longitude: data.vehicleinfo.location_x as f32,
-                        bearing: None,
-                        odometer: None,
-                        speed: None,
-                    }),
-                    current_stop_sequence: None,
-                    current_status: None,
-                    timestamp: Some(data.timestamp as u64),
-                    congestion_level: None,
-                    occupancy_status: None,
-                    occupancy_percentage: None,
-                    route_type: 2,
-                };
-
-                aspenised_vehicle_positions.insert(data.vehicle.clone(), vehicle_pos);
-            }
-        }
-    }
 
     // Resolve trip delays after all initial processing is complete.
     // This allows us to link trip updates that were processed separately from the vehicle positions.

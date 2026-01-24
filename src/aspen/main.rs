@@ -91,7 +91,7 @@ use std::io::Write;
 use std::time::Instant;
 
 mod alerts_processing;
-mod import_sncb;
+
 mod metrolinx_platforms;
 mod persistence;
 mod track_number;
@@ -127,7 +127,7 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
-    pub sncb_data: Arc<import_sncb::SncbSharedData>,
+
 }
 
 impl AspenRpc for AspenServer {
@@ -1600,47 +1600,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(SccHashMap::new());
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
-    let sncb_data: Arc<import_sncb::SncbSharedData> = Arc::new(SccHashMap::new());
 
-    // Load persisted SNCB data
-    println!("Loading persisted SNCB data...");
-    if let Ok(Some(loaded_sncb)) = persistence::load_sncb_data() {
-        for (k, v) in loaded_sncb {
-            let _ = sncb_data.insert_async(k, v).await;
-        }
-        println!("Loaded {} SNCB vehicle entries from disk", sncb_data.len());
-    } else {
-        println!("No persisted SNCB data found or failed to load");
-    }
-
-    // Spawn SNCB Importer
-    let sncb_data_importer = Arc::clone(&sncb_data);
-    let pool_importer = Arc::clone(&arc_conn_pool);
-    tokio::spawn(async move {
-        import_sncb::run_sncb_importer(sncb_data_importer, pool_importer).await;
-    });
-
-    // Spawn SNCB Persistence Task
-    let sncb_data_persistence = Arc::clone(&sncb_data);
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(Duration::from_secs(300)).await; // 5 minutes
-            let mut data_to_save = HashMap::new();
-
-            sncb_data_persistence
-                .any_async(|k: &String, v: &import_sncb::IRailVehicleResponse| {
-                    data_to_save.insert(k.clone(), v.clone());
-                    false
-                })
-                .await;
-
-            if let Err(e) = persistence::save_sncb_data(&data_to_save) {
-                eprintln!("[SNCB] Failed to save persistence data: {}", e);
-            } else {
-                println!("[SNCB] Saved {} items to persistence", data_to_save.len());
-            }
-        }
-    });
 
     //run both the leader and the listener simultaniously
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
@@ -1701,7 +1661,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&alpenrose_to_process_queue_chateaux),
         etcd_lease_id_for_this_worker,
         redis_client.clone(),
-        Arc::clone(&sncb_data),
+
     ));
 
     let this_worker_id_copy = this_worker_id.clone();
@@ -1803,7 +1763,7 @@ async fn main() -> anyhow::Result<()> {
             let conn_pool_arced = Arc::clone(&arc_conn_pool);
 
             let etcd_addresses = Arc::clone(&Arc::clone(&etcd_addresses));
-            let sncb_data_server = Arc::clone(&sncb_data);
+
 
             move || async move {
                 listener
@@ -1833,7 +1793,7 @@ async fn main() -> anyhow::Result<()> {
                                 SccHashMap::new(),
                             ),
                             backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
-                            sncb_data: Arc::clone(&sncb_data_server),
+
                         };
                         channel.execute(server.serve()).for_each(spawn)
                     })
