@@ -268,6 +268,8 @@ pub async fn new_rt_data(
         AHashMap::new();
     let mut stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>> =
         AHashMap::new();
+    let mut stop_id_to_parent_id: AHashMap<CompactString, CompactString> = AHashMap::new();
+    let mut parent_id_to_children_ids: AHashMap<CompactString, Vec<CompactString>> = AHashMap::new();
 
     let mut accumulated_itinerary_patterns: AHashMap<
         String,
@@ -642,14 +644,35 @@ pub async fn new_rt_data(
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         };
 
+        // Query for stops with parent_station to build parent-child mappings
+        let pool_parent_stops = pool.clone();
+        let chateau_parent_stops = chateau_id.to_string();
+        let parent_stops_future = async move {
+            let mut conn = pool_parent_stops
+                .get()
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+            catenary::schema::gtfs::stops::dsl::stops
+                .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau_parent_stops))
+                .filter(catenary::schema::gtfs::stops::dsl::parent_station.is_not_null())
+                .select((
+                    catenary::schema::gtfs::stops::dsl::gtfs_id,
+                    catenary::schema::gtfs::stops::dsl::parent_station,
+                ))
+                .load::<(String, Option<String>)>(&mut conn)
+                .await
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        };
+
         let join_start = std::time::Instant::now();
-        let (calendar, calendar_dates, stops, itinerary_pattern_meta_list, itinerary_pattern_rows) =
+        let (calendar, calendar_dates, stops, itinerary_pattern_meta_list, itinerary_pattern_rows, parent_stops) =
             tokio::try_join!(
                 calendar_future,
                 calendar_dates_future,
                 stops_future,
                 itinerary_patterns_future,
-                itinerary_pattern_rows_future
+                itinerary_pattern_rows_future,
+                parent_stops_future
             )?;
 
         let itin_lookup_duration = join_start.elapsed();
@@ -657,6 +680,17 @@ pub async fn new_rt_data(
 
         let calendar_structure =
             catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
+
+        // Build parent-child mappings from parent_stops query results
+        for (stop_id, parent) in &parent_stops {
+            if let Some(parent_id) = parent {
+                stop_id_to_parent_id.insert(stop_id.clone().into(), parent_id.clone().into());
+                parent_id_to_children_ids
+                    .entry(parent_id.clone().into())
+                    .or_default()
+                    .push(stop_id.clone().into());
+            }
+        }
 
         let stop_id_to_stop_from_postgres: AHashMap<String, catenary::models::Stop> = stops
             .into_iter()
@@ -1266,8 +1300,28 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
-                                "nmbs" => {
-                                    // platform_string not available in CompactStopTimeUpdate
+                                "nmbs" | "sncb" => {
+                                    // Extract platform from stop_id suffix pattern (e.g., "8833001_7" -> platform "7")
+                                    if let Some(stop_id) = &stu.stop_id {
+                                        // Check if this RT stop_id has an underscore suffix indicating platform
+                                        if let Some((parent_part, platform_part)) = stop_id.rsplit_once('_') {
+                                            // Verify the parent is in our scheduled stops or matches via parent relationship
+                                            let is_valid_match = scheduled_stop_ids_hashset
+                                                .as_ref()
+                                                .map(|scheduled| {
+                                                    scheduled.contains(parent_part)
+                                                        || stop_id_to_parent_id
+                                                            .get(stop_id.as_str())
+                                                            .map(|rt_parent| scheduled.contains(rt_parent.as_str()))
+                                                            .unwrap_or(false)
+                                                })
+                                                .unwrap_or(false);
+
+                                            if is_valid_match && !platform_part.is_empty() {
+                                                platform_resp = Some(platform_part.into());
+                                            }
+                                        }
+                                    }
                                 }
 
                                 "gotransit" | "upexpress" => {
@@ -1858,6 +1912,8 @@ pub async fn new_rt_data(
         trip_id_to_trip_modification_ids,
         stop_id_to_trip_modification_ids,
         stop_id_to_non_scheduled_trip_ids,
+        stop_id_to_parent_id,
+        parent_id_to_children_ids,
     };
 
     // Insert the aspenised data - clone only for persistence, move into map when possible
