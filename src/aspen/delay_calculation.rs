@@ -331,9 +331,11 @@ pub fn calculate_delay(
                                                     if candidate.abs() < d.abs() {
                                                         delay = Some(candidate);
                                                     }
-                                                } else if d < -43200 {
+                                                } else if d < -3600 {
+                                                    // Prefer positive (late) over negative (early)
+                                                    // A train being hours early is almost always a day calculation error
                                                     let candidate = d + 86400;
-                                                    if candidate.abs() < d.abs() {
+                                                    if candidate > 0 && candidate < 86400 {
                                                         delay = Some(candidate);
                                                     }
                                                 }
