@@ -619,6 +619,27 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "f-dpz-gotransit" | "f-dpz2-upexpress" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                // remove stop headsigns such as "Kipling GO 08:42 - Union Station GO 09:03"
+                for stoptime in trip.stop_times.iter_mut() {
+                    stoptime.stop_headsign = None;
+                }
+
+                //trip id uses "YYYYMMDD-ROUTE-TRIP" format, "20260424-MI-2722" so extracting the last element is the trip number
+                let trip_id_split: Vec<&str> = trip.id.split('-').collect();
+
+                let trip_short_name = trip_id_split[trip_id_split.len() - 1];
+
+                trip.trip_short_name = Some(trip_short_name.to_string());
+
+                //forces recomputation downstream in Maple, so "MI - Union Station GO" will be replaced with "Union Station"
+                trip.trip_headsign = None;
+            }
+            gtfs
+        }
         "f-hongkong~justusewheels" => {
             let route_types = vec![gtfs_structures::RouteType::Subway];
 
