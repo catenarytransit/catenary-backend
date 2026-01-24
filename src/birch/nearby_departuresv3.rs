@@ -56,6 +56,7 @@ pub struct StopOutputV3 {
     pub lat: f64,
     pub lon: f64,
     pub osm_station_id: Option<i64>,
+    pub timezone: String,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -1050,6 +1051,7 @@ async fn fetch_chateau_data(
                                         lat: s.point.as_ref().unwrap().y,
                                         lon: s.point.as_ref().unwrap().x,
                                         osm_station_id: s.osm_station_id,
+                                        timezone: s.timezone.clone().unwrap_or("ETC/Utc".to_string()),
                                     });
                                 }
                             }
