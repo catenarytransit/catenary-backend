@@ -1312,28 +1312,26 @@ pub async fn get_trip_init(
                                                 "Multiple trip updates found for trip id {} {}",
                                                 chateau, query.trip_id
                                             );
-                                            match &query.start_time {
-                                                Some(query_start_time) => {
-                                                    let find_trip =
-                                                        get_trip.iter().find(|each_update| {
-                                                            match each_update
-                                                                .trip
-                                                                .start_time
-                                                                .as_ref()
-                                                                .map(|start_time| {
-                                                                    start_time.clone()
-                                                                        == *query_start_time
-                                                                }) {
-                                                                Some(true) => true,
-                                                                _ => false,
-                                                            }
-                                                        });
+                                            let query_start_date_parsed = Some(start_naive_date);
 
-                                                    match find_trip {
-                                                        Some(find_trip) => find_trip,
-                                                        None => &get_trip[0],
-                                                    }
-                                                }
+                                            let find_trip = get_trip.iter().find(|each_update| {
+                                                let start_time_matches = match (&query.start_time, &each_update.trip.start_time) {
+                                                    (Some(q_time), Some(u_time)) => q_time == u_time,
+                                                    (None, _) => true,
+                                                    (Some(_), None) => false,
+                                                };
+
+                                                let start_date_matches = match (&query_start_date_parsed, &each_update.trip.start_date) {
+                                                    (Some(q_date), Some(u_date)) => q_date == u_date,
+                                                    (None, _) => true,
+                                                    (Some(_), None) => false,
+                                                };
+
+                                                start_time_matches && start_date_matches
+                                            });
+
+                                            match find_trip {
+                                                Some(find_trip) => find_trip,
                                                 None => &get_trip[0],
                                             }
                                         }
