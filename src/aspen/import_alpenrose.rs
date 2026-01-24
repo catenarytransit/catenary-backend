@@ -9,6 +9,7 @@ use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::stop_time_logic::find_closest_stop_time_update;
 use crate::track_number::*;
+use crate::metrolinx_platforms::{fetch_metrolinx_platforms, ALL_METROLINX_STATIONS};
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::option_i32_to_occupancy_status;
 use catenary::aspen_dataset::option_i32_to_schedule_relationship;
@@ -201,6 +202,14 @@ pub async fn new_rt_data(
                         None
                     }
                 }
+            }
+            _ => None,
+        };
+
+    let fetch_supplemental_platforms_metrolinx: Option<AHashMap<(String, String), String>> =
+        match chateau_id {
+            "gotransit" | "upexpress" => {
+                Some(fetch_metrolinx_platforms(ALL_METROLINX_STATIONS.iter().map(|s| s.to_string()).collect()).await)
             }
             _ => None,
         };
@@ -1284,6 +1293,19 @@ pub async fn new_rt_data(
                                                                 break;
                                                             }
                                                         }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                "gotransit" | "upexpress" => {
+                                    if let Some(plats) = &fetch_supplemental_platforms_metrolinx {
+                                        if let Some(trip_id) = &trip_id {
+                                            if let Some(stop_id) = &stu.stop_id {
+                                                if let Some(trip_number) = trip_id.split('-').last() {
+                                                    if let Some(platform) = plats.get(&(trip_number.to_string(), stop_id.to_string())) {
+                                                        platform_resp = Some(platform.clone().into());
                                                     }
                                                 }
                                             }

@@ -94,6 +94,7 @@ mod alerts_processing;
 mod import_sncb;
 mod persistence;
 mod track_number;
+mod metrolinx_platforms;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
