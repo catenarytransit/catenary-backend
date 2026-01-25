@@ -40,6 +40,7 @@ use diesel_async::RunQueryDsl;
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use regex::Regex;
 use sha2::{Digest, Sha256};
+use geo::{Distance, Haversine, Point};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
@@ -352,6 +353,24 @@ struct NodeData {
     network: Option<String>,
     level: Option<String>,
     local_ref: Option<String>,
+    is_derivative: bool,
+}
+
+/// Intermediate struct for storing way data that needs centroid calculation
+#[derive(Clone)]
+struct WayData {
+    id: i64,
+    node_refs: Vec<i64>,
+    name: Option<String>,
+    name_translations: Option<serde_json::Value>,
+    station_type: Option<String>,
+    railway_tag: Option<String>,
+    mode_type: String,
+    uic_ref: Option<String>,
+    ref_: Option<String>,
+    wikidata: Option<String>,
+    operator: Option<String>,
+    network: Option<String>,
 }
 
 #[tokio::main]
@@ -451,10 +470,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut node_data: HashMap<i64, NodeData> = HashMap::new();
     let mut node_ids: HashSet<i64> = HashSet::new();
     let mut stop_area_relations: Vec<Relation> = Vec::new();
+    let mut way_data: HashMap<i64, WayData> = HashMap::new();
+    let mut railway_station_relations: Vec<Relation> = Vec::new();
+    let mut all_node_coords: HashMap<i64, (f64, f64)> = HashMap::new();
 
     let mut processed = 0u64;
     let mut nodes_found = 0u64;
     let mut relations_found = 0u64;
+    let mut ways_found = 0u64;
 
     for obj_result in reader.iter() {
         let obj = obj_result?;
@@ -462,14 +485,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         if processed % 100000 == 0 {
             print!(
-                "\rPass 1: Processed {} objects, found {} nodes, {} relations...",
-                processed, nodes_found, relations_found
+                "\rPass 1: Processed {} objects, found {} nodes, {} ways, {} relations...",
+                processed, nodes_found, ways_found, relations_found
             );
             std::io::Write::flush(&mut std::io::stdout())?;
         }
 
         match obj {
             OsmObj::Node(node) => {
+                let id = node.id.0;
+                all_node_coords.insert(id, (node.lat(), node.lon()));
+
                 if !is_railway_station_or_platform(&node.tags) {
                     continue;
                 }
@@ -480,7 +506,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 };
 
                 nodes_found += 1;
-                let id = node.id.0;
                 node_ids.insert(id);
 
                 node_data.insert(
@@ -501,24 +526,64 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         network: node.tags.get("network").map(|s| s.to_string()),
                         level: node.tags.get("level").map(|s| s.to_string()),
                         local_ref: node.tags.get("local_ref").map(|s| s.to_string()),
+                        is_derivative: false,
                     },
                 );
             }
             OsmObj::Relation(rel) => {
                 if is_stop_area_relation(&rel.tags) {
                     relations_found += 1;
-                    stop_area_relations.push(rel);
+                    stop_area_relations.push(rel.clone());
+                }
+                if is_railway_station_or_platform(&rel.tags) {
+                    if let Some(mode) = classify_mode(&rel.tags) {
+                        if mode == "rail" {
+                            railway_station_relations.push(rel);
+                        }
+                    }
                 }
             }
-            OsmObj::Way(_) => {
-                // Skip ways for now (would need centroid calculation)
+            OsmObj::Way(way) => {
+                if !is_railway_station_or_platform(&way.tags) {
+                    continue;
+                }
+
+                let mode = match classify_mode(&way.tags) {
+                    Some(m) => m,
+                    None => continue,
+                };
+
+                if mode != "rail" {
+                    continue;
+                }
+
+                ways_found += 1;
+                let node_refs: Vec<i64> = way.nodes.iter().map(|n| n.0).collect();
+                
+                way_data.insert(
+                    way.id.0,
+                    WayData {
+                        id: way.id.0,
+                        node_refs,
+                        name: way.tags.get("name").map(|s| s.to_string()),
+                        name_translations: extract_name_translations(&way.tags),
+                        station_type: get_station_type(&way.tags),
+                        railway_tag: way.tags.get("railway").map(|s| s.to_string()),
+                        mode_type: mode,
+                        uic_ref: way.tags.get("uic_ref").map(|s| s.to_string()),
+                        ref_: way.tags.get("ref").map(|s| s.to_string()),
+                        wikidata: way.tags.get("wikidata").map(|s| s.to_string()),
+                        operator: way.tags.get("operator").map(|s| s.to_string()),
+                        network: way.tags.get("network").map(|s| s.to_string()),
+                    },
+                );
             }
         }
     }
 
     println!(
-        "\nPass 1 complete: {} nodes, {} stop_area relations",
-        nodes_found, relations_found
+        "\nPass 1 complete: {} nodes, {} ways, {} stop_area relations",
+        nodes_found, ways_found, relations_found
     );
 
     // =========================================================================
@@ -593,6 +658,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             level: data.level.clone(),
             local_ref: data.local_ref.clone(),
             parent_osm_id,
+            is_derivative: data.is_derivative,
         };
 
         stations.push(station);
@@ -608,20 +674,114 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     // =========================================================================
+    // PASS 3.5: Create derivative points from ways/relations that have no nearby rail node
+    // =========================================================================
+    println!("\n=== Pass 3.5: Creating derivative points from ways ===" );
+
+    fn normalize_name_for_comparison(name: &str) -> String {
+        name.to_lowercase()
+            .replace("-", " ")
+            .replace("'", " ")
+            .replace("'", " ")
+            .replace("gare ", "")
+            .replace("station ", "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    fn names_are_similar(name1: &str, name2: &str) -> bool {
+        let n1 = normalize_name_for_comparison(name1);
+        let n2 = normalize_name_for_comparison(name2);
+        
+        if n1 == n2 {
+            return true;
+        }
+        if n1.contains(&n2) || n2.contains(&n1) {
+            return true;
+        }
+        false
+    }
+
+    let existing_rail_nodes: Vec<&NodeData> = node_data
+        .values()
+        .filter(|n| n.mode_type == "rail")
+        .collect();
+
+    let mut derivative_count = 0;
+
+    for (way_id, way) in &way_data {
+        let coords: Vec<(f64, f64)> = way
+            .node_refs
+            .iter()
+            .filter_map(|nid| all_node_coords.get(nid).copied())
+            .collect();
+
+        if coords.is_empty() {
+            continue;
+        }
+
+        let centroid_lat = coords.iter().map(|(lat, _)| lat).sum::<f64>() / coords.len() as f64;
+        let centroid_lon = coords.iter().map(|(_, lon)| lon).sum::<f64>() / coords.len() as f64;
+
+        let has_nearby_rail_node = existing_rail_nodes.iter().any(|node| {
+            let centroid_point = Point::new(centroid_lon, centroid_lat);
+            let node_point = Point::new(node.lon, node.lat);
+            let dist = Haversine.distance(centroid_point, node_point);
+            if dist > 500.0 {
+                return false;
+            }
+            if let (Some(way_name), Some(node_name)) = (&way.name, &node.name) {
+                names_are_similar(way_name, node_name)
+            } else {
+                true
+            }
+        });
+
+        if !has_nearby_rail_node {
+            derivative_count += 1;
+            let station = OsmStation {
+                osm_id: *way_id,
+                osm_type: "way".to_string(),
+                import_id,
+                point: postgis_diesel::types::Point {
+                    x: centroid_lon,
+                    y: centroid_lat,
+                    srid: Some(4326),
+                },
+                name: way.name.clone(),
+                name_translations: way.name_translations.clone(),
+                station_type: way.station_type.clone(),
+                railway_tag: way.railway_tag.clone(),
+                mode_type: way.mode_type.clone(),
+                uic_ref: way.uic_ref.clone(),
+                ref_: way.ref_.clone(),
+                wikidata: way.wikidata.clone(),
+                operator: way.operator.clone(),
+                network: way.network.clone(),
+                level: None,
+                local_ref: None,
+                parent_osm_id: None,
+                is_derivative: true,
+            };
+            
+            if let Some(name) = &way.name {
+                println!(
+                    "  Created derivative point for way {} ({}) at ({}, {})",
+                    way_id, name, centroid_lat, centroid_lon
+                );
+            }
+            
+            stations.push(station);
+        }
+    }
+
+    println!("Created {} derivative points from ways", derivative_count);
+
+    // =========================================================================
     // PASS 4: Deduplicate stations
     // =========================================================================
     println!("\n=== Pass 4: Deduplicating stations ===");
-
-    // Helper function for distance
-    fn haversine_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-        let r = 6371000.0; // Earth radius in meters
-        let d_lat = (lat2 - lat1).to_radians();
-        let d_lon = (lon2 - lon1).to_radians();
-        let a = (d_lat / 2.0).sin().powi(2)
-            + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
-        let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-        r * c
-    }
 
     // Build a map of existing names to coordinates for lookup
     let mut existing_stations_by_name: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
@@ -656,7 +816,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let check_duplicates = |target_name: &str, rule_desc: &str| -> bool {
                 if let Some(coords_list) = existing_stations_by_name.get(target_name) {
                     for (other_lat, other_lon) in coords_list {
-                        let dist = haversine_distance_meters(lat, lon, *other_lat, *other_lon);
+                        let p1 = Point::new(lon, lat);
+                        let p2 = Point::new(*other_lon, *other_lat);
+                        let dist = Haversine.distance(p1, p2);
                         if dist < max_dist_meters {
                             println!(
                                 "Marking duplicate station for removal: {} (found base station: {} at {:.0}m distance) [{}]",

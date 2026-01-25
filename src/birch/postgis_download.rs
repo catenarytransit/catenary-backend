@@ -736,6 +736,7 @@ fn get_osm_stations_fields() -> std::collections::BTreeMap<String, String> {
     fields.insert(String::from("level"), String::from("text"));
     fields.insert(String::from("local_ref"), String::from("text"));
     fields.insert(String::from("parent_osm_id"), String::from("bigint"));
+    fields.insert(String::from("is_derivative"), String::from("boolean"));
     fields
 }
 
@@ -792,6 +793,7 @@ FROM (
         level,
         local_ref,
         parent_osm_id,
+        is_derivative,
         ST_AsMVTGeom(ST_Transform(point, 3857),
         ST_TileEnvelope({z}, {x}, {y}), 4096, 64, true) AS geom
     FROM

@@ -217,7 +217,7 @@ async fn fetch_osm_stations_in_bbox(
         r#"
         SELECT osm_id, osm_type, import_id, point, name, name_translations,
                station_type, railway_tag, mode_type, uic_ref, ref AS ref_, 
-               wikidata, operator, network, level, local_ref, parent_osm_id
+               wikidata, operator, network, level, local_ref, parent_osm_id, is_derivative
         FROM gtfs.osm_stations
         WHERE point && ST_MakeEnvelope({}, {}, {}, {}, 4326)
           AND mode_type IN ({})
@@ -964,7 +964,7 @@ pub async fn find_osm_stations_near(
         r#"
         SELECT osm_id, osm_type, import_id, point, name, name_translations,
                station_type, railway_tag, mode_type, uic_ref, ref AS ref_, 
-               wikidata, operator, network, level, local_ref, parent_osm_id
+               wikidata, operator, network, level, local_ref, parent_osm_id, is_derivative
         FROM gtfs.osm_stations
         WHERE ST_DWithin(point::geography, ST_MakePoint({}, {})::geography, {})
         {}

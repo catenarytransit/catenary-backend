@@ -524,4 +524,6 @@ pub struct OsmStation {
     pub local_ref: Option<String>,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
     pub parent_osm_id: Option<i64>,
+    #[diesel(sql_type = diesel::sql_types::Bool)]
+    pub is_derivative: bool,
 }
