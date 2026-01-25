@@ -226,6 +226,7 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
+        "f-amtrak~gold~runner" | 
         "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
         | "f-dr5-mtanyclirr"
@@ -653,7 +654,7 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
-        "f-amtrak~sanjoaquin" => {
+        "f-amtrak~gold~runner" => {
             let mut gtfs = gtfs;
 
             for (trip_id, trip) in gtfs.trips.iter_mut() {
