@@ -664,28 +664,6 @@ pub async fn gtfs_process_feed(
                 }
             }
 
-            gtfs.routes.remove_entry("ACE");
-
-            gtfs.trips.retain(|trip_id, trip| trip.route_id != "ACE");
-
-            gtfs.routes.retain(|route_id, route| route_id != "ACE");
-
-            for (trip_id, trip) in gtfs.trips.iter_mut() {
-                if trip.trip_short_name.as_deref() == Some("AMSJ") {
-                    trip.trip_short_name = Some(trip_id.to_string());
-                    trip.trip_headsign = None;
-                }
-
-                for stoptime in trip.stop_times.iter_mut() {
-                    stoptime.stop_headsign = None;
-                }
-            }
-
-            if let Some(main_gold_runner) = gtfs.routes.get_mut("SJ2") {
-                main_gold_runner.short_name = None;
-                main_gold_runner.long_name = Some("Gold Runner".to_string());
-            }
-
             gtfs
         }
         "f-viarail~traindecharlevoix" => {
