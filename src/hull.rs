@@ -2,7 +2,7 @@ use delaunator::{EMPTY, Point as DPoint, triangulate};
 use geo_types::{Coord, LineString, Point, Polygon};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::f64::consts::PI;
+use geo::{Distance, Haversine};
 
 /// Represents an edge in the triangulation with its length.
 #[derive(Debug, Clone, Copy)]
@@ -33,19 +33,9 @@ impl Ord for ScoredEdge {
     }
 }
 
-/// Calculates the Haversine distance between two points (in metres).
+// / Calculates the Haversine distance between two points (in metres).
 fn haversine_distance(p1: Point, p2: Point) -> f64 {
-    const R: f64 = 6371000.0; // Earth radius in metres
-
-    let lat1 = p1.y() * PI / 180.0;
-    let lat2 = p2.y() * PI / 180.0;
-    let d_lat = (p2.y() - p1.y()) * PI / 180.0;
-    let d_lon = (p2.x() - p1.x()) * PI / 180.0;
-
-    let a = (d_lat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (d_lon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-
-    R * c
+    Haversine.distance(p1, p2)
 }
 
 /// Computes the Chi-shape (concave hull) of a set of Geo points.
