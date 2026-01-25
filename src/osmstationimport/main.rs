@@ -593,11 +593,52 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Map from node_id -> parent_osm_id
     let mut parent_map: HashMap<i64, i64> = HashMap::new();
+    let mut ways_covered_by_relations: HashSet<i64> = HashSet::new();
     let mut relations_processed = 0;
     let mut mappings_created = 0;
 
     for rel in &stop_area_relations {
         relations_processed += 1;
+
+        // Check if this relation contains any of our candidate ways
+        let mut relation_ways: Vec<i64> = Vec::new();
+        let mut has_primary_node = false;
+
+        for member in &rel.refs {
+            match member.member {
+                OsmId::Way(way_id) => {
+                    if way_data.contains_key(&way_id.0) {
+                        relation_ways.push(way_id.0);
+                    }
+                }
+                OsmId::Node(node_id) => {
+                    if let Some(node) = node_data.get(&node_id.0) {
+                        // Check if this is a primary station node (rail/subway/tram station)
+                        if node.mode_type == "rail" || node.mode_type == "subway" || node.mode_type == "tram" {
+                            // stricter check: must be a station/halt/stop, not just a platform
+                            if node.station_type.as_deref() == Some("station") 
+                                || node.station_type.as_deref() == Some("halt")
+                                || node.station_type.as_deref() == Some("tram_stop") 
+                                || node.station_type.as_deref() == Some("subway_entrance") // sometimes entrances are main nodes
+                                || node.railway_tag.as_deref() == Some("station")
+                                || node.railway_tag.as_deref() == Some("halt")
+                            {
+                                has_primary_node = true;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // If relation has a primary node, mark all its rail-station-ways as "covered"
+        // so we don't create derivative points for them
+        if has_primary_node {
+            for way_id in relation_ways {
+                ways_covered_by_relations.insert(way_id);
+            }
+        }
 
         // Find the parent station in this relation
         if let Some((parent_id, _)) = find_parent_station_in_relation(rel, &node_ids) {
@@ -711,6 +752,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut derivative_count = 0;
 
     for (way_id, way) in &way_data {
+        // Skip purely visual building/platform ways that are already part of a station relation containing a main node
+        if ways_covered_by_relations.contains(way_id) {
+            continue;
+        }
+
         let coords: Vec<(f64, f64)> = way
             .node_refs
             .iter()
