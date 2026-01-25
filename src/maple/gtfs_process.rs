@@ -653,19 +653,6 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
-        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => {
-            let mut gtfs = gtfs;
-
-            gtfs.trips.retain(|trip_id, trip| {
-                trip.stop_times
-                    .iter()
-                    .all(|st| st.stop.id.as_str() != "LBO")
-            });
-
-            gtfs.stops.remove_entry("LBO");
-
-            gtfs
-        }
         "f-amtrak~sanjoaquin" => {
             let mut gtfs = gtfs;
 
