@@ -663,6 +663,10 @@ pub async fn gtfs_process_feed(
                 if let Some(last_st) = last_st {
                     trip.trip_headsign = Some(last_st.stop.name.as_ref().unwrap().clone());
                 }
+
+                for stoptime in trip.stop_times.iter_mut() {
+                    stoptime.stop_headsign = None;
+                }
             }
 
             gtfs
