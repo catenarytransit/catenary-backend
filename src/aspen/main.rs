@@ -92,7 +92,6 @@ use std::time::Instant;
 
 mod alerts_processing;
 
-mod metrolinx_platforms;
 mod persistence;
 mod track_number;
 

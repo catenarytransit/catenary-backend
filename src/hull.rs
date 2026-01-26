@@ -1,8 +1,8 @@
 use delaunator::{EMPTY, Point as DPoint, triangulate};
+use geo::{Distance, Haversine};
 use geo_types::{Coord, LineString, Point, Polygon};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use geo::{Distance, Haversine};
 
 /// Represents an edge in the triangulation with its length.
 #[derive(Debug, Clone, Copy)]

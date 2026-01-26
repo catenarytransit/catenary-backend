@@ -226,8 +226,8 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
-        "f-amtrak~gold~runner" | 
-        "f-northern~indiana~commuter~transportation~district"
+        "f-amtrak~gold~runner"
+        | "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
         | "f-dr5-mtanyclirr"
         | "f-dr7-mtanyc~metro~north"

@@ -37,10 +37,10 @@ use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use geo::{Distance, Haversine, Point};
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use geo::{Distance, Haversine, Point};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
@@ -579,7 +579,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                 ways_found += 1;
                 let node_refs: Vec<i64> = way.nodes.iter().map(|n| n.0).collect();
-                
+
                 way_data.insert(
                     way.id.0,
                     WayData {
@@ -635,7 +635,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 OsmId::Node(node_id) => {
                     if let Some(node) = node_data.get(&node_id.0) {
                         // Check if this is a primary station node (rail/subway/tram station)
-                        if node.mode_type == "rail" || node.mode_type == "subway" || node.mode_type == "tram" {
+                        if node.mode_type == "rail"
+                            || node.mode_type == "subway"
+                            || node.mode_type == "tram"
+                        {
                             // stricter check: must be a station/halt/stop, not just a platform
                             if node.station_type.as_deref() == Some("station") 
                                 || node.station_type.as_deref() == Some("halt")
@@ -657,11 +660,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         // so we don't create derivative points for them
         for (way_id, way_mode) in relation_ways {
             if primary_node_modes.contains(&way_mode) {
-                 // EXCEPTION: Always ensure Lucien-L'Allier 555589144 gets a derivative point
-                 // This way has railway=station train=yes but tends to get suppressed by other logic
-                 if way_id == 555589144 {
+                // EXCEPTION: Always ensure Lucien-L'Allier 555589144 gets a derivative point
+                // This way has railway=station train=yes but tends to get suppressed by other logic
+                if way_id == 555589144 {
                     continue;
-                 }
+                }
                 ways_covered_by_relations.insert(way_id);
             }
         }
@@ -743,7 +746,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // =========================================================================
     // PASS 3.5: Create derivative points from ways/relations that have no nearby rail node
     // =========================================================================
-    println!("\n=== Pass 3.5: Creating derivative points from ways ===" );
+    println!("\n=== Pass 3.5: Creating derivative points from ways ===");
 
     fn normalize_name_for_comparison(name: &str) -> String {
         name.to_lowercase()
@@ -760,7 +763,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     fn names_are_similar(name1: &str, name2: &str) -> bool {
         let n1 = normalize_name_for_comparison(name1);
         let n2 = normalize_name_for_comparison(name2);
-        
+
         if n1 == n2 {
             return true;
         }
@@ -836,14 +839,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 parent_osm_id: None,
                 is_derivative: true,
             };
-            
+
             if let Some(name) = &way.name {
                 println!(
                     "  Created derivative point for way {} ({}) at ({}, {})",
                     way_id, name, centroid_lat, centroid_lon
                 );
             }
-            
+
             stations.push(station);
         }
     }

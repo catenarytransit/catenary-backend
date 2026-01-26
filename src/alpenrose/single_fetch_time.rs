@@ -34,6 +34,7 @@ lazy_static! {
         "f-mta~nyc~rt~lirr",
         "f-bus~dft~gov~uk~rt",
         "f-dp3-cta~rt",
+        "f-dp3-cta~bus~rt",
         "f-viarail~rt",
         "f-tlms~rt",
         //"f-uc~irvine~anteater~express~rt",
@@ -107,6 +108,7 @@ pub async fn single_fetch_time(
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>>,
     flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>>,
     etcd_urls: Arc<Vec<String>>,
@@ -144,6 +146,7 @@ pub async fn single_fetch_time(
                 let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
                 let via_gtfs = via_gtfs.clone();
+                let cta_bus_gtfs = cta_bus_gtfs.clone();
                 let flixbus_us_aggregator = flixbus_us_aggregator.clone();
                 let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
 
@@ -618,6 +621,18 @@ pub async fn single_fetch_time(
                                         &feed_id,
                                         gtfs,
                                         &client,
+                                    )
+                                    .await;
+                                }
+                            }
+                            "f-dp3-cta~bus~rt" | "f-dp3-cta~bus~rt" => {
+                                let cta_bus_lock = cta_bus_gtfs.read().await;
+                                if let Some(gtfs) = cta_bus_lock.as_ref() {
+                                    custom_rt_feeds::cta_bus::fetch_cta_bus_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        gtfs,
+                                        &assignment,
                                     )
                                     .await;
                                 }

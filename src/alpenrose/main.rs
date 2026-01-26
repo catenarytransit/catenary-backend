@@ -85,6 +85,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
     let flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
     let chicago_trips_str: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
@@ -504,6 +505,31 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     });
                 }
 
+                // CTA Bus
+                if assigned_feeds.contains("f-dp3-cta~bus~rt")
+                    && !downloads_started.contains("cta_bus")
+                {
+                    println!("Spawning CTA Bus download task...");
+                    downloads_started.insert("cta_bus".to_string());
+                    let cta_bus_gtfs = cta_bus_gtfs.clone();
+                    tokio::spawn(async move {
+                        let gtfs = gtfs_structures::GtfsReader::default()
+                            .read_shapes(false)
+                            .read_from_url_async(
+                                "https://www.transitchicago.com/downloads/sch_data/google_transit.zip",
+                            )
+                            .await;
+
+                        match gtfs {
+                            Ok(gtfs) => {
+                                println!("CTA Bus GTFS downloaded.");
+                                *cta_bus_gtfs.write().await = Some(gtfs);
+                            }
+                            Err(e) => eprintln!("Failed to download CTA Bus GTFS: {}", e),
+                        }
+                    });
+                }
+
                 // MNR
                 if assigned_feeds.contains("f-mta~nyc~rt~mnr") && !downloads_started.contains("mnr")
                 {
@@ -631,6 +657,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&mnr_gtfs),
                 Arc::clone(&via_gtfs),
+                Arc::clone(&cta_bus_gtfs),
                 Arc::clone(&flixbus_us_aggregator),
                 Arc::clone(&flixbus_eu_aggregator),
                 etcd_urls.clone(),

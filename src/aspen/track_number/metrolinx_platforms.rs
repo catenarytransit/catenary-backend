@@ -181,7 +181,10 @@ pub async fn fetch_upexpress_platforms(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error connecting to UP Express API for {}: {}", stop_code, e);
+                    eprintln!(
+                        "Error connecting to UP Express API for {}: {}",
+                        stop_code, e
+                    );
                     (stop_code, None)
                 }
             }

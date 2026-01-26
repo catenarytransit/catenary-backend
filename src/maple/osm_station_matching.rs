@@ -304,7 +304,6 @@ async fn batch_update_stops(
     diesel::sql_query(query).execute(conn).await
 }
 
-
 // ============================================================================
 // Matching logic (CPU-bound, parallelizable)
 // ============================================================================
@@ -315,7 +314,6 @@ struct MatchResult {
     osm_station_id: Option<i64>,
     osm_platform_id: Option<i64>,
 }
-
 
 /// Score a candidate station against a stop
 fn score_candidate(
@@ -356,7 +354,10 @@ fn score_candidate(
                 .collect();
 
             let token_match = if !gtfs_tokens.is_empty() {
-                let matches = gtfs_tokens.iter().filter(|t| osm_name_clean.contains(*t)).count();
+                let matches = gtfs_tokens
+                    .iter()
+                    .filter(|t| osm_name_clean.contains(*t))
+                    .count();
                 matches as f64 / gtfs_tokens.len() as f64
             } else {
                 0.0
@@ -366,7 +367,6 @@ fn score_candidate(
             jw_score.max(token_match)
         })
         .unwrap_or(0.0);
-
 
     // Compute distance using geo crate
     let p1 = point!(x: stop_lon, y: stop_lat);
@@ -552,8 +552,7 @@ fn match_stop_with_rtree(
     // Still prioritize exact mode matches
 
     // Check if in Canada (approximate bbox: Lat 41.6-83.1, Lon -141.0 to -52.6)
-    let is_canada =
-        stop_lat >= 41.6 && stop_lat <= 83.1 && stop_lon >= -141.0 && stop_lon <= -52.6;
+    let is_canada = stop_lat >= 41.6 && stop_lat <= 83.1 && stop_lon >= -141.0 && stop_lon <= -52.6;
     let proximity_fallback_m = if is_canada { 300.0 } else { 500.0 };
 
     let stop_point = point!(x: stop_lon, y: stop_lat);
@@ -570,7 +569,6 @@ fn match_stop_with_rtree(
         .filter(|(_, d, _)| *d <= proximity_fallback_m)
         // Sort by mode_priority DESC, then distance ASC
         .min_by(|(_, d1, p1), (_, d2, p2)| p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap()));
-
 
     if let Some((station, _, _)) = closest_station {
         return Some((station.osm_id, None));
@@ -688,7 +686,6 @@ pub async fn propagate_parent_matches(
             }
         }
     }
-
 
     println!(
         "  OSM matching: propagating matches to {} parents via children",
@@ -886,7 +883,6 @@ pub async fn match_stops_for_feed(
             // Do not continue here! We must process these stops to clear any existing matches (set to NULL).
             // Passing an empty R-tree will result in None matches, which is what we want.
         }
-
 
         // Build R-tree index (pre-compute lowercase names here)
         let indexed_stations: Vec<IndexedStation> = osm_stations

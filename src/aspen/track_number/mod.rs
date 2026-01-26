@@ -1,6 +1,9 @@
-use serde::Deserialize;
-use serde::Serialize;
+use catenary::postgres_tools::CatenaryPostgresPool;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+pub mod metrolinx_platforms;
+pub mod viarail;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlatformInfo {
@@ -15,6 +18,7 @@ pub enum TrackData {
     Metrolink(Option<MetrolinkOutputTrackData>),
     Amtrak(AmtrakTrackDataMultisource),
     NationalRail(HashMap<String, Vec<PlatformInfo>>),
+    ViaRail(Option<viarail::ViaRailTrackData>),
     None,
 }
 
@@ -165,7 +169,7 @@ async fn metrolink_station_schedule_decode(
     }
 }
 
-pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
+pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> TrackData {
     match chateau_id {
         "metrolinktrains" => {
             let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
@@ -247,6 +251,10 @@ pub async fn fetch_track_data(chateau_id: &str) -> TrackData {
                 }
             }
         }
+        "viarail" => match viarail::fetch_via_rail(pool).await {
+            Some(data) => TrackData::ViaRail(Some(data)),
+            None => TrackData::ViaRail(None),
+        },
         _ => TrackData::None,
     }
 }

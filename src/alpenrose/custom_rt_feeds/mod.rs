@@ -6,6 +6,7 @@ pub mod metrolink_extra;
 pub mod mta;
 pub mod tlms;
 //pub mod uci;
+pub mod cta_bus;
 pub mod northern_indiana;
 pub mod rtcquebec;
 pub mod sto_ca;
