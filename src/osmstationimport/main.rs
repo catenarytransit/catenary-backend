@@ -601,14 +601,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         relations_processed += 1;
 
         // Check if this relation contains any of our candidate ways
-        let mut relation_ways: Vec<i64> = Vec::new();
-        let mut has_primary_node = false;
+        // Check if this relation contains any of our candidate ways
+        let mut relation_ways: Vec<(i64, String)> = Vec::new();
+        let mut primary_node_modes: HashSet<String> = HashSet::new();
 
         for member in &rel.refs {
             match member.member {
                 OsmId::Way(way_id) => {
-                    if way_data.contains_key(&way_id.0) {
-                        relation_ways.push(way_id.0);
+                    if let Some(way) = way_data.get(&way_id.0) {
+                        relation_ways.push((way_id.0, way.mode_type.clone()));
                     }
                 }
                 OsmId::Node(node_id) => {
@@ -623,7 +624,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                 || node.railway_tag.as_deref() == Some("station")
                                 || node.railway_tag.as_deref() == Some("halt")
                             {
-                                has_primary_node = true;
+                                primary_node_modes.insert(node.mode_type.clone());
                             }
                         }
                     }
@@ -632,10 +633,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
 
-        // If relation has a primary node, mark all its rail-station-ways as "covered"
+        // If relation has a primary node OF THE SAME MODE, mark the way as "covered"
         // so we don't create derivative points for them
-        if has_primary_node {
-            for way_id in relation_ways {
+        for (way_id, way_mode) in relation_ways {
+            if primary_node_modes.contains(&way_mode) {
                 ways_covered_by_relations.insert(way_id);
             }
         }
