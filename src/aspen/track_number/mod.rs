@@ -116,11 +116,22 @@ async fn metrolink_station_schedule_decode(
         HashMap::new();
 
     for t in response {
-        if !track_lookup.contains_key(&t.train_designation) {
-            track_lookup.insert(t.train_designation.clone(), HashMap::new());
+        let mut train_designation = t.train_designation.clone();
+
+        if train_designation.len() > 1 {
+            let last_char = train_designation.chars().last().unwrap_or(' ');
+            let second_last_char = train_designation.chars().rev().nth(1).unwrap_or(' ');
+
+            if last_char.is_alphabetic() && second_last_char.is_numeric() {
+                train_designation.pop();
+            }
         }
 
-        let mut train_lookup_entry = track_lookup.get_mut(&t.train_designation).unwrap();
+        if !track_lookup.contains_key(&train_designation) {
+            track_lookup.insert(train_designation.clone(), HashMap::new());
+        }
+
+        let mut train_lookup_entry = track_lookup.get_mut(&train_designation).unwrap();
 
         let stop_id_find = match stop_codes_to_use {
             MetrolinkOrAmtrakStopCodes::Metrolink => {
