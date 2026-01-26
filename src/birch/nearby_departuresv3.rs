@@ -1077,7 +1077,40 @@ async fn fetch_chateau_data(
 
                     let event_time = departure_ts; // Already calculated above: midnight_ts + trip_start + dep_time_offset
                     let relevant_alerts = alert_index.search(route_id.as_str(), trip_id.as_str());
+
                     for alert in relevant_alerts {
+                        // Check if alert applies to this specific stop/trip context
+                        let applies = alert.informed_entity.iter().any(|entity| {
+                            // Check route (if present in entity)
+                            if let Some(r) = &entity.route_id {
+                                if r != route_id.as_str() {
+                                    return false;
+                                }
+                            }
+                            // Check trip (if present in entity)
+                            if let Some(t) = &entity.trip {
+                                if let Some(tid) = &t.trip_id {
+                                    if tid != trip_id.as_str() {
+                                        return false;
+                                    }
+                                }
+                            }
+                            // Check stop (if present in entity)
+                            if let Some(s) = &entity.stop_id {
+                                if !crate::stop_matching::rt_stop_matches_scheduled_simple(
+                                    s,
+                                    row.stop_id.as_str(),
+                                ) {
+                                    return false;
+                                }
+                            }
+                            true
+                        });
+
+                        if !applies {
+                            continue;
+                        }
+
                         if alert.effect == Some(1) {
                             // NO_SERVICE
                             let is_active = alert.active_period.iter().any(|ap| {
