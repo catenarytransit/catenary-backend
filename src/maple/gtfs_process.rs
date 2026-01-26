@@ -56,6 +56,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
+use rgb::Rgb;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -66,6 +67,10 @@ pub struct GtfsSummary {
     pub general_timezone: String,
     pub bbox: Option<geo::Rect>,
 }
+
+const METRA_MINI_IDS: &[&str] = &[
+    "UW", "BN", "SW", "RI", "ME", "HC", "MW", "UNW", "UN",
+];
 
 fn execute_pfaedle_rs(
     gtfs_path: &str,
@@ -643,6 +648,121 @@ pub async fn gtfs_process_feed(
                 //forces recomputation downstream in Maple, so "MI - Union Station GO" will be replaced with "Union Station"
                 trip.trip_headsign = None;
             }
+            gtfs
+        }
+        "f-dr4-septa~rail" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                // Trip ID uses "[route][train number]_[yyyymmdd]_[unknown]" format
+                // Example: CYN1052_20260105_SID185785
+                let trip_id_split: Vec<&str> = trip.id.split('_').collect();
+
+                let first_component = trip_id_split[0];
+
+                if first_component.chars().count() < 4 {
+                    continue
+                }
+
+                let trip_short_name: String = first_component.chars().skip(3).collect();
+
+                trip.trip_short_name = Some(trip_short_name.to_string());
+            }
+            gtfs
+        }
+        "f-dp3-metra" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                // Trip ID uses "[route ID]_[route mini-ID][train number]_[version numeric]_[version alphabetic]" format
+                // Examples:
+                // UP-W_UW50_V2_C
+                // BNSF_BN1258_V2_C
+                // SWS_SW809_V2_C
+                // RI_RI413_V8_C
+                // ME_ME621_V2_C
+                // ME_ME321_V7_C
+                // SWS_SW809_V2_C
+                // HC_HC915_V1_C
+                // MD-W_MW2217_V1_C
+                // UP-NW_UNW648_V2_B
+                // UP-N_UN327_V2_B
+
+                let mini_and_number = match trip.id.split('_').nth(1) {
+                    Some(x) => x,
+                    None => continue, // malformed
+                };
+
+                let mut best_prefix: Option<&str> = None;
+
+                for &prefix in METRA_MINI_IDS {
+                    if mini_and_number.starts_with(prefix) {
+                        best_prefix = match best_prefix {
+                            None => Some(prefix),
+                            Some(prev) if prefix.len() > prev.len() => Some(prefix),
+                            Some(prev) => Some(prev),
+                        };
+                    }
+                }
+
+                if let Some(prefix) = best_prefix {
+                    if let Some(rest) = mini_and_number.strip_prefix(prefix) {
+                        trip.trip_short_name = Some(rest.to_string());
+                    }
+                }
+            }
+            gtfs
+        }
+        "f-sf~bay~area~rg" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                if trip.route_id == "CE:ACE" || trip.route_id == "AM:CC" {
+                    // remove stop headsigns
+                    for stoptime in trip.stop_times.iter_mut() {
+                        stoptime.stop_headsign = None;
+                    }
+
+                    // Trip ID uses "[operator]:[train number]" format
+                    // Example: AM:521, CE:ACE01
+                    let trip_id_split: Vec<&str> = trip.id.split(':').collect();
+
+                    let trip_short_name = trip_id_split[trip_id_split.len() - 1];
+
+                    trip.trip_short_name = Some(trip_short_name.to_string());
+
+                    // forces headsign recomputation downstream in Maple
+                    trip.trip_headsign = None;
+                }
+            }
+            gtfs
+        }
+        "f-dq-mtamaryland~marc" => {
+            let mut gtfs = gtfs;
+
+            for route in gtfs.routes.values_mut() {
+                if let Some(long_name) = route.long_name.as_deref() {
+                    match long_name {
+                        "PENN - WASHINGTON" => {
+                            route.short_name = Some("Penn".to_string());
+                            route.long_name = Some("MARC Penn Line".to_string());
+                            route.color = Some(Rgb {r: 0xC6, g: 0x21, b: 0x41});
+                        }
+                        "CAMDEN - WASHINGTON" => {
+                            route.short_name = Some("Camden".to_string());
+                            route.long_name = Some("MARC Camden Line".to_string());
+                            route.color = Some(Rgb {r: 0xEF, g: 0x5B, b: 0x2A});
+                        }
+                        "BRUNSWICK - WASHINGTON" => {
+                            route.short_name = Some("Brunswick".to_string());
+                            route.long_name = Some("MARC Brunswick Line".to_string());
+                            route.color = Some(Rgb {r: 0xEF, g: 0xAC, b: 0x1F});
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
             gtfs
         }
         "f-hongkong~justusewheels" => {
