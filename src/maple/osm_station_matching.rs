@@ -243,14 +243,14 @@ async fn batch_update_stops(
     conn: &mut AsyncPgConnection,
     feed_id: &str,
     attempt_id: &str,
-    updates: &[(String, i64, Option<i64>)], // (gtfs_id, station_id, platform_id)
+    updates: &[(String, Option<i64>, Option<i64>)], // (gtfs_id, station_id, platform_id)
 ) -> Result<usize, diesel::result::Error> {
     if updates.is_empty() {
         return Ok(0);
     }
 
     let gtfs_ids: Vec<&str> = updates.iter().map(|(id, _, _)| id.as_str()).collect();
-    let station_ids: Vec<i64> = updates.iter().map(|(_, sid, _)| *sid).collect();
+    let station_ids: Vec<Option<i64>> = updates.iter().map(|(_, sid, _)| *sid).collect();
     let platform_ids: Vec<Option<i64>> = updates.iter().map(|(_, _, pid)| *pid).collect();
 
     // Build the platform_ids array string (handling NULLs)
@@ -271,7 +271,10 @@ async fn batch_update_stops(
 
     let station_arr = station_ids
         .iter()
-        .map(|id| id.to_string())
+        .map(|p| match p {
+            Some(id) => id.to_string(),
+            None => "NULL".to_string(),
+        })
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -301,6 +304,7 @@ async fn batch_update_stops(
     diesel::sql_query(query).execute(conn).await
 }
 
+
 // ============================================================================
 // Matching logic (CPU-bound, parallelizable)
 // ============================================================================
@@ -308,9 +312,10 @@ async fn batch_update_stops(
 /// Result of matching a single stop
 struct MatchResult {
     gtfs_id: String,
-    osm_station_id: i64,
+    osm_station_id: Option<i64>,
     osm_platform_id: Option<i64>,
 }
+
 
 /// Score a candidate station against a stop
 fn score_candidate(
@@ -321,24 +326,37 @@ fn score_candidate(
     platform_code: Option<&str>,
     radius_m: f64,
 ) -> (f64, bool) {
+    // Helper to clean names for comparison (remove common station words)
+    let clean_name = |name: &str| -> String {
+        name.replace("gare", "")
+            .replace("station", "")
+            .replace("  ", " ")
+            .trim()
+            .to_string()
+    };
+
+    let stop_name_clean = clean_name(stop_name_lower);
+
     // Compute name similarity
     let name_sim = station
         .name_lower
         .as_ref()
         .map(|osm_name| {
+            let osm_name_clean = clean_name(osm_name);
+
             // First try Jaro-Winkler
-            let jw_score = jaro_winkler(stop_name_lower, osm_name);
+            let jw_score = jaro_winkler(&stop_name_clean, &osm_name_clean);
 
             // Also check token-based matching:
             // "Paris Est" should match "Paris Gare de l'Est"
             // Check if all significant words from GTFS name appear in OSM name
-            let gtfs_tokens: Vec<&str> = stop_name_lower
+            let gtfs_tokens: Vec<&str> = stop_name_clean
                 .split(|c: char| !c.is_alphanumeric())
                 .filter(|t| t.len() >= 2) // Skip very short tokens
                 .collect();
 
             let token_match = if !gtfs_tokens.is_empty() {
-                let matches = gtfs_tokens.iter().filter(|t| osm_name.contains(*t)).count();
+                let matches = gtfs_tokens.iter().filter(|t| osm_name_clean.contains(*t)).count();
                 matches as f64 / gtfs_tokens.len() as f64
             } else {
                 0.0
@@ -348,6 +366,7 @@ fn score_candidate(
             jw_score.max(token_match)
         })
         .unwrap_or(0.0);
+
 
     // Compute distance using geo crate
     let p1 = point!(x: stop_lon, y: stop_lat);
@@ -531,7 +550,11 @@ fn match_stop_with_rtree(
     // Step 4: FINAL FALLBACK - pure proximity match within 500m
     // If no text-based matches found, match the closest station regardless of name
     // Still prioritize exact mode matches
-    const PROXIMITY_FALLBACK_M: f64 = 500.0;
+
+    // Check if in Canada (approximate bbox: Lat 41.6-83.1, Lon -141.0 to -52.6)
+    let is_canada =
+        stop_lat >= 41.6 && stop_lat <= 83.1 && stop_lon >= -141.0 && stop_lon <= -52.6;
+    let proximity_fallback_m = if is_canada { 300.0 } else { 500.0 };
 
     let stop_point = point!(x: stop_lon, y: stop_lat);
 
@@ -544,9 +567,10 @@ fn match_stop_with_rtree(
             let mode_priority = mode_match_priority(mode, &s.mode_type);
             (s, distance, mode_priority)
         })
-        .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
+        .filter(|(_, d, _)| *d <= proximity_fallback_m)
         // Sort by mode_priority DESC, then distance ASC
         .min_by(|(_, d1, p1), (_, d2, p2)| p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap()));
+
 
     if let Some((station, _, _)) = closest_station {
         return Some((station.osm_id, None));
@@ -653,17 +677,18 @@ pub async fn propagate_parent_matches(
     }
 
     // 4. Determine best match for each unmatched parent
-    let mut updates: Vec<(String, i64, Option<i64>)> = Vec::new();
+    let mut updates: Vec<(String, Option<i64>, Option<i64>)> = Vec::new();
 
     for parent_id in unmatched_parents {
         if let Some(counts) = votes.get(&parent_id) {
             // Find osm_id with max count (majority vote)
             if let Some((&best_osm_id, _)) = counts.iter().max_by_key(|&(_, count)| count) {
                 // For parent stations, we generally don't assign a platform_id
-                updates.push((parent_id, best_osm_id, None));
+                updates.push((parent_id, Some(best_osm_id), None));
             }
         }
     }
+
 
     println!(
         "  OSM matching: propagating matches to {} parents via children",
@@ -858,8 +883,10 @@ pub async fn match_stops_for_feed(
                     cell_stops.len()
                 );
             }
-            continue;
+            // Do not continue here! We must process these stops to clear any existing matches (set to NULL).
+            // Passing an empty R-tree will result in None matches, which is what we want.
         }
+
 
         // Build R-tree index (pre-compute lowercase names here)
         let indexed_stations: Vec<IndexedStation> = osm_stations
@@ -872,10 +899,10 @@ pub async fn match_stops_for_feed(
         // Match all stops in this cell using parallel processing
         let matches: Vec<MatchResult> = cell_stops
             .par_iter()
-            .filter_map(|stop| {
+            .map(|stop| {
                 let radius = get_radius_for_mode(stop.mode);
 
-                match_stop_with_rtree(
+                let match_result = match_stop_with_rtree(
                     &rtree,
                     stop.lon,
                     stop.lat,
@@ -883,27 +910,25 @@ pub async fn match_stops_for_feed(
                     stop.platform_code.as_deref(),
                     radius,
                     stop.mode,
-                )
-                .map(|(station_id, platform_id)| MatchResult {
-                    gtfs_id: stop.gtfs_id.clone(),
-                    osm_station_id: station_id,
-                    osm_platform_id: platform_id,
-                })
+                );
+
+                match match_result {
+                    Some((station_id, platform_id)) => MatchResult {
+                        gtfs_id: stop.gtfs_id.clone(),
+                        osm_station_id: Some(station_id),
+                        osm_platform_id: platform_id,
+                    },
+                    None => MatchResult {
+                        gtfs_id: stop.gtfs_id.clone(),
+                        osm_station_id: None,
+                        osm_platform_id: None,
+                    },
+                }
             })
             .collect();
 
-        if matches.is_empty() {
-            println!(
-                "  OSM matching: cell {:?} - {} stops tried, 0 matches (score < {})",
-                cell,
-                cell_stops.len(),
-                MIN_MATCH_SCORE
-            );
-            continue;
-        }
-
         // Batch update the database
-        let updates: Vec<(String, i64, Option<i64>)> = matches
+        let updates: Vec<(String, Option<i64>, Option<i64>)> = matches
             .into_iter()
             .map(|m| (m.gtfs_id, m.osm_station_id, m.osm_platform_id))
             .collect();
