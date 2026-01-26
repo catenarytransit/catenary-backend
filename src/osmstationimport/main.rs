@@ -199,6 +199,11 @@ fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
         }
     }
 
+    // Exclude railway=proposed
+    if tags.get("railway").map_or(false, |v| v == "proposed") {
+        return false;
+    }
+
     // Exclude bus-only stations
     if tags.get("highway").map_or(false, |v| v == "bus_stop")
         && tags.get("railway").is_none()
