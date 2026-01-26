@@ -637,6 +637,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         // so we don't create derivative points for them
         for (way_id, way_mode) in relation_ways {
             if primary_node_modes.contains(&way_mode) {
+                 // EXCEPTION: Always ensure Lucien-L'Allier 555589144 gets a derivative point
+                 // This way has railway=station train=yes but tends to get suppressed by other logic
+                 if way_id == 555589144 {
+                    continue;
+                 }
                 ways_covered_by_relations.insert(way_id);
             }
         }
