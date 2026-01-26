@@ -39,6 +39,18 @@ pub struct MetrolinxDepartureDetail {
     // We might not need departureTime for now if we just match by trip ID
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpExpressStopResponse {
+    pub departures: Vec<UpExpressDeparture>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct UpExpressDeparture {
+    pub platform: String,
+    #[serde(rename = "tripNumber")]
+    pub trip_number: String,
+}
+
 pub const ALL_METROLINX_STATIONS: &[&str] = &[
     "WR", "WH", "WE", "UN", "UI", "ST", "SR", "SCTH", "SC", "RU", "RO", "RI", "PO", "PIN", "PA",
     "OS", "OR", "OL", "OA", "NI", "NE", "MR", "MP", "MO", "ML", "MK", "MJ", "MI", "ME", "MD", "MA",
@@ -46,6 +58,8 @@ pub const ALL_METROLINX_STATIONS: &[&str] = &[
     "EG", "EA", "DW", "DI", "DA", "CO", "CL", "CF", "CE", "BU", "BR", "BO", "BM", "BL", "BE", "BD",
     "BA", "AU", "AP", "AL", "AJ", "AG", "AD", "AC",
 ];
+
+pub const ALL_UPEXPRESS_STATIONS: &[&str] = &["WE", "UN", "PA", "MD", "BL"];
 
 /// Fetches platform assignments for a list of stop codes.
 /// Returns a HashMap where Key = (TripNumber, StopCode) and Value = Platform.
@@ -111,6 +125,79 @@ pub async fn fetch_metrolinx_platforms(
                 }
                 platforms_map.insert(
                     (item.trip_number.clone(), data.stationCode.clone()),
+                    item.platform.clone(),
+                );
+            }
+        }
+    }
+
+    platforms_map
+}
+
+/// Fetches platform assignments for a list of UP Express stop codes.
+/// Returns a HashMap where Key = (TripNumber, StopCode) and Value = Platform.
+pub async fn fetch_upexpress_platforms(
+    stops_to_fetch: Vec<String>,
+) -> AHashMap<(String, String), String> {
+    use futures::{StreamExt, stream};
+
+    let client = reqwest::Client::new();
+
+    let bodies = stream::iter(stops_to_fetch.into_iter())
+        .map(|stop_code| {
+            let client = client.clone();
+            async move {
+                let url = format!(
+                    "https://api.metrolinx.com/external/upe/tdp/up/departures/{}",
+                    stop_code
+                );
+                let resp = client.get(&url).send().await;
+                (stop_code, resp)
+            }
+        })
+        .buffer_unordered(20);
+
+    let mut platforms_map = AHashMap::new();
+
+    let results: Vec<(String, Option<UpExpressStopResponse>)> = bodies
+        .map(|(stop_code, resp)| async move {
+            match resp {
+                Ok(resp) => {
+                    if resp.status().is_success() {
+                        match resp.json::<UpExpressStopResponse>().await {
+                            Ok(data) => (stop_code, Some(data)),
+                            Err(e) => {
+                                eprintln!("Error parsing UP Express data for {}: {}", stop_code, e);
+                                (stop_code, None)
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "Error fetching UP Express data for {}: Status {}",
+                            stop_code,
+                            resp.status()
+                        );
+                        (stop_code, None)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error connecting to UP Express API for {}: {}", stop_code, e);
+                    (stop_code, None)
+                }
+            }
+        })
+        .buffer_unordered(20)
+        .collect()
+        .await;
+
+    for (stop_code, data_opt) in results {
+        if let Some(data) = data_opt {
+            for item in data.departures {
+                if item.platform == "-" || item.platform.trim().is_empty() {
+                    continue;
+                }
+                platforms_map.insert(
+                    (item.trip_number.clone(), stop_code.clone()),
                     item.platform.clone(),
                 );
             }

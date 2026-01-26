@@ -5,7 +5,10 @@
 extern crate catenary;
 use crate::delay_calculation::calculate_delay;
 use crate::metrolink_california_additions::vehicle_pos_supplement;
-use crate::metrolinx_platforms::{ALL_METROLINX_STATIONS, fetch_metrolinx_platforms};
+use crate::metrolinx_platforms::{
+    fetch_metrolinx_platforms, fetch_upexpress_platforms, ALL_METROLINX_STATIONS,
+    ALL_UPEXPRESS_STATIONS,
+};
 use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::stop_time_logic::find_closest_stop_time_update;
@@ -205,9 +208,18 @@ pub async fn new_rt_data(
 
     let fetch_supplemental_platforms_metrolinx: Option<AHashMap<(String, String), String>> =
         match chateau_id {
-            "gotransit" | "upexpress" => Some(
+            "gotransit" => Some(
                 fetch_metrolinx_platforms(
                     ALL_METROLINX_STATIONS
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                )
+                .await,
+            ),
+            "upexpress" => Some(
+                fetch_upexpress_platforms(
+                    ALL_UPEXPRESS_STATIONS
                         .iter()
                         .map(|s| s.to_string())
                         .collect(),
@@ -1333,11 +1345,12 @@ pub async fn new_rt_data(
                                     }
                                 }
 
-                                "gotransit" | "upexpress" => {
+                                "gotransit" => {
                                     if let Some(plats) = &fetch_supplemental_platforms_metrolinx {
                                         if let Some(trip_id) = &trip_id {
                                             if let Some(stop_id) = &stu.stop_id {
-                                                if let Some(trip_number) = trip_id.split('-').last()
+                                                if let Some(trip_number) =
+                                                    trip_id.split('-').last()
                                                 {
                                                     if let Some(platform) = plats.get(&(
                                                         trip_number.to_string(),
@@ -1346,6 +1359,32 @@ pub async fn new_rt_data(
                                                         platform_resp =
                                                             Some(platform.clone().into());
                                                     }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                "upexpress" => {
+                                    if let Some(plats) = &fetch_supplemental_platforms_metrolinx {
+                                        if let Some(stop_id) = &stu.stop_id {
+                                            // Prefer trip_short_name if available (matches user requirement),
+                                            // otherwise fallback to parsing trip_id suffix.
+                                            let trip_number_candidate = compressed_trip
+                                                .and_then(|t| t.trip_short_name.as_ref().map(|s| s.to_string()))
+                                                .or_else(|| {
+                                                    trip_id.as_ref().and_then(|id| {
+                                                        id.split('-').last().map(|s| s.to_string())
+                                                    })
+                                                });
+
+                                            if let Some(trip_number) = trip_number_candidate {
+                                                if let Some(platform) = plats.get(&(
+                                                    trip_number,
+                                                    stop_id.to_string(),
+                                                )) {
+                                                    platform_resp =
+                                                        Some(platform.clone().into());
                                                 }
                                             }
                                         }
