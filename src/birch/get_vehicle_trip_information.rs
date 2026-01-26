@@ -2226,8 +2226,28 @@ async fn get_alert_single_trip(
     if let Ok(alerts_for_route) = alerts_for_route {
         if let Some(alerts_for_route) = alerts_for_route {
             for (alert_id, alert) in alerts_for_route {
-                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                alert_ids_for_this_route.push(alert_id.clone());
+                // If the alert is using trip id as a filter (informed entity), check if the trip id applies to us. If not, throw it out.
+                let relevant = alert.informed_entity.iter().any(|entity| {
+                    let route_id_covered = match &entity.route_id {
+                        None => true,
+                        Some(route_id_entity) => route_id_entity == &route_id,
+                    };
+
+                    let trip_covered = match &entity.trip {
+                        None => true,
+                        Some(trip) => match &trip.trip_id {
+                            None => true,
+                            Some(entity_trip_id) => entity_trip_id == &trip_id,
+                        },
+                    };
+
+                    route_id_covered && trip_covered
+                });
+
+                if relevant {
+                    alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                    alert_ids_for_this_route.push(alert_id.clone());
+                }
             }
         }
     }
@@ -2235,8 +2255,28 @@ async fn get_alert_single_trip(
     if let Ok(alerts_for_trip) = alerts_for_trip {
         if let Some(alerts_for_trip) = alerts_for_trip {
             for (alert_id, alert) in alerts_for_trip {
-                alert_id_to_alert.insert(alert_id.clone(), alert.clone());
-                alert_ids_for_this_trip.push(alert_id.clone());
+                // If the alert is using trip id as a filter (informed entity), check if the trip id applies to us. If not, throw it out.
+                let relevant = alert.informed_entity.iter().any(|entity| {
+                    let route_id_covered = match &entity.route_id {
+                        None => true,
+                        Some(route_id_entity) => route_id_entity == &route_id,
+                    };
+
+                    let trip_covered = match &entity.trip {
+                        None => true,
+                        Some(trip) => match &trip.trip_id {
+                            None => true,
+                            Some(entity_trip_id) => entity_trip_id == &trip_id,
+                        },
+                    };
+
+                    route_id_covered && trip_covered
+                });
+
+                if relevant {
+                    alert_id_to_alert.insert(alert_id.clone(), alert.clone());
+                    alert_ids_for_this_trip.push(alert_id.clone());
+                }
             }
         }
     }

@@ -46,6 +46,7 @@ use language_tags::LanguageTag;
 use prost::Message;
 use regex::Regex;
 use rgb::RGB;
+use rgb::Rgb;
 use serde_json::json;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -56,7 +57,6 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
-use rgb::Rgb;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -68,9 +68,7 @@ pub struct GtfsSummary {
     pub bbox: Option<geo::Rect>,
 }
 
-const METRA_MINI_IDS: &[&str] = &[
-    "UW", "BN", "SW", "RI", "ME", "HC", "MW", "UNW", "UN",
-];
+const METRA_MINI_IDS: &[&str] = &["UW", "BN", "SW", "RI", "ME", "HC", "MW", "UNW", "UN"];
 
 fn execute_pfaedle_rs(
     gtfs_path: &str,
@@ -661,7 +659,7 @@ pub async fn gtfs_process_feed(
                 let first_component = trip_id_split[0];
 
                 if first_component.chars().count() < 4 {
-                    continue
+                    continue;
                 }
 
                 let trip_short_name: String = first_component.chars().skip(3).collect();
@@ -746,17 +744,29 @@ pub async fn gtfs_process_feed(
                         "PENN - WASHINGTON" => {
                             route.short_name = Some("Penn".to_string());
                             route.long_name = Some("MARC Penn Line".to_string());
-                            route.color = Some(Rgb {r: 0xC6, g: 0x21, b: 0x41});
+                            route.color = Some(Rgb {
+                                r: 0xC6,
+                                g: 0x21,
+                                b: 0x41,
+                            });
                         }
                         "CAMDEN - WASHINGTON" => {
                             route.short_name = Some("Camden".to_string());
                             route.long_name = Some("MARC Camden Line".to_string());
-                            route.color = Some(Rgb {r: 0xEF, g: 0x5B, b: 0x2A});
+                            route.color = Some(Rgb {
+                                r: 0xEF,
+                                g: 0x5B,
+                                b: 0x2A,
+                            });
                         }
                         "BRUNSWICK - WASHINGTON" => {
                             route.short_name = Some("Brunswick".to_string());
                             route.long_name = Some("MARC Brunswick Line".to_string());
-                            route.color = Some(Rgb {r: 0xEF, g: 0xAC, b: 0x1F});
+                            route.color = Some(Rgb {
+                                r: 0xEF,
+                                g: 0xAC,
+                                b: 0x1F,
+                            });
                         }
                         _ => {}
                     }
