@@ -192,6 +192,13 @@ fn get_station_type(tags: &osmpbfreader::Tags) -> Option<String> {
 
 /// Check if this OSM object should be included as a railway station/platform
 fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
+    // Exclude Disney Parks
+    if let Some(operator) = tags.get("operator") {
+        if operator == "Disney Parks" {
+            return false;
+        }
+    }
+
     // Exclude bus-only stations
     if tags.get("highway").map_or(false, |v| v == "bus_stop")
         && tags.get("railway").is_none()
@@ -304,6 +311,14 @@ fn get_platform_nodes_in_relation(rel: &Relation) -> Vec<i64> {
     }
 
     platforms
+}
+
+/// Apply name overrides
+fn get_clean_name(name: &str) -> String {
+    match name {
+        "Santa Ana Regional Transportation Center" => "Santa Ana".to_string(),
+        _ => name.to_string(),
+    }
 }
 
 /// Extract multilingual names from tags
@@ -514,7 +529,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         id,
                         lat: node.lat(),
                         lon: node.lon(),
-                        name: node.tags.get("name").map(|s| s.to_string()),
+                        name: node.tags.get("name").map(|s| get_clean_name(s)),
                         name_translations: extract_name_translations(&node.tags),
                         station_type: get_station_type(&node.tags),
                         railway_tag: node.tags.get("railway").map(|s| s.to_string()),
@@ -565,7 +580,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     WayData {
                         id: way.id.0,
                         node_refs,
-                        name: way.tags.get("name").map(|s| s.to_string()),
+                        name: way.tags.get("name").map(|s| get_clean_name(s)),
                         name_translations: extract_name_translations(&way.tags),
                         station_type: get_station_type(&way.tags),
                         railway_tag: way.tags.get("railway").map(|s| s.to_string()),
