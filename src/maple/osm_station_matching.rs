@@ -585,7 +585,7 @@ fn match_stop_with_rtree(
             let mode_priority = mode_match_priority(mode, &p.mode_type);
             (p, distance, mode_priority)
         })
-        .filter(|(_, d, _)| *d <= PROXIMITY_FALLBACK_M)
+        .filter(|(_, d, _)| *d <= proximity_fallback_m)
         .min_by(|(_, d1, p1), (_, d2, p2)| p2.cmp(p1).then_with(|| d1.partial_cmp(d2).unwrap()));
 
     if let Some((platform, _, _)) = closest_platform {
