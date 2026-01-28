@@ -907,6 +907,35 @@ pub async fn departures_at_osm_station(
                                                         {
                                                             stop_cancelled = true;
                                                         }
+                                                        
+                                                        // LOGIC UPDATE: Handle partial schedules and late arrivals
+                                                        let trip_base_time = valid_trip.reference_start_of_service_date.timestamp() as u64 
+                                                            + valid_trip.trip_start_time as u64;
+
+                                                        let abs_scheduled_arrival = itin_option.arrival_time_since_start
+                                                            .map(|t| trip_base_time + t as u64);
+                                                        let abs_scheduled_departure = itin_option.departure_time_since_start
+                                                            .map(|t| trip_base_time + t as u64);
+
+                                                        // If the GTFS schedule is only listing either arrival or departure but not both (aka waiting at a station), 
+                                                        // set the rt departure time to the rt arrival time.
+                                                        if (abs_scheduled_arrival.is_some() ^ abs_scheduled_departure.is_some()) {
+                                                            if let Some(rt_arr) = arrival_time_rt {
+                                                                departure_time_rt = Some(rt_arr);
+                                                            }
+                                                        }
+
+                                                        // If the rt arrival time is after the GTFS schedule departure time, also set the rt departure time
+                                                        if let Some(rt_arr) = arrival_time_rt {
+                                                            if let Some(sched_dep) = abs_scheduled_departure {
+                                                                if rt_arr > sched_dep {
+                                                                    // Ensure rt_departure is at least rt_arr
+                                                                    if departure_time_rt.unwrap_or(0) < rt_arr {
+                                                                        departure_time_rt = Some(rt_arr);
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
                                             }
