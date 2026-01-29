@@ -31,10 +31,10 @@ pub enum ClientMessage {
 #[derive(Serialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
-    #[serde(rename = "initial")]
-    Initial { data: TripIntroductionInformation },
-    #[serde(rename = "update")]
-    Update { data: GtfsRtRefreshData },
+    #[serde(rename = "initial_trip")]
+    InitialTrip { data: TripIntroductionInformation },
+    #[serde(rename = "update_trip")]
+    UpdateTrip { data: GtfsRtRefreshData },
     #[serde(rename = "error")]
     Error { message: String },
 }
@@ -110,7 +110,7 @@ impl TripWebSocket {
                                                  act.last_update_timestamp = Some(ts);
                                              }
                                              
-                                             let msg = ServerMessage::Update { data };
+                                             let msg = ServerMessage::UpdateTrip { data };
                                              let text = serde_json::to_string(&msg).unwrap();
                                              ctx.text(text);
                                         }
@@ -181,7 +181,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             .map(|result, _, ctx: &mut ws::WebsocketContext<Self>| {
                                  match result {
                                      Ok(data) => {
-                                         let msg = ServerMessage::Initial { data };
+                                         let msg = ServerMessage::InitialTrip { data };
                                          let text = serde_json::to_string(&msg).unwrap();
                                          ctx.text(text);
                                      }
