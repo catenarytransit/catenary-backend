@@ -3,6 +3,11 @@
 // Attribution cannot be removed
 
 use crate::ChateauDataNoGeometry;
+
+#[path = "connection_manager.rs"]
+pub mod connection_manager;
+use connection_manager::AspenClientManager;
+
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;

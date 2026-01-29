@@ -1,4 +1,5 @@
 use crate::aspen::lib::ChateauMetadataEtcd;
+use crate::aspen::lib::connection_manager::AspenClientManager;
 use crate::aspen_dataset::{
     AspenisedAlert, AspenisedVehicleDescriptor,
     AspenisedVehiclePosition,
@@ -143,6 +144,7 @@ pub async fn fetch_trip_information(
     pool: Arc<CatenaryPostgresPool>,
     etcd_connection_ips: Arc<EtcdConnectionIps>,
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_client_manager: Arc<AspenClientManager>,
     mut timer: Option<&mut simple_server_timing_header::Timer>,
 ) -> Result<TripIntroductionInformation, String> {
     if let Some(t) = &mut timer { // Reborrow? Actually timer is Option<&mut T>.
@@ -374,7 +376,18 @@ pub async fn fetch_trip_information(
         if let Ok(fetch_assigned) = fetch_assigned {
             if let Some(kv) = fetch_assigned.kvs().first() {
                 if let Ok(assigned_data) = crate::bincode_deserialize::<ChateauMetadataEtcd>(kv.value()) {
-                    if let Ok(aspen_client) = crate::aspen::lib::spawn_aspen_client_from_ip(&assigned_data.socket).await {
+                    let socket = assigned_data.socket;
+                    let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
+                        Ok(client)
+                    } else {
+                        let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
+                        if let Ok(client) = &client_res {
+                            aspen_client_manager.insert_client(socket, client.clone()).await;
+                        }
+                        client_res
+                    };
+
+                    if let Ok(aspen_client) = aspen_client {
                          let updates = aspen_client.get_trip_updates_from_trip_id(context::current(), chateau.clone(), trip_id.clone()).await;
                          
                          if let Ok(Some(updates_vec)) = updates {
@@ -542,6 +555,7 @@ pub async fn fetch_trip_rt_update(
     query: QueryTripInformationParams,
     etcd_connection_ips: Arc<EtcdConnectionIps>,
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_client_manager: Arc<AspenClientManager>,
 ) -> Result<ResponseForGtfsRtRefresh, String> {
     let etcd = etcd_client::Client::connect(
         etcd_connection_ips.ip_addresses.as_slice(),
@@ -576,9 +590,19 @@ pub async fn fetch_trip_rt_update(
                 )
                 .unwrap();
 
-                let aspen_client =
-                    crate::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+
+
+                let socket = assigned_chateau_data.socket;
+                let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
+                    Ok(client)
+                } else {
+                    let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket)
                         .await;
+                    if let Ok(client) = &client_res {
+                        aspen_client_manager.insert_client(socket, client.clone()).await;
+                    }
+                    client_res
+                };
 
                 match aspen_client {
                     Ok(aspen_client) => {

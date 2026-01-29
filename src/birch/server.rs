@@ -57,6 +57,7 @@ use catenary::EtcdConnectionIps;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use catenary::aspen::lib::connection_manager::AspenClientManager;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
@@ -840,6 +841,8 @@ async fn main() -> std::io::Result<()> {
     let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>> =
         Arc::new(tokio::sync::RwLock::new(None));
 
+    let aspen_client_manager = Arc::new(AspenClientManager::new());
+
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
@@ -898,6 +901,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_connection_ips)))
             .app_data(actix_web::web::Data::new(Arc::clone(&etcd_reuser)))
             .app_data(actix_web::web::Data::new(Arc::clone(&shared_client)))
+            .app_data(actix_web::web::Data::new(Arc::clone(&aspen_client_manager)))
             .route("/", web::get().to(index))
             .route("robots.txt", web::get().to(robots))
             .service(amtrakproxy)

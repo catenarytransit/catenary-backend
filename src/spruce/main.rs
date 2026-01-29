@@ -3,6 +3,7 @@ use actix_web_actors::ws;
 use std::sync::Arc;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::connection_manager::AspenClientManager;
 
 mod trip_websocket;
 use trip_websocket::TripWebSocket;
@@ -13,12 +14,14 @@ async fn index(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         TripWebSocket::new(
             pool.as_ref().clone(),
             etcd_connection_ips.as_ref().clone(),
-            etcd_connection_options.as_ref().clone()
+            etcd_connection_options.as_ref().clone(),
+            aspen_client_manager.as_ref().clone(),
         ),
         &req,
         stream
@@ -52,11 +55,14 @@ async fn main() -> std::io::Result<()> {
         .parse::<usize>()
         .unwrap();
 
+    let aspen_client_manager = Arc::new(AspenClientManager::new());
+
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(etcd_connection_ips.clone()))
             .app_data(web::Data::new(etcd_connection_options.clone()))
+            .app_data(web::Data::new(aspen_client_manager.clone()))
             .route("/ws/", web::get().to(index))
     })
     .workers(worker_amount)

@@ -6,6 +6,7 @@ use catenary::trip_logic::{
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::connection_manager::AspenClientManager;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -17,12 +18,14 @@ const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
-    #[serde(rename = "subscribe")]
-    Subscribe {
+    #[serde(rename = "subscribe_trip")]
+    SubscribeTrip {
         chateau: String,
         #[serde(flatten)]
         params: QueryTripInformationParams,
     },
+    #[serde(rename = "unsubscribe_trip")]
+    UnsubscribeTrip,
 }
 
 #[derive(Serialize)]
@@ -41,6 +44,7 @@ pub struct TripWebSocket {
     pub pool: Arc<CatenaryPostgresPool>,
     pub etcd_connection_ips: Arc<EtcdConnectionIps>,
     pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    pub aspen_client_manager: Arc<AspenClientManager>,
     pub subscription: Option<QueryTripInformationParams>,
     pub hb: Instant,
     pub last_update_timestamp: Option<u64>,
@@ -51,12 +55,14 @@ impl TripWebSocket {
         pool: Arc<CatenaryPostgresPool>,
         etcd_connection_ips: Arc<EtcdConnectionIps>,
         etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+        aspen_client_manager: Arc<AspenClientManager>,
     ) -> Self {
         Self {
             chateau: None,
             pool,
             etcd_connection_ips,
             etcd_connection_options,
+            aspen_client_manager,
             subscription: None,
             hb: Instant::now(),
             last_update_timestamp: None,
@@ -82,6 +88,7 @@ impl TripWebSocket {
                         params.clone(),
                         act.etcd_connection_ips.clone(),
                         act.etcd_connection_options.clone(),
+                        act.aspen_client_manager.clone(),
                     );
                     
                     let fut = async move {
@@ -146,7 +153,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
                 match msg {
-                    Ok(ClientMessage::Subscribe { chateau, params }) => {
+                    Ok(ClientMessage::UnsubscribeTrip) => {
+                        self.chateau = None;
+                        self.subscription = None;
+                        self.last_update_timestamp = None;
+                    }
+                    Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
                         self.chateau = Some(chateau.clone());
                         self.subscription = Some(params.clone());
                         
@@ -157,6 +169,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             self.pool.clone(),
                             self.etcd_connection_ips.clone(),
                             self.etcd_connection_options.clone(),
+                            self.aspen_client_manager.clone(),
                             None,
                         );
 

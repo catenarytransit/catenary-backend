@@ -5,6 +5,7 @@ use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
 use catenary::SerializableStop;
 use catenary::aspen::lib::ChateauMetadataEtcd;
+use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::aspen_dataset::AspenisedTripScheduleRelationship;
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::AspenisedVehiclePosition;
@@ -259,6 +260,7 @@ pub async fn get_trip_rt_update(
     query: web::Query<QueryTripInformationParams>, // pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
     let query = query.into_inner();
@@ -268,6 +270,7 @@ pub async fn get_trip_rt_update(
         query,
         etcd_connection_ips.as_ref().clone(),
         etcd_connection_options.as_ref().clone(),
+        aspen_client_manager.as_ref().clone(),
     ).await {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => HttpResponse::InternalServerError().body(e),
@@ -281,6 +284,7 @@ pub async fn get_trip_init(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
@@ -292,6 +296,7 @@ pub async fn get_trip_init(
         pool.as_ref().clone(),
         etcd_connection_ips.as_ref().clone(),
         etcd_connection_options.as_ref().clone(),
+        aspen_client_manager.as_ref().clone(),
         Some(&mut timer)
     ).await {
         Ok(response) => {
