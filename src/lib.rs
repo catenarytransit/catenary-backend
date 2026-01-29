@@ -98,6 +98,9 @@ pub mod aspen_dataset;
 pub mod compact_formats;
 pub mod genentech_auth;
 pub mod graph_formats;
+pub mod connections_lookup;
+pub mod stop_matching;
+pub mod trip_logic;
 
 lazy_static! {
     static ref CLOCK_AM_PM_REGEX: Regex =

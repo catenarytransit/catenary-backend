@@ -962,7 +962,6 @@ async fn main() -> std::io::Result<()> {
             .service(osm_station_preview::osm_station_preview)
             .service(openrailwaymap_proxy::openrailwaymap_proxy)
             .service(text_search::text_search_v1)
-            .service(nominatim_details)
             .service(routesofchateauwithagency)
             .service(routesofchateauwithagencyv2)
             .service(osm_stations)
@@ -1020,135 +1019,10 @@ struct QueryNominatimDetails {
     osm_class: Option<String>,
 }
 
-#[actix_web::get("nominatim_details")]
-pub async fn nominatim_details(
-    query: web::Query<QueryNominatimDetails>,
-
-    client: actix_web::web::Data<Arc<reqwest::Client>>,
-) -> impl Responder {
-    use query_string_builder::QueryString;
-
-    let query = query.into_inner();
-
-    let base_url = "https://nominatim1.catenarymaps.org/details";
-
-    let error_msg = r#"{"error":{"code":404,"message":"No place with that OSM ID found."}}"#;
-
-    let client = client.as_ref();
-
-    match &query.osm_type {
-        None => {
-            let n_attempt = QueryString::dynamic()
-                .with_value("osmtype", "N")
-                .with_value("osmid", &query.osm_id)
-                .with_opt_value("class", query.osm_class.as_ref());
-
-            let url_to_send_node = format!("{}{}", base_url, n_attempt);
-
-            let node_fetch = client.get(url_to_send_node).send().await;
-
-            match node_fetch {
-                Err(e) => HttpResponse::InternalServerError().body("Could not reach Nominatim"),
-                Ok(r) => {
-                    let text = r.text().await.unwrap();
-
-                    match text.as_str() == error_msg {
-                        false => {
-                            //not an error, send it back
-                            HttpResponse::Ok().body(text)
-                        }
-                        true => {
-                            let w_attempt = QueryString::dynamic()
-                                .with_value("osmtype", "W")
-                                .with_value("osmid", &query.osm_id)
-                                .with_opt_value("class", query.osm_class.as_ref());
-
-                            let url_to_send_node = format!("{}{}", base_url, w_attempt);
-
-                            let node_fetch = client.get(url_to_send_node).send().await;
-
-                            match node_fetch {
-                                Err(e) => HttpResponse::InternalServerError()
-                                    .body("Could not reach Nominatim"),
-                                Ok(r) => {
-                                    let text = r.text().await.unwrap();
-
-                                    match text.as_str() == error_msg {
-                                        false => {
-                                            //not an error, send it back
-                                            HttpResponse::Ok().body(text)
-                                        }
-                                        true => {
-                                            let r_attempt = QueryString::dynamic()
-                                                .with_value("osmtype", "R")
-                                                .with_value("osmid", &query.osm_id)
-                                                .with_opt_value("class", query.osm_class.as_ref());
-
-                                            let url_to_send_node =
-                                                format!("{}{}", base_url, r_attempt);
-
-                                            let node_fetch =
-                                                client.get(url_to_send_node).send().await;
-
-                                            match node_fetch {
-                                                Err(e) => HttpResponse::InternalServerError()
-                                                    .body("Could not reach Nominatim"),
-                                                Ok(r) => {
-                                                    let text = r.text().await.unwrap();
-
-                                                    match text.as_str() == error_msg {
-                                                        false => {
-                                                            //not an error, send it back
-                                                            HttpResponse::Ok().body(text)
-                                                        }
-                                                        true => {
-                                                            //Give up
-                                                            HttpResponse::NotFound().body(error_msg)
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Some(osm_type) => {
-            let attempt = QueryString::dynamic()
-                .with_value("osmtype", osm_type)
-                .with_value("osmid", query.osm_id)
-                .with_opt_value("class", query.osm_class);
-
-            let url_to_send_node = format!("{}{}", base_url, attempt);
-
-            let node_fetch = client.get(url_to_send_node).send().await;
-
-            match node_fetch {
-                Err(e) => HttpResponse::InternalServerError().body("Could not reach Nominatim"),
-                Ok(r) => {
-                    let text = r.text().await.unwrap();
-
-                    match text.as_str() == error_msg {
-                        false => {
-                            //not an error, send it back
-                            HttpResponse::Ok().body(text)
-                        }
-                        true => HttpResponse::NotFound().body(text),
-                    }
-                }
-            }
-        }
-    }
-}
-
 #[actix_web::get("/size_bbox_zoom")]
 pub async fn size_bbox_zoom_birch(
     query_bbox_zoom: web::Query<QueryBboxZoom>,
-    req: HttpRequest,
+    _req: HttpRequest,
 ) -> impl Responder {
     let bbox = slippy_map_tiles::BBox::new(
         query_bbox_zoom.t,
@@ -1174,7 +1048,7 @@ pub async fn size_bbox_zoom_birch(
 #[actix_web::get("/watchduty_tiles_proxy/{z}/{x}/{y}")]
 pub async fn proxy_for_watchduty_tiles(
     path: web::Path<(u8, u32, u32)>,
-    req: HttpRequest,
+    _req: HttpRequest,
 ) -> impl Responder {
     let (z, x, y) = path.into_inner();
 
