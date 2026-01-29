@@ -1,6 +1,7 @@
 use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, web};
 use actix_web_actors::ws;
 use std::sync::Arc;
+use chrono::Utc;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
@@ -26,6 +27,10 @@ async fn index(
         &req,
         stream
     )
+}
+
+async fn index_root() -> HttpResponse {
+    HttpResponse::Ok().body(format!("Hello World from Catenary Spruce! {}", Utc::now().to_rfc3339()))
 }
 
 #[actix_web::main]
@@ -64,6 +69,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(etcd_connection_options.clone()))
             .app_data(web::Data::new(aspen_client_manager.clone()))
             .route("/ws/", web::get().to(index))
+            .route("/", web::get().to(index_root))
     })
     .workers(worker_amount)
     .bind(("127.0.0.1", 52771))?
