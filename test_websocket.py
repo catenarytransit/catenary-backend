@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import json
 
-async def test_websocket(uri, chateau, trip_id):
+async def test_websocket(uri, chateau, trip_id, start_time=None, start_date=None, route_id=None):
     # Single endpoint 
     
     print(f"Connecting to {uri}...")
@@ -12,10 +12,18 @@ async def test_websocket(uri, chateau, trip_id):
 
             # Send Subscribe Message with chateau
             subscribe_msg = {
-                "type": "subscribe",
+                "type": "subscribe_trip",
                 "chateau": chateau,
                 "trip_id": trip_id,
             }
+            
+            if start_time:
+                subscribe_msg["start_time"] = start_time
+            if start_date:
+                subscribe_msg["start_date"] = start_date
+            if route_id:
+                subscribe_msg["route_id"] = route_id
+                
             await websocket.send(json.dumps(subscribe_msg))
             print(f"Sent: {subscribe_msg}")
 
