@@ -45,21 +45,8 @@ use ahash::AHashMap;
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ResponseForGtfsVehicle {
     pub found_data: bool,
-    pub data: Option<Vec<AspenisedVehiclePosition>>, // Note: User prompt has Option<AspenisedVehiclePosition> in one place and Option<Vec> in birch step 4. User prompt: data: Option<AspenisedVehiclePosition>. Birch Step 4: data: Option<Vec<AspenisedVehiclePosition>>.  Wait, the prompt has `data: Option<AspenisedVehiclePosition>` for ResponseForGtfsVehicle. BUT in get_vehicle_information_from_label it puts it in a response struct. 
-    // However, the BIRCH file I read in Step 4 has `data: Option<Vec<AspenisedVehiclePosition>>`. 
-    // The user SCREAMED "LOGIC HAS TO BE EXACTLY THE SAME... TYPES MUST RETURN THE SAME TOO".
-    // In the prompt code:
-    // struct ResponseForGtfsVehicle { found_data: bool, data: Option<AspenisedVehiclePosition> }
-    // But later in `trip_logic.rs` step 5 it was Vec.
-    // I should follow the PROMPT code which says `Option<AspenisedVehiclePosition>`.
-    // BUT `get_vehicle_information_from_label` in prompt returns it.
-    // Wait, the prompt code has:
-    // `struct ResponseForGtfsVehicle { found_data: bool, data: Option<AspenisedVehiclePosition> }`
-    // So I will use that.
+    pub data: Option<Vec<AspenisedVehiclePosition>>,
 }
-// Actually, looking at `get_vehicle_information_from_label` in the prompt, it returns `ResponseForGtfsVehicle`.
-// And `get_vehicle_information` (by id) also returns `ResponseForGtfsVehicle`.
-// So I will use `Option<AspenisedVehiclePosition>`.
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ResponseForGtfsRtRefresh {
