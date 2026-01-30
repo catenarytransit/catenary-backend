@@ -104,7 +104,6 @@ pub struct DepartureItem {
     pub scheduled_arrival: Option<u64>,
     pub realtime_arrival: Option<u64>,
     pub service_date: chrono::NaiveDate,
-    pub start_date: chrono::NaiveDate,
     pub headsign: String,
     pub platform: Option<String>,
     pub trip_id: String,
@@ -159,7 +158,7 @@ pub struct LocalDepartureItem {
     pub stop_name: Option<String>,
     pub cancelled: bool,
     pub platform: Option<String>,
-    pub start_date: chrono::NaiveDate,
+    pub service_date: chrono::NaiveDate,
     pub last_stop: bool,
 }
 
@@ -1285,7 +1284,6 @@ async fn fetch_chateau_data(
                             ),
                             realtime_arrival: rt_arr,
                             service_date: *date,
-                            start_date: *date,
                             headsign: headsign,
                             platform: display_platform.clone(),
                             trip_id: trip_id.to_string(),
@@ -1327,7 +1325,7 @@ async fn fetch_chateau_data(
                             stop_name: stop_name_map.get(row.stop_id.as_str()).cloned().flatten(),
                             cancelled: is_cancelled,
                             platform: display_platform,
-                            start_date: *date,
+                            service_date: *date,
                             last_stop: is_last_stop,
                         };
 
