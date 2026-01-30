@@ -1,8 +1,8 @@
 use crate::map_coordinator::{
-    AspenisedVehiclePositionOutput, BulkFetchCoordinator, BulkFetchParamsV3, BulkFetchResponseV2,
-    CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2, EachChateauResponseV2,
-    PositionDataCategoryV2, Subscribe, Unsubscribe, category_to_allowed_route_ids,
-    convert_to_output, BoundsInputV3,
+    AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinator, BulkFetchParamsV3,
+    BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
+    EachChateauResponseV2, PositionDataCategoryV2, Subscribe, Unsubscribe,
+    category_to_allowed_route_ids, convert_to_output,
 };
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -242,15 +242,15 @@ impl TripWebSocket {
             // If time mismatch, we have a new feed.
             // If time match, we might have a viewport change (Delta).
             let is_new_feed = response.last_updated_time_ms != last_sent_time;
-            
+
             // Logic:
             // 1. If is_new_feed: Send ALL vehicles in current bounds. replaces_all = true.
-            // 2. If !is_new_feed: 
+            // 2. If !is_new_feed:
             //    Check delta between current params.bounds and last_sent_bounds.
             //    Send ONLY vehicles in (current - last). replaces_all = false.
-            
+
             // Note: If !is_new_feed and last_sent_bounds == current_bounds, we send nothing.
-            
+
             let mut has_any_updates = false;
 
             for category in &categories_requested {
@@ -262,7 +262,9 @@ impl TripWebSocket {
                 };
 
                 // If this specific category was not sent last time, we must send full state for it
-                let category_is_new = last_sent_categories.as_ref().map_or(true, |c| !c.contains(category_str));
+                let category_is_new = last_sent_categories
+                    .as_ref()
+                    .map_or(true, |c| !c.contains(category_str));
 
                 let zoom = match category {
                     CategoryOfRealtimeVehicleData::Metro => 8,
@@ -279,27 +281,29 @@ impl TripWebSocket {
                 };
 
                 let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match category {
-                     CategoryOfRealtimeVehicleData::Metro => &b.level8,
-                     CategoryOfRealtimeVehicleData::Rail => &b.level7,
-                     CategoryOfRealtimeVehicleData::Bus => &b.level12,
-                     CategoryOfRealtimeVehicleData::Other => &b.level5,
+                    CategoryOfRealtimeVehicleData::Metro => &b.level8,
+                    CategoryOfRealtimeVehicleData::Rail => &b.level7,
+                    CategoryOfRealtimeVehicleData::Bus => &b.level12,
+                    CategoryOfRealtimeVehicleData::Other => &b.level5,
                 });
-                
+
                 // Determine if we need to send anything for this category
                 let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
-                
+
                 // If not replacing all, check if bounds changed
                 let bounds_changed = if let Some(pb) = prev_bounds_for_level {
-                     pb.min_x != bounds.min_x || pb.max_x != bounds.max_x || 
-                     pb.min_y != bounds.min_y || pb.max_y != bounds.max_y
+                    pb.min_x != bounds.min_x
+                        || pb.max_x != bounds.max_x
+                        || pb.min_y != bounds.min_y
+                        || pb.max_y != bounds.max_y
                 } else {
-                     true 
+                    true
                 };
 
                 if !replace_all && !bounds_changed {
-                    continue; 
+                    continue;
                 }
-                
+
                 has_any_updates = true;
 
                 let route_types_allowed = category_to_allowed_route_ids(category);
@@ -361,7 +365,7 @@ impl TripWebSocket {
                                         && x <= bounds.max_x
                                         && y >= bounds.min_y
                                         && y <= bounds.max_y;
-                                        
+
                                     // Check if it was in previous bounds
                                     let in_prev_bounds = x >= prev_bounds.min_x
                                         && x <= prev_bounds.max_x
@@ -410,15 +414,13 @@ impl TripWebSocket {
 
                 match category {
                     CategoryOfRealtimeVehicleData::Metro => {
-                        each_chateau_response.categories.as_mut().unwrap().metro =
-                            Some(payload);
+                        each_chateau_response.categories.as_mut().unwrap().metro = Some(payload);
                     }
                     CategoryOfRealtimeVehicleData::Rail => {
                         each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
                     }
                     CategoryOfRealtimeVehicleData::Other => {
-                        each_chateau_response.categories.as_mut().unwrap().other =
-                            Some(payload);
+                        each_chateau_response.categories.as_mut().unwrap().other = Some(payload);
                     }
                     CategoryOfRealtimeVehicleData::Bus => {
                         each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
@@ -427,7 +429,7 @@ impl TripWebSocket {
             } // for category
 
             if has_any_updates {
-                 let mut bulk_fetch_response = BulkFetchResponseV2 {
+                let mut bulk_fetch_response = BulkFetchResponseV2 {
                     chateaus: BTreeMap::new(),
                 };
                 bulk_fetch_response
@@ -438,10 +440,17 @@ impl TripWebSocket {
                 if let Ok(text) = serde_json::to_string(&msg) {
                     ctx.text(text);
                 }
-                
+
                 // Update state
                 let categories_sent: HashSet<String> = params.categories.iter().cloned().collect();
-                self.sent_state.insert(chateau_id.clone(), (response.last_updated_time_ms, params.bounds_input.clone(), categories_sent));
+                self.sent_state.insert(
+                    chateau_id.clone(),
+                    (
+                        response.last_updated_time_ms,
+                        params.bounds_input.clone(),
+                        categories_sent,
+                    ),
+                );
             }
         }
     }

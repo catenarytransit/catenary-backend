@@ -163,6 +163,7 @@ pub struct LocalDepartureItem {
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
+#[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(lat = ?query.lat, lon = ?query.lon))]
 pub async fn nearby_from_coords_v3(
     req: HttpRequest,
     query: Query<NearbyFromCoordsV3>,

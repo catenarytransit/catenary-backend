@@ -780,8 +780,9 @@ async fn ip_addr_to_geo_api(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // std::env::set_var("RUST_LOG", "debug");
-    // env_logger::init();
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     // Connect to the database.
     let pool = Arc::new(make_async_pool().await.unwrap());

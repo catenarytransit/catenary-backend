@@ -141,6 +141,7 @@ struct DeparturesAtOsmStationResponse {
 }
 
 #[actix_web::get("/departures_at_osm_station")]
+#[tracing::instrument(name = "departures_at_osm_station", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(osm_id = ?query.osm_station_id))]
 pub async fn departures_at_osm_station(
     req: HttpRequest,
     query: Query<DeparturesAtOsmStationQuery>,
