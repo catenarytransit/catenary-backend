@@ -59,20 +59,8 @@ pub enum ServerMessage {
     UpdateTrip { data: GtfsRtRefreshData },
     #[serde(rename = "error")]
     Error { message: String },
-    // Map response is usually just the BulkFetchResponseV2 JSON, but we can wrap it if consistent with ws
-    // However, existing backend sends raw JSON for map? No, this is new WebSocket territory.
-    // Let's stick to the convention if possible.
-    // But the user requested "identical response" to the HTTP version.
-    // The HTTP version returns BulkFetchResponseV2 directly.
-    // If we wrap it in `type: update_map_response`, we change the shape.
-    // BUT we are in a WebSocket multiplexing different things.
-    // If I send bare BulkFetchResponseV2, the client has to detect it.
-    // Let's assume the client can handle a new message type "map_update".
     #[serde(rename = "map_update")]
-    MapUpdate(BulkFetchResponseV2), // Tuple variant to embed the response directly? Or named?
-                                    // If I use untagged enum or custom serialization I could make it look exactly like HTTP body?
-                                    // But then how to distinguish from other messages?
-                                    // Let's explicitly use a type tag for consistency within THIS socket.
+    MapUpdate(BulkFetchResponseV2),
 }
 
 pub struct TripWebSocket {
