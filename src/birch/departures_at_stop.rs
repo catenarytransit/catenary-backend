@@ -349,8 +349,22 @@ pub async fn departures_at_stop(
         let chateau_id = chateau_id_to_search.clone();
         let stop_ids = stop_id_to_search.clone();
 
+        let lookback_days = match chateau_id.as_str() {
+             "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
+             _ => 14,
+        };
+
+        let start_date_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0)
+            .unwrap_or_default()
+            .date_naive()
+            - chrono::Duration::days(lookback_days);
+        let end_date_utc = chrono::DateTime::from_timestamp(less_than_time as i64, 0)
+            .unwrap_or_default()
+            .date_naive()
+            + chrono::Duration::days(1);
+
         futures.push(async move {
-            fetch_stop_data_for_chateau(pool, chateau_id, stop_ids, include_shapes).await
+            fetch_stop_data_for_chateau(pool, chateau_id, stop_ids, include_shapes, Some((start_date_utc, end_date_utc))).await
         });
     }
 

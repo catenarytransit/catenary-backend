@@ -356,8 +356,19 @@ pub async fn departures_at_osm_station(
         let stop_ids: Vec<String> = stop_ids_to_search.iter().cloned().collect();
         let include_shapes = include_shapes;
 
+        let lookback_days = match chateau_id.as_str() {
+             "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
+             _ => 14,
+        };
+
+        let check_start_date = greater_than_date_time.date_naive() - chrono::Duration::days(lookback_days);
+        let check_end_date = (greater_than_date_time + req_lookahead)
+            .date_naive()
+            .succ_opt()
+            .unwrap();
+
         futures.push(async move {
-            fetch_stop_data_for_chateau(pool, chateau_id, stop_ids, include_shapes).await
+            fetch_stop_data_for_chateau(pool, chateau_id, stop_ids, include_shapes, Some((check_start_date, check_end_date))).await
         });
     }
 

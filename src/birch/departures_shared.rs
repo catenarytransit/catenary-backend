@@ -4,10 +4,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::NaiveDate;
 use chrono::TimeZone;
 use compact_str::CompactString;
-use diesel::ExpressionMethods;
-use diesel::SelectableHelper;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::methods::SelectDsl;
+use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 use futures::StreamExt;
@@ -38,6 +35,7 @@ pub async fn fetch_stop_data_for_chateau(
     chateau_id: String,
     stop_ids: Vec<String>,
     include_shapes: bool,
+    date_filter: Option<(NaiveDate, NaiveDate)>,
 ) -> StopDataResult {
     let mut conn = pool.get().await.unwrap();
     let global_start = std::time::Instant::now();
@@ -281,24 +279,126 @@ pub async fn fetch_stop_data_for_chateau(
 
         let t_section = std::time::Instant::now();
 
+        // New Logic: If date_filter is present, we first fetch distinct service_ids
+        let mut active_service_ids_opt: Option<BTreeSet<CompactString>> = None;
+        let mut service_ids_to_search: BTreeSet<CompactString> = BTreeSet::new();
+
+        if let Some((start_date, end_date)) = date_filter {
+            let mut conn_lite = pool_for_schedule.get().await.unwrap();
+
+            // 1. Fetch ALL service IDs for these itinerary patterns (lightweight query)
+            let service_ids: Vec<CompactString> =
+                catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                    .filter(
+                        catenary::schema::gtfs::trips_compressed::chateau
+                            .eq(chateau_id_clone2.clone()),
+                    )
+                    .filter(
+                        catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                            .eq_any(&itinerary_list_clone),
+                    )
+                    .select(catenary::schema::gtfs::trips_compressed::service_id)
+                    .distinct()
+                    .load::<CompactString>(&mut conn_lite)
+                    .await
+                    .unwrap_or_default();
+            
+            println!(
+                "PERF: service_id fetch (distinct) took {}ms. Count: {}",
+                t_section.elapsed().as_millis(),
+                service_ids.len()
+            );
+
+            // 2. Fetch Calendar / Calendar Dates for these specific service IDs
+            let mut conn_cal = pool_for_schedule.get().await.unwrap();
+            let calendar = catenary::schema::gtfs::calendar::dsl::calendar
+                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_clone2.clone()))
+                .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids))
+                .select(catenary::models::Calendar::as_select())
+                .load::<catenary::models::Calendar>(&mut conn_cal)
+                .await
+                .unwrap_or_default();
+
+            let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids),
+                )
+                .select(catenary::models::CalendarDate::as_select())
+                .load::<catenary::models::CalendarDate>(&mut conn_cal)
+                .await
+                .unwrap_or_default();
+
+            // 3. Determine Active Services
+            let unified_cal =
+                catenary::make_calendar_structure_from_pg(vec![calendar.clone()], vec![calendar_dates.clone()])
+                    .unwrap_or_default();
+            
+            let mut active_services = BTreeSet::new();
+            if let Some(cal_map) = unified_cal.get(&chateau_id_clone2) {
+                for service_id in &service_ids {
+                   if let Some(service) = cal_map.get(service_id.as_str()) {
+                       let mut is_active = false;
+                       let mut d = start_date;
+                       while d <= end_date {
+                           if catenary::datetime_in_service(service, d) {
+                               is_active = true;
+                               break;
+                           }
+                           d = d.succ_opt().unwrap();
+                       }
+                       if is_active {
+                           active_services.insert(service_id.clone());
+                       }
+                   }
+                }
+            } 
+            
+            println!(
+                 "PERF: Active Services Calculation took {}ms. Active: {} / {}", 
+                 t_section.elapsed().as_millis(), 
+                 active_services.len(), 
+                 service_ids.len()
+            );
+
+            active_service_ids_opt = Some(active_services);
+        }
+
+        // --- Fetch Trips ---
         let trips = if use_parallel_fetching {
             let chunks: Vec<Vec<String>> = itinerary_list_clone
                 .chunks(chunk_size)
                 .map(|chunk| chunk.to_vec())
                 .collect();
+            
+            let active_services_arc = active_service_ids_opt.as_ref().map(|s| Arc::new(s.clone()));
 
             let futures_trips = chunks.into_iter().map(|chunk| {
                 let pool = pool_for_schedule.clone();
                 let chateau = chateau_id_clone2.clone();
+                let active_services = active_services_arc.clone();
+                
                 async move {
                     let mut conn = pool.get().await.unwrap();
-                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                    let mut query = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .into_boxed()
                         .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau))
                         .filter(
                             catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
                                 .eq_any(chunk),
                         )
-                        .select(catenary::models::CompressedTrip::as_select())
+                        .select(catenary::models::CompressedTrip::as_select());
+                    
+                    if let Some(services) = &active_services {
+                         let services_vec: Vec<CompactString> = services.iter().cloned().collect();
+                         query = query.filter(
+                             catenary::schema::gtfs::trips_compressed::service_id.eq_any(services_vec)
+                         );
+                    }
+
+                    query  
                         .load::<catenary::models::CompressedTrip>(&mut conn)
                         .await
                         .unwrap_or_default()
@@ -307,14 +407,15 @@ pub async fn fetch_stop_data_for_chateau(
 
             let results: Vec<Vec<catenary::models::CompressedTrip>> =
                 futures::stream::iter(futures_trips)
-                    .buffer_unordered(10) // Allow up to 10 concurrent connections
+                    .buffer_unordered(10)
                     .collect()
                     .await;
 
             results.into_iter().flatten().collect::<Vec<_>>()
         } else {
             let mut conn2 = pool_for_schedule.get().await.unwrap();
-            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            let mut query = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                .into_boxed()
                 .filter(
                     catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id_clone2.clone()),
                 )
@@ -322,28 +423,33 @@ pub async fn fetch_stop_data_for_chateau(
                     catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
                         .eq_any(&itinerary_list_clone),
                 )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load::<catenary::models::CompressedTrip>(&mut conn2)
+                .select(catenary::models::CompressedTrip::as_select());
+            
+             if let Some(services) = &active_service_ids_opt {
+                 query = query.filter(
+                     catenary::schema::gtfs::trips_compressed::service_id.eq_any(services)
+                 );
+             }
+                
+             query.load::<catenary::models::CompressedTrip>(&mut conn2)
                 .await
                 .unwrap_or_default()
         };
         println!(
-            "PERF: trips_compressed fetch took {}ms",
-            t_section.elapsed().as_millis()
+            "PERF: trips_compressed fetch took {}ms. Count: {}",
+            t_section.elapsed().as_millis(), trips.len()
         );
         let t_section = std::time::Instant::now();
 
-        let mut conn_calendar = pool_for_schedule.get().await.unwrap();
-
         let mut trip_compressed_btreemap =
             BTreeMap::<String, catenary::models::CompressedTrip>::new();
-        let mut service_ids_to_search: BTreeSet<CompactString> = BTreeSet::new();
 
         for trip in &trips {
             trip_compressed_btreemap.insert(trip.trip_id.clone(), trip.clone());
             service_ids_to_search.insert(trip.service_id.clone());
         }
-
+        
+        let mut conn_calendar = pool_for_schedule.get().await.unwrap();
         let calendar = catenary::schema::gtfs::calendar::dsl::calendar
             .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_clone2.clone()))
             .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_to_search))
