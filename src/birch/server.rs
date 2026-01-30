@@ -62,7 +62,6 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use opentelemetry::trace::TracerProvider as _;
-use opentelemetry_sdk::trace::SdkTracerProvider;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
@@ -787,17 +786,11 @@ async fn ip_addr_to_geo_api(
 async fn main() -> std::io::Result<()> {
     // 1. Configure the OTLP Exporter
     // 1. Configure the OTLP Exporter
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .build()
-        .unwrap();
-
-    let provider = SdkTracerProvider::builder()
-        .with_batch_exporter(exporter)
-        .build();
-
-    let tracer = provider.tracer("catenary-backend");
-
+    // 1. Configure the Datadog Tracer
+    let tracer_provider = datadog_opentelemetry::tracing().init();
+    
+    let tracer = tracer_provider.tracer("birch");
+    
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // 2. Configure the Format Layer (Logs)
