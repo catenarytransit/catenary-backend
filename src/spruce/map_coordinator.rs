@@ -1,0 +1,361 @@
+
+use ahash::AHashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use catenary::aspen_dataset::AspenisedVehicleDescriptor;
+use catenary::aspen_dataset::CatenaryRtVehiclePosition;
+use catenary::aspen_dataset::{AspenisedVehiclePosition, AspenisedVehicleRouteCache}; 
+use actix::prelude::*;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::{GetVehicleLocationsResponse, ChateauMetadataEtcd};
+use tarpc::context;
+use catenary::bincode_deserialize;
+
+#[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Clone, Copy)]
+pub enum CategoryOfRealtimeVehicleData {
+    Metro,
+    Bus,
+    Rail,
+    Other,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Hash)]
+pub struct AspenisedVehicleTripInfoOutput {
+    pub trip_id: Option<String>,
+    pub trip_headsign: Option<String>,
+    pub route_id: Option<String>,
+    pub trip_short_name: Option<String>,
+    pub direction_id: Option<u32>,
+    pub start_time: Option<String>,
+    pub start_date: Option<String>,
+    pub schedule_relationship: Option<u8>,
+    pub delay: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AspenisedVehiclePositionOutput {
+    pub trip: Option<AspenisedVehicleTripInfoOutput>,
+    pub vehicle: Option<AspenisedVehicleDescriptor>,
+    pub position: Option<CatenaryRtVehiclePosition>,
+    pub timestamp: Option<u64>,
+    pub route_type: i16,
+    pub current_stop_sequence: Option<u32>,
+    pub current_status: Option<i32>,
+    pub congestion_level: Option<i32>,
+    pub occupancy_status: Option<i32>,
+    pub occupancy_percentage: Option<u32>,
+}
+
+pub fn convert_to_output(input: &AspenisedVehiclePosition) -> AspenisedVehiclePositionOutput {
+    let trip_new = match &input.trip {
+        Some(trip) => Some(AspenisedVehicleTripInfoOutput {
+            trip_id: trip.trip_id.clone(),
+            trip_headsign: trip.trip_headsign.clone(),
+            route_id: trip.route_id.clone(),
+            trip_short_name: trip.trip_short_name.clone(),
+            direction_id: trip.direction_id,
+            start_time: trip.start_time.clone(),
+            start_date: trip.start_date.map(|x| x.format("%Y%m%d").to_string()),
+            schedule_relationship: trip.schedule_relationship.as_ref().map(|x| x.into()),
+            delay: trip.delay,
+        }),
+        None => None,
+    };
+
+    AspenisedVehiclePositionOutput {
+        trip: trip_new,
+        vehicle: input.vehicle.clone(),
+        position: input.position.clone(),
+        timestamp: input.timestamp,
+        route_type: input.route_type,
+        current_stop_sequence: input.current_stop_sequence,
+        current_status: input.current_status,
+        congestion_level: input.congestion_level,
+        occupancy_status: input.occupancy_status,
+        occupancy_percentage: input.occupancy_percentage,
+    }
+}
+
+pub fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -> Vec<i16> {
+    match category {
+        CategoryOfRealtimeVehicleData::Metro => vec![0, 1, 5, 7, 12],
+        CategoryOfRealtimeVehicleData::Bus => vec![3, 11],
+        CategoryOfRealtimeVehicleData::Rail => vec![2],
+        CategoryOfRealtimeVehicleData::Other => vec![4, 6],
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChateauAskParamsV2 {
+    pub category_params: CategoryAskParamsV2,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct CategoryAskParamsV2 {
+    pub bus: Option<SubCategoryAskParamsV2>,
+    pub metro: Option<SubCategoryAskParamsV2>,
+    pub rail: Option<SubCategoryAskParamsV2>,
+    pub other: Option<SubCategoryAskParamsV2>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SubCategoryAskParamsV2 {
+    pub last_updated_time_ms: u64,
+    pub prev_user_min_x: Option<u32>,
+    pub prev_user_max_x: Option<u32>,
+    pub prev_user_min_y: Option<u32>,
+    pub prev_user_max_y: Option<u32>,
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BoundsInputV3 {
+    pub level5: BoundsInputPerLevel,
+    pub level7: BoundsInputPerLevel,
+    pub level8: BoundsInputPerLevel,
+    pub level12: BoundsInputPerLevel,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BoundsInputPerLevel {
+    pub min_x: u32,
+    pub max_x: u32,
+    pub min_y: u32,
+    pub max_y: u32,
+}
+
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct BulkFetchParamsV3 {
+    pub chateaus: BTreeMap<String, ChateauAskParamsV2>,
+    pub categories: Vec<String>,
+    pub bounds_input: BoundsInputV3,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct BulkFetchResponseV2 {
+    pub chateaus: BTreeMap<String, EachChateauResponseV2>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EachChateauResponseV2 {
+    pub categories: Option<PositionDataCategoryV2>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub struct PositionDataCategoryV2 {
+    pub metro: Option<EachCategoryPayloadV2>,
+    pub bus: Option<EachCategoryPayloadV2>,
+    pub rail: Option<EachCategoryPayloadV2>,
+    pub other: Option<EachCategoryPayloadV2>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EachCategoryPayloadV2 {
+     pub vehicle_positions:
+        Option<BTreeMap<u32, BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>>>,
+    pub last_updated_time_ms: u64,
+    pub replaces_all: bool,
+    pub z_level: u8,
+    pub list_of_agency_ids: Option<Vec<String>>,
+}
+
+// Messages
+
+#[derive(Message, Clone)]
+#[rtype(result = "()")]
+pub struct ChateauUpdate {
+    pub chateau_id: String,
+    pub response: Arc<GetVehicleLocationsResponse>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Subscribe {
+    pub chateau_id: String,
+    pub recipient: Recipient<ChateauUpdate>,
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+pub struct Unsubscribe {
+    pub chateau_id: String,
+    pub recipient: Recipient<ChateauUpdate>,
+}
+
+// Coordinator Actor
+
+pub struct BulkFetchCoordinator {
+    subscribers: HashMap<String, HashSet<Recipient<ChateauUpdate>>>,
+    // chateau_id -> (last_response, last_success_time)
+    cache: HashMap<String, (Arc<GetVehicleLocationsResponse>, Instant)>,
+    etcd_connection_ips: Arc<EtcdConnectionIps>,
+    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_client_manager: Arc<AspenClientManager>,
+    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+}
+
+impl BulkFetchCoordinator {
+    pub fn new(
+        etcd_connection_ips: Arc<EtcdConnectionIps>,
+        etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+        aspen_client_manager: Arc<AspenClientManager>,
+        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+    ) -> Self {
+        Self {
+            subscribers: HashMap::new(),
+            cache: HashMap::new(),
+            etcd_connection_ips,
+            etcd_connection_options,
+            aspen_client_manager,
+            etcd_reuser,
+        }
+    }
+
+    fn fetch_cycle(&mut self, ctx: &mut Context<Self>) {
+        if self.subscribers.is_empty() {
+             return;
+        }
+
+        let chateaus_to_fetch: Vec<String> = self.subscribers.keys().cloned().collect();
+        let etcd_reuser = self.etcd_reuser.clone();
+        let etcd_ips = self.etcd_connection_ips.clone();
+        let etcd_opts = self.etcd_connection_options.clone();
+        let aspen_manager = self.aspen_client_manager.clone();
+        
+        let fut = async move {
+            let mut etcd = None;
+            {
+                let etcd_reuser_contents = etcd_reuser.read().await;
+                let mut client_is_healthy = false;
+                if let Some(client) = etcd_reuser_contents.as_ref() {
+                    let mut client = client.clone();
+                    if client.status().await.is_ok() {
+                        etcd = Some(client.clone());
+                        client_is_healthy = true;
+                    }
+                }
+
+                if !client_is_healthy {
+                    drop(etcd_reuser_contents);
+                    if let Ok(new_client) = etcd_client::Client::connect(
+                        etcd_ips.ip_addresses.as_slice(),
+                        etcd_opts.as_ref().clone(),
+                    )
+                    .await {
+                        etcd = Some(new_client.clone());
+                        let mut etcd_reuser_write_lock = etcd_reuser.write().await;
+                        *etcd_reuser_write_lock = Some(new_client);
+                    }
+                }
+            }
+
+            if etcd.is_none() {
+                return Vec::new();
+            }
+            let mut etcd = etcd.unwrap();
+
+            let mut results = Vec::new();
+
+            for chateau_id in chateaus_to_fetch {
+                 let fetch_assigned_node = etcd
+                    .get(
+                        format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+                        None,
+                    )
+                    .await;
+                
+                if let Ok(resp) = fetch_assigned_node {
+                     if !resp.kvs().is_empty() {
+                         if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
+                                resp.kvs().first().unwrap().value()
+                         ) {
+                     if let Some(aspen_client) = aspen_manager.get_client(assigned_chateau_data.socket).await {
+                                  // Fetching a superset of route types to cover all categories (Metro, Bus, Rail, Other)
+                                  let route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12]; 
+
+                                  let response = aspen_client.get_vehicle_locations(
+                                      context::current(),
+                                      chateau_id.clone(),
+                                      None,
+                                      Some(route_types)
+                                  ).await;
+                                  
+                                  if let Ok(Some(data)) = response {
+                                      results.push((chateau_id, data));
+                                  }
+                             }
+                         }
+                     }
+                }
+            }
+            results
+        };
+
+        ctx.spawn(actix::fut::wrap_future(fut).map(|results, actor: &mut BulkFetchCoordinator, _| {
+             for (chateau_id, data) in results {
+                 let data_arc = Arc::new(data);
+                 
+                 let is_new = if let Some((old_data, _)) = actor.cache.get(&chateau_id) {
+                     old_data.last_updated_time_ms != data_arc.last_updated_time_ms
+                 } else {
+                     true
+                 };
+
+                 if is_new {
+                     actor.cache.insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
+                     if let Some(subs) = actor.subscribers.get(&chateau_id) {
+                         for recipient in subs {
+                             recipient.do_send(ChateauUpdate {
+                                 chateau_id: chateau_id.clone(),
+                                 response: data_arc.clone(),
+                             });
+                         }
+                     }
+                 }
+             }
+        }));
+    }
+}
+
+impl Actor for BulkFetchCoordinator {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.run_interval(Duration::from_millis(1000), |act, ctx| {
+            act.fetch_cycle(ctx);
+        });
+    }
+}
+
+impl Handler<Subscribe> for BulkFetchCoordinator {
+    type Result = ();
+
+    fn handle(&mut self, msg: Subscribe, _: &mut Self::Context) {
+        let subs = self.subscribers.entry(msg.chateau_id.clone()).or_default();
+        subs.insert(msg.recipient.clone());
+
+        if let Some((data, _)) = self.cache.get(&msg.chateau_id) {
+            msg.recipient.do_send(ChateauUpdate {
+                chateau_id: msg.chateau_id,
+                response: data.clone(),
+            });
+        }
+    }
+}
+
+impl Handler<Unsubscribe> for BulkFetchCoordinator {
+    type Result = ();
+
+    fn handle(&mut self, msg: Unsubscribe, _: &mut Self::Context) {
+        if let Some(subs) = self.subscribers.get_mut(&msg.chateau_id) {
+            subs.remove(&msg.recipient);
+            if subs.is_empty() {
+                self.subscribers.remove(&msg.chateau_id);
+            }
+        }
+    }
+}
