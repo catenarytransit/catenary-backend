@@ -357,7 +357,8 @@ pub async fn departures_at_osm_station(
         let include_shapes = include_shapes;
 
         let lookback_days = match chateau_id.as_str() {
-             "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
+             "sncb" | "schweiz" | "sncf" | "deutschland" | "nederlandse~spoorwegen" | "nationalrailuk" => 2,
+             "île~de~france~mobilités" => 2,
              _ => 14,
         };
 
