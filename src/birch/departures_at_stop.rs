@@ -351,6 +351,7 @@ pub async fn departures_at_stop(
 
         let lookback_days = match chateau_id.as_str() {
              "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
+             "île~de~france~mobilités" => 2,
              _ => 14,
         };
 
