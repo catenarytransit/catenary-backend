@@ -780,8 +780,25 @@ async fn ip_addr_to_geo_api(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    // 1. Configure the OTLP Exporter
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()?;
+
+    let tracer = opentelemetry_sdk::trace::Tracer::builder()
+        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+        .build();
+
+    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    // 2. Configure the Format Layer (Logs)
+    let fmt_layer = tracing_subscriber::fmt::layer().with_target(false);
+
+    // 3. Register everything
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(fmt_layer)
+        .with(telemetry_layer)
         .init();
 
     // Connect to the database.
