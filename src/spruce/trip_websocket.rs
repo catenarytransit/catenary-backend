@@ -8,6 +8,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -25,7 +26,13 @@ pub enum ClientMessage {
         params: QueryTripInformationParams,
     },
     #[serde(rename = "unsubscribe_trip")]
-    UnsubscribeTrip,
+    UnsubscribeTrip {
+        chateau: String,
+        #[serde(flatten)]
+        params: QueryTripInformationParams,
+    },
+    #[serde(rename = "unsubscribe_all_trips")]
+    UnsubscribeAllTrips,
 }
 
 #[derive(Serialize)]
@@ -40,14 +47,12 @@ pub enum ServerMessage {
 }
 
 pub struct TripWebSocket {
-    pub chateau: Option<String>,
     pub pool: Arc<CatenaryPostgresPool>,
     pub etcd_connection_ips: Arc<EtcdConnectionIps>,
     pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub aspen_client_manager: Arc<AspenClientManager>,
-    pub subscription: Option<QueryTripInformationParams>,
+    pub subscriptions: HashMap<(String, QueryTripInformationParams), Option<u64>>,
     pub hb: Instant,
-    pub last_update_timestamp: Option<u64>,
 }
 
 impl TripWebSocket {
@@ -58,14 +63,12 @@ impl TripWebSocket {
         aspen_client_manager: Arc<AspenClientManager>,
     ) -> Self {
         Self {
-            chateau: None,
             pool,
             etcd_connection_ips,
             etcd_connection_options,
             aspen_client_manager,
-            subscription: None,
+            subscriptions: HashMap::new(),
             hb: Instant::now(),
-            last_update_timestamp: None,
         }
     }
 
@@ -81,51 +84,55 @@ impl TripWebSocket {
 
     fn start_periodic_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.run_interval(UPDATE_INTERVAL, |act, ctx| {
-            if let Some(params) = &act.subscription {
-                if let Some(chateau) = &act.chateau {
-                    let fs = fetch_trip_rt_update(
-                        chateau.clone(),
-                        params.clone(),
-                        act.etcd_connection_ips.clone(),
-                        act.etcd_connection_options.clone(),
-                        act.aspen_client_manager.clone(),
-                    );
-                    
-                    let fut = async move {
-                        fs.await
-                    };
+            for ((chateau, params), _) in act.subscriptions.iter_mut() {
+                let fs = fetch_trip_rt_update(
+                    chateau.clone(),
+                    params.clone(),
+                    act.etcd_connection_ips.clone(),
+                    act.etcd_connection_options.clone(),
+                    act.aspen_client_manager.clone(),
+                );
+                
+                let params_clone = params.clone();
+                let chateau_clone = chateau.clone();
 
-                    let fut = actix::fut::wrap_future(fut)
-                        .map(|result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
-                            match result {
-                                Ok(response) => {
-                                    if response.found_data {
-                                        if let Some(data) = response.data {
-                                             if let Some(ts) = data.timestamp {
-                                                 if let Some(last) = act.last_update_timestamp {
-                                                     if last == ts {
-                                                         return;
-                                                     }
-                                                 }
-                                                 act.last_update_timestamp = Some(ts);
+                let fut = async move {
+                    fs.await
+                };
+
+                let fut = actix::fut::wrap_future(fut)
+                    .map(move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                        match result {
+                            Ok(response) => {
+                                if response.found_data {
+                                    if let Some(data) = response.data {
+                                         if let Some(ts) = data.timestamp {
+                                             let key = (chateau_clone.clone(), params_clone.clone());
+                                             if let Some(current_last_update) = act.subscriptions.get_mut(&key) {
+                                                  if let Some(last) = current_last_update {
+                                                      if *last == ts {
+                                                          return;
+                                                      }
+                                                  }
+                                                  *current_last_update = Some(ts);
                                              }
-                                             
-                                             let msg = ServerMessage::UpdateTrip { data };
-                                             let text = serde_json::to_string(&msg).unwrap();
-                                             ctx.text(text);
-                                        }
+                                         }
+                                         
+                                         let msg = ServerMessage::UpdateTrip { data };
+                                         let text = serde_json::to_string(&msg).unwrap();
+                                         ctx.text(text);
                                     }
                                 }
-                                Err(e) => {
-                                    // Optionally send error or log it. 
-                                    // Sending repeated errors might be noisy.
-                                    // eprintln!("Error fetching update: {}", e);
-                                }
                             }
-                        });
-                    
-                    ctx.spawn(fut);
-                }
+                            Err(e) => {
+                                // Optionally send error or log it. 
+                                // Sending repeated errors might be noisy.
+                                // eprintln!("Error fetching update: {}", e);
+                            }
+                        }
+                    });
+                
+                ctx.spawn(fut);
             }
         });
     }
@@ -153,14 +160,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
                 match msg {
-                    Ok(ClientMessage::UnsubscribeTrip) => {
-                        self.chateau = None;
-                        self.subscription = None;
-                        self.last_update_timestamp = None;
+                    Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
+                        self.subscriptions.remove(&(chateau, params));
+                    }
+                    Ok(ClientMessage::UnsubscribeAllTrips) => {
+                        self.subscriptions.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
-                        self.chateau = Some(chateau.clone());
-                        self.subscription = Some(params.clone());
+                        self.subscriptions.insert((chateau.clone(), params.clone()), None);
                         
                         // Fetch initial data immediately
                         let fs = fetch_trip_information(
@@ -201,7 +208,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                 }
             }
             Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            Ok(ws::Message::Close(reason)) => {
+            Ok(ws::Message::Close(_reason)) => {
                 ctx.stop();
             }
             _ => (),

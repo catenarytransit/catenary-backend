@@ -58,6 +58,8 @@ pub struct ResponseForGtfsRtRefresh {
 pub struct GtfsRtRefreshData {
     pub stoptimes: Vec<StopTimeRefresh>,
     pub timestamp: Option<u64>,
+    pub trip_id: Option<String>,
+    pub chateau: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -103,6 +105,8 @@ pub struct TripIntroductionInformation {
     pub deleted: bool,
     pub connecting_routes: Option<BTreeMap<String, BTreeMap<String, crate::models::Route>>>, // chateau -> route_id -> Route
     pub connections_per_stop: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>, // stop_id -> chateau -> route_ids
+    pub trip_id: Option<String>,
+    pub chateau: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -128,7 +132,7 @@ pub struct StopTimeIntroduction {
     pub osm_station_id: Option<i64>,
 }
 
-#[derive(Deserialize, Serialize, Clone, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct QueryTripInformationParams {
     pub trip_id: String,
     pub start_time: Option<String>,
@@ -426,6 +430,8 @@ pub async fn fetch_trip_rt_update(
                                         data: Some(GtfsRtRefreshData {
                                             stoptimes: stop_data,
                                             timestamp: rt_trip_update.timestamp,
+                                            trip_id: Some(query.trip_id.clone()),
+                                            chateau: Some(chateau.clone()),
                                         }),
                                     })
                                 } else {
@@ -791,6 +797,8 @@ pub async fn fetch_trip_information(
                         is_cancelled: false,
                         connecting_routes: None,
                         connections_per_stop: None,
+                        trip_id: Some(query.trip_id.clone()),
+                        chateau: Some(chateau.clone()),
                     };
                     
                     return Ok(response);
@@ -2018,6 +2026,8 @@ pub async fn fetch_trip_information(
         } else {
             Some(connections_lookup_result.connections_per_stop)
         },
+        trip_id: Some(query.trip_id.clone()),
+        chateau: Some(chateau.clone()),
     };
 
     Ok(response)
