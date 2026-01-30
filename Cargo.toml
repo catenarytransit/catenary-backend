@@ -204,7 +204,7 @@ pointy = "0.7.0"
 cta-bus-gtfs-realtime = { git = "https://github.com/catenarytransit/cta-bus-gtfs-realtime", version = "0.1.0" }
 opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
-opentelemetry-otlp = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.32.1"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

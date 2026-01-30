@@ -52,12 +52,17 @@ mod departures_shared;
 mod osm_station_lookup;
 mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
-use catenary::EtcdConnectionIps;
+use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
-use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
+use catenary::EtcdConnectionIps;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+use opentelemetry::trace::TracerProvider as _;
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
@@ -781,13 +786,17 @@ async fn ip_addr_to_geo_api(
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     // 1. Configure the OTLP Exporter
+    // 1. Configure the OTLP Exporter
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
-        .build()?;
+        .build()
+        .unwrap();
 
-    let tracer = opentelemetry_sdk::trace::Tracer::builder()
-        .with_batch_exporter(exporter, opentelemetry_sdk::runtime::Tokio)
+    let provider = SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
         .build();
+
+    let tracer = provider.tracer("catenary-backend");
 
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
