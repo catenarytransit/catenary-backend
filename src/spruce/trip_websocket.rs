@@ -2,7 +2,7 @@ use crate::map_coordinator::{
     AspenisedVehiclePositionOutput, BulkFetchCoordinator, BulkFetchParamsV3, BulkFetchResponseV2,
     CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2, EachChateauResponseV2,
     PositionDataCategoryV2, Subscribe, Unsubscribe, category_to_allowed_route_ids,
-    convert_to_output,
+    convert_to_output, BoundsInputV3,
 };
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -42,12 +42,18 @@ pub enum ClientMessage {
     #[serde(rename = "unsubscribe_all_trips")]
     UnsubscribeAllTrips,
 
-    // New variant for map updates
     #[serde(rename = "update_map")]
     UpdateMap {
         #[serde(flatten)]
-        params: BulkFetchParamsV3,
+        params: MapViewportUpdate,
     },
+}
+
+#[derive(Deserialize, Clone)]
+pub struct MapViewportUpdate {
+    pub chateaus: Vec<String>,
+    pub categories: Vec<String>,
+    pub bounds_input: BoundsInputV3,
 }
 
 #[derive(Serialize)]
@@ -73,8 +79,10 @@ pub struct TripWebSocket {
 
     // Map related fields
     pub coordinator: Addr<BulkFetchCoordinator>,
-    pub map_params: Option<BulkFetchParamsV3>,
+    pub client_viewport: Option<MapViewportUpdate>,
     pub subscribed_chateaus: HashSet<String>,
+    // ChateauID -> (LastTime, LastBounds, LastCategories)
+    pub sent_state: HashMap<String, (u64, BoundsInputV3, HashSet<String>)>,
 }
 
 impl TripWebSocket {
@@ -93,8 +101,9 @@ impl TripWebSocket {
             subscriptions: HashMap::new(),
             hb: Instant::now(),
             coordinator,
-            map_params: None,
+            client_viewport: None,
             subscribed_chateaus: HashSet::new(),
+            sent_state: HashMap::new(),
         }
     }
 
@@ -195,266 +204,230 @@ impl TripWebSocket {
     }
 
     fn process_map_update(
-        &self,
+        &mut self,
         chateau_id: &String,
         response: &Arc<GetVehicleLocationsResponse>,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        if let Some(params) = &self.map_params {
-            if let Some(chateau_params) = params.chateaus.get(chateau_id) {
-                // Reuse logic from bulk_realtime_fetch_v3 / map_websocket
-                let categories_requested = params
-                    .categories
-                    .iter()
-                    .map(|category| match category.as_str() {
-                        "metro" => Some(CategoryOfRealtimeVehicleData::Metro),
-                        "bus" => Some(CategoryOfRealtimeVehicleData::Bus),
-                        "rail" => Some(CategoryOfRealtimeVehicleData::Rail),
-                        "other" => Some(CategoryOfRealtimeVehicleData::Other),
-                        _ => None,
-                    })
-                    .flatten()
-                    .collect::<Vec<CategoryOfRealtimeVehicleData>>();
+        if let Some(params) = &self.client_viewport {
+            // Check if this chateau is still relevant? (It should be if we are subscribed)
+            // But verify it's in the current params list to be safe
+            if !params.chateaus.contains(chateau_id) {
+                return;
+            }
 
-                let mut each_chateau_response = EachChateauResponseV2 {
-                    categories: Some(PositionDataCategoryV2::default()),
+            let categories_requested = params
+                .categories
+                .iter()
+                .map(|category| match category.as_str() {
+                    "metro" => Some(CategoryOfRealtimeVehicleData::Metro),
+                    "bus" => Some(CategoryOfRealtimeVehicleData::Bus),
+                    "rail" => Some(CategoryOfRealtimeVehicleData::Rail),
+                    "other" => Some(CategoryOfRealtimeVehicleData::Other),
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<CategoryOfRealtimeVehicleData>>();
+
+            let mut each_chateau_response = EachChateauResponseV2 {
+                categories: Some(PositionDataCategoryV2::default()),
+            };
+
+            let sent_state_entry = self.sent_state.get(chateau_id).cloned();
+            let (last_sent_time, last_sent_bounds, last_sent_categories) = match &sent_state_entry {
+                Some((t, b, c)) => (*t, Some(b), Some(c)),
+                None => (0, None, None),
+            };
+
+            // If time mismatch, we have a new feed.
+            // If time match, we might have a viewport change (Delta).
+            let is_new_feed = response.last_updated_time_ms != last_sent_time;
+            
+            // Logic:
+            // 1. If is_new_feed: Send ALL vehicles in current bounds. replaces_all = true.
+            // 2. If !is_new_feed: 
+            //    Check delta between current params.bounds and last_sent_bounds.
+            //    Send ONLY vehicles in (current - last). replaces_all = false.
+            
+            // Note: If !is_new_feed and last_sent_bounds == current_bounds, we send nothing.
+            
+            let mut has_any_updates = false;
+
+            for category in &categories_requested {
+                let category_str = match category {
+                    CategoryOfRealtimeVehicleData::Metro => "metro",
+                    CategoryOfRealtimeVehicleData::Bus => "bus",
+                    CategoryOfRealtimeVehicleData::Rail => "rail",
+                    CategoryOfRealtimeVehicleData::Other => "other",
                 };
 
-                for category in &categories_requested {
-                    let chateau_params_for_this_category = match category {
-                        CategoryOfRealtimeVehicleData::Metro => {
-                            &chateau_params.category_params.metro
-                        }
-                        CategoryOfRealtimeVehicleData::Bus => &chateau_params.category_params.bus,
-                        CategoryOfRealtimeVehicleData::Rail => &chateau_params.category_params.rail,
-                        CategoryOfRealtimeVehicleData::Other => {
-                            &chateau_params.category_params.other
-                        }
-                    };
+                // If this specific category was not sent last time, we must send full state for it
+                let category_is_new = last_sent_categories.as_ref().map_or(true, |c| !c.contains(category_str));
 
-                    let mismatched_times = response.last_updated_time_ms
-                        != chateau_params_for_this_category
-                            .as_ref()
-                            .map_or(0, |x| x.last_updated_time_ms);
+                let zoom = match category {
+                    CategoryOfRealtimeVehicleData::Metro => 8,
+                    CategoryOfRealtimeVehicleData::Rail => 7,
+                    CategoryOfRealtimeVehicleData::Bus => 12,
+                    CategoryOfRealtimeVehicleData::Other => 5,
+                };
 
-                    let no_previous_tiles = match category {
-                        CategoryOfRealtimeVehicleData::Metro => {
-                            let bounds = &params.bounds_input.level8;
-                            chateau_params_for_this_category.as_ref().map_or(true, |p| {
-                                p.prev_user_min_x.is_none()
-                                    || p.prev_user_max_x.is_none()
-                                    || p.prev_user_min_y.is_none()
-                                    || p.prev_user_max_y.is_none()
-                            })
-                        }
-                        CategoryOfRealtimeVehicleData::Rail => {
-                            let bounds = &params.bounds_input.level7;
-                            chateau_params_for_this_category.as_ref().map_or(true, |p| {
-                                p.prev_user_min_x.is_none()
-                                    || p.prev_user_max_x.is_none()
-                                    || p.prev_user_min_y.is_none()
-                                    || p.prev_user_max_y.is_none()
-                            })
-                        }
-                        CategoryOfRealtimeVehicleData::Bus => {
-                            let bounds = &params.bounds_input.level12;
-                            chateau_params_for_this_category.as_ref().map_or(true, |p| {
-                                p.prev_user_min_x.is_none()
-                                    || p.prev_user_max_x.is_none()
-                                    || p.prev_user_min_y.is_none()
-                                    || p.prev_user_max_y.is_none()
-                            })
-                        }
-                        CategoryOfRealtimeVehicleData::Other => {
-                            let bounds = &params.bounds_input.level5;
-                            chateau_params_for_this_category.as_ref().map_or(true, |p| {
-                                p.prev_user_min_x.is_none()
-                                    || p.prev_user_max_x.is_none()
-                                    || p.prev_user_min_y.is_none()
-                                    || p.prev_user_max_y.is_none()
-                            })
-                        }
-                    };
+                let bounds = match category {
+                    CategoryOfRealtimeVehicleData::Metro => &params.bounds_input.level8,
+                    CategoryOfRealtimeVehicleData::Rail => &params.bounds_input.level7,
+                    CategoryOfRealtimeVehicleData::Bus => &params.bounds_input.level12,
+                    CategoryOfRealtimeVehicleData::Other => &params.bounds_input.level5,
+                };
 
-                    let replace_all_tiles = mismatched_times || no_previous_tiles;
-                    let route_types_allowed = category_to_allowed_route_ids(category);
+                let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match category {
+                     CategoryOfRealtimeVehicleData::Metro => &b.level8,
+                     CategoryOfRealtimeVehicleData::Rail => &b.level7,
+                     CategoryOfRealtimeVehicleData::Bus => &b.level12,
+                     CategoryOfRealtimeVehicleData::Other => &b.level5,
+                });
+                
+                // Determine if we need to send anything for this category
+                let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
+                
+                // If not replacing all, check if bounds changed
+                let bounds_changed = if let Some(pb) = prev_bounds_for_level {
+                     pb.min_x != bounds.min_x || pb.max_x != bounds.max_x || 
+                     pb.min_y != bounds.min_y || pb.max_y != bounds.max_y
+                } else {
+                     true 
+                };
 
-                    let filtered_vehicle_positions = response
-                        .vehicle_positions
-                        .iter()
-                        .filter(|vehicle_position| {
-                            route_types_allowed.contains(&vehicle_position.1.route_type)
+                if !replace_all && !bounds_changed {
+                    continue; 
+                }
+                
+                has_any_updates = true;
+
+                let route_types_allowed = category_to_allowed_route_ids(category);
+
+                let filtered_vehicle_positions = response
+                    .vehicle_positions
+                    .iter()
+                    .filter(|vehicle_position| {
+                        route_types_allowed.contains(&vehicle_position.1.route_type)
+                    })
+                    .map(|(a, b)| (a.clone(), convert_to_output(&b)))
+                    .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
+
+                let mut vehicles_by_tile: BTreeMap<
+                    u32,
+                    BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
+                > = BTreeMap::new();
+
+                if replace_all {
+                    // Send everything in current bounds
+                    for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                        if let Some(pos) = &vehicle_position.position {
+                            if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                                let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                    pos.latitude,
+                                    pos.longitude,
+                                    zoom,
+                                );
+
+                                let in_current_bounds = x >= bounds.min_x
+                                    && x <= bounds.max_x
+                                    && y >= bounds.min_y
+                                    && y <= bounds.max_y;
+
+                                if in_current_bounds {
+                                    vehicles_by_tile
+                                        .entry(x)
+                                        .or_default()
+                                        .entry(y)
+                                        .or_default()
+                                        .insert(vehicle_id, vehicle_position);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    // Delta send
+                    if let Some(prev_bounds) = prev_bounds_for_level {
+                        for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                            if let Some(pos) = &vehicle_position.position {
+                                if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                                    let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                        pos.latitude,
+                                        pos.longitude,
+                                        zoom,
+                                    );
+
+                                    let in_current_bounds = x >= bounds.min_x
+                                        && x <= bounds.max_x
+                                        && y >= bounds.min_y
+                                        && y <= bounds.max_y;
+                                        
+                                    // Check if it was in previous bounds
+                                    let in_prev_bounds = x >= prev_bounds.min_x
+                                        && x <= prev_bounds.max_x
+                                        && y >= prev_bounds.min_y
+                                        && y <= prev_bounds.max_y;
+
+                                    if in_current_bounds && !in_prev_bounds {
+                                        vehicles_by_tile
+                                            .entry(x)
+                                            .or_default()
+                                            .entry(y)
+                                            .or_default()
+                                            .insert(vehicle_id, vehicle_position);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
+                    cache
+                        .values()
+                        .filter_map(|route_cache| {
+                            if route_types_allowed.contains(&route_cache.route_type) {
+                                route_cache.agency_id.clone()
+                            } else {
+                                None
+                            }
                         })
-                        .map(|(a, b)| (a.clone(), convert_to_output(&b)))
-                        .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
+                        .collect::<BTreeSet<String>>()
+                        .into_iter()
+                        .collect::<Vec<String>>()
+                });
 
-                    let mut vehicles_by_tile: BTreeMap<
-                        u32,
-                        BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
-                    > = BTreeMap::new();
+                let payload = EachCategoryPayloadV2 {
+                    vehicle_positions: match vehicles_by_tile.is_empty() {
+                        false => Some(vehicles_by_tile),
+                        true => None,
+                    },
+                    last_updated_time_ms: response.last_updated_time_ms,
+                    replaces_all: replace_all,
+                    z_level: zoom,
+                    list_of_agency_ids,
+                };
 
-                    let zoom = match category {
-                        CategoryOfRealtimeVehicleData::Metro => 8,
-                        CategoryOfRealtimeVehicleData::Rail => 7,
-                        CategoryOfRealtimeVehicleData::Bus => 12,
-                        CategoryOfRealtimeVehicleData::Other => 5,
-                    };
-
-                    match replace_all_tiles {
-                        true => {
-                            for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
-                                if let Some(pos) = &vehicle_position.position {
-                                    let bounds = match category {
-                                        CategoryOfRealtimeVehicleData::Metro => {
-                                            &params.bounds_input.level8
-                                        }
-                                        CategoryOfRealtimeVehicleData::Rail => {
-                                            &params.bounds_input.level7
-                                        }
-                                        CategoryOfRealtimeVehicleData::Bus => {
-                                            &params.bounds_input.level12
-                                        }
-                                        CategoryOfRealtimeVehicleData::Other => {
-                                            &params.bounds_input.level5
-                                        }
-                                    };
-
-                                    if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                        let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                            pos.latitude,
-                                            pos.longitude,
-                                            zoom,
-                                        );
-
-                                        let in_current_bounds = x >= bounds.min_x
-                                            && x <= bounds.max_x
-                                            && y >= bounds.min_y
-                                            && y <= bounds.max_y;
-
-                                        if in_current_bounds {
-                                            vehicles_by_tile
-                                                .entry(x)
-                                                .or_default()
-                                                .entry(y)
-                                                .or_default()
-                                                .insert(vehicle_id, vehicle_position);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        false => {
-                            let (bounds, prev_bounds_params) = match category {
-                                CategoryOfRealtimeVehicleData::Metro => (
-                                    &params.bounds_input.level8,
-                                    chateau_params_for_this_category.as_ref(),
-                                ),
-                                CategoryOfRealtimeVehicleData::Rail => (
-                                    &params.bounds_input.level7,
-                                    chateau_params_for_this_category.as_ref(),
-                                ),
-                                CategoryOfRealtimeVehicleData::Bus => (
-                                    &params.bounds_input.level12,
-                                    chateau_params_for_this_category.as_ref(),
-                                ),
-                                CategoryOfRealtimeVehicleData::Other => (
-                                    &params.bounds_input.level5,
-                                    chateau_params_for_this_category.as_ref(),
-                                ),
-                            };
-
-                            if let Some(prev_bounds) = prev_bounds_params {
-                                if let (
-                                    Some(prev_min_x),
-                                    Some(prev_max_x),
-                                    Some(prev_min_y),
-                                    Some(prev_max_y),
-                                ) = (
-                                    prev_bounds.prev_user_min_x,
-                                    prev_bounds.prev_user_max_x,
-                                    prev_bounds.prev_user_min_y,
-                                    prev_bounds.prev_user_max_y,
-                                ) {
-                                    for (vehicle_id, vehicle_position) in filtered_vehicle_positions
-                                    {
-                                        if let Some(pos) = &vehicle_position.position {
-                                            if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                                let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                                    pos.latitude,
-                                                    pos.longitude,
-                                                    zoom,
-                                                );
-
-                                                let in_current_bounds = x >= bounds.min_x
-                                                    && x <= bounds.max_x
-                                                    && y >= bounds.min_y
-                                                    && y <= bounds.max_y;
-                                                let in_prev_bounds = x >= prev_min_x
-                                                    && x <= prev_max_x
-                                                    && y >= prev_min_y
-                                                    && y <= prev_max_y;
-
-                                                if in_current_bounds && !in_prev_bounds {
-                                                    vehicles_by_tile
-                                                        .entry(x)
-                                                        .or_default()
-                                                        .entry(y)
-                                                        .or_default()
-                                                        .insert(vehicle_id, vehicle_position);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                match category {
+                    CategoryOfRealtimeVehicleData::Metro => {
+                        each_chateau_response.categories.as_mut().unwrap().metro =
+                            Some(payload);
                     }
-
-                    let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
-                        cache
-                            .values()
-                            .filter_map(|route_cache| {
-                                if route_types_allowed.contains(&route_cache.route_type) {
-                                    route_cache.agency_id.clone()
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<BTreeSet<String>>()
-                            .into_iter()
-                            .collect::<Vec<String>>()
-                    });
-
-                    let payload = EachCategoryPayloadV2 {
-                        vehicle_positions: match vehicles_by_tile.is_empty() {
-                            false => Some(vehicles_by_tile),
-                            true => None,
-                        },
-                        last_updated_time_ms: response.last_updated_time_ms,
-                        replaces_all: replace_all_tiles,
-                        z_level: zoom,
-                        list_of_agency_ids,
-                    };
-
-                    match category {
-                        CategoryOfRealtimeVehicleData::Metro => {
-                            each_chateau_response.categories.as_mut().unwrap().metro =
-                                Some(payload);
-                        }
-                        CategoryOfRealtimeVehicleData::Rail => {
-                            each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
-                        }
-                        CategoryOfRealtimeVehicleData::Other => {
-                            each_chateau_response.categories.as_mut().unwrap().other =
-                                Some(payload);
-                        }
-                        CategoryOfRealtimeVehicleData::Bus => {
-                            each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
-                        }
+                    CategoryOfRealtimeVehicleData::Rail => {
+                        each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
                     }
-                } // for category
+                    CategoryOfRealtimeVehicleData::Other => {
+                        each_chateau_response.categories.as_mut().unwrap().other =
+                            Some(payload);
+                    }
+                    CategoryOfRealtimeVehicleData::Bus => {
+                        each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
+                    }
+                }
+            } // for category
 
-                let mut bulk_fetch_response = BulkFetchResponseV2 {
+            if has_any_updates {
+                 let mut bulk_fetch_response = BulkFetchResponseV2 {
                     chateaus: BTreeMap::new(),
                 };
                 bulk_fetch_response
@@ -465,6 +438,10 @@ impl TripWebSocket {
                 if let Ok(text) = serde_json::to_string(&msg) {
                     ctx.text(text);
                 }
+                
+                // Update state
+                let categories_sent: HashSet<String> = params.categories.iter().cloned().collect();
+                self.sent_state.insert(chateau_id.clone(), (response.last_updated_time_ms, params.bounds_input.clone(), categories_sent));
             }
         }
     }
@@ -543,9 +520,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                     }
                     Ok(ClientMessage::UpdateMap { params }) => {
                         let new_chateaus: HashSet<String> =
-                            params.chateaus.keys().cloned().collect();
+                            params.chateaus.iter().cloned().collect();
                         self.update_map_subscriptions(ctx, new_chateaus);
-                        self.map_params = Some(params);
+                        self.client_viewport = Some(params);
 
                         // Request updates for all subscribed chateaus (cached ones will come back instantly)
                         for ch in &self.subscribed_chateaus {
