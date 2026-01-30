@@ -341,7 +341,7 @@ impl Actor for BulkFetchCoordinator {
     type Context = Context<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
-        ctx.run_interval(Duration::from_millis(500), |act, ctx| {
+        ctx.run_interval(Duration::from_millis(300), |act, ctx| {
             act.fetch_cycle(ctx);
         });
     }
