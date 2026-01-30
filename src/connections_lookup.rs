@@ -1,8 +1,8 @@
-use ahash::AHashMap;
-use ahash::AHashSet;
 use crate::postgres_tools::CatenaryPostgresPool;
 use crate::schema::gtfs::routes as routes_pg_schema;
 use crate::schema::gtfs::stops as stops_pg_schema;
+use ahash::AHashMap;
+use ahash::AHashSet;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
@@ -44,10 +44,8 @@ pub async fn connections_lookup(
     let mut additional_routes_to_lookup = additional_routes_to_lookup;
 
     // Fetch metadata for connecting routes
-    let mut response_connecting_routes: BTreeMap<
-        String,
-        BTreeMap<String, crate::models::Route>,
-    > = BTreeMap::new();
+    let mut response_connecting_routes: BTreeMap<String, BTreeMap<String, crate::models::Route>> =
+        BTreeMap::new();
 
     let conn: &mut bb8::PooledConnection<
         '_,
@@ -176,7 +174,7 @@ pub async fn connections_lookup(
 
         // For each *connection* stop, keep only the closest base stop
         let mut best_connection_assignment: AHashMap<
-            (String, String),                      // (connection_chateau, connection_stop_id)
+            (String, String),                   // (connection_chateau, connection_stop_id)
             (String, f64, crate::models::Stop), // (base_stop_id, distance_m, stop)
         > = AHashMap::new();
 
@@ -338,8 +336,7 @@ pub async fn connections_lookup(
                 .await
                 .unwrap();
 
-            let mut connecting_routes_map: BTreeMap<String, crate::models::Route> =
-                BTreeMap::new();
+            let mut connecting_routes_map: BTreeMap<String, crate::models::Route> = BTreeMap::new();
 
             for route in connecting_routes_pg {
                 connecting_routes_map.insert(route.route_id.clone(), route);

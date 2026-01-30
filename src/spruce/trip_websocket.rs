@@ -1,25 +1,24 @@
-
+use crate::map_coordinator::{
+    AspenisedVehiclePositionOutput, BulkFetchCoordinator, BulkFetchParamsV3, BulkFetchResponseV2,
+    CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2, EachChateauResponseV2,
+    PositionDataCategoryV2, Subscribe, Unsubscribe, category_to_allowed_route_ids,
+    convert_to_output,
+};
 use actix::prelude::*;
 use actix_web_actors::ws;
-use catenary::trip_logic::{
-    fetch_trip_information, fetch_trip_rt_update, GtfsRtRefreshData, QueryTripInformationParams,
-    TripIntroductionInformation,
-};
-use catenary::postgres_tools::CatenaryPostgresPool;
+use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::trip_logic::{
+    GtfsRtRefreshData, QueryTripInformationParams, TripIntroductionInformation,
+    fetch_trip_information, fetch_trip_rt_update,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use ahash::AHashMap; 
-use crate::map_coordinator::{
-    BulkFetchCoordinator, BulkFetchParamsV3, CategoryOfRealtimeVehicleData, ChateauUpdate, Subscribe, Unsubscribe,
-    category_to_allowed_route_ids, convert_to_output,
-    EachChateauResponseV2, PositionDataCategoryV2, EachCategoryPayloadV2, AspenisedVehiclePositionOutput,
-    BulkFetchResponseV2
-};
-use catenary::aspen::lib::GetVehicleLocationsResponse;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -42,13 +41,13 @@ pub enum ClientMessage {
     },
     #[serde(rename = "unsubscribe_all_trips")]
     UnsubscribeAllTrips,
-    
+
     // New variant for map updates
     #[serde(rename = "update_map")]
     UpdateMap {
         #[serde(flatten)]
-        params: BulkFetchParamsV3
-    }
+        params: BulkFetchParamsV3,
+    },
 }
 
 #[derive(Serialize)]
@@ -70,10 +69,10 @@ pub enum ServerMessage {
     // If I send bare BulkFetchResponseV2, the client has to detect it.
     // Let's assume the client can handle a new message type "map_update".
     #[serde(rename = "map_update")]
-    MapUpdate (BulkFetchResponseV2) // Tuple variant to embed the response directly? Or named?
-    // If I use untagged enum or custom serialization I could make it look exactly like HTTP body?
-    // But then how to distinguish from other messages?
-    // Let's explicitly use a type tag for consistency within THIS socket.
+    MapUpdate(BulkFetchResponseV2), // Tuple variant to embed the response directly? Or named?
+                                    // If I use untagged enum or custom serialization I could make it look exactly like HTTP body?
+                                    // But then how to distinguish from other messages?
+                                    // Let's explicitly use a type tag for consistency within THIS socket.
 }
 
 pub struct TripWebSocket {
@@ -83,7 +82,7 @@ pub struct TripWebSocket {
     pub aspen_client_manager: Arc<AspenClientManager>,
     pub subscriptions: HashMap<(String, QueryTripInformationParams), Option<u64>>,
     pub hb: Instant,
-    
+
     // Map related fields
     pub coordinator: Addr<BulkFetchCoordinator>,
     pub map_params: Option<BulkFetchParamsV3>,
@@ -131,35 +130,35 @@ impl TripWebSocket {
                     act.etcd_connection_options.clone(),
                     act.aspen_client_manager.clone(),
                 );
-                
+
                 let params_clone = params.clone();
                 let chateau_clone = chateau.clone();
 
-                let fut = async move {
-                    fs.await
-                };
+                let fut = async move { fs.await };
 
-                let fut = actix::fut::wrap_future(fut)
-                    .map(move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                let fut = actix::fut::wrap_future(fut).map(
+                    move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
                         match result {
                             Ok(response) => {
                                 if response.found_data {
                                     if let Some(data) = response.data {
-                                         if let Some(ts) = data.timestamp {
-                                             let key = (chateau_clone.clone(), params_clone.clone());
-                                             if let Some(current_last_update) = act.subscriptions.get_mut(&key) {
-                                                  if let Some(last) = current_last_update {
-                                                      if *last == ts {
-                                                          return;
-                                                      }
-                                                  }
-                                                  *current_last_update = Some(ts);
-                                             }
-                                         }
-                                         
-                                         let msg = ServerMessage::UpdateTrip { data };
-                                         let text = serde_json::to_string(&msg).unwrap();
-                                         ctx.text(text);
+                                        if let Some(ts) = data.timestamp {
+                                            let key = (chateau_clone.clone(), params_clone.clone());
+                                            if let Some(current_last_update) =
+                                                act.subscriptions.get_mut(&key)
+                                            {
+                                                if let Some(last) = current_last_update {
+                                                    if *last == ts {
+                                                        return;
+                                                    }
+                                                }
+                                                *current_last_update = Some(ts);
+                                            }
+                                        }
+
+                                        let msg = ServerMessage::UpdateTrip { data };
+                                        let text = serde_json::to_string(&msg).unwrap();
+                                        ctx.text(text);
                                     }
                                 }
                             }
@@ -167,16 +166,28 @@ impl TripWebSocket {
                                 // Optionally send error
                             }
                         }
-                    });
-                
+                    },
+                );
+
                 ctx.spawn(fut);
             }
         });
     }
 
-    fn update_map_subscriptions(&mut self, ctx: &mut ws::WebsocketContext<Self>, new_chateaus: HashSet<String>) {
-        let to_unsubscribe: Vec<String> = self.subscribed_chateaus.difference(&new_chateaus).cloned().collect();
-        let to_subscribe: Vec<String> = new_chateaus.difference(&self.subscribed_chateaus).cloned().collect();
+    fn update_map_subscriptions(
+        &mut self,
+        ctx: &mut ws::WebsocketContext<Self>,
+        new_chateaus: HashSet<String>,
+    ) {
+        let to_unsubscribe: Vec<String> = self
+            .subscribed_chateaus
+            .difference(&new_chateaus)
+            .cloned()
+            .collect();
+        let to_subscribe: Vec<String> = new_chateaus
+            .difference(&self.subscribed_chateaus)
+            .cloned()
+            .collect();
 
         for ch in to_unsubscribe {
             self.coordinator.do_send(Unsubscribe {
@@ -191,11 +202,16 @@ impl TripWebSocket {
                 recipient: ctx.address().recipient(),
             });
         }
-        
+
         self.subscribed_chateaus = new_chateaus;
     }
 
-    fn process_map_update(&self, chateau_id: &String, response: &Arc<GetVehicleLocationsResponse>, ctx: &mut ws::WebsocketContext<Self>) {
+    fn process_map_update(
+        &self,
+        chateau_id: &String,
+        response: &Arc<GetVehicleLocationsResponse>,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
         if let Some(params) = &self.map_params {
             if let Some(chateau_params) = params.chateaus.get(chateau_id) {
                 // Reuse logic from bulk_realtime_fetch_v3 / map_websocket
@@ -211,24 +227,28 @@ impl TripWebSocket {
                     })
                     .flatten()
                     .collect::<Vec<CategoryOfRealtimeVehicleData>>();
-                    
+
                 let mut each_chateau_response = EachChateauResponseV2 {
                     categories: Some(PositionDataCategoryV2::default()),
                 };
-                
+
                 for category in &categories_requested {
-                     let chateau_params_for_this_category = match category {
-                        CategoryOfRealtimeVehicleData::Metro => &chateau_params.category_params.metro,
+                    let chateau_params_for_this_category = match category {
+                        CategoryOfRealtimeVehicleData::Metro => {
+                            &chateau_params.category_params.metro
+                        }
                         CategoryOfRealtimeVehicleData::Bus => &chateau_params.category_params.bus,
                         CategoryOfRealtimeVehicleData::Rail => &chateau_params.category_params.rail,
-                        CategoryOfRealtimeVehicleData::Other => &chateau_params.category_params.other,
+                        CategoryOfRealtimeVehicleData::Other => {
+                            &chateau_params.category_params.other
+                        }
                     };
 
                     let mismatched_times = response.last_updated_time_ms
                         != chateau_params_for_this_category
                             .as_ref()
                             .map_or(0, |x| x.last_updated_time_ms);
-                    
+
                     let no_previous_tiles = match category {
                         CategoryOfRealtimeVehicleData::Metro => {
                             let bounds = &params.bounds_input.level8;
@@ -258,8 +278,8 @@ impl TripWebSocket {
                             })
                         }
                         CategoryOfRealtimeVehicleData::Other => {
-                             let bounds = &params.bounds_input.level5;
-                             chateau_params_for_this_category.as_ref().map_or(true, |p| {
+                            let bounds = &params.bounds_input.level5;
+                            chateau_params_for_this_category.as_ref().map_or(true, |p| {
                                 p.prev_user_min_x.is_none()
                                     || p.prev_user_max_x.is_none()
                                     || p.prev_user_min_y.is_none()
@@ -279,19 +299,19 @@ impl TripWebSocket {
                         })
                         .map(|(a, b)| (a.clone(), convert_to_output(&b)))
                         .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
-                    
+
                     let mut vehicles_by_tile: BTreeMap<
                         u32,
                         BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
                     > = BTreeMap::new();
-                    
+
                     let zoom = match category {
                         CategoryOfRealtimeVehicleData::Metro => 8,
                         CategoryOfRealtimeVehicleData::Rail => 7,
                         CategoryOfRealtimeVehicleData::Bus => 12,
                         CategoryOfRealtimeVehicleData::Other => 5,
                     };
-                    
+
                     match replace_all_tiles {
                         true => {
                             for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
@@ -367,7 +387,8 @@ impl TripWebSocket {
                                     prev_bounds.prev_user_min_y,
                                     prev_bounds.prev_user_max_y,
                                 ) {
-                                    for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                                    for (vehicle_id, vehicle_position) in filtered_vehicle_positions
+                                    {
                                         if let Some(pos) = &vehicle_position.position {
                                             if pos.latitude != 0.0 && pos.longitude != 0.0 {
                                                 let (x, y) = slippy_map_tiles::lat_lon_to_tile(
@@ -399,8 +420,8 @@ impl TripWebSocket {
                                 }
                             }
                         }
-                    } 
-                    
+                    }
+
                     let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
                         cache
                             .values()
@@ -426,28 +447,31 @@ impl TripWebSocket {
                         z_level: zoom,
                         list_of_agency_ids,
                     };
-                    
+
                     match category {
                         CategoryOfRealtimeVehicleData::Metro => {
-                            each_chateau_response.categories.as_mut().unwrap().metro = Some(payload);
+                            each_chateau_response.categories.as_mut().unwrap().metro =
+                                Some(payload);
                         }
                         CategoryOfRealtimeVehicleData::Rail => {
                             each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
                         }
                         CategoryOfRealtimeVehicleData::Other => {
-                             each_chateau_response.categories.as_mut().unwrap().other = Some(payload);
+                            each_chateau_response.categories.as_mut().unwrap().other =
+                                Some(payload);
                         }
                         CategoryOfRealtimeVehicleData::Bus => {
-                             each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
+                            each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
                         }
                     }
-
                 } // for category
 
                 let mut bulk_fetch_response = BulkFetchResponseV2 {
                     chateaus: BTreeMap::new(),
                 };
-                bulk_fetch_response.chateaus.insert(chateau_id.clone(), each_chateau_response);
+                bulk_fetch_response
+                    .chateaus
+                    .insert(chateau_id.clone(), each_chateau_response);
 
                 let msg = ServerMessage::MapUpdate(bulk_fetch_response);
                 if let Ok(text) = serde_json::to_string(&msg) {
@@ -465,7 +489,7 @@ impl Actor for TripWebSocket {
         self.hb(ctx);
         self.start_periodic_updates(ctx);
     }
-    
+
     fn stopping(&mut self, ctx: &mut Self::Context) -> actix::Running {
         for ch in &self.subscribed_chateaus {
             self.coordinator.do_send(Unsubscribe {
@@ -497,8 +521,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         self.subscriptions.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
-                        self.subscriptions.insert((chateau.clone(), params.clone()), None);
-                        
+                        self.subscriptions
+                            .insert((chateau.clone(), params.clone()), None);
+
                         // Fetch initial data immediately
                         let fs = fetch_trip_information(
                             chateau,
@@ -510,43 +535,43 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             None,
                         );
 
-                        let fut = async move {
-                            fs.await
-                        };
-                        
-                        let fut = actix::fut::wrap_future(fut)
-                            .map(|result, _, ctx: &mut ws::WebsocketContext<Self>| {
-                                 match result {
-                                     Ok(data) => {
-                                         let msg = ServerMessage::InitialTrip { data };
-                                         let text = serde_json::to_string(&msg).unwrap();
-                                         ctx.text(text);
-                                     }
-                                     Err(e) => {
-                                         let msg = ServerMessage::Error { message: e };
-                                         let text = serde_json::to_string(&msg).unwrap();
-                                         ctx.text(text);
-                                     }
-                                 }
-                            });
+                        let fut = async move { fs.await };
+
+                        let fut = actix::fut::wrap_future(fut).map(
+                            |result, _, ctx: &mut ws::WebsocketContext<Self>| match result {
+                                Ok(data) => {
+                                    let msg = ServerMessage::InitialTrip { data };
+                                    let text = serde_json::to_string(&msg).unwrap();
+                                    ctx.text(text);
+                                }
+                                Err(e) => {
+                                    let msg = ServerMessage::Error { message: e };
+                                    let text = serde_json::to_string(&msg).unwrap();
+                                    ctx.text(text);
+                                }
+                            },
+                        );
                         ctx.spawn(fut);
                     }
                     Ok(ClientMessage::UpdateMap { params }) => {
-                        let new_chateaus: HashSet<String> = params.chateaus.keys().cloned().collect();
+                        let new_chateaus: HashSet<String> =
+                            params.chateaus.keys().cloned().collect();
                         self.update_map_subscriptions(ctx, new_chateaus);
                         self.map_params = Some(params);
-                        
+
                         // Request updates for all subscribed chateaus (cached ones will come back instantly)
                         for ch in &self.subscribed_chateaus {
-                             self.coordinator.do_send(Subscribe {
+                            self.coordinator.do_send(Subscribe {
                                 chateau_id: ch.clone(),
                                 recipient: ctx.address().recipient(),
-                             });
-                         }
+                            });
+                        }
                     }
                     Err(e) => {
-                         let msg = ServerMessage::Error { message: format!("Invalid message: {}", e) };
-                         ctx.text(serde_json::to_string(&msg).unwrap());
+                        let msg = ServerMessage::Error {
+                            message: format!("Invalid message: {}", e),
+                        };
+                        ctx.text(serde_json::to_string(&msg).unwrap());
                     }
                 }
             }

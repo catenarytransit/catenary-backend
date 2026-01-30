@@ -96,9 +96,9 @@ use std::path::PathBuf;
 use std::{fs::File, io::BufReader, io::BufWriter};
 pub mod aspen_dataset;
 pub mod compact_formats;
+pub mod connections_lookup;
 pub mod genentech_auth;
 pub mod graph_formats;
-pub mod connections_lookup;
 pub mod stop_matching;
 pub mod trip_logic;
 

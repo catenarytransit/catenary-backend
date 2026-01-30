@@ -1,18 +1,17 @@
-
+use actix::prelude::*;
 use ahash::AHashMap;
-use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::aspen::lib::{ChateauMetadataEtcd, GetVehicleLocationsResponse};
 use catenary::aspen_dataset::AspenisedVehicleDescriptor;
 use catenary::aspen_dataset::CatenaryRtVehiclePosition;
-use catenary::aspen_dataset::{AspenisedVehiclePosition, AspenisedVehicleRouteCache}; 
-use actix::prelude::*;
+use catenary::aspen_dataset::{AspenisedVehiclePosition, AspenisedVehicleRouteCache};
+use catenary::bincode_deserialize;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use catenary::aspen::lib::connection_manager::AspenClientManager;
-use catenary::EtcdConnectionIps;
-use catenary::aspen::lib::{GetVehicleLocationsResponse, ChateauMetadataEtcd};
 use tarpc::context;
-use catenary::bincode_deserialize;
 
 #[derive(Eq, PartialEq, Hash, Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum CategoryOfRealtimeVehicleData {
@@ -110,7 +109,6 @@ pub struct SubCategoryAskParamsV2 {
     pub prev_user_max_y: Option<u32>,
 }
 
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BoundsInputV3 {
     pub level5: BoundsInputPerLevel,
@@ -126,7 +124,6 @@ pub struct BoundsInputPerLevel {
     pub min_y: u32,
     pub max_y: u32,
 }
-
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BulkFetchParamsV3 {
@@ -155,7 +152,7 @@ pub struct PositionDataCategoryV2 {
 
 #[derive(Serialize, Deserialize)]
 pub struct EachCategoryPayloadV2 {
-     pub vehicle_positions:
+    pub vehicle_positions:
         Option<BTreeMap<u32, BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>>>,
     pub last_updated_time_ms: u64,
     pub replaces_all: bool,
@@ -217,7 +214,7 @@ impl BulkFetchCoordinator {
 
     fn fetch_cycle(&mut self, ctx: &mut Context<Self>) {
         if self.subscribers.is_empty() {
-             return;
+            return;
         }
 
         let chateaus_to_fetch: Vec<String> = self.subscribers.keys().cloned().collect();
@@ -225,7 +222,7 @@ impl BulkFetchCoordinator {
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
         let aspen_manager = self.aspen_client_manager.clone();
-        
+
         let fut = async move {
             let mut etcd = None;
             {
@@ -245,7 +242,8 @@ impl BulkFetchCoordinator {
                         etcd_ips.ip_addresses.as_slice(),
                         etcd_opts.as_ref().clone(),
                     )
-                    .await {
+                    .await
+                    {
                         etcd = Some(new_client.clone());
                         let mut etcd_reuser_write_lock = etcd_reuser.write().await;
                         *etcd_reuser_write_lock = Some(new_client);
@@ -261,63 +259,71 @@ impl BulkFetchCoordinator {
             let mut results = Vec::new();
 
             for chateau_id in chateaus_to_fetch {
-                 let fetch_assigned_node = etcd
+                let fetch_assigned_node = etcd
                     .get(
                         format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
                         None,
                     )
                     .await;
-                
-                if let Ok(resp) = fetch_assigned_node {
-                     if !resp.kvs().is_empty() {
-                         if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
-                                resp.kvs().first().unwrap().value()
-                         ) {
-                     if let Some(aspen_client) = aspen_manager.get_client(assigned_chateau_data.socket).await {
-                                  // Fetching a superset of route types to cover all categories (Metro, Bus, Rail, Other)
-                                  let route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12]; 
 
-                                  let response = aspen_client.get_vehicle_locations(
-                                      context::current(),
-                                      chateau_id.clone(),
-                                      None,
-                                      Some(route_types)
-                                  ).await;
-                                  
-                                  if let Ok(Some(data)) = response {
-                                      results.push((chateau_id, data));
-                                  }
-                             }
-                         }
-                     }
+                if let Ok(resp) = fetch_assigned_node {
+                    if !resp.kvs().is_empty() {
+                        if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
+                            resp.kvs().first().unwrap().value(),
+                        ) {
+                            if let Some(aspen_client) =
+                                aspen_manager.get_client(assigned_chateau_data.socket).await
+                            {
+                                // Fetching a superset of route types to cover all categories (Metro, Bus, Rail, Other)
+                                let route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+
+                                let response = aspen_client
+                                    .get_vehicle_locations(
+                                        context::current(),
+                                        chateau_id.clone(),
+                                        None,
+                                        Some(route_types),
+                                    )
+                                    .await;
+
+                                if let Ok(Some(data)) = response {
+                                    results.push((chateau_id, data));
+                                }
+                            }
+                        }
+                    }
                 }
             }
             results
         };
 
-        ctx.spawn(actix::fut::wrap_future(fut).map(|results, actor: &mut BulkFetchCoordinator, _| {
-             for (chateau_id, data) in results {
-                 let data_arc = Arc::new(data);
-                 
-                 let is_new = if let Some((old_data, _)) = actor.cache.get(&chateau_id) {
-                     old_data.last_updated_time_ms != data_arc.last_updated_time_ms
-                 } else {
-                     true
-                 };
+        ctx.spawn(actix::fut::wrap_future(fut).map(
+            |results, actor: &mut BulkFetchCoordinator, _| {
+                for (chateau_id, data) in results {
+                    let data_arc = Arc::new(data);
 
-                 if is_new {
-                     actor.cache.insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
-                     if let Some(subs) = actor.subscribers.get(&chateau_id) {
-                         for recipient in subs {
-                             recipient.do_send(ChateauUpdate {
-                                 chateau_id: chateau_id.clone(),
-                                 response: data_arc.clone(),
-                             });
-                         }
-                     }
-                 }
-             }
-        }));
+                    let is_new = if let Some((old_data, _)) = actor.cache.get(&chateau_id) {
+                        old_data.last_updated_time_ms != data_arc.last_updated_time_ms
+                    } else {
+                        true
+                    };
+
+                    if is_new {
+                        actor
+                            .cache
+                            .insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
+                        if let Some(subs) = actor.subscribers.get(&chateau_id) {
+                            for recipient in subs {
+                                recipient.do_send(ChateauUpdate {
+                                    chateau_id: chateau_id.clone(),
+                                    response: data_arc.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            },
+        ));
     }
 }
 

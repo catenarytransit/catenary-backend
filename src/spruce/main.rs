@@ -1,12 +1,11 @@
-
+use actix::prelude::*;
 use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, web};
 use actix_web_actors::ws;
-use std::sync::Arc;
-use chrono::Utc;
-use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
-use actix::prelude::*;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
+use chrono::Utc;
+use std::sync::Arc;
 
 mod trip_websocket;
 use trip_websocket::TripWebSocket;
@@ -32,12 +31,15 @@ async fn index(
             coordinator.get_ref().clone(),
         ),
         &req,
-        stream
+        stream,
     )
 }
 
 async fn index_root() -> HttpResponse {
-    HttpResponse::Ok().body(format!("Hello World from Catenary Spruce! {}", Utc::now().to_rfc3339()))
+    HttpResponse::Ok().body(format!(
+        "Hello World from Catenary Spruce! {}",
+        Utc::now().to_rfc3339()
+    ))
 }
 
 #[actix_web::main]
@@ -46,7 +48,7 @@ async fn main() -> std::io::Result<()> {
     // env_logger::init();
 
     let pool = Arc::new(make_async_pool().await.unwrap());
-    
+
     let etcd_urls_string = std::env::var("ETCD_URLS").unwrap();
     let etcd_urls_vec: Vec<String> = etcd_urls_string.split(",").map(|x| x.to_string()).collect();
     let etcd_username = std::env::var("ETCD_USERNAME").unwrap();
@@ -59,31 +61,35 @@ async fn main() -> std::io::Result<()> {
     let etcd_connection_options = Arc::new(Some(
         etcd_client::ConnectOptions::new()
             .with_user(etcd_username.clone(), etcd_password.clone())
-            .with_keep_alive(std::time::Duration::from_secs(1), std::time::Duration::from_secs(5)),
+            .with_keep_alive(
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(5),
+            ),
     ));
-    
+
     let worker_amount = std::env::var("WORKER_AMOUNT")
         .unwrap_or("2".to_string())
         .parse::<usize>()
         .unwrap();
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
-    
+
     // Etcd Reuser for BulkFetchCoordinator
     // Note: The original code used a RwLock<Option<Client>>, we can create one here.
     // However, the `etcd_client::Client` is cloneable and handles valid connection pool internally usually?
     // But the code in `bulk_realtime_fetch_v3` manually checks status and reconnects.
     // Let's replicate strict behavior: create an initial client (or None) and wrap in RwLock.
-    
+
     let etcd_reuser = Arc::new(tokio::sync::RwLock::new(None));
-    
+
     // Start the coordinator actor
     let coordinator = BulkFetchCoordinator::new(
         etcd_connection_ips.clone(),
         etcd_connection_options.clone(),
         aspen_client_manager.clone(),
         etcd_reuser.clone(),
-    ).start();
+    )
+    .start();
 
     HttpServer::new(move || {
         App::new()

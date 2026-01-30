@@ -1,5 +1,3 @@
-use crate::connections_lookup::connections_lookup;
-use crate::models;
 use crate::EtcdConnectionIps;
 use crate::SerializableStop;
 use crate::aspen::lib::ChateauMetadataEtcd;
@@ -9,6 +7,8 @@ use crate::aspen_dataset::AspenisedVehicleDescriptor;
 use crate::aspen_dataset::AspenisedVehiclePosition;
 use crate::aspen_dataset::{AspenStopTimeEvent, AspenisedTripModification};
 use crate::aspen_dataset::{AspenisedAlert, AspenisedStop};
+use crate::connections_lookup::connections_lookup;
+use crate::models;
 use crate::postgres_tools::CatenaryPostgresPool;
 use crate::schema::gtfs::calendar as calendar_pg_schema;
 use crate::schema::gtfs::calendar_dates as calendar_dates_pg_schema;
@@ -17,6 +17,7 @@ use crate::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_sch
 use crate::schema::gtfs::routes as routes_pg_schema;
 use crate::schema::gtfs::stops as stops_pg_schema;
 use crate::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
+use ahash::AHashMap;
 use chrono::Datelike;
 use chrono::TimeZone;
 use chrono_tz::Tz;
@@ -40,7 +41,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tarpc::context;
-use ahash::AHashMap;
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct ResponseForGtfsVehicle {
@@ -282,7 +282,11 @@ pub async fn fetch_trip_rt_update(
 ) -> Result<ResponseForGtfsRtRefresh, String> {
     let etcd = etcd_client::Client::connect(
         etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned().cloned(),
+        etcd_connection_options
+            .as_ref()
+            .as_ref()
+            .to_owned()
+            .cloned(),
     )
     .await;
 
@@ -314,17 +318,20 @@ pub async fn fetch_trip_rt_update(
                 .unwrap();
 
                 let socket = assigned_chateau_data.socket;
-                let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
+                let aspen_client = if let Some(client) =
+                    aspen_client_manager.get_client(socket).await
+                {
                     Ok(client)
                 } else {
-                    let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket)
-                        .await;
+                    let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
                     if let Ok(client) = &client_res {
-                        aspen_client_manager.insert_client(socket, client.clone()).await;
+                        aspen_client_manager
+                            .insert_client(socket, client.clone())
+                            .await;
                     }
                     client_res
                 };
-                
+
                 match aspen_client {
                     Ok(aspen_client) => {
                         let get_trip = aspen_client
@@ -418,9 +425,7 @@ pub async fn fetch_trip_rt_update(
                                                 .departure_occupancy_status
                                                 .as_ref()
                                                 .map(|x| {
-                                                    crate::aspen_dataset::occupancy_status_to_u8(
-                                                        &x,
-                                                    )
+                                                    crate::aspen_dataset::occupancy_status_to_u8(&x)
                                                 }),
                                         })
                                         .collect();
@@ -528,7 +533,11 @@ pub async fn fetch_trip_information(
 
     let etcd = etcd_client::Client::connect(
         etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned().cloned(),
+        etcd_connection_options
+            .as_ref()
+            .as_ref()
+            .to_owned()
+            .cloned(),
     )
     .await;
 
@@ -549,10 +558,10 @@ pub async fn fetch_trip_information(
     if let Some(t) = &mut timer {
         t.add("fetch_assigned_aspen_chateau_data_from_etcd");
     }
-    
+
     // RT ONLY TRIP LOGIC
     if trip_compressed.is_empty() {
-         let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
+        let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
             .as_ref()
             .ok()
             .map(|x| x.kvs().first())
@@ -570,17 +579,18 @@ pub async fn fetch_trip_information(
             let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
                 Ok(client)
             } else {
-                let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket)
-                    .await;
+                let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
                 if let Ok(client) = &client_res {
-                    aspen_client_manager.insert_client(socket, client.clone()).await;
+                    aspen_client_manager
+                        .insert_client(socket, client.clone())
+                        .await;
                 }
                 client_res
             };
 
             if let Err(aspen_client_err) = &aspen_client {
-                 eprintln!("{:#?}", aspen_client_err);
-                 return Err("Could not connect to realtime data server".to_string());
+                eprintln!("{:#?}", aspen_client_err);
+                return Err("Could not connect to realtime data server".to_string());
             }
 
             let aspen_client = aspen_client.unwrap();
@@ -596,7 +606,7 @@ pub async fn fetch_trip_information(
             if let Ok(get_trips) = get_trips {
                 if let Some(get_trip) = get_trips {
                     if get_trip.is_empty() {
-                         return Err("Trip not found in rt database".to_string());
+                        return Err("Trip not found in rt database".to_string());
                     }
 
                     let trip = &get_trip[0];
@@ -617,8 +627,8 @@ pub async fn fetch_trip_information(
                         .await;
 
                     if let Err(stops_data_err) = &stops_data {
-                         eprintln!("{}", stops_data_err);
-                         return Err("Error fetching stop data from postgres".to_string());
+                        eprintln!("{}", stops_data_err);
+                        return Err("Error fetching stop data from postgres".to_string());
                     }
 
                     let stops_data: Vec<crate::models::Stop> = stops_data.unwrap();
@@ -713,32 +723,33 @@ pub async fn fetch_trip_information(
                         .load(conn)
                         .await;
 
-                     if let Err(route_err) = &route_query {
+                    if let Err(route_err) = &route_query {
                         eprintln!("{}", route_err);
                         return Err("Error fetching route data".to_string());
-                     }
-                     let route_vec = route_query.unwrap();
-                     if route_vec.is_empty() {
-                         return Err("Route not found".to_string());
-                     }
-                     let route = &route_vec[0];
+                    }
+                    let route_vec = route_query.unwrap();
+                    if route_vec.is_empty() {
+                        return Err("Route not found".to_string());
+                    }
+                    let route = &route_vec[0];
 
-                     let agency = crate::schema::gtfs::agencies::dsl::agencies
+                    let agency = crate::schema::gtfs::agencies::dsl::agencies
                         .filter(crate::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
                         .select(crate::models::Agency::as_select())
                         .load(conn)
                         .await;
-                     
-                     let tz = match agency {
+
+                    let tz = match agency {
                         Ok(agency) => {
                             if !agency.is_empty() {
                                 let agency: &crate::models::Agency = &agency[0];
-                                chrono_tz::Tz::from_str_insensitive(agency.agency_timezone.as_str()).unwrap_or(chrono_tz::UTC)
+                                chrono_tz::Tz::from_str_insensitive(agency.agency_timezone.as_str())
+                                    .unwrap_or(chrono_tz::UTC)
                             } else {
                                 chrono_tz::UTC
                             }
                         }
-                        _ => chrono_tz::UTC
+                        _ => chrono_tz::UTC,
                     };
 
                     let mut shape_polyline = None;
@@ -751,7 +762,7 @@ pub async fn fetch_trip_information(
 
                             if let Ok(Some(shape_response)) = shape_response {
                                 shape_polyline = Some(shape_response);
-                                // rt_shape = true; 
+                                // rt_shape = true;
                             }
                         }
                     }
@@ -800,7 +811,7 @@ pub async fn fetch_trip_information(
                         trip_id: Some(query.trip_id.clone()),
                         chateau: Some(chateau.clone()),
                     };
-                    
+
                     return Ok(response);
                 }
             }
@@ -809,7 +820,7 @@ pub async fn fetch_trip_information(
     }
 
     // STATIC DB FETCHING
-    
+
     let trip_compressed = trip_compressed[0].clone();
 
     let (itin_meta, itin_rows, route, calendar_req, calendar_dates) = futures::join!(
@@ -923,9 +934,7 @@ pub async fn fetch_trip_information(
             match itin_meta.shape_id {
                 Some(shape_id_to_lookup) => {
                     let shape_query = crate::schema::gtfs::shapes::dsl::shapes
-                        .filter(
-                            crate::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup),
-                        )
+                        .filter(crate::schema::gtfs::shapes::dsl::shape_id.eq(shape_id_to_lookup))
                         .filter(crate::schema::gtfs::shapes::dsl::chateau.eq(&chateau))
                         .select(crate::models::Shape::as_select())
                         .first(conn)
@@ -1102,8 +1111,8 @@ pub async fn fetch_trip_information(
         vec_service_dates.sort_by_key(|x| x.2.abs().num_seconds());
 
         if vec_service_dates.is_empty() {
-             // Fallback or Error? User Logic calls it "Trip not found" or "No service date found"
-             // But if we are here we have static data.
+            // Fallback or Error? User Logic calls it "Trip not found" or "No service date found"
+            // But if we are here we have static data.
             return Err("No service date found for this trip".to_string());
         }
 
@@ -1197,15 +1206,16 @@ pub async fn fetch_trip_information(
                 fetch_assigned_node_for_this_chateau_data.value(),
             )
             .unwrap();
-            
+
             let socket = assigned_chateau_data.socket;
             let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
                 Ok(client)
             } else {
-                let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket)
-                    .await;
+                let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
                 if let Ok(client) = &client_res {
-                    aspen_client_manager.insert_client(socket, client.clone()).await;
+                    aspen_client_manager
+                        .insert_client(socket, client.clone())
+                        .await;
                 }
                 client_res
             };
@@ -1423,8 +1433,9 @@ pub async fn fetch_trip_information(
                                             let mut before_start_selector: Vec<
                                                 StopTimeIntroduction,
                                             > = vec![];
-                                            let mut with_replacement_stops: Vec<StopTimeIntroduction> =
-                                                vec![];
+                                            let mut with_replacement_stops: Vec<
+                                                StopTimeIntroduction,
+                                            > = vec![];
                                             let mut after_end_selector: Vec<StopTimeIntroduction> =
                                                 vec![];
                                             let mut old_stop_group: Vec<StopTimeIntroduction> =
@@ -1635,8 +1646,9 @@ pub async fn fetch_trip_information(
                                                         .flatten()
                                                         .collect::<Vec<StopTimeIntroduction>>()
                                                         ;
-                                                        
-                                                        with_replacement_stops = response_replacement_stops;
+
+                                                        with_replacement_stops =
+                                                            response_replacement_stops;
 
                                                         for post_end_stop in &mut after_end_selector
                                                         {
@@ -1667,7 +1679,6 @@ pub async fn fetch_trip_information(
                                                             after_end_selector,
                                                         ]
                                                         .concat();
-
                                                     }
                                                 }
                                             }

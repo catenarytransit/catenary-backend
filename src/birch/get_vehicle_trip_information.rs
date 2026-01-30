@@ -19,6 +19,11 @@ use catenary::schema::gtfs::itinerary_pattern_meta as itinerary_pattern_meta_pg_
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use catenary::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
+use catenary::trip_logic::{
+    GtfsRtRefreshData, QueryTripInformationParams, ResponseForGtfsRtRefresh,
+    ResponseForGtfsVehicle, StopTimeIntroduction, StopTimeRefresh, TripIntroductionInformation,
+    fetch_trip_information, fetch_trip_rt_update,
+};
 use chrono::Datelike;
 use chrono::TimeZone;
 use chrono_tz::Tz;
@@ -42,11 +47,6 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use tarpc::context;
-use catenary::trip_logic::{
-    fetch_trip_information, fetch_trip_rt_update, GtfsRtRefreshData, QueryTripInformationParams,
-    ResponseForGtfsRtRefresh, ResponseForGtfsVehicle, StopTimeIntroduction, StopTimeRefresh,
-    TripIntroductionInformation,
-};
 
 #[actix_web::get("/get_vehicle_metadata/{chateau}/{vehicle_id}")]
 pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Responder {
@@ -222,7 +222,7 @@ pub async fn get_vehicle_information(
                 if let Ok(get_vehicle) = get_vehicle {
                     let vehicles = match get_vehicle {
                         Some(get_vehicle) => Some(vec![get_vehicle]),
-                        None => None
+                        None => None,
                     };
 
                     if let Some(vehicles) = vehicles {
@@ -271,7 +271,9 @@ pub async fn get_trip_rt_update(
         etcd_connection_ips.as_ref().clone(),
         etcd_connection_options.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
-    ).await {
+    )
+    .await
+    {
         Ok(response) => HttpResponse::Ok().json(response),
         Err(e) => HttpResponse::InternalServerError().body(e),
     }
@@ -297,11 +299,13 @@ pub async fn get_trip_init(
         etcd_connection_ips.as_ref().clone(),
         etcd_connection_options.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
-        Some(&mut timer)
-    ).await {
+        Some(&mut timer),
+    )
+    .await
+    {
         Ok(response) => {
-             let text = serde_json::to_string(&response).unwrap();
-             HttpResponse::Ok()
+            let text = serde_json::to_string(&response).unwrap();
+            HttpResponse::Ok()
                 .insert_header(("Content-Type", "application/json"))
                 .insert_header(("Cache-Control", "no-cache"))
                 .insert_header((
@@ -309,13 +313,13 @@ pub async fn get_trip_init(
                     timer.header_value(),
                 ))
                 .body(text)
-        },
+        }
         Err(e) => {
-             if e.as_str().contains("not found") {
-                 HttpResponse::NotFound().body(e)
-             } else {
-                 HttpResponse::InternalServerError().body(e)
-             }
+            if e.as_str().contains("not found") {
+                HttpResponse::NotFound().body(e)
+            } else {
+                HttpResponse::InternalServerError().body(e)
+            }
         }
     }
 }
