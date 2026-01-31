@@ -221,6 +221,7 @@ impl BulkFetchCoordinator {
         if self.subscribers.is_empty() {
              return;
         }
+        println!("DEBUG: Coordinator fetch cycle starting for {} chateaus", self.subscribers.len());
 
         let chateaus_to_fetch: Vec<String> = self.subscribers.keys().cloned().collect();
         let etcd_reuser = self.etcd_reuser.clone();
@@ -257,6 +258,7 @@ impl BulkFetchCoordinator {
             }
 
             if etcd.is_none() {
+                println!("DEBUG: Etcd connection failed");
                 return Vec::new(); // Failed to connect to etcd
             }
             let mut etcd = etcd.unwrap();
@@ -284,6 +286,7 @@ impl BulkFetchCoordinator {
 
                             // If client is missing, try to connect immediately
                             if aspen_client.is_none() {
+                                println!("DEBUG: Aspen client missing for {}, connecting...", chateau_id);
                                 if let Ok(new_client) =
                                     catenary::aspen::lib::spawn_aspen_client_from_ip(
                                         &assigned_chateau_data.socket,
@@ -297,6 +300,8 @@ impl BulkFetchCoordinator {
                                         )
                                         .await;
                                     aspen_client = Some(new_client);
+                                } else {
+                                    println!("DEBUG: Failed to spawn aspen client for {}", chateau_id);
                                 }
                             }
 
@@ -315,10 +320,11 @@ impl BulkFetchCoordinator {
 
                                 match response {
                                     Ok(Some(data)) => {
+                                        println!("DEBUG: Got data for {}", chateau_id);
                                         results.push((chateau_id, data));
                                     }
-                                    Err(_) | Ok(None) => {
-                                        // RPC failed implies dead connection usually. Reconnect and retry once.
+                                    Err(e) => {
+                                        println!("DEBUG: RPC failed for {}: {:?}", chateau_id, e);
                                         if let Ok(new_client) =
                                             catenary::aspen::lib::spawn_aspen_client_from_ip(
                                                 &assigned_chateau_data.socket,
@@ -343,20 +349,31 @@ impl BulkFetchCoordinator {
                                                 .await;
                                             
                                             if let Ok(Some(data)) = response_retry {
+                                                println!("DEBUG: Retry success for {}", chateau_id);
                                                 results.push((chateau_id, data));
+                                            } else {
+                                                 println!("DEBUG: Retry failed for {}", chateau_id);
                                             }
                                         }
+                                    }
+                                    Ok(None) => {
+                                         println!("DEBUG: Response Ok(None) for {}", chateau_id);
                                     }
                                 }
                             }
                         }
+                    } else {
+                        println!("DEBUG: No assigned node for {}", chateau_id);
                     }
+                } else {
+                    println!("DEBUG: Etcd fetch failed for {}", chateau_id);
                 }
             }
             results
         };
 
         ctx.spawn(actix::fut::wrap_future(fut).map(|results, actor: &mut BulkFetchCoordinator, _| {
+             println!("DEBUG: Coordinator cycle finished, got {} results", results.len());
              for (chateau_id, data) in results {
                  let data_arc = Arc::new(data);
                  
@@ -367,6 +384,7 @@ impl BulkFetchCoordinator {
                  };
 
                  if is_new {
+                     println!("DEBUG: New data for {}, broadcasting", chateau_id);
                      actor.cache.insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
                      if let Some(subs) = actor.subscribers.get(&chateau_id) {
                          for recipient in subs {
@@ -769,36 +787,23 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MapWebSocket {
             Ok(ws::Message::Text(text)) => {
                 // Parse params
                 // Expected format: JSON of BulkFetchParamsV3
-                if let Ok(params) = serde_json::from_str::<BulkFetchParamsV3>(&text) {
-                     let new_chateaus: HashSet<String> = params.chateaus.keys().cloned().collect();
-                     self.update_subscriptions(ctx, new_chateaus);
-                     self.params = Some(params);
-                     
-                     // If we just got new params (e.g. moved map), we might need to send data immediately?
-                     // The logic in Coordinator will reject sending cached data if we just subscribed.
-                     // But update_subscriptions sends Subscribe for new chateaus to Coordinator, which sends cached data.
-                     // IMPORTANT: If we moved the map but chateaus didn't change, we still need to re-evaluate tiles.
-                     // Getting cached data from Coordinator again? 
-                     // Or should MapWebSocket cache the latest response?
-                     // I'll make MapWebSocket request data if it's not a new subscription but an update.
-                     // Actually, the simplest way is to ask Coordinator to 'Fresh' send.
-                     // But Coordinator already sends on Subscribe.
-                     // If I 'Subscribe' again, Coordinator will add (already exists) and send cache.
-                     // So calling do_send(Subscribe) for existing chateaus works to get data?
-                     // No, Subscribe uses HashSet, so recipient is same.
-                     // But the handler for Subscribe sends cached data unconditionally.
-                     // So we can just re-send Subscribe for ALL chateaus when params change?
-                     // Yes, that triggers a re-send of data to us, which we then filter with new params.
-                     // Efficient enough? It avoids re-fetching from Aspen.
-                     // It sends Arc<Response> (cheap) to MapWebSocket, which does filtering (cpu work) and sends to client.
-                     // Perfect.
-                     
-                     for ch in &self.subscribed_chateaus {
-                         self.coordinator.do_send(Subscribe {
-                            chateau_id: ch.clone(),
-                            recipient: ctx.address().recipient(),
-                         });
-                     }
+                match serde_json::from_str::<BulkFetchParamsV3>(&text) {
+                    Ok(params) => {
+                         let new_chateaus: HashSet<String> = params.chateaus.keys().cloned().collect();
+                         println!("DEBUG: Received params for chateaus: {:?}", new_chateaus);
+                         self.update_subscriptions(ctx, new_chateaus);
+                         self.params = Some(params);
+                         
+                         for ch in &self.subscribed_chateaus {
+                             self.coordinator.do_send(Subscribe {
+                                chateau_id: ch.clone(),
+                                recipient: ctx.address().recipient(),
+                             });
+                         }
+                    }
+                    Err(e) => {
+                        println!("DEBUG: Failed to parse params: {:?}", e);
+                    }
                 }
             }
             Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
@@ -815,6 +820,7 @@ impl Handler<ChateauUpdate> for MapWebSocket {
     type Result = ();
 
     fn handle(&mut self, msg: ChateauUpdate, ctx: &mut Self::Context) {
+        println!("DEBUG: MapWebSocket received ChateauUpdate for {}", msg.chateau_id);
         self.process_update(&msg.chateau_id, &msg.response, ctx);
     }
 }
