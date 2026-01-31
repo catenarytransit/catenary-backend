@@ -426,7 +426,6 @@ pub async fn nearby_from_coords_v3(
                 stop_dist_map_clone,
             )
             .await
-
         });
     }
 
@@ -786,7 +785,8 @@ async fn fetch_chateau_data(
         "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
         _ => 14,
     };
-    let date_window_start = departure_time_chrono.date_naive() - chrono::Duration::days(lookback_days);
+    let date_window_start =
+        departure_time_chrono.date_naive() - chrono::Duration::days(lookback_days);
     let date_window_end = departure_time_chrono.date_naive() + chrono::Duration::days(1);
 
     let (
@@ -801,7 +801,14 @@ async fn fetch_chateau_data(
         _,
         calendar,
         calendar_dates,
-    ) = fetch_stop_data_for_chateau(pool, chateau.clone(), final_stop_ids, false, Some((date_window_start, date_window_end))).await;
+    ) = fetch_stop_data_for_chateau(
+        pool,
+        chateau.clone(),
+        final_stop_ids,
+        false,
+        Some((date_window_start, date_window_end)),
+    )
+    .await;
 
     let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
     // We will just access rt_data.trip_updates directly later

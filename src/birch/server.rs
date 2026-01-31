@@ -52,19 +52,19 @@ mod departures_shared;
 mod osm_station_lookup;
 mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
-use actix_web::{middleware, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
+use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use catenary::EtcdConnectionIps;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use opentelemetry::trace::TracerProvider as _;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use geojson::{Feature, GeoJson, JsonValue};
+use opentelemetry::trace::TracerProvider as _;
 use ordered_float::Pow;
 use serde::Deserialize;
 use serde_derive::Serialize;
@@ -788,9 +788,9 @@ async fn main() -> std::io::Result<()> {
     // 1. Configure the OTLP Exporter
     // 1. Configure the Datadog Tracer
     let tracer_provider = datadog_opentelemetry::tracing().init();
-    
+
     let tracer = tracer_provider.tracer("birch");
-    
+
     let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
     // 2. Configure the Format Layer (Logs)

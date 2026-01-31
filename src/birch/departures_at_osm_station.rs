@@ -357,20 +357,33 @@ pub async fn departures_at_osm_station(
         let include_shapes = include_shapes;
 
         let lookback_days = match chateau_id.as_str() {
-             "sncb" | "schweiz" | "sncf" | "deutschland" | "nederlandse~spoorwegen" | "nationalrailuk" => 2,
-             "île~de~france~mobilités" => 2,
-             "bus~dft~gov~uk" => 8,
-             _ => 14,
+            "sncb"
+            | "schweiz"
+            | "sncf"
+            | "deutschland"
+            | "nederlandse~spoorwegen"
+            | "nationalrailuk" => 2,
+            "île~de~france~mobilités" => 2,
+            "bus~dft~gov~uk" => 8,
+            _ => 14,
         };
 
-        let check_start_date = greater_than_date_time.date_naive() - chrono::Duration::days(lookback_days);
+        let check_start_date =
+            greater_than_date_time.date_naive() - chrono::Duration::days(lookback_days);
         let check_end_date = (greater_than_date_time + req_lookahead)
             .date_naive()
             .succ_opt()
             .unwrap();
 
         futures.push(async move {
-            fetch_stop_data_for_chateau(pool, chateau_id, stop_ids, include_shapes, Some((check_start_date, check_end_date))).await
+            fetch_stop_data_for_chateau(
+                pool,
+                chateau_id,
+                stop_ids,
+                include_shapes,
+                Some((check_start_date, check_end_date)),
+            )
+            .await
         });
     }
 

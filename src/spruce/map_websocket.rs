@@ -264,48 +264,93 @@ impl BulkFetchCoordinator {
             let mut results = Vec::new();
 
             for chateau_id in chateaus_to_fetch {
-                 let fetch_assigned_node = etcd
+                let fetch_assigned_node = etcd
                     .get(
                         format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
                         None,
                     )
                     .await;
-                
-                if let Ok(resp) = fetch_assigned_node {
-                     if !resp.kvs().is_empty() {
-                         if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
-                                resp.kvs().first().unwrap().value()
-                         ) {
-                             if let Ok(aspen_client) = aspen_manager.get_client(assigned_chateau_data.socket).await {
-                                  // Fetch only what we need? 
-                                  // Note: The original code requested all route types needed by *any* user.
-                                  // Here, to simplify the single fetch cycle, we fetch ALL data or we need to aggregate route types.
-                                  // The original code passed `route_types_wanted`. 
-                                  // For simplicity and correctness with "single fetch", we can fetch None (all) 
-                                  // or just fetch all standard route types.
-                                  // Let's assume fetching all (None) is safe/default, or we pass specific content.
-                                  // Original code aggregated `categories_requested`.
-                                  // We should probably fetch all relevant types for available categories.
-                                  // To avoid complexity of tracking aggregate route types here, let's fetch ALL.
-                                  // But `get_vehicle_locations` takes `allowed_route_types`.
-                                  // If we pass empty/None, does it fetch all?
-                                  // `birch` example passes `route_types_wanted`.
-                                  // Let's fetch all common types.
-                                  let route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12]; // superset of all categories
 
-                                  let response = aspen_client.get_vehicle_locations(
-                                      context::current(),
-                                      chateau_id.clone(),
-                                      None,
-                                      route_types
-                                  ).await;
-                                  
-                                  if let Ok(Some(data)) = response {
-                                      results.push((chateau_id, data));
-                                  }
-                             }
-                         }
-                     }
+                if let Ok(resp) = fetch_assigned_node {
+                    if !resp.kvs().is_empty() {
+                        if let Ok(assigned_chateau_data) =
+                            bincode_deserialize::<ChateauMetadataEtcd>(
+                                resp.kvs().first().unwrap().value(),
+                            )
+                        {
+                            let mut aspen_client = aspen_manager
+                                .get_client(assigned_chateau_data.socket)
+                                .await;
+
+                            // If client is missing, try to connect immediately
+                            if aspen_client.is_none() {
+                                if let Ok(new_client) =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                        &assigned_chateau_data.socket,
+                                    )
+                                    .await
+                                {
+                                    aspen_manager
+                                        .insert_client(
+                                            assigned_chateau_data.socket,
+                                            new_client.clone(),
+                                        )
+                                        .await;
+                                    aspen_client = Some(new_client);
+                                }
+                            }
+
+                            if let Some(client) = aspen_client {
+                                let route_types: Vec<i16> =
+                                    vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12]; // superset of all categories
+
+                                let response = client
+                                    .get_vehicle_locations(
+                                        context::current(),
+                                        chateau_id.clone(),
+                                        None,
+                                        Some(route_types.clone()),
+                                    )
+                                    .await;
+
+                                match response {
+                                    Ok(Some(data)) => {
+                                        results.push((chateau_id, data));
+                                    }
+                                    Err(_) | Ok(None) => {
+                                        // RPC failed implies dead connection usually. Reconnect and retry once.
+                                        if let Ok(new_client) =
+                                            catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                                &assigned_chateau_data.socket,
+                                            )
+                                            .await
+                                        {
+                                            aspen_manager
+                                                .insert_client(
+                                                    assigned_chateau_data.socket,
+                                                    new_client.clone(),
+                                                )
+                                                .await;
+                                            
+                                            // Retry
+                                            let response_retry = new_client
+                                                .get_vehicle_locations(
+                                                    context::current(),
+                                                    chateau_id.clone(),
+                                                    None,
+                                                    Some(route_types),
+                                                )
+                                                .await;
+                                            
+                                            if let Ok(Some(data)) = response_retry {
+                                                results.push((chateau_id, data));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             results
