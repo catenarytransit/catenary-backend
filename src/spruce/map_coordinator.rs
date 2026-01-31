@@ -271,27 +271,101 @@ impl BulkFetchCoordinator {
                         if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
                             resp.kvs().first().unwrap().value(),
                         ) {
-                            if let Some(aspen_client) =
-                                aspen_manager.get_client(assigned_chateau_data.socket).await
-                            {
-                                // Fetching a superset of route types to cover all categories (Metro, Bus, Rail, Other)
-                                let route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+                            let mut aspen_client =
+                                aspen_manager.get_client(assigned_chateau_data.socket).await;
 
-                                let response = aspen_client
+                            if aspen_client.is_none() {
+                                println!(
+                                    "DEBUG: Aspen client missing for {}, connecting...",
+                                    chateau_id
+                                );
+                                if let Ok(new_client) =
+                                    catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                        &assigned_chateau_data.socket,
+                                    )
+                                    .await
+                                {
+                                    aspen_manager
+                                        .insert_client(
+                                            assigned_chateau_data.socket,
+                                            new_client.clone(),
+                                        )
+                                        .await;
+                                    aspen_client = Some(new_client);
+                                } else {
+                                    println!(
+                                        "DEBUG: Failed to spawn aspen client for {}",
+                                        chateau_id
+                                    );
+                                }
+                            }
+
+                            if let Some(client) = aspen_client {
+                                // Fetching a superset of route types to cover all categories (Metro, Bus, Rail, Other)
+                                let route_types: Vec<i16> = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+
+                                let response = client
                                     .get_vehicle_locations(
                                         context::current(),
                                         chateau_id.clone(),
                                         None,
-                                        Some(route_types),
+                                        Some(route_types.clone()),
                                     )
                                     .await;
 
-                                if let Ok(Some(data)) = response {
-                                    results.push((chateau_id, data));
+                                match response {
+                                    Ok(Some(data)) => {
+                                        // println!("DEBUG: Got data for {}", chateau_id);
+                                        results.push((chateau_id, data));
+                                    }
+                                    Err(e) => {
+                                        println!("DEBUG: RPC failed for {}: {:?}", chateau_id, e);
+                                        // Retry logic
+                                        if let Ok(new_client) =
+                                            catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                                &assigned_chateau_data.socket,
+                                            )
+                                            .await
+                                        {
+                                            aspen_manager
+                                                .insert_client(
+                                                    assigned_chateau_data.socket,
+                                                    new_client.clone(),
+                                                )
+                                                .await;
+
+                                            println!(
+                                                "DEBUG: Reconnected to {}, retrying...",
+                                                chateau_id
+                                            );
+                                            let response_retry = new_client
+                                                .get_vehicle_locations(
+                                                    context::current(),
+                                                    chateau_id.clone(),
+                                                    None,
+                                                    Some(route_types),
+                                                )
+                                                .await;
+
+                                            if let Ok(Some(data)) = response_retry {
+                                                println!("DEBUG: Retry success for {}", chateau_id);
+                                                results.push((chateau_id, data));
+                                            } else {
+                                                println!("DEBUG: Retry failed for {}", chateau_id);
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        println!("DEBUG: Response Ok(None) for {}", chateau_id);
+                                    }
                                 }
                             }
                         }
+                    } else {
+                        println!("DEBUG: No assigned node for {}", chateau_id);
                     }
+                } else {
+                    println!("DEBUG: Etcd fetch failed for {}", chateau_id);
                 }
             }
             results

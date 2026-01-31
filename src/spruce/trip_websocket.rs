@@ -24,50 +24,9 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
 
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-pub enum ClientMessage {
-    #[serde(rename = "subscribe_trip")]
-    SubscribeTrip {
-        chateau: String,
-        #[serde(flatten)]
-        params: QueryTripInformationParams,
-    },
-    #[serde(rename = "unsubscribe_trip")]
-    UnsubscribeTrip {
-        chateau: String,
-        #[serde(flatten)]
-        params: QueryTripInformationParams,
-    },
-    #[serde(rename = "unsubscribe_all_trips")]
-    UnsubscribeAllTrips,
+use crate::{ClientMessage, MapViewportUpdate, ServerMessage};
 
-    #[serde(rename = "update_map")]
-    UpdateMap {
-        #[serde(flatten)]
-        params: MapViewportUpdate,
-    },
-}
-
-#[derive(Deserialize, Clone)]
-pub struct MapViewportUpdate {
-    pub chateaus: Vec<String>,
-    pub categories: Vec<String>,
-    pub bounds_input: BoundsInputV3,
-}
-
-#[derive(Serialize)]
-#[serde(tag = "type")]
-pub enum ServerMessage {
-    #[serde(rename = "initial_trip")]
-    InitialTrip { data: TripIntroductionInformation },
-    #[serde(rename = "update_trip")]
-    UpdateTrip { data: GtfsRtRefreshData },
-    #[serde(rename = "error")]
-    Error { message: String },
-    #[serde(rename = "map_update")]
-    MapUpdate(BulkFetchResponseV2),
-}
+// Messages moved to main.rs
 
 pub struct TripWebSocket {
     pub pool: Arc<CatenaryPostgresPool>,
@@ -528,6 +487,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         ctx.spawn(fut);
                     }
                     Ok(ClientMessage::UpdateMap { params }) => {
+                        println!(
+                            "DEBUG: TripWebSocket received UpdateMap (chateaus: {:?})",
+                            params.chateaus
+                        );
                         let new_chateaus: HashSet<String> =
                             params.chateaus.iter().cloned().collect();
                         self.update_map_subscriptions(ctx, new_chateaus);

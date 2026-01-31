@@ -11,7 +11,56 @@ mod trip_websocket;
 use trip_websocket::TripWebSocket;
 
 mod map_coordinator;
-use map_coordinator::BulkFetchCoordinator;
+use catenary::trip_logic::{
+    GtfsRtRefreshData, QueryTripInformationParams, TripIntroductionInformation,
+};
+use map_coordinator::{BoundsInputV3, BulkFetchCoordinator, BulkFetchResponseV2};
+use serde::{Deserialize, Serialize};
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+pub enum ClientMessage {
+    #[serde(rename = "subscribe_trip")]
+    SubscribeTrip {
+        chateau: String,
+        #[serde(flatten)]
+        params: QueryTripInformationParams,
+    },
+    #[serde(rename = "unsubscribe_trip")]
+    UnsubscribeTrip {
+        chateau: String,
+        #[serde(flatten)]
+        params: QueryTripInformationParams,
+    },
+    #[serde(rename = "unsubscribe_all_trips")]
+    UnsubscribeAllTrips,
+
+    #[serde(rename = "update_map")]
+    UpdateMap {
+        #[serde(flatten)]
+        params: MapViewportUpdate,
+    },
+}
+
+#[derive(Deserialize, Clone)]
+pub struct MapViewportUpdate {
+    pub chateaus: Vec<String>,
+    pub categories: Vec<String>,
+    pub bounds_input: BoundsInputV3,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+pub enum ServerMessage {
+    #[serde(rename = "initial_trip")]
+    InitialTrip { data: TripIntroductionInformation },
+    #[serde(rename = "update_trip")]
+    UpdateTrip { data: GtfsRtRefreshData },
+    #[serde(rename = "error")]
+    Error { message: String },
+    #[serde(rename = "map_update")]
+    MapUpdate(BulkFetchResponseV2),
+}
 
 async fn index(
     req: HttpRequest,
