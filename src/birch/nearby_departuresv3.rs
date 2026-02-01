@@ -278,6 +278,8 @@ pub async fn nearby_from_coords_v3(
         .map(|s| (s.gtfs_id.clone(), s.name.clone()))
         .collect();
 
+    let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+
     for stop in &stops {
         // Calculate distance
         let stop_point = geo::Point::new(
@@ -301,6 +303,18 @@ pub async fn nearby_from_coords_v3(
             if stops.len() > 800 && dist > 1000.0 {
                 continue;
             }
+
+            if number_of_osm_stations > 50 && dist > 2000.0 {
+                continue;
+            }
+        }
+
+        if number_of_osm_stations > 100 && dist > 2500.0 {
+            continue;
+        }
+
+        if number_of_osm_stations > 200 && dist > 3000.0 {
+            continue;
         }
         
         // Hard limit: skip all distant stops when extremely dense
