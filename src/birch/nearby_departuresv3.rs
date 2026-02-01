@@ -807,43 +807,9 @@ async fn fetch_chateau_data(
         // No local transport stops to check
     }
 
-    // V2 OPTIMIZATION: extract direction_pattern_ids from the best_stops optimization
-    // These are the unique direction pattern IDs for stops in our filtered search space.
-    // Passing these to fetch_stop_data_for_chateau enables early filtering of itinerary_pattern_meta.
-    let direction_pattern_ids: Option<Vec<String>> = if !stop_ids.is_empty() {
-        // Fetch all directions for ALL stops (not just local transport) to get full filtering
-        let mut dir_conn = pool.get().await.unwrap();
-        let all_direction_rows: Vec<catenary::models::DirectionPatternRow> =
-            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
-                .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
-                .select(catenary::models::DirectionPatternRow::as_select())
-                .load(&mut dir_conn)
-                .await
-                .unwrap_or_default();
+    // V2 OPTIMIZATION: Implement direction-first data fetching directly here
+    // Key insight: fetch meta by direction IDs first, THEN use those itinerary IDs for trips
 
-        let dir_ids: Vec<String> = all_direction_rows
-            .iter()
-            .map(|r| r.direction_pattern_id.clone())
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-
-        if dir_ids.is_empty() {
-            None
-        } else {
-            println!(
-                "V3_OPT: Filtering by {} direction_pattern_ids for chateau {}",
-                dir_ids.len(),
-                chateau
-            );
-            Some(dir_ids)
-        }
-    } else {
-        None
-    };
-
-    // 1. Fetch Static using refined list
     let lookback_days = match chateau.as_str() {
         "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
         _ => 14,
@@ -852,27 +818,243 @@ async fn fetch_chateau_data(
         departure_time_chrono.date_naive() - chrono::Duration::days(lookback_days);
     let date_window_end = departure_time_chrono.date_naive() + chrono::Duration::days(1);
 
+    let t_v3_fetch = Instant::now();
+
+    // Step 1: Fetch direction patterns for our stops (already have this from best_stops optimization)
+    let mut dir_conn = pool.get().await.unwrap();
+    let direction_rows_list: Vec<catenary::models::DirectionPatternRow> =
+        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
+            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
+            .select(catenary::models::DirectionPatternRow::as_select())
+            .load(&mut dir_conn)
+            .await
+            .unwrap_or_default();
+
+    let direction_pattern_ids: Vec<String> = direction_rows_list
+        .iter()
+        .map(|r| r.direction_pattern_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    println!(
+        "V3_OPT: {} direction_pattern_ids for chateau {} (took {}ms)",
+        direction_pattern_ids.len(),
+        chateau,
+        t_v3_fetch.elapsed().as_millis()
+    );
+
+    if direction_pattern_ids.is_empty() {
+        return None;
+    }
+
+    // Step 2: Fetch itinerary_pattern_meta filtered by direction_pattern_ids
+    let t_meta = Instant::now();
+    let mut meta_conn = pool.get().await.unwrap();
+    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
+        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau.clone()))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                    .eq_any(&direction_pattern_ids),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load(&mut meta_conn)
+            .await
+            .unwrap_or_default();
+
+    // Extract the filtered itinerary_pattern_ids - THIS IS THE KEY OPTIMIZATION
+    let filtered_itinerary_ids: Vec<String> = itin_meta_list
+        .iter()
+        .map(|m| m.itinerary_pattern_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    println!(
+        "V3_OPT: {} itinerary_pattern_ids from {} metas (took {}ms)",
+        filtered_itinerary_ids.len(),
+        itin_meta_list.len(),
+        t_meta.elapsed().as_millis()
+    );
+
+    // Build lookup maps
+    let mut itin_meta: BTreeMap<String, catenary::models::ItineraryPatternMeta> = BTreeMap::new();
+    for meta in &itin_meta_list {
+        itin_meta.insert(meta.itinerary_pattern_id.clone(), meta.clone());
+    }
+
+    let route_ids: Vec<CompactString> = itin_meta_list.iter().map(|m| m.route_id.clone()).collect();
+
+    // Step 3: Fetch remaining data in parallel
+    let pool_clone = pool.clone();
+    let chateau_clone = chateau.clone();
+    let chateau_clone2 = chateau.clone();
+    let chateau_clone3 = chateau.clone();
+    let chateau_clone4 = chateau.clone();
+    let chateau_clone5 = chateau.clone();
+    let chateau_clone6 = chateau.clone();
+    let direction_pattern_ids_clone = direction_pattern_ids.clone();
+    let filtered_itinerary_ids_clone = filtered_itinerary_ids.clone();
+    let route_ids_clone = route_ids.clone();
+
     let (
-        chateau_id,
-        itins,
-        itin_meta,
-        direction_meta,
-        trips_compressed,
-        direction_rows,
-        routes,
-        agencies,
-        _,
+        itins_result,
+        direction_meta_result,
+        trips_compressed_result,
+        routes_result,
         calendar,
         calendar_dates,
-    ) = fetch_stop_data_for_chateau(
-        pool,
-        chateau.clone(),
-        final_stop_ids,
-        false,
-        Some((date_window_start, date_window_end)),
-        direction_pattern_ids,
-    )
-    .await;
+    ) = tokio::join!(
+        // Itinerary pattern rows (filtered by our itinerary IDs AND stops)
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                        .eq_any(&filtered_itinerary_ids_clone),
+                )
+                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&final_stop_ids))
+                .select(catenary::models::ItineraryPatternRow::as_select())
+                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        // Direction pattern meta
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                .filter(catenary::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_clone2))
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                        .eq_any(&direction_pattern_ids_clone),
+                )
+                .select(catenary::models::DirectionPatternMeta::as_select())
+                .load::<catenary::models::DirectionPatternMeta>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        // Trips - THE KEY OPTIMIZATION: only fetch for filtered_itinerary_ids
+        async {
+            let t_trips = Instant::now();
+            let mut conn = pool_clone.get().await.unwrap();
+            let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone3))
+                .filter(
+                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                        .eq_any(&filtered_itinerary_ids_clone),
+                )
+                .select(catenary::models::CompressedTrip::as_select())
+                .load::<catenary::models::CompressedTrip>(&mut conn)
+                .await
+                .unwrap_or_default();
+            println!(
+                "V3_OPT: trips_compressed fetch took {}ms, count: {}",
+                t_trips.elapsed().as_millis(),
+                trips.len()
+            );
+            trips
+        },
+        // Routes
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_clone4))
+                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids_clone))
+                .select(catenary::models::Route::as_select())
+                .load::<catenary::models::Route>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        // Calendar - don't filter by date here, we'll filter later via calendar_struct
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::calendar::dsl::calendar
+                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_clone5.clone()))
+                .select(catenary::models::Calendar::as_select())
+                .load::<catenary::models::Calendar>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        // Calendar dates
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_clone6))
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(date_window_end))
+                .select(catenary::models::CalendarDate::as_select())
+                .load::<catenary::models::CalendarDate>(&mut conn)
+                .await
+                .unwrap_or_default()
+        }
+    );
+
+    println!(
+        "V3_OPT: Total fetch for {} took {}ms",
+        chateau,
+        t_v3_fetch.elapsed().as_millis()
+    );
+
+    // Build remaining data structures
+    let mut itins: BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>> = BTreeMap::new();
+    for itin in itins_result {
+        itins
+            .entry(itin.itinerary_pattern_id.clone())
+            .or_default()
+            .push(itin);
+    }
+
+    let mut direction_meta: BTreeMap<String, catenary::models::DirectionPatternMeta> =
+        BTreeMap::new();
+    for dm in direction_meta_result {
+        direction_meta.insert(dm.direction_pattern_id.clone(), dm);
+    }
+
+    let trips_compressed: BTreeMap<String, catenary::models::CompressedTrip> =
+        trips_compressed_result
+            .into_iter()
+            .map(|t| (t.trip_id.clone(), t))
+            .collect();
+
+    let routes: BTreeMap<String, catenary::models::Route> = routes_result
+        .into_iter()
+        .map(|r| (r.route_id.clone(), r))
+        .collect();
+
+    // Fetch agencies based on routes
+    let agency_ids: Vec<String> = routes
+        .values()
+        .filter_map(|r| r.agency_id.clone())
+        .collect();
+    let mut agency_conn = pool.get().await.unwrap();
+    let agencies_list: Vec<catenary::models::Agency> =
+        catenary::schema::gtfs::agencies::dsl::agencies
+            .filter(catenary::schema::gtfs::agencies::chateau.eq(chateau.clone()))
+            .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
+            .select(catenary::models::Agency::as_select())
+            .load(&mut agency_conn)
+            .await
+            .unwrap_or_default();
+
+    let mut agencies: BTreeMap<String, catenary::models::Agency> = agencies_list
+        .into_iter()
+        .map(|a| (a.agency_id.clone(), a))
+        .collect();
+
+    // Build direction_rows map
+    let mut direction_rows: BTreeMap<String, Vec<catenary::models::DirectionPatternRow>> =
+        BTreeMap::new();
+    for dr in direction_rows_list {
+        direction_rows
+            .entry(dr.direction_pattern_id.clone())
+            .or_default()
+            .push(dr);
+    }
+
+    let chateau_id = chateau.clone();
 
     let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
     // We will just access rt_data.trip_updates directly later
