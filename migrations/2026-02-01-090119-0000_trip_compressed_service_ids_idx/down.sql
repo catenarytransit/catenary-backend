@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS gtfs.trips_compressed_chateau_itin_service_idx;

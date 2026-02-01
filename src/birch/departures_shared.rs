@@ -324,6 +324,8 @@ pub async fn fetch_stop_data_for_chateau(
                     catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()),
                 )
                 .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids))
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(end_date))
                 .select(catenary::models::CalendarDate::as_select())
                 .load::<catenary::models::CalendarDate>(&mut conn_cal)
                 .await
@@ -465,11 +467,20 @@ pub async fn fetch_stop_data_for_chateau(
         );
         let t_section = std::time::Instant::now();
 
-        let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+        let mut calendar_dates_query = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .into_boxed()
             .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()))
             .filter(
                 catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_to_search),
-            )
+            );
+
+        if let Some((start_date, end_date)) = date_filter {
+            calendar_dates_query = calendar_dates_query
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
+                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(end_date));
+        }
+
+        let calendar_dates = calendar_dates_query
             .select(catenary::models::CalendarDate::as_select())
             .load::<catenary::models::CalendarDate>(&mut conn_calendar)
             .await
