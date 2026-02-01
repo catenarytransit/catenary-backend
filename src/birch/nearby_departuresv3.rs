@@ -838,6 +838,14 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
+    // Extract stop IDs from direction patterns - these are the stops we need to filter by
+    let direction_stop_ids: Vec<String> = direction_rows_list
+        .iter()
+        .map(|r| r.stop_id.to_string())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
     println!(
         "V3_OPT: {} direction_pattern_ids for chateau {} (took {}ms)",
         direction_pattern_ids.len(),
@@ -911,7 +919,7 @@ async fn fetch_chateau_data(
                     catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
                         .eq_any(&filtered_itinerary_ids_clone),
                 )
-                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&final_stop_ids))
+                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&direction_stop_ids))
                 .select(catenary::models::ItineraryPatternRow::as_select())
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
