@@ -283,89 +283,92 @@ pub async fn fetch_stop_data_for_chateau(
         let mut active_service_ids_opt: Option<BTreeSet<CompactString>> = None;
         let mut service_ids_to_search: BTreeSet<CompactString> = BTreeSet::new();
 
-        if let Some((start_date, end_date)) = date_filter {
-            let mut conn_lite = pool_for_schedule.get().await.unwrap();
+        if false {
+            if let Some((start_date, end_date)) = date_filter {
+                let mut conn_lite = pool_for_schedule.get().await.unwrap();
 
-            // 1. Fetch ALL service IDs for these itinerary patterns (lightweight query)
-            let service_ids: Vec<CompactString> =
-                catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                    .filter(
-                        catenary::schema::gtfs::trips_compressed::chateau
-                            .eq(chateau_id_clone2.clone()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                            .eq_any(&itinerary_list_clone),
-                    )
-                    .select(catenary::schema::gtfs::trips_compressed::service_id)
-                    .distinct()
-                    .load::<CompactString>(&mut conn_lite)
+                // 1. Fetch ALL service IDs for these itinerary patterns (lightweight query)
+                let service_ids: Vec<CompactString> =
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::chateau
+                                .eq(chateau_id_clone2.clone()),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                                .eq_any(&itinerary_list_clone),
+                        )
+                        .select(catenary::schema::gtfs::trips_compressed::service_id)
+                        .distinct()
+                        .load::<CompactString>(&mut conn_lite)
+                        .await
+                        .unwrap_or_default();
+
+                println!(
+                    "PERF: service_id fetch (distinct) took {}ms. Count: {}",
+                    t_section.elapsed().as_millis(),
+                    service_ids.len()
+                );
+
+                // 2. Fetch Calendar / Calendar Dates for these specific service IDs
+                let mut conn_cal = pool_for_schedule.get().await.unwrap();
+                let calendar = catenary::schema::gtfs::calendar::dsl::calendar
+                    .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_clone2.clone()))
+                    .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids))
+                    .select(catenary::models::Calendar::as_select())
+                    .load::<catenary::models::Calendar>(&mut conn_cal)
                     .await
                     .unwrap_or_default();
 
-            println!(
-                "PERF: service_id fetch (distinct) took {}ms. Count: {}",
-                t_section.elapsed().as_millis(),
-                service_ids.len()
-            );
+                let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                    .filter(
+                        catenary::schema::gtfs::calendar_dates::chateau
+                            .eq(chateau_id_clone2.clone()),
+                    )
+                    .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(end_date))
+                    .select(catenary::models::CalendarDate::as_select())
+                    .load::<catenary::models::CalendarDate>(&mut conn_cal)
+                    .await
+                    .unwrap_or_default();
 
-            // 2. Fetch Calendar / Calendar Dates for these specific service IDs
-            let mut conn_cal = pool_for_schedule.get().await.unwrap();
-            let calendar = catenary::schema::gtfs::calendar::dsl::calendar
-                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_id_clone2.clone()))
-                .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids))
-                .select(catenary::models::Calendar::as_select())
-                .load::<catenary::models::Calendar>(&mut conn_cal)
-                .await
-                .unwrap_or_default();
-
-            let calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                .filter(
-                    catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()),
+                // 3. Determine Active Services
+                let unified_cal = catenary::make_calendar_structure_from_pg(
+                    vec![calendar.clone()],
+                    vec![calendar_dates.clone()],
                 )
-                .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids))
-                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
-                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(end_date))
-                .select(catenary::models::CalendarDate::as_select())
-                .load::<catenary::models::CalendarDate>(&mut conn_cal)
-                .await
                 .unwrap_or_default();
 
-            // 3. Determine Active Services
-            let unified_cal = catenary::make_calendar_structure_from_pg(
-                vec![calendar.clone()],
-                vec![calendar_dates.clone()],
-            )
-            .unwrap_or_default();
-
-            let mut active_services = BTreeSet::new();
-            if let Some(cal_map) = unified_cal.get(&chateau_id_clone2) {
-                for service_id in &service_ids {
-                    if let Some(service) = cal_map.get(service_id.as_str()) {
-                        let mut is_active = false;
-                        let mut d = start_date;
-                        while d <= end_date {
-                            if catenary::datetime_in_service(service, d) {
-                                is_active = true;
-                                break;
+                let mut active_services = BTreeSet::new();
+                if let Some(cal_map) = unified_cal.get(&chateau_id_clone2) {
+                    for service_id in &service_ids {
+                        if let Some(service) = cal_map.get(service_id.as_str()) {
+                            let mut is_active = false;
+                            let mut d = start_date;
+                            while d <= end_date {
+                                if catenary::datetime_in_service(service, d) {
+                                    is_active = true;
+                                    break;
+                                }
+                                d = d.succ_opt().unwrap();
                             }
-                            d = d.succ_opt().unwrap();
-                        }
-                        if is_active {
-                            active_services.insert(service_id.clone());
+                            if is_active {
+                                active_services.insert(service_id.clone());
+                            }
                         }
                     }
                 }
+
+                println!(
+                    "PERF: Active Services Calculation took {}ms. Active: {} / {}",
+                    t_section.elapsed().as_millis(),
+                    active_services.len(),
+                    service_ids.len()
+                );
+
+                active_service_ids_opt = Some(active_services);
             }
-
-            println!(
-                "PERF: Active Services Calculation took {}ms. Active: {} / {}",
-                t_section.elapsed().as_millis(),
-                active_services.len(),
-                service_ids.len()
-            );
-
-            active_service_ids_opt = Some(active_services);
         }
 
         // --- Fetch Trips ---

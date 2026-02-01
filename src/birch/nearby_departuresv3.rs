@@ -316,7 +316,7 @@ pub async fn nearby_from_coords_v3(
         if number_of_osm_stations > 200 && dist > 3000.0 {
             continue;
         }
-        
+
         // Hard limit: skip all distant stops when extremely dense
         if stop_dist_map.len() > 400 && dist > 3000.0 {
             continue;
@@ -750,7 +750,7 @@ async fn fetch_chateau_data(
             final_stop_ids.push(stop_id.clone());
         }
     }
-    
+
     // MEMORY FIX: Build a HashSet of relevant stop IDs for O(1) lookup during row iteration
     let relevant_stop_ids: std::collections::HashSet<String> = stop_to_key_map
         .keys()
@@ -1050,7 +1050,7 @@ async fn fetch_chateau_data(
             if !relevant_stop_ids.contains(row.stop_id.as_str()) {
                 continue;
             }
-            
+
             if let Some(station_key) =
                 stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string()))
             {
