@@ -888,10 +888,10 @@ async fn fetch_chateau_data(
     let route_ids: Vec<CompactString> = itin_meta_list.iter().map(|m| m.route_id.clone()).collect();
 
     // Step 3: Fetch remaining data in parallel
+    // CRITICAL: We must fetch itinerary_pattern FIRST, extract reduced IDs, then fetch trips
     let pool_clone = pool.clone();
     let chateau_clone = chateau.clone();
     let chateau_clone2 = chateau.clone();
-    let chateau_clone3 = chateau.clone();
     let chateau_clone4 = chateau.clone();
     let chateau_clone5 = chateau.clone();
     let chateau_clone6 = chateau.clone();
@@ -899,18 +899,13 @@ async fn fetch_chateau_data(
     let filtered_itinerary_ids_clone = filtered_itinerary_ids.clone();
     let route_ids_clone = route_ids.clone();
 
-    let (
-        itins_result,
-        direction_meta_result,
-        trips_compressed_result,
-        routes_result,
-        calendar,
-        calendar_dates,
-    ) = tokio::join!(
+    // Stage 1: Fetch itinerary_pattern, direction_meta, routes, calendar
+    let (itins_result, direction_meta_result, routes_result, calendar, calendar_dates) = tokio::join!(
         // Itinerary pattern rows (filtered by our itinerary IDs AND stops)
         async {
+            let t_itin = Instant::now();
             let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+            let result = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                 .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone))
                 .filter(
                     catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
@@ -920,7 +915,13 @@ async fn fetch_chateau_data(
                 .select(catenary::models::ItineraryPatternRow::as_select())
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
-                .unwrap_or_default()
+                .unwrap_or_default();
+            println!(
+                "V3_OPT: itinerary_pattern fetch took {}ms, count: {}",
+                t_itin.elapsed().as_millis(),
+                result.len()
+            );
+            result
         },
         // Direction pattern meta
         async {
@@ -936,27 +937,6 @@ async fn fetch_chateau_data(
                 .await
                 .unwrap_or_default()
         },
-        // Trips - THE KEY OPTIMIZATION: only fetch for filtered_itinerary_ids
-        async {
-            let t_trips = Instant::now();
-            let mut conn = pool_clone.get().await.unwrap();
-            let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone3))
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids_clone),
-                )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load::<catenary::models::CompressedTrip>(&mut conn)
-                .await
-                .unwrap_or_default();
-            println!(
-                "V3_OPT: trips_compressed fetch took {}ms, count: {}",
-                t_trips.elapsed().as_millis(),
-                trips.len()
-            );
-            trips
-        },
         // Routes
         async {
             let mut conn = pool_clone.get().await.unwrap();
@@ -968,11 +948,11 @@ async fn fetch_chateau_data(
                 .await
                 .unwrap_or_default()
         },
-        // Calendar - don't filter by date here, we'll filter later via calendar_struct
+        // Calendar
         async {
             let mut conn = pool_clone.get().await.unwrap();
             catenary::schema::gtfs::calendar::dsl::calendar
-                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_clone5.clone()))
+                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_clone5))
                 .select(catenary::models::Calendar::as_select())
                 .load::<catenary::models::Calendar>(&mut conn)
                 .await
@@ -990,6 +970,44 @@ async fn fetch_chateau_data(
                 .await
                 .unwrap_or_default()
         }
+    );
+
+    // V2 OPTIMIZATION: Extract REDUCED itinerary IDs from the filtered itinerary_pattern result
+    // This is the KEY difference - we only get IDs for itineraries that ACTUALLY have stops in our radius
+    let reduced_itinerary_ids: Vec<String> = itins_result
+        .iter()
+        .map(|i| i.itinerary_pattern_id.clone())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    println!(
+        "V3_OPT: Reduced to {} itinerary_pattern_ids (from {} metas)",
+        reduced_itinerary_ids.len(),
+        filtered_itinerary_ids.len()
+    );
+
+    // Stage 2: Fetch trips for ONLY the reduced itinerary IDs
+    let t_trips = Instant::now();
+    let mut trips_conn = pool.get().await.unwrap();
+    let trips_compressed_result: Vec<catenary::models::CompressedTrip> = if !reduced_itinerary_ids.is_empty() {
+        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau.clone()))
+            .filter(
+                catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                    .eq_any(&reduced_itinerary_ids),
+            )
+            .select(catenary::models::CompressedTrip::as_select())
+            .load::<catenary::models::CompressedTrip>(&mut trips_conn)
+            .await
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+    println!(
+        "V3_OPT: trips_compressed fetch took {}ms, count: {}",
+        t_trips.elapsed().as_millis(),
+        trips_compressed_result.len()
     );
 
     println!(
