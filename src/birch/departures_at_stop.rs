@@ -376,6 +376,7 @@ pub async fn departures_at_stop(
                 stop_ids,
                 include_shapes,
                 Some((start_date_utc, end_date_utc)),
+                None, // direction_pattern_ids - not optimizing this path
             )
             .await
         });

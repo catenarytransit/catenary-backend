@@ -36,6 +36,7 @@ pub async fn fetch_stop_data_for_chateau(
     stop_ids: Vec<String>,
     include_shapes: bool,
     date_filter: Option<(NaiveDate, NaiveDate)>,
+    direction_pattern_ids: Option<Vec<String>>,
 ) -> StopDataResult {
     let mut conn = pool.get().await.unwrap();
     let global_start = std::time::Instant::now();
@@ -67,23 +68,43 @@ pub async fn fetch_stop_data_for_chateau(
     // Task A: Meta Data
     let mut conn1 = conn; // Reuse first connection
     let chateau_id_clone = chateau_id.clone();
+    let direction_pattern_ids_clone = direction_pattern_ids.clone();
     let meta_task = async {
-        let itin_meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                    .eq(chateau_id_clone.clone()),
-            )
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                    .eq_any(&itinerary_list),
-            )
-            .select(catenary::models::ItineraryPatternMeta::as_select())
-            .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
-            .await
-            .unwrap_or_default();
+        // V2 OPTIMIZATION: If we have direction_pattern_ids, filter by those first
+        // This dramatically reduces the result set in dense areas
+        let itin_meta = if let Some(ref dir_ids) = direction_pattern_ids_clone {
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                        .eq(chateau_id_clone.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                        .eq_any(dir_ids),
+                )
+                .select(catenary::models::ItineraryPatternMeta::as_select())
+                .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
+                .await
+                .unwrap_or_default()
+        } else {
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::chateau
+                        .eq(chateau_id_clone.clone()),
+                )
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
+                        .eq_any(&itinerary_list),
+                )
+                .select(catenary::models::ItineraryPatternMeta::as_select())
+                .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
+                .await
+                .unwrap_or_default()
+        };
         println!(
-            "PERF: itinerary_pattern_meta fetch took {}ms",
-            t_section.elapsed().as_millis()
+            "PERF: itinerary_pattern_meta fetch took {}ms (count: {})",
+            t_section.elapsed().as_millis(),
+            itin_meta.len()
         );
         let t_section = std::time::Instant::now();
 

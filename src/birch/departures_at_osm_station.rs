@@ -382,6 +382,7 @@ pub async fn departures_at_osm_station(
                 stop_ids,
                 include_shapes,
                 Some((check_start_date, check_end_date)),
+                None, // direction_pattern_ids - not optimizing this path
             )
             .await
         });

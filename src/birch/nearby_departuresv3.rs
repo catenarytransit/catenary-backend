@@ -807,6 +807,42 @@ async fn fetch_chateau_data(
         // No local transport stops to check
     }
 
+    // V2 OPTIMIZATION: extract direction_pattern_ids from the best_stops optimization
+    // These are the unique direction pattern IDs for stops in our filtered search space.
+    // Passing these to fetch_stop_data_for_chateau enables early filtering of itinerary_pattern_meta.
+    let direction_pattern_ids: Option<Vec<String>> = if !stop_ids.is_empty() {
+        // Fetch all directions for ALL stops (not just local transport) to get full filtering
+        let mut dir_conn = pool.get().await.unwrap();
+        let all_direction_rows: Vec<catenary::models::DirectionPatternRow> =
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
+                .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
+                .select(catenary::models::DirectionPatternRow::as_select())
+                .load(&mut dir_conn)
+                .await
+                .unwrap_or_default();
+
+        let dir_ids: Vec<String> = all_direction_rows
+            .iter()
+            .map(|r| r.direction_pattern_id.clone())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if dir_ids.is_empty() {
+            None
+        } else {
+            println!(
+                "V3_OPT: Filtering by {} direction_pattern_ids for chateau {}",
+                dir_ids.len(),
+                chateau
+            );
+            Some(dir_ids)
+        }
+    } else {
+        None
+    };
+
     // 1. Fetch Static using refined list
     let lookback_days = match chateau.as_str() {
         "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
@@ -834,6 +870,7 @@ async fn fetch_chateau_data(
         final_stop_ids,
         false,
         Some((date_window_start, date_window_end)),
+        direction_pattern_ids,
     )
     .await;
 
