@@ -286,19 +286,25 @@ pub async fn nearby_from_coords_v3(
         );
         let dist = input_point.haversine_distance(&stop_point);
 
-        if stops.len() > 100 && dist > 4000.0 && stop.primary_route_type == Some(3) {
-            continue;
+        // MEMORY FIX: More aggressive filtering for dense areas
+        // Filter out distant bus stops when we have many stops
+        if stop.primary_route_type == Some(3) {
+            if stops.len() > 100 && dist > 4000.0 {
+                continue;
+            }
+            if stops.len() > 300 && dist > 2500.0 {
+                continue;
+            }
+            if stops.len() > 500 && dist > 1500.0 {
+                continue;
+            }
+            if stops.len() > 800 && dist > 1000.0 {
+                continue;
+            }
         }
-
-        if stops.len() > 300 && dist > 2500.0 && stop.primary_route_type == Some(3) {
-            continue;
-        }
-
-        if stops.len() > 500 && dist > 2000.0 && stop.primary_route_type == Some(3) {
-            continue;
-        }
-
-        if stops.len() > 800 && dist > 1500.0 && stop.primary_route_type == Some(3) {
+        
+        // Hard limit: skip all distant stops when extremely dense
+        if stop_dist_map.len() > 400 && dist > 3000.0 {
             continue;
         }
 
@@ -730,6 +736,13 @@ async fn fetch_chateau_data(
             final_stop_ids.push(stop_id.clone());
         }
     }
+    
+    // MEMORY FIX: Build a HashSet of relevant stop IDs for O(1) lookup during row iteration
+    let relevant_stop_ids: std::collections::HashSet<String> = stop_to_key_map
+        .keys()
+        .filter(|(c, _)| c == &chateau)
+        .map(|(_, sid)| sid.clone())
+        .collect();
 
     if !stops_to_check.is_empty() {
         // Fetch directions for these stops to see which ones are redundant
@@ -1019,6 +1032,11 @@ async fn fetch_chateau_data(
         };
 
         for row in rows {
+            // MEMORY FIX: Skip rows for stops we don't care about (O(1) lookup)
+            if !relevant_stop_ids.contains(row.stop_id.as_str()) {
+                continue;
+            }
+            
             if let Some(station_key) =
                 stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string()))
             {
