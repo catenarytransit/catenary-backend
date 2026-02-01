@@ -33,6 +33,11 @@ pub async fn fetch_cta_bus_data(
 
                         match cta_bus_rt_data {
                             Ok(feed_message) => {
+                                if feed_message.entity.is_empty() {
+                                    eprintln!("{}: Fetched data is empty.", feed_id);
+                                    return;
+                                }
+
                                 let aspen_client =
                                     catenary::aspen::lib::spawn_aspen_client_from_ip(
                                         &worker_metadata.socket,
