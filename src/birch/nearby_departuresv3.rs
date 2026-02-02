@@ -769,77 +769,7 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    // B. Calculate Active Services (Crucial Optimization)
-    // We fetch DISTINCT service_ids for these itineraries, then check Calendar.
-    // This allows us to filter the Trips query significantly.
-    let mut distinct_service_conn = pool.get().await.unwrap();
-    let potential_service_ids: Vec<CompactString> =
-        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau.clone()))
-            .filter(
-                catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                    .eq_any(&filtered_itinerary_ids),
-            )
-            .select(catenary::schema::gtfs::trips_compressed::service_id)
-            .distinct()
-            .load::<CompactString>(&mut distinct_service_conn)
-            .await
-            .unwrap_or_default();
-
-    // Fetch Calendar for potential services
-    let pool_cal = pool.clone();
-    let chateau_cal = chateau.clone();
-    let chateau_cal2 = chateau.clone();
-    let service_ids_clone = potential_service_ids.clone();
-    let service_ids_clone2 = potential_service_ids.clone();
-
-    let (calendar, calendar_dates) = tokio::join!(
-        async {
-            let mut conn = pool_cal.get().await.unwrap();
-            catenary::schema::gtfs::calendar::dsl::calendar
-                .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_cal))
-                .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&service_ids_clone))
-                .select(catenary::models::Calendar::as_select())
-                .load::<catenary::models::Calendar>(&mut conn)
-                .await
-                .unwrap_or_default()
-        },
-        async {
-            let mut conn = pool_cal.get().await.unwrap();
-            catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_cal2))
-                .filter(
-                    catenary::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_clone2),
-                )
-                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
-                .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(date_window_end))
-                .select(catenary::models::CalendarDate::as_select())
-                .load::<catenary::models::CalendarDate>(&mut conn)
-                .await
-                .unwrap_or_default()
-        }
-    );
-
-    let calendar_struct =
-        make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates]).unwrap_or_default();
-    let service_map = calendar_struct.get(&chateau);
-
-    // Filter to ONLY active service IDs
-    let mut active_service_ids = Vec::new();
-    if let Some(services) = service_map {
-        let base_date = departure_time_chrono.date_naive() - chrono::Duration::days(1);
-        for service_id in &potential_service_ids {
-            if let Some(service) = services.get(service_id.as_str()) {
-                for i in 0..3 {
-                    let d = base_date + chrono::Duration::days(i);
-                    if catenary::datetime_in_service(service, d) {
-                        active_service_ids.push(service_id.clone());
-                        break;
-                    }
-                }
-            }
-        }
-    }
+    // Active services optimization removed (performance regression)
 
     // C. Fetch Remaining Data (Filtered by Active Services)
     let direction_stop_ids: Vec<String> = direction_rows_list
@@ -855,24 +785,17 @@ async fn fetch_chateau_data(
     let chateau_clone_itin = chateau.clone();
     let chateau_clone_dm = chateau.clone();
     let chateau_clone_routes = chateau.clone();
-    let active_service_ids_clone = active_service_ids.clone();
+
 
     let (trips_compressed_result, itins_result, direction_meta_result, routes_result) = tokio::join!(
         async {
-            if active_service_ids_clone.is_empty() {
-                return vec![];
-            }
+            // Reverted optimization: fetch all trips for itineraries then filter in memory
             let mut conn = pool_clone.get().await.unwrap();
             catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
                 .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone_trips))
                 .filter(
                     catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
                         .eq_any(&filtered_itinerary_ids),
-                )
-                // CRITICAL OPTIMIZATION: Only fetch trips that are running today/tomorrow
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::service_id
-                        .eq_any(&active_service_ids_clone),
                 )
                 .select(catenary::models::CompressedTrip::as_select())
                 .load::<catenary::models::CompressedTrip>(&mut conn)
@@ -923,11 +846,60 @@ async fn fetch_chateau_data(
     );
 
     println!(
-        "V3_OPT: Fetch for {} took {}ms. Found {} active trips.",
+        "V3_OPT: Fetch for {} took {}ms. Found {} trips (unfiltered).",
         chateau,
         t_v3_fetch.elapsed().as_millis(),
         trips_compressed_result.len()
     );
+
+    // Fetch Calendar (Moved here to optimize performance)
+    let mut service_ids_to_fetch = HashSet::new();
+    for trip in &trips_compressed_result {
+        service_ids_to_fetch.insert(trip.service_id.clone());
+    }
+
+    let service_ids_vec: Vec<CompactString> = service_ids_to_fetch.into_iter().collect();
+
+    let (calendar, calendar_dates) = if !service_ids_vec.is_empty() {
+        let pool_cal1 = pool.clone();
+        let pool_cal2 = pool.clone();
+        let chateau_cal1 = chateau.clone();
+        let chateau_cal2 = chateau.clone();
+        let s_ids1 = service_ids_vec.clone();
+        let s_ids2 = service_ids_vec;
+
+        tokio::join!(
+            async move {
+                let mut conn = pool_cal1.get().await.unwrap();
+                catenary::schema::gtfs::calendar::dsl::calendar
+                    .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_cal1))
+                    .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&s_ids1))
+                    .select(catenary::models::Calendar::as_select())
+                    .load::<catenary::models::Calendar>(&mut conn)
+                    .await
+                    .unwrap_or_default()
+            },
+            async move {
+                let mut conn = pool_cal2.get().await.unwrap();
+                catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                    .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_cal2))
+                    .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&s_ids2))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(date_window_end))
+                    .select(catenary::models::CalendarDate::as_select())
+                    .load::<catenary::models::CalendarDate>(&mut conn)
+                    .await
+                    .unwrap_or_default()
+            }
+        )
+    } else {
+        (vec![], vec![])
+    };
+
+    let calendar_struct =
+        catenary::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates]).unwrap_or_default();
+    let service_map = calendar_struct.get(&chateau);
+
 
     // Build Maps
     let mut itins: BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>> = BTreeMap::new();
