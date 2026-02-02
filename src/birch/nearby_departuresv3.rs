@@ -1108,7 +1108,7 @@ async fn fetch_chateau_data(
                     .unwrap_or(0);
 
                 let mut is_last_stop = false;
-                if let Some(dir_id) = &itinerary_meta.direction_pattern_id {
+                /*if let Some(dir_id) = &itinerary_meta.direction_pattern_id {
                     if let Some(d_rows) = direction_rows.get(dir_id) {
                         if let Some(last) = d_rows.last() {
                             if last.stop_sequence == row.gtfs_stop_sequence {
@@ -1116,7 +1116,7 @@ async fn fetch_chateau_data(
                             }
                         }
                     }
-                }
+                }*/
 
                 for date in &valid_service_dates {
                     let tz = chrono_tz::Tz::from_str_insensitive(&itinerary_meta.timezone)
