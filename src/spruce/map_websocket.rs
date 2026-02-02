@@ -90,12 +90,12 @@ pub fn category_to_allowed_route_ids(category: &CategoryOfRealtimeVehicleData) -
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ChateauAskParamsV2 {
     pub category_params: CategoryAskParamsV2,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CategoryAskParamsV2 {
     pub bus: Option<SubCategoryAskParamsV2>,
     pub metro: Option<SubCategoryAskParamsV2>,
@@ -103,7 +103,7 @@ pub struct CategoryAskParamsV2 {
     pub other: Option<SubCategoryAskParamsV2>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct SubCategoryAskParamsV2 {
     pub last_updated_time_ms: u64,
     pub prev_user_min_x: Option<u32>,
@@ -113,7 +113,7 @@ pub struct SubCategoryAskParamsV2 {
 }
 
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BoundsInputV3 {
     pub level5: BoundsInputPerLevel,
     pub level7: BoundsInputPerLevel,
@@ -121,7 +121,7 @@ pub struct BoundsInputV3 {
     pub level12: BoundsInputPerLevel,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BoundsInputPerLevel {
     pub min_x: u32,
     pub max_x: u32,
@@ -130,7 +130,7 @@ pub struct BoundsInputPerLevel {
 }
 
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct BulkFetchParamsV3 {
     pub chateaus: BTreeMap<String, ChateauAskParamsV2>,
     pub categories: Vec<String>,
@@ -790,15 +790,23 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for MapWebSocket {
                 match serde_json::from_str::<BulkFetchParamsV3>(&text) {
                     Ok(params) => {
                          let new_chateaus: HashSet<String> = params.chateaus.keys().cloned().collect();
-                         println!("DEBUG: Received params for chateaus: {:?}", new_chateaus);
-                         self.update_subscriptions(ctx, new_chateaus);
-                         self.params = Some(params);
                          
-                         for ch in &self.subscribed_chateaus {
-                             self.coordinator.do_send(Subscribe {
-                                chateau_id: ch.clone(),
-                                recipient: ctx.address().recipient(),
-                             });
+                         let chateaus_changed = new_chateaus != self.subscribed_chateaus;
+                         let params_changed = self.params.as_ref() != Some(&params);
+
+                         if chateaus_changed || params_changed {
+                             println!("DEBUG: Received new params (chateaus: {:?})", new_chateaus);
+                             self.update_subscriptions(ctx, new_chateaus);
+                             self.params = Some(params);
+                             
+                             for ch in &self.subscribed_chateaus {
+                                 self.coordinator.do_send(Subscribe {
+                                    chateau_id: ch.clone(),
+                                    recipient: ctx.address().recipient(),
+                                 });
+                             }
+                         } else {
+                             // println!("DEBUG: Params identical, skipping update.");
                          }
                     }
                     Err(e) => {
