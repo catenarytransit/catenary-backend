@@ -786,7 +786,6 @@ async fn fetch_chateau_data(
     let chateau_clone_dm = chateau.clone();
     let chateau_clone_routes = chateau.clone();
 
-
     let (trips_compressed_result, itins_result, direction_meta_result, routes_result) = tokio::join!(
         async {
             // Reverted optimization: fetch all trips for itineraries then filter in memory
@@ -897,9 +896,9 @@ async fn fetch_chateau_data(
     };
 
     let calendar_struct =
-        catenary::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates]).unwrap_or_default();
+        catenary::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates])
+            .unwrap_or_default();
     let service_map = calendar_struct.get(&chateau);
-
 
     // Build Maps
     let mut itins: BTreeMap<String, Vec<catenary::models::ItineraryPatternRow>> = BTreeMap::new();
@@ -1002,12 +1001,15 @@ async fn fetch_chateau_data(
 
     // 5. Process Data into Objects
     // 5. Process Data into Objects
-    let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> = HashMap::new();
-    
+    let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> =
+        HashMap::new();
+
     // Key: LocalRouteKey -> Value: Map<Headsign, List of items>
-    let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> = HashMap::new();
-    
-    let mut local_route_meta_map: HashMap<LocalRouteKey, (catenary::models::Route, String)> = HashMap::new();
+    let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> =
+        HashMap::new();
+
+    let mut local_route_meta_map: HashMap<LocalRouteKey, (catenary::models::Route, String)> =
+        HashMap::new();
     let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new();
     let mut stop_output_map: HashMap<String, StopOutputV3> = HashMap::new();
     let alert_index = AlertIndex::new(&rt_alerts);
@@ -1167,8 +1169,42 @@ async fn fetch_chateau_data(
                                         break;
                                     }
                                     if u.trip.start_date.is_none() {
-                                        // Simplified estimation check would go here, omitting for brevity as direct Date match is preferred
-                                        // and usually sufficient with correct Aspen usage.
+                                        for stu in &u.stop_time_update {
+                                            let update_time = stu
+                                                .departure
+                                                .as_ref()
+                                                .and_then(|d| d.time)
+                                                .or(stu.arrival.as_ref().and_then(|a| a.time));
+
+                                            if let Some(u_time) = update_time {
+                                                if let Some(static_stop) = rows.iter().find(|r| {
+                                                     if let Some(seq) = stu.stop_sequence {
+                                                         if r.gtfs_stop_sequence == seq as u32 { return true; }
+                                                     }
+                                                     if let Some(sid) = &stu.stop_id {
+                                                          return crate::stop_matching::rt_stop_matches_scheduled_simple(sid, r.stop_id.as_str());
+                                                     }
+                                                     false
+                                                 }) {
+                                                     let offset = static_stop.departure_time_since_start
+                                                        .or(static_stop.arrival_time_since_start)
+                                                        .or(static_stop.interpolated_time_since_start)
+                                                        .unwrap_or(0);
+                                                     
+                                                     let tz = chrono_tz::Tz::from_str_insensitive(&itinerary_meta.timezone).unwrap_or(chrono_tz::UTC);
+                                                     
+                                                     let implied_start_timestamp = (u_time as i64) - (trip.start_time as i64 + offset as i64);
+                                                     // Allow for up to 20 hours of delay/early carrying over days, though matching exact date is usually enough
+                                                     // effectively we check if the implied service date is the same as the candidate date
+                                                     if let chrono::LocalResult::Single(dt) = tz.timestamp_opt(implied_start_timestamp, 0) {
+                                                         if dt.date_naive() == *date {
+                                                             active_update = Some(u);
+                                                             break;
+                                                         }
+                                                     }
+                                                 }
+                                            }
+                                        }
                                     }
                                 }
                             }

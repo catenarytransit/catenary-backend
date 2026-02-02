@@ -793,7 +793,8 @@ pub async fn fetch_trip_information(
                             .start_date
                             .clone()
                             .map(|x| {
-                                let date = chrono::NaiveDate::parse_from_str(&x, "%Y%md%d");
+                                let date = chrono::NaiveDate::parse_from_str(&x, "%Y%m%d")
+                                    .or_else(|_| chrono::NaiveDate::parse_from_str(&x, "%Y-%m-%d"));
                                 match date {
                                     Ok(date) => Some(date),
                                     Err(_) => None,
@@ -1032,7 +1033,8 @@ pub async fn fetch_trip_information(
 
     //map start date to a YYYY, MM, DD format
     let start_naive_date = if let Some(start_date) = &query.start_date {
-        let start_date = chrono::NaiveDate::parse_from_str(start_date, "%Y%m%d");
+        let start_date = chrono::NaiveDate::parse_from_str(start_date, "%Y%m%d")
+            .or_else(|_| chrono::NaiveDate::parse_from_str(start_date, "%Y-%m-%d"));
 
         if let Err(start_date_err) = start_date {
             eprintln!("{}", start_date_err);
