@@ -958,7 +958,7 @@ async fn fetch_chateau_data(
             .into_iter()
             .map(|t| (t.trip_id.clone(), t))
             .collect();
-            
+
     let seek_back = chrono::TimeDelta::new(5400, 0).unwrap();
     let seek_forward = chrono::TimeDelta::new(3600 * 12, 0).unwrap();
 
@@ -1017,7 +1017,7 @@ async fn fetch_chateau_data(
 
         let frequency: Option<catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto> =
             trip.frequencies.as_ref().map(|data| {
-                prost::Message::decode::<catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto>(
+                <catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto as prost::Message>::decode(
                     data.as_ref(),
                 )
                 .unwrap()
