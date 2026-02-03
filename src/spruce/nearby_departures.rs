@@ -1560,7 +1560,7 @@ pub async fn get_nearby_departures_stream(
         let meta = station_group_metadata.get(&key).unwrap();
         let dist = meta.3;
 
-        let should_be_in_chunk1 = dist < 2000.0;
+        let should_be_in_chunk1 = dist < 1500.0;
 
         if should_be_in_chunk1 {
             if let Some(stops) = station_groups.get(&key) {
@@ -1616,11 +1616,7 @@ pub async fn get_nearby_departures_stream(
     let input_point_clone2 = input_point.clone();
 
     let c2_future = async move {
-        // Chunk 2 with Delay
-        // "delay the second chunk processing a few fractions of a second"
-        // 250ms seems appropriate for "fractions of a second"
-        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-
+        // Chunk 2
         process_chunk_internal(
             context_clone2,
             params_clone2,

@@ -41,16 +41,109 @@ pub async fn fetch_stop_data_for_chateau(
     let mut conn = pool.get().await.unwrap();
     let global_start = std::time::Instant::now();
 
+    // 1. Resolve Direction Patterns & Itinerary Metadata first
+    let (itinerary_list, itin_meta) = if let Some(ref dir_ids) = direction_pattern_ids {
+        // Case A: Caller provided direction_pattern_ids
+        let meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id.clone()))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                    .eq_any(dir_ids),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+            .await
+            .unwrap_or_default();
+
+        let ids: Vec<String> = meta
+            .iter()
+            .map(|x| x.itinerary_pattern_id.clone())
+            .collect();
+        (ids, meta)
+    } else {
+        // Case B: Infer directions from stops (V2 Logic)
+        // We fetch direction_pattern for these stops to see what directions serve them.
+        let distinct_directions: Vec<String> =
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(
+                    catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()),
+                )
+                .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids))
+                .select(catenary::schema::gtfs::direction_pattern::direction_pattern_id)
+                .distinct()
+                .load::<String>(&mut conn)
+                .await
+                .unwrap_or_default();
+
+        if distinct_directions.is_empty() {
+            return (
+                chateau_id,
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                BTreeMap::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+
+        let meta = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id.clone()))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                    .eq_any(&distinct_directions),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+            .await
+            .unwrap_or_default();
+
+        let ids: Vec<String> = meta
+            .iter()
+            .map(|x| x.itinerary_pattern_id.clone())
+            .collect();
+        (ids, meta)
+    };
+
+    if itinerary_list.is_empty() {
+        return (
+            chateau_id,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            Vec::new(),
+            Vec::new(),
+        );
+    }
+
+    // 2. Fetch Itinerary Pattern Rows (filtered by both ID and Stop)
+    // CRITICAL: We filter by stop_id_any(&stop_ids) to only fetch the rows for the stops we care about.
+    // This dramatically reduces the amount of data fetched compared to fetching the whole itinerary.
     let itins = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
         .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id.clone()))
+        .filter(
+            catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                .eq_any(&itinerary_list),
+        )
         .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&stop_ids))
         .select(catenary::models::ItineraryPatternRow::as_select())
         .load::<catenary::models::ItineraryPatternRow>(&mut conn)
         .await
         .unwrap_or_default();
+
     println!(
-        "PERF: itinerary_pattern fetch took {}ms",
-        global_start.elapsed().as_millis()
+        "PERF: itinerary_pattern fetch took {}ms. Count: {}",
+        global_start.elapsed().as_millis(),
+        itins.len()
     );
     let t_section = std::time::Instant::now();
 
@@ -62,55 +155,29 @@ pub async fn fetch_stop_data_for_chateau(
             .push(itin.clone());
     }
 
-    let itinerary_list: Vec<String> = itins_btreemap.keys().cloned().collect();
-    let itinerary_list_clone = itinerary_list.clone();
+    // Since we filtered itinerary_pattern rows by stop_id, we might have itineraries in our list
+    // that don't have any matching rows (e.g. if the direction matches but the pattern doesn't stop there).
+    // We should filter our itinerary_list down to only those that actually have rows.
+    let itinerary_list_filtered: Vec<String> = itins_btreemap.keys().cloned().collect();
+    let itinerary_list_clone = itinerary_list_filtered.clone();
 
     // Task A: Meta Data
-    let mut conn1 = conn; // Reuse first connection
-    let chateau_id_clone = chateau_id.clone();
-    let direction_pattern_ids_clone = direction_pattern_ids.clone();
-    let meta_task = async {
-        // V2 OPTIMIZATION: If we have direction_pattern_ids, filter by those first
-        // This dramatically reduces the result set in dense areas
-        let itin_meta = if let Some(ref dir_ids) = direction_pattern_ids_clone {
-            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                        .eq(chateau_id_clone.clone()),
-                )
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                        .eq_any(dir_ids),
-                )
-                .select(catenary::models::ItineraryPatternMeta::as_select())
-                .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
-                .await
-                .unwrap_or_default()
-        } else {
-            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern_meta::chateau
-                        .eq(chateau_id_clone.clone()),
-                )
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                        .eq_any(&itinerary_list),
-                )
-                .select(catenary::models::ItineraryPatternMeta::as_select())
-                .load::<catenary::models::ItineraryPatternMeta>(&mut conn1)
-                .await
-                .unwrap_or_default()
-        };
-        println!(
-            "PERF: itinerary_pattern_meta fetch took {}ms (count: {})",
-            t_section.elapsed().as_millis(),
-            itin_meta.len()
-        );
-        let t_section = std::time::Instant::now();
+    // We reuse the 'itin_meta' we fetched earlier, but we might want to filter it if we filtered the list
+    let itin_meta_filtered: Vec<catenary::models::ItineraryPatternMeta> = itin_meta
+        .into_iter()
+        .filter(|x| itins_btreemap.contains_key(&x.itinerary_pattern_id))
+        .collect();
 
+    let itin_meta_arc = Arc::new(itin_meta_filtered);
+    let pool_for_join = pool.clone();
+    let chateau_id_clone = chateau_id.clone();
+
+    let meta_task = async {
+        let itin_meta = itin_meta_arc.as_ref();
+        
         let mut itin_meta_btreemap =
             BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
-        for itin in &itin_meta {
+        for itin in itin_meta {
             itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
         }
 
@@ -122,14 +189,6 @@ pub async fn fetch_stop_data_for_chateau(
             .collect();
 
         let route_ids: Vec<CompactString> = itin_meta.iter().map(|x| x.route_id.clone()).collect();
-
-        // Prepare parallel fetches
-        // We need separate connections for concurrent execution or use a pool inside the join
-        // Since we only have 'conn1', we must rely on the pool to get new connections for parallel tasks
-        // or just accept valid parallelisation if we can clone the pool.
-
-        // However, 'pool' is passed to the function.
-        let pool_for_join = pool.clone();
 
         let direction_ids_clone1 = direction_ids_to_search.clone();
         let direction_ids_clone2 = direction_ids_to_search.clone();
@@ -182,11 +241,6 @@ pub async fn fetch_stop_data_for_chateau(
                 .await
                 .unwrap_or_default()
         };
-
-        // We first run direction meta to get shape IDs for shapes fetching, OR we could fetch shapes after
-        // But to maximize concurrency, we need shape IDs.
-        // Current logic: fetch direction_meta -> extract shape IDs -> fetch shapes.
-        // We can run (routes, direction_rows) parallel with direction_meta.
 
         let (direction_meta, direction_rows, routes_ret) =
             tokio::join!(direction_meta_task, direction_rows_task, routes_task);
