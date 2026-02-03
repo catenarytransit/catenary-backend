@@ -724,38 +724,18 @@ async fn fetch_chateau_data(
     let t_v3_fetch = Instant::now();
 
     // 3. Optimized Fetch Pipeline - Parallelize initial queries
-    // Fetch direction_rows and ALL itinerary_pattern_meta for chateau in parallel,
-    // then filter in memory. This eliminates sequential round-trips.
+    // 3. Optimized Fetch Pipeline - Sequential to allow index usage
+    // Fetch direction_rows FIRST, then use the results to filter itinerary_pattern_meta
 
-    let pool_dir = pool.clone();
-    let pool_meta = pool.clone();
-    let chateau_dir = chateau.clone();
-    let chateau_meta = chateau.clone();
-    let stop_ids_for_dir = final_stop_ids.clone();
-
-    let (direction_rows_list, all_itin_meta_for_chateau) = tokio::join!(
-        async move {
-            let mut conn = pool_dir.get().await.unwrap();
-            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_dir))
-                .filter(
-                    catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids_for_dir),
-                )
-                .select(catenary::models::DirectionPatternRow::as_select())
-                .load::<catenary::models::DirectionPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default()
-        },
-        async move {
-            let mut conn = pool_meta.get().await.unwrap();
-            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_meta))
-                .select(catenary::models::ItineraryPatternMeta::as_select())
-                .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
-                .await
-                .unwrap_or_default()
-        }
-    );
+    let mut conn = pool.get().await.unwrap();
+    let direction_rows_list: Vec<catenary::models::DirectionPatternRow> =
+        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
+            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
+            .select(catenary::models::DirectionPatternRow::as_select())
+            .load::<catenary::models::DirectionPatternRow>(&mut conn)
+            .await
+            .unwrap_or_default();
 
     if direction_rows_list.is_empty() {
         return None;
@@ -766,16 +746,19 @@ async fn fetch_chateau_data(
         .map(|r| r.direction_pattern_id.clone())
         .collect();
 
-    // Filter itin_meta in memory based on direction_pattern_ids
-    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> = all_itin_meta_for_chateau
-        .into_iter()
-        .filter(|m| {
-            m.direction_pattern_id
-                .as_ref()
-                .map(|dp| direction_pattern_ids.contains(dp))
-                .unwrap_or(false)
-        })
-        .collect();
+    // Now fetch ONLY relevant itinerary meta
+    let mut conn = pool.get().await.unwrap();
+    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
+        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau.clone()))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                    .eq_any(&direction_pattern_ids),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+            .await
+            .unwrap_or_default();
 
     let filtered_itinerary_ids: Vec<String> = itin_meta_list
         .iter()
