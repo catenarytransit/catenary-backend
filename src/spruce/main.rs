@@ -10,7 +10,10 @@ use std::sync::Arc;
 mod trip_websocket;
 use trip_websocket::TripWebSocket;
 
+mod departures_shared;
 mod map_coordinator;
+mod nearby_departures;
+
 use catenary::trip_logic::{
     GtfsRtRefreshData, QueryTripInformationParams, TripIntroductionInformation,
 };
@@ -40,6 +43,12 @@ pub enum ClientMessage {
         #[serde(flatten)]
         params: MapViewportUpdate,
     },
+    #[serde(rename = "nearby_departures")]
+    NearbyDepartures {
+        #[serde(flatten)]
+        params: nearby_departures::NearbyFromCoordsV3,
+        request_id: String,
+    },
 }
 
 #[derive(Deserialize, Clone)]
@@ -60,6 +69,13 @@ pub enum ServerMessage {
     Error { message: String },
     #[serde(rename = "map_update")]
     MapUpdate(BulkFetchResponseV2),
+    #[serde(rename = "nearby_departures_chunk")]
+    NearbyDeparturesChunk {
+        request_id: String,
+        chunk_index: usize,
+        total_chunks: usize,
+        data: nearby_departures::NearbyDeparturesV3Response,
+    },
 }
 
 async fn index(
@@ -70,6 +86,7 @@ async fn index(
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     coordinator: web::Data<Addr<BulkFetchCoordinator>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         TripWebSocket::new(
@@ -78,6 +95,7 @@ async fn index(
             etcd_connection_options.as_ref().clone(),
             aspen_client_manager.as_ref().clone(),
             coordinator.get_ref().clone(),
+            etcd_reuser.get_ref().clone(),
         ),
         &req,
         stream,
@@ -147,7 +165,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(etcd_connection_options.clone()))
             .app_data(web::Data::new(aspen_client_manager.clone()))
             .app_data(web::Data::new(coordinator.clone()))
+            .app_data(web::Data::new(etcd_reuser.clone()))
             .route("/ws/", web::get().to(index))
+            .service(nearby_departures::nearby_from_coords_v3)
             .route("/", web::get().to(index_root))
     })
     .workers(worker_amount)

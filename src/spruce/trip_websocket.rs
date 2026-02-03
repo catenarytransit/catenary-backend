@@ -24,7 +24,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
 
-use crate::{ClientMessage, MapViewportUpdate, ServerMessage};
+use crate::{ClientMessage, MapViewportUpdate, ServerMessage, nearby_departures};
+use futures::StreamExt;
 
 // Messages moved to main.rs
 
@@ -42,6 +43,8 @@ pub struct TripWebSocket {
     pub subscribed_chateaus: HashSet<String>,
     // ChateauID -> (LastTime, LastBounds, LastCategories)
     pub sent_state: HashMap<String, (u64, BoundsInputV3, HashSet<String>)>,
+
+    pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 }
 
 impl TripWebSocket {
@@ -51,6 +54,7 @@ impl TripWebSocket {
         etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
         aspen_client_manager: Arc<AspenClientManager>,
         coordinator: Addr<BulkFetchCoordinator>,
+        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     ) -> Self {
         Self {
             pool,
@@ -63,6 +67,7 @@ impl TripWebSocket {
             client_viewport: None,
             subscribed_chateaus: HashSet::new(),
             sent_state: HashMap::new(),
+            etcd_reuser,
         }
     }
 
@@ -503,6 +508,51 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                 recipient: ctx.address().recipient(),
                             });
                         }
+                    }
+                    Ok(ClientMessage::NearbyDepartures { params, request_id }) => {
+                        let context = nearby_departures::NearbyDeparturesContext {
+                            pool: self.pool.clone(),
+                            etcd_connection_ips: self.etcd_connection_ips.clone(),
+                            etcd_connection_options: self.etcd_connection_options.clone(),
+                            etcd_reuser: self.etcd_reuser.clone(),
+                        };
+
+                        let request_id_clone = request_id.clone();
+
+                        let fut = async move {
+                            let stream =
+                                nearby_departures::get_nearby_departures_stream(context, params)
+                                    .await;
+                            stream
+                                .enumerate()
+                                .map(move |(idx, response)| {
+                                    let msg = ServerMessage::NearbyDeparturesChunk {
+                                        request_id: request_id_clone.clone(),
+                                        chunk_index: idx,
+                                        total_chunks: 2,
+                                        data: response,
+                                    };
+                                    if let Ok(text) = serde_json::to_string(&msg) {
+                                        text
+                                    } else {
+                                        "".to_string()
+                                    }
+                                })
+                                .collect::<Vec<String>>()
+                                .await
+                        };
+
+                        let fut = actix::fut::wrap_future(fut).map(
+                            |messages, _, ctx: &mut ws::WebsocketContext<Self>| {
+                                for text in messages {
+                                    if !text.is_empty() {
+                                        ctx.text(text);
+                                    }
+                                }
+                            },
+                        );
+
+                        ctx.spawn(fut);
                     }
                     Err(e) => {
                         let msg = ServerMessage::Error {
