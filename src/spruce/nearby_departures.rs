@@ -432,7 +432,7 @@ pub async fn nearby_from_coords_v3(
             HashMap<String, StopOutputV3>,
         )>,
     > = futures::stream::iter(chateau_futures)
-        .buffer_unordered(10)
+        .buffer_unordered(32)
         .collect()
         .await;
     let pipeline_processing_time = pipeline_start.elapsed();
@@ -723,43 +723,59 @@ async fn fetch_chateau_data(
 
     let t_v3_fetch = Instant::now();
 
-    // 3. Optimized Fetch Pipeline (The "OSM-ification")
-    // Instead of fetching all trips then filtering, we calculate Active Services first.
+    // 3. Optimized Fetch Pipeline - Parallelize initial queries
+    // Fetch direction_rows and ALL itinerary_pattern_meta for chateau in parallel,
+    // then filter in memory. This eliminates sequential round-trips.
 
-    // A. Fetch Direction & Itinerary Meta
-    let mut dir_conn = pool.get().await.unwrap();
-    let direction_rows_list: Vec<catenary::models::DirectionPatternRow> =
-        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
-            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
-            .select(catenary::models::DirectionPatternRow::as_select())
-            .load(&mut dir_conn)
-            .await
-            .unwrap_or_default();
+    let pool_dir = pool.clone();
+    let pool_meta = pool.clone();
+    let chateau_dir = chateau.clone();
+    let chateau_meta = chateau.clone();
+    let stop_ids_for_dir = final_stop_ids.clone();
+
+    let (direction_rows_list, all_itin_meta_for_chateau) = tokio::join!(
+        async move {
+            let mut conn = pool_dir.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_dir))
+                .filter(
+                    catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids_for_dir),
+                )
+                .select(catenary::models::DirectionPatternRow::as_select())
+                .load::<catenary::models::DirectionPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        async move {
+            let mut conn = pool_meta.get().await.unwrap();
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_meta))
+                .select(catenary::models::ItineraryPatternMeta::as_select())
+                .load::<catenary::models::ItineraryPatternMeta>(&mut conn)
+                .await
+                .unwrap_or_default()
+        }
+    );
 
     if direction_rows_list.is_empty() {
         return None;
     }
 
-    let direction_pattern_ids: Vec<String> = direction_rows_list
+    let direction_pattern_ids: HashSet<String> = direction_rows_list
         .iter()
         .map(|r| r.direction_pattern_id.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
         .collect();
 
-    let mut meta_conn = pool.get().await.unwrap();
-    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
-        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau.clone()))
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                    .eq_any(&direction_pattern_ids),
-            )
-            .select(catenary::models::ItineraryPatternMeta::as_select())
-            .load(&mut meta_conn)
-            .await
-            .unwrap_or_default();
+    // Filter itin_meta in memory based on direction_pattern_ids
+    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> = all_itin_meta_for_chateau
+        .into_iter()
+        .filter(|m| {
+            m.direction_pattern_id
+                .as_ref()
+                .map(|dp| direction_pattern_ids.contains(dp))
+                .unwrap_or(false)
+        })
+        .collect();
 
     let filtered_itinerary_ids: Vec<String> = itin_meta_list
         .iter()
@@ -1807,7 +1823,7 @@ async fn process_chunk_internal(
 
     let pipeline_start = Instant::now();
     let pipeline_results: Vec<_> = futures::stream::iter(chateau_futures)
-        .buffer_unordered(10)
+        .buffer_unordered(32)
         .collect()
         .await;
     let pipeline_processing_time = pipeline_start.elapsed();

@@ -65,9 +65,7 @@ pub async fn fetch_stop_data_for_chateau(
         // We fetch direction_pattern for these stops to see what directions serve them.
         let distinct_directions: Vec<String> =
             catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-                .filter(
-                    catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()),
-                )
+                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()))
                 .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids))
                 .select(catenary::schema::gtfs::direction_pattern::direction_pattern_id)
                 .distinct()
@@ -131,8 +129,7 @@ pub async fn fetch_stop_data_for_chateau(
     let itins = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
         .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id.clone()))
         .filter(
-            catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                .eq_any(&itinerary_list),
+            catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id.eq_any(&itinerary_list),
         )
         .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&stop_ids))
         .select(catenary::models::ItineraryPatternRow::as_select())
@@ -174,7 +171,7 @@ pub async fn fetch_stop_data_for_chateau(
 
     let meta_task = async {
         let itin_meta = itin_meta_arc.as_ref();
-        
+
         let mut itin_meta_btreemap =
             BTreeMap::<String, catenary::models::ItineraryPatternMeta>::new();
         for itin in itin_meta {
