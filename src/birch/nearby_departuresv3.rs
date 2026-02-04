@@ -1048,7 +1048,11 @@ async fn fetch_chateau_data(
         HashMap::new();
     let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new();
     let mut stop_output_map: HashMap<String, StopOutputV3> = HashMap::new();
+
+    let alerts_idx_timer = std::time::Instant::now();
     let alert_index = AlertIndex::new(&rt_alerts);
+    println!("alerts index formation time: {:?}", alerts_idx_timer.elapsed());
+
     let relevant_stop_ids: HashSet<String> = stop_to_key_map
         .keys()
         .filter(|(c, _)| c == &chateau)
@@ -1102,6 +1106,9 @@ async fn fetch_chateau_data(
             Some(r) => r,
             None => continue,
         };
+
+        let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
+        let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
 
         for row in rows {
             if !relevant_stop_ids.contains(row.stop_id.as_str()) {
@@ -1177,6 +1184,7 @@ async fn fetch_chateau_data(
                     let mut is_cancelled = false;
                     let mut is_delayed = false;
 
+                    let timer_looking_at_rt_alerts = std::time::Instant::now();
                     let relevant_alerts = alert_index.search(route_id.as_str(), trip_id.as_str());
                     for alert in relevant_alerts {
                         if alert.effect == Some(1) {
@@ -1191,10 +1199,12 @@ async fn fetch_chateau_data(
                             }
                         }
                     }
+                    total_time_added_looking_at_rt_alerts += timer_looking_at_rt_alerts.elapsed();
 
                     let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> =
                         None;
                     if let Some(data) = &rt_data {
+                        let timer_looking_at_rt_trips = std::time::Instant::now();
                         if let Some(update_ids) =
                             data.trip_id_to_trip_update_ids.get(trip_id.as_str())
                         {
@@ -1245,9 +1255,11 @@ async fn fetch_chateau_data(
                                 }
                             }
                         }
+                        total_time_added_looking_at_rt_trips += timer_looking_at_rt_trips.elapsed();
                     }
 
                     if let Some(update) = active_update {
+                        let timer_looking_at_rt_alerts = std::time::Instant::now();
                         if let Some(stu) = update.stop_time_update.iter().find(|s| {
                             s.stop_sequence == Some(row.gtfs_stop_sequence as u16)
                                 || s.stop_id
@@ -1280,6 +1292,7 @@ async fn fetch_chateau_data(
                             if stu.schedule_relationship == Some(catenary::aspen_dataset::AspenisedStopTimeScheduleRelationship::Skipped) { is_cancelled = true; }
                         }
                         if update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) { is_cancelled = true; }
+                        total_time_added_looking_at_rt_alerts += timer_looking_at_rt_alerts.elapsed();
                     }
 
                     if let Some(d) = rt_dep {
@@ -1396,6 +1409,9 @@ async fn fetch_chateau_data(
                 }
             }
         }
+
+        println!("Total time added looking at rt alerts: {}", total_time_added_looking_at_rt_alerts.as_secs_f64());
+        println!("Total time added looking at rt trips: {}", total_time_added_looking_at_rt_trips.as_secs_f64());
     }
 
     // Filter closest stop for Local
