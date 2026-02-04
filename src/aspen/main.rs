@@ -402,7 +402,7 @@ impl AspenRpc for AspenServer {
             .peek_with(&chateau_id, |_, authoritative_data| {
                 let time_it_took_to_peek = start_of_function.elapsed();
                 println!("Time it took to peek: {}ms", time_it_took_to_peek.as_millis());
-                
+
                 let route_id_list = route_ids.iter().cloned().collect::<AHashSet<String>>();
 
                 let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
@@ -456,6 +456,9 @@ impl AspenRpc for AspenServer {
                     stop_id_to_parent_id,
                 }
             })
+
+            let time_it_took_to_process = start_of_function.elapsed();
+            println!("Time it took to process trips_with_route_ids: {}ms", time_it_took_to_process.as_millis());
     }
 
     async fn get_gtfs_rt(
