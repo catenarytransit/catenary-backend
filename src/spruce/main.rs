@@ -74,6 +74,7 @@ pub enum ServerMessage {
         request_id: String,
         chunk_index: usize,
         total_chunks: usize,
+        is_hydration: bool,
         data: nearby_departures::NearbyDeparturesV3Response,
     },
 }

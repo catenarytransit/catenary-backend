@@ -525,11 +525,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                     .await;
                             stream
                                 .enumerate()
-                                .map(move |(idx, response)| {
+                                .map(move |(idx, (response, is_hydration))| {
                                     let msg = ServerMessage::NearbyDeparturesChunk {
                                         request_id: request_id_clone.clone(),
                                         chunk_index: idx,
                                         total_chunks: 2,
+                                        is_hydration,
                                         data: response,
                                     };
                                     if let Ok(text) = serde_json::to_string(&msg) {
