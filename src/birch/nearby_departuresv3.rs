@@ -848,10 +848,7 @@ async fn fetch_chateau_data(
         let mut conn = pool_clone.get().await.unwrap();
         catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone_trips))
-            .filter(
-                catenary::schema::gtfs::trips_compressed::route_id
-                    .eq_any(&route_ids),
-            )
+            .filter(catenary::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
             .select(catenary::models::CompressedTrip::as_select())
             .load::<catenary::models::CompressedTrip>(&mut conn)
             .await
@@ -1001,10 +998,10 @@ async fn fetch_chateau_data(
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                             {
                                 let (t, a) = tokio::join!(
-                                    client.get_all_trips_with_ids(
+                                    client.get_all_trips_with_route_ids(
                                         tarpc::context::current(),
                                         chateau.clone(),
-                                        trip_ids.clone()
+                                        route_ids.clone().into_iter().map(|x| x.into()).collect()
                                     ),
                                     client
                                         .get_all_alerts(tarpc::context::current(), chateau.clone())

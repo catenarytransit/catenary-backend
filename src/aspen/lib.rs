@@ -38,6 +38,11 @@ pub trait AspenRpc {
         trip_id: Vec<String>,
     ) -> Option<TripsSelectionResponse>;
 
+    async fn get_all_trips_with_route_ids(
+        chateau_id: String,
+        route_id: Vec<String>,
+    ) -> Option<TripsSelectionResponse>;
+
     async fn get_shape(chateau_id: String, shape_id: String) -> Option<EcoString>;
 
     async fn get_trip_modification(

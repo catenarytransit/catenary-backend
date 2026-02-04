@@ -407,6 +407,58 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_all_trips_with_route_ids(
+        self,
+        _ctx: context::Context,
+        chateau_id: String,
+        route_ids: Vec<String>,
+    ) -> Option<TripsSelectionResponse> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            None => None,
+            Some(authoritative_data) => {
+                let authoritative_data = authoritative_data.get();
+
+                let route_id_list = route_ids.into_iter().collect::<AHashSet<String>>();
+
+                let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+                let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
+
+                for route_id in route_id_list {
+                    if let Some(trip_update_id_list) = authoritative_data
+                        .trip_updates_lookup_by_route_id_to_trip_update_ids
+                        .get(route_id.as_str())
+                    {
+                        for trip_update_id in trip_update_id_list {
+                            if let Some(trip_update) =
+                                authoritative_data.trip_updates.get(trip_update_id.as_str())
+                            {
+                                trip_updates
+                                    .insert(trip_update_id.to_string(), trip_update.clone());
+
+                                if let Some(trip_id) = &trip_update.trip.trip_id {
+                                    trip_id_to_trip_update_ids
+                                        .entry(trip_id.clone())
+                                        .or_default()
+                                        .push(trip_update_id.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Some(TripsSelectionResponse {
+                    trip_updates,
+                    trip_id_to_trip_update_ids,
+                    stop_id_to_parent_id: authoritative_data
+                        .stop_id_to_parent_id
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                })
+            }
+        }
+    }
+
     async fn get_gtfs_rt(
         self,
         _: context::Context,
