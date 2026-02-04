@@ -43,6 +43,7 @@ struct NearbyFromCoordsV3 {
     limit_per_station: Option<usize>,
     limit_per_headsign: Option<usize>,
     skip_realtime: Option<bool>,
+    rt_timeout_ms: Option<u64>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -166,6 +167,9 @@ pub async fn nearby_from_coords_v3(
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
+
+    let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
+
     let start = Instant::now();
     let limit_per_station = query.limit_per_station.unwrap_or(10);
     let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
@@ -1004,7 +1008,7 @@ async fn fetch_chateau_data(
 
                                 let timer_get_trips = std::time::Instant::now();
                                 let timeout_result = tokio::time::timeout(
-                                    std::time::Duration::from_millis(2000),
+                                    std::time::Duration::from_millis(rt_timeout_ms),
                                     async {
                                         tokio::join!(
                                             client.get_all_trips_with_route_ids(
