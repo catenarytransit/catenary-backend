@@ -13,6 +13,7 @@ use std::collections::hash_map::Entry::Occupied;
 use std::collections::hash_map::Entry::Vacant;
 use std::hash::Hash;
 use tzf_rs::DefaultFinder;
+pub mod service_optimisation;
 
 lazy_static! {
     static ref FINDER: DefaultFinder = DefaultFinder::new();

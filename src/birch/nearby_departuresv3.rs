@@ -972,38 +972,39 @@ async fn fetch_chateau_data(
 
     if !skip_realtime {
         if let Some(etcd) = etcd_arc.as_ref() {
-        if !trip_ids.is_empty() {
-            let mut etcd_clone = etcd.clone();
-            if let Ok(resp) = etcd_clone
-                .get(format!("/aspen_assigned_chateaux/{}", chateau), None)
-                .await
-            {
-                if let Some(kv) = resp.kvs().first() {
-                    if let Ok(meta) =
-                        catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value())
-                    {
-                        if let Ok(client) =
-                            catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
+            if !trip_ids.is_empty() {
+                let mut etcd_clone = etcd.clone();
+                if let Ok(resp) = etcd_clone
+                    .get(format!("/aspen_assigned_chateaux/{}", chateau), None)
+                    .await
+                {
+                    if let Some(kv) = resp.kvs().first() {
+                        if let Ok(meta) =
+                            catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value())
                         {
-                            let (t, a) = tokio::join!(
-                                client.get_all_trips_with_ids(
-                                    tarpc::context::current(),
-                                    chateau.clone(),
-                                    trip_ids.clone()
-                                ),
-                                client.get_all_alerts(tarpc::context::current(), chateau.clone())
-                            );
-                            if let Ok(Some(tr)) = t {
-                                rt_data = Some(tr);
-                            }
-                            if let Ok(Some(al)) = a {
-                                rt_alerts = al.into_iter().collect();
+                            if let Ok(client) =
+                                catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
+                            {
+                                let (t, a) = tokio::join!(
+                                    client.get_all_trips_with_ids(
+                                        tarpc::context::current(),
+                                        chateau.clone(),
+                                        trip_ids.clone()
+                                    ),
+                                    client
+                                        .get_all_alerts(tarpc::context::current(), chateau.clone())
+                                );
+                                if let Ok(Some(tr)) = t {
+                                    rt_data = Some(tr);
+                                }
+                                if let Ok(Some(al)) = a {
+                                    rt_alerts = al.into_iter().collect();
+                                }
                             }
                         }
                     }
                 }
             }
-        }
         }
     }
 

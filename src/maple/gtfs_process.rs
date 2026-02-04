@@ -1181,6 +1181,14 @@ pub async fn gtfs_process_feed(
         bbox: None,
     };
 
+    let start_optimization_timer = Instant::now();
+    maple_syrup::service_optimisation::optimise_services(&mut gtfs);
+    println!(
+        "Optimized services for {} in {:?}",
+        feed_id,
+        start_optimization_timer.elapsed()
+    );
+
     let start_reduction_timer = Instant::now();
     let reduction = maple_syrup::reduce(&gtfs);
     println!(
