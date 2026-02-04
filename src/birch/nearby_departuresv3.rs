@@ -1037,7 +1037,6 @@ async fn fetch_chateau_data(
     }
 
     // 5. Process Data into Objects
-    // 5. Process Data into Objects
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> =
         HashMap::new();
 
