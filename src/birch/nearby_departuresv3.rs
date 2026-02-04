@@ -421,6 +421,7 @@ pub async fn nearby_from_coords_v3(
                 full_info_map_clone,
                 stop_dist_map_clone,
                 skip_realtime,
+                rt_timeout_ms,
             )
             .await
         });
@@ -653,6 +654,7 @@ async fn fetch_chateau_data(
     stop_full_info_map: HashMap<String, catenary::models::Stop>,
     stop_dist_map: HashMap<String, f64>,
     skip_realtime: bool,
+    rt_timeout_ms: u64,
 ) -> Option<(
     HashMap<(String, StationKey), Vec<DepartureItem>>,
     HashMap<
