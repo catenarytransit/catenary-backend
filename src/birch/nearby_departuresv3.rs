@@ -1004,7 +1004,7 @@ async fn fetch_chateau_data(
 
                                 let timer_get_trips = std::time::Instant::now();
                                 let timeout_result = tokio::time::timeout(
-                                    std::time::Duration::from_millis(500),
+                                    std::time::Duration::from_millis(2000),
                                     async {
                                         tokio::join!(
                                             client.get_all_trips_with_route_ids(
