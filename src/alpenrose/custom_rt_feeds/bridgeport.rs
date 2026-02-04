@@ -26,9 +26,12 @@ struct BridgeportVehicle {
     lon: f64,
     heading: i32,
     #[allow(dead_code)]
+    #[serde(rename = "routeID")]
     route_id: i32,
+    #[serde(rename = "routeAbbr")]
     route_abbr: String,
     #[allow(dead_code)]
+    #[serde(rename = "directionID")]
     direction_id: i32,
     #[allow(dead_code)]
     direction_name: String,
@@ -47,11 +50,14 @@ struct BridgeportVehicle {
 #[serde(rename_all = "camelCase")]
 struct BridgeportStop {
     #[allow(dead_code)]
+    #[serde(rename = "stopID")]
     stop_id: i32,
     #[allow(dead_code)]
+    #[serde(rename = "stopName")]
     stop_name: String,
     lat: f64,
     lon: f64,
+    #[serde(rename = "directionID")]
     direction_id: i32,
     #[allow(dead_code)]
     direction_name: String,
@@ -87,7 +93,7 @@ async fn fetch_routes(
         .post(&url)
         .header("Content-Type", "application/json; charset=utf-8")
         .header("Accept", "application/json")
-        .body("")
+        .body("{}") // Send empty JSON object to avoid 411
         .send()
         .await?;
 
@@ -135,27 +141,7 @@ async fn fetch_stops_for_route(
     Ok(data.d)
 }
 
-fn find_active_trip(
-    gtfs: &gtfs_structures::Gtfs,
-    route_id: &str,
-    stop_name: &str,
-    vehicle_direction_id: i32,
-) -> Option<(String, String)> {
-    // 1. Find gtfs stop by fuzzy name match
-    // Simple exact match or contains check for now
-    // The API stop names are like "BARNUM AVE. at MAIN ST."
-    // GTFS stop names might be similar (or not).
-    // Let's try to match by name as best as we can.
-    // Ideally we would use lat/lon but we don't have vehicle stop lat/lon readily available to cross check easily without map
-    // Actually we have stats for all stops for the route, so we can pass that map in.
 
-    // Better approach:
-    // In `convert_to_gtfs_rt`, we have `stops` for the route.
-    // We can find matching BridgeportStop by name == vehicle.nextStop.
-    // Then use BridgeportStop lat/lon to finding closest GTFS stop.
-
-    None
-}
 
 fn get_closest_gtfs_stop<'a>(
     gtfs: &'a gtfs_structures::Gtfs,
@@ -411,18 +397,31 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_routes() {
         let client = reqwest::Client::new();
-        let routes = fetch_routes(&client).await;
+        let url = format!("{}/MultiRoute.aspx/getRouteInfo", BASE_URL);
         
-        match routes {
-            Ok(routes) => {
-                println!("Fetched {} routes", routes.len());
-                for route in &routes {
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json; charset=utf-8")
+            .header("Accept", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        let text = response.text().await.expect("Failed to get text");
+        println!("Raw response: {}", text);
+
+        let data: Result<BridgeportResponse<BridgeportRoute>, _> = serde_json::from_str(&text);
+        match data {
+            Ok(data) => {
+                println!("Fetched {} routes", data.d.len());
+                for route in &data.d {
                     println!("  Route {}: {} (id={})", route.abbr, route.name, route.id);
                 }
-                assert!(!routes.is_empty());
+                assert!(!data.d.is_empty());
             }
             Err(e) => {
-                eprintln!("Failed to fetch routes: {}", e);
+                panic!("Failed to decode routes: {}. Raw text: {}", e, text);
             }
         }
     }
@@ -430,38 +429,66 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_vehicles() {
         let client = reqwest::Client::new();
-        let vehicles = fetch_vehicles_for_route(&client, 1).await;
+        let url = format!("{}/GoogleMap.aspx/getVehicles", BASE_URL);
+        let body = serde_json::json!({ "routeID": "1" }); // Ensure string if API expects it, or pass int. API seems to accept "1".
 
-        match vehicles {
-            Ok(vehicles) => {
-                println!("Fetched {} vehicles for route 1", vehicles.len());
-                for v in &vehicles {
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        let text = response.text().await.expect("Failed to get text");
+        println!("Raw vehicle response: {}", text);
+
+        let data: Result<BridgeportResponse<BridgeportVehicle>, _> = serde_json::from_str(&text);
+        match data {
+             Ok(data) => {
+                println!("Fetched {} vehicles for route 1", data.d.len());
+                for v in &data.d {
                     println!(
                         "  Vehicle {}: ({}, {}) heading {} on route {}",
                         v.property_tag, v.lat, v.lon, v.heading, v.route_abbr
                     );
                 }
-            }
-            Err(e) => {
-                eprintln!("Failed to fetch vehicles: {}", e);
-            }
+             }
+             Err(e) => {
+                 panic!("Failed to decode vehicles: {}. Raw text: {}", e, text);
+             }
         }
     }
     
     #[tokio::test]
     async fn test_fetch_stops() {
         let client = reqwest::Client::new();
-        let stops = fetch_stops_for_route(&client, 1).await;
+        let url = format!("{}/GoogleMap.aspx/getStops", BASE_URL);
+        let body = serde_json::json!({ "routeID": "1" });
 
-         match stops {
-            Ok(stops) => {
-                println!("Fetched {} stops for route 1", stops.len());
-                if let Some(s) = stops.first() {
+        let response = client
+            .post(&url)
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .header("Accept", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .expect("Failed to send request");
+
+        let text = response.text().await.expect("Failed to get text");
+        println!("Raw stops response: {}", text);
+
+        let data: Result<BridgeportResponse<BridgeportStop>, _> = serde_json::from_str(&text);
+         match data {
+            Ok(data) => {
+                println!("Fetched {} stops for route 1", data.d.len());
+                if let Some(s) = data.d.first() {
                      println!("  First stop: {} ({}) at {},{}", s.stop_name, s.stop_id, s.lat, s.lon);
                 }
             }
             Err(e) => {
-                eprintln!("Failed to fetch stops: {}", e);
+                panic!("Failed to decode stops: {}. Raw text: {}", e, text);
             }
         }
     }
