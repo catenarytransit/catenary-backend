@@ -986,17 +986,23 @@ async fn fetch_chateau_data(
         if let Some(etcd) = etcd_arc.as_ref() {
             if !trip_ids.is_empty() {
                 let mut etcd_clone = etcd.clone();
+                let start_realtime_fetch = std::time::Instant::now();
                 if let Ok(resp) = etcd_clone
                     .get(format!("/aspen_assigned_chateaux/{}", chateau), None)
                     .await
                 {
+                    let etcd_time = start_realtime_fetch.elapsed();
                     if let Some(kv) = resp.kvs().first() {
                         if let Ok(meta) =
                             catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value())
                         {
+                            let timer_to_connect_to_aspen = std::time::Instant::now();
                             if let Ok(client) =
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                             {
+                                let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+
+                                let timer_get_trips = std::time::Instant::now();
                                 let (t, a) = tokio::join!(
                                     client.get_all_trips_with_route_ids(
                                         tarpc::context::current(),
@@ -1006,6 +1012,16 @@ async fn fetch_chateau_data(
                                     client
                                         .get_all_alerts(tarpc::context::current(), chateau.clone())
                                 );
+                                let time_get_trips = timer_get_trips.elapsed();
+
+                                println!(
+                                    "nearby deps realtime data fetch chateau {}, etcd time {:?}, aspen connect time {:?}, get trips time {:?}",
+                                    chateau.as_str(),
+                                    etcd_time,
+                                    time_to_connect_to_aspen,
+                                    time_get_trips
+                                );
+
                                 if let Ok(Some(tr)) = t {
                                     rt_data = Some(tr);
                                 }
