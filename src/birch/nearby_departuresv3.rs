@@ -792,21 +792,7 @@ async fn fetch_chateau_data(
     let chateau_clone_dm = chateau.clone();
     let chateau_clone_routes = chateau.clone();
 
-    let (trips_compressed_result, itins_result, direction_meta_result, routes_result) = tokio::join!(
-        async {
-            // Reverted optimization: fetch all trips for itineraries then filter in memory
-            let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone_trips))
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids),
-                )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load::<catenary::models::CompressedTrip>(&mut conn)
-                .await
-                .unwrap_or_default()
-        },
+    let (itins_result, direction_meta_result, routes_result) = tokio::join!(
         async {
             let mut conn = pool_clone.get().await.unwrap();
             catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
@@ -850,11 +836,40 @@ async fn fetch_chateau_data(
         }
     );
 
+    // Extract ACTUAL itinerary IDs that match the stop
+    let actual_itinerary_ids: Vec<String> = itins_result
+        .iter()
+        .map(|r| r.itinerary_pattern_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let trips_compressed_raw: Vec<catenary::models::CompressedTrip> = {
+        let mut conn = pool_clone.get().await.unwrap();
+        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone_trips))
+            .filter(
+                catenary::schema::gtfs::trips_compressed::route_id
+                    .eq_any(&route_ids),
+            )
+            .select(catenary::models::CompressedTrip::as_select())
+            .load::<catenary::models::CompressedTrip>(&mut conn)
+            .await
+            .unwrap_or_default()
+    };
+
+    let approved_itins: HashSet<&str> = actual_itinerary_ids.iter().map(|s| s.as_str()).collect();
+    let trips_compressed_result: Vec<catenary::models::CompressedTrip> = trips_compressed_raw
+        .into_iter()
+        .filter(|t| approved_itins.contains(t.itinerary_pattern_id.as_str()))
+        .collect();
+
     println!(
-        "V3_OPT: Fetch for {} took {}ms. Found {} trips (unfiltered).",
+        "V3_OPT: Fetch for {} took {}ms. Found {} trips (filtered by {} itins).",
         chateau,
         t_v3_fetch.elapsed().as_millis(),
-        trips_compressed_result.len()
+        trips_compressed_result.len(),
+        actual_itinerary_ids.len()
     );
 
     // Fetch Calendar (Moved here to optimize performance)
