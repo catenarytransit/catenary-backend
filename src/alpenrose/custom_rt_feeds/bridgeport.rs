@@ -141,20 +141,23 @@ async fn fetch_stops_for_route(
     Ok(data.d)
 }
 
-
-
 fn get_closest_gtfs_stop<'a>(
     gtfs: &'a gtfs_structures::Gtfs,
     lat: f64,
     lon: f64,
 ) -> Option<&'a gtfs_structures::Stop> {
-    gtfs.stops.values().min_by(|a, b| {
-        let dist_a =
-            (a.latitude.unwrap_or(0.0) - lat).powi(2) + (a.longitude.unwrap_or(0.0) - lon).powi(2);
-        let dist_b =
-            (b.latitude.unwrap_or(0.0) - lat).powi(2) + (b.longitude.unwrap_or(0.0) - lon).powi(2);
-        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-    }).map(|v| &**v)
+    gtfs.stops
+        .values()
+        .min_by(|a, b| {
+            let dist_a = (a.latitude.unwrap_or(0.0) - lat).powi(2)
+                + (a.longitude.unwrap_or(0.0) - lon).powi(2);
+            let dist_b = (b.latitude.unwrap_or(0.0) - lat).powi(2)
+                + (b.longitude.unwrap_or(0.0) - lon).powi(2);
+            dist_a
+                .partial_cmp(&dist_b)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|v| &**v)
 }
 
 fn guess_trip_id(
@@ -163,81 +166,88 @@ fn guess_trip_id(
     next_stop_name: &str,
     api_stops: &[BridgeportStop],
     vehicle_direction_id: i32,
-) -> Option<(String, String)> { // (trip_id, start_date)
+) -> Option<(String, String)> {
+    // (trip_id, start_date)
     // 1. Find the stop in api_stops that matches next_stop_name
-    let matched_api_stop = api_stops.iter().find(|s| s.stop_name == next_stop_name && s.direction_id == vehicle_direction_id)?;
+    let matched_api_stop = api_stops
+        .iter()
+        .find(|s| s.stop_name == next_stop_name && s.direction_id == vehicle_direction_id)?;
 
     // 2. Find closest GTFS stop
     let gtfs_stop = get_closest_gtfs_stop(gtfs, matched_api_stop.lat, matched_api_stop.lon)?;
-    
+
     // 3. Find trips for this route that stop at this stop around now
-    
+
     // Date/Time logic
     // We need current time in local timezone presumably, or just unix timestamp
     // GTFS uses HH:MM:SS, potentially > 24h
     let now = chrono::Utc::now();
-    // Assuming EST/EDT for Bridgeport, CT. -5 or -4. 
+    // Assuming EST/EDT for Bridgeport, CT. -5 or -4.
     // Ideally use chrono-tz or offset, but simple offset is okay for estimation
     // Or just use seconds from midnight UTC and adjust.
     // Let's rely on chrono's FixedOffset for now or just standard matching logic
-    // Actually catenary likely has utilities for this. 
+    // Actually catenary likely has utilities for this.
     // `gtfs_structures` works with seconds since midnight.
-    
+
     let seconds_since_midnight = (now.timestamp() % 86400) as u32; // This is UTC seconds since midnight.
     // Bridgeport is UTC-5/UTC-4.
-    // Let's roughly adjust. 
+    // Let's roughly adjust.
     // better: calculate local time seconds since midnight.
     // Or iterate all trips and find the one with closest arrival time at that stop
     // THAT IS VALID for today.
 
     // Filter trips by route_id
-    let candidates = gtfs.trips.values().filter(|vocab| vocab.route_id == route_id);
+    let candidates = gtfs
+        .trips
+        .values()
+        .filter(|vocab| vocab.route_id == route_id);
 
     // We need to check if service runs today.
-    // Using simple approach: assume service is active if not explicitly removed? 
+    // Using simple approach: assume service is active if not explicitly removed?
     // No, we should check calendar.
     // Let's skip complex calendar check and just find *a* trip relative close in time as a heuristic for now?
     // Or just check if today YYYYMMDD is in service.
-    
+
     // This part is computationally expensive to do for every vehicle if not optimized.
     // For now, let's just implement exact stop match + closest time without full calendar validation
     // or return None if too complex for this step.
 
     // Simplified: Find a trip that stops at `gtfs_stop.id` with arrival_time closest to now.
-    
+
     let mut best_trip: Option<&gtfs_structures::Trip> = None;
     let mut min_diff = u32::MAX;
 
     for trip in candidates {
         for stop_time in &trip.stop_times {
             if stop_time.stop.id == gtfs_stop.id {
-                 // Check arrival time
-                 let arrival = stop_time.arrival_time?;
-                 // Convert UTC now to approx local seconds (UTC-5)
-                 let local_seconds = if seconds_since_midnight >= 5 * 3600 {
-                     seconds_since_midnight - 5 * 3600
-                 } else {
-                     seconds_since_midnight + 19 * 3600
-                 };
-                 
-                 let diff = if arrival > local_seconds {
-                     arrival - local_seconds
-                 } else {
-                     local_seconds - arrival
-                 };
-                 
-                 if diff < min_diff && diff < 3600 { // within 1 hour
-                     min_diff = diff;
-                     best_trip = Some(trip);
-                 }
+                // Check arrival time
+                let arrival = stop_time.arrival_time?;
+                // Convert UTC now to approx local seconds (UTC-5)
+                let local_seconds = if seconds_since_midnight >= 5 * 3600 {
+                    seconds_since_midnight - 5 * 3600
+                } else {
+                    seconds_since_midnight + 19 * 3600
+                };
+
+                let diff = if arrival > local_seconds {
+                    arrival - local_seconds
+                } else {
+                    local_seconds - arrival
+                };
+
+                if diff < min_diff && diff < 3600 {
+                    // within 1 hour
+                    min_diff = diff;
+                    best_trip = Some(trip);
+                }
             }
         }
     }
-    
+
     if let Some(trip) = best_trip {
-         // Determine start_date. Simple current date YYYYMMDD string.
-         let start_date = now.format("%Y%m%d").to_string();
-         return Some((trip.id.clone(), start_date));
+        // Determine start_date. Simple current date YYYYMMDD string.
+        let start_date = now.format("%Y%m%d").to_string();
+        return Some((trip.id.clone(), start_date));
     }
 
     None
@@ -255,7 +265,7 @@ fn convert_to_gtfs_rt(
             let gtfs_route_id = route_mapping
                 .get(v.route_abbr.as_str())
                 .map(|s| s.to_string());
-            
+
             let mut trip_desc = gtfs_realtime::TripDescriptor {
                 trip_id: None,
                 route_id: gtfs_route_id.clone(),
@@ -270,11 +280,13 @@ fn convert_to_gtfs_rt(
             if let Some(ref r_id) = gtfs_route_id {
                 // We need the API route ID (v.route_id) to lookup stops in cache
                 if let Some(stops) = stops_cache.get(&v.route_id) {
-                     if let Some((trip_id, start_date)) = guess_trip_id(gtfs, r_id, &v.next_stop, stops, v.direction_id) {
-                         trip_desc.trip_id = Some(trip_id);
-                         trip_desc.start_date = Some(start_date);
-                         // trip_desc.schedule_relationship = Some(gtfs_realtime::trip_descriptor::ScheduleRelationship::Scheduled as i32); 
-                     }
+                    if let Some((trip_id, start_date)) =
+                        guess_trip_id(gtfs, r_id, &v.next_stop, stops, v.direction_id)
+                    {
+                        trip_desc.trip_id = Some(trip_id);
+                        trip_desc.start_date = Some(start_date);
+                        // trip_desc.schedule_relationship = Some(gtfs_realtime::trip_descriptor::ScheduleRelationship::Scheduled as i32);
+                    }
                 }
             }
 
@@ -332,9 +344,9 @@ pub async fn fetch_bridgeport_data(
 
     let routes = fetch_routes(client).await?;
 
-    // Fetch vehicles and stops in parallel? 
+    // Fetch vehicles and stops in parallel?
     // Or just iterate routes and fetch both.
-    
+
     let mut vehicles = Vec::new();
     let mut stops_map = AHashMap::new();
 
@@ -343,9 +355,9 @@ pub async fn fetch_bridgeport_data(
         // Fetch vehicles
         let v_res = fetch_vehicles_for_route(client, route.id).await;
         if let Ok(v) = v_res {
-             vehicles.extend(v);
+            vehicles.extend(v);
         }
-        
+
         // Fetch stops (only need to do this occasionally ideally, but stateless here)
         let s_res = fetch_stops_for_route(client, route.id).await;
         if let Ok(s) = s_res {
@@ -398,7 +410,7 @@ mod tests {
     async fn test_fetch_routes() {
         let client = reqwest::Client::new();
         let url = format!("{}/MultiRoute.aspx/getRouteInfo", BASE_URL);
-        
+
         let response = client
             .post(&url)
             .header("Content-Type", "application/json; charset=utf-8")
@@ -446,7 +458,7 @@ mod tests {
 
         let data: Result<BridgeportResponse<BridgeportVehicle>, _> = serde_json::from_str(&text);
         match data {
-             Ok(data) => {
+            Ok(data) => {
                 println!("Fetched {} vehicles for route 1", data.d.len());
                 for v in &data.d {
                     println!(
@@ -454,13 +466,13 @@ mod tests {
                         v.property_tag, v.lat, v.lon, v.heading, v.route_abbr
                     );
                 }
-             }
-             Err(e) => {
-                 panic!("Failed to decode vehicles: {}. Raw text: {}", e, text);
-             }
+            }
+            Err(e) => {
+                panic!("Failed to decode vehicles: {}. Raw text: {}", e, text);
+            }
         }
     }
-    
+
     #[tokio::test]
     async fn test_fetch_stops() {
         let client = reqwest::Client::new();
@@ -480,11 +492,14 @@ mod tests {
         println!("Raw stops response: {}", text);
 
         let data: Result<BridgeportResponse<BridgeportStop>, _> = serde_json::from_str(&text);
-         match data {
+        match data {
             Ok(data) => {
                 println!("Fetched {} stops for route 1", data.d.len());
                 if let Some(s) = data.d.first() {
-                     println!("  First stop: {} ({}) at {},{}", s.stop_name, s.stop_id, s.lat, s.lon);
+                    println!(
+                        "  First stop: {} ({}) at {},{}",
+                        s.stop_name, s.stop_id, s.lat, s.lon
+                    );
                 }
             }
             Err(e) => {

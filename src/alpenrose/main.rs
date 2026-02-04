@@ -392,8 +392,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                         match gtfs {
                             Ok(gtfs) => {
-                                 println!("Amtrak GTFS downloaded.");
-                                 *amtrak_gtfs.write().await = Some(gtfs);
+                                println!("Amtrak GTFS downloaded.");
+                                *amtrak_gtfs.write().await = Some(gtfs);
                             }
                             Err(e) => eprintln!("Failed to download Amtrak GTFS: {}", e),
                         }
@@ -696,7 +696,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 too_many_requests_log.clone(),
             )
             .await?;
-
 
             //check if the worker is still alive
 
