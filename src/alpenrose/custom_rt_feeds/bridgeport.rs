@@ -167,52 +167,21 @@ fn guess_trip_id(
     api_stops: &[BridgeportStop],
     vehicle_direction_id: i32,
 ) -> Option<(String, String)> {
-    // (trip_id, start_date)
-    // 1. Find the stop in api_stops that matches next_stop_name
     let matched_api_stop = api_stops
         .iter()
         .find(|s| s.stop_name == next_stop_name && s.direction_id == vehicle_direction_id)?;
 
-    // 2. Find closest GTFS stop
     let gtfs_stop = get_closest_gtfs_stop(gtfs, matched_api_stop.lat, matched_api_stop.lon)?;
 
-    // 3. Find trips for this route that stop at this stop around now
-
-    // Date/Time logic
-    // We need current time in local timezone presumably, or just unix timestamp
-    // GTFS uses HH:MM:SS, potentially > 24h
     let now = chrono::Utc::now();
-    // Assuming EST/EDT for Bridgeport, CT. -5 or -4.
-    // Ideally use chrono-tz or offset, but simple offset is okay for estimation
-    // Or just use seconds from midnight UTC and adjust.
-    // Let's rely on chrono's FixedOffset for now or just standard matching logic
-    // Actually catenary likely has utilities for this.
-    // `gtfs_structures` works with seconds since midnight.
+    let seconds_since_midnight = (now.timestamp() % 86400) as u32;
 
-    let seconds_since_midnight = (now.timestamp() % 86400) as u32; // This is UTC seconds since midnight.
-    // Bridgeport is UTC-5/UTC-4.
-    // Let's roughly adjust.
-    // better: calculate local time seconds since midnight.
-    // Or iterate all trips and find the one with closest arrival time at that stop
-    // THAT IS VALID for today.
-
-    // Filter trips by route_id
     let candidates = gtfs
         .trips
         .values()
         .filter(|vocab| vocab.route_id == route_id);
 
-    // We need to check if service runs today.
-    // Using simple approach: assume service is active if not explicitly removed?
-    // No, we should check calendar.
-    // Let's skip complex calendar check and just find *a* trip relative close in time as a heuristic for now?
-    // Or just check if today YYYYMMDD is in service.
-
-    // This part is computationally expensive to do for every vehicle if not optimized.
-    // For now, let's just implement exact stop match + closest time without full calendar validation
-    // or return None if too complex for this step.
-
-    // Simplified: Find a trip that stops at `gtfs_stop.id` with arrival_time closest to now.
+    // Find a trip that stops at `gtfs_stop.id` with arrival_time closest to now.
 
     let mut best_trip: Option<&gtfs_structures::Trip> = None;
     let mut min_diff = u32::MAX;
@@ -222,7 +191,7 @@ fn guess_trip_id(
             if stop_time.stop.id == gtfs_stop.id {
                 // Check arrival time
                 let arrival = stop_time.arrival_time?;
-                // Convert UTC now to approx local seconds (UTC-5)
+                // Bridgeport is UTC-5; adjust comparison to match stop arrival time
                 let local_seconds = if seconds_since_midnight >= 5 * 3600 {
                     seconds_since_midnight - 5 * 3600
                 } else {
@@ -236,7 +205,6 @@ fn guess_trip_id(
                 };
 
                 if diff < min_diff && diff < 3600 {
-                    // within 1 hour
                     min_diff = diff;
                     best_trip = Some(trip);
                 }
@@ -245,7 +213,6 @@ fn guess_trip_id(
     }
 
     if let Some(trip) = best_trip {
-        // Determine start_date. Simple current date YYYYMMDD string.
         let start_date = now.format("%Y%m%d").to_string();
         return Some((trip.id.clone(), start_date));
     }
@@ -276,7 +243,6 @@ fn convert_to_gtfs_rt(
                 modified_trip: None,
             };
 
-            // Try to guess trip id
             if let Some(ref r_id) = gtfs_route_id {
                 // We need the API route ID (v.route_id) to lookup stops in cache
                 if let Some(stops) = stops_cache.get(&v.route_id) {
@@ -285,7 +251,6 @@ fn convert_to_gtfs_rt(
                     {
                         trip_desc.trip_id = Some(trip_id);
                         trip_desc.start_date = Some(start_date);
-                        // trip_desc.schedule_relationship = Some(gtfs_realtime::trip_descriptor::ScheduleRelationship::Scheduled as i32);
                     }
                 }
             }
@@ -344,21 +309,16 @@ pub async fn fetch_bridgeport_data(
 
     let routes = fetch_routes(client).await?;
 
-    // Fetch vehicles and stops in parallel?
-    // Or just iterate routes and fetch both.
-
     let mut vehicles = Vec::new();
     let mut stops_map = AHashMap::new();
 
-    // Limit concurrency if needed, but for now just process chunks or all
     for route in routes {
-        // Fetch vehicles
         let v_res = fetch_vehicles_for_route(client, route.id).await;
+
         if let Ok(v) = v_res {
             vehicles.extend(v);
         }
 
-        // Fetch stops (only need to do this occasionally ideally, but stateless here)
         let s_res = fetch_stops_for_route(client, route.id).await;
         if let Ok(s) = s_res {
             stops_map.insert(route.id, s);
@@ -442,7 +402,7 @@ mod tests {
     async fn test_fetch_vehicles() {
         let client = reqwest::Client::new();
         let url = format!("{}/GoogleMap.aspx/getVehicles", BASE_URL);
-        let body = serde_json::json!({ "routeID": "1" }); // Ensure string if API expects it, or pass int. API seems to accept "1".
+        let body = serde_json::json!({ "routeID": "1" });
 
         let response = client
             .post(&url)
@@ -505,6 +465,76 @@ mod tests {
             Err(e) => {
                 panic!("Failed to decode stops: {}. Raw text: {}", e, text);
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_full_conversion_with_real_gtfs() {
+        // 1. Load GTFS
+        println!("Downloading GTFS...");
+        let gtfs = gtfs_structures::Gtfs::from_url_async(
+            "https://data.trilliumtransit.com/gtfs/gbt-ct-us/gbt-ct-us.zip",
+        )
+        .await
+        .expect("Failed to download GTFS");
+        println!(
+            "GTFS loaded. {} stops, {} trips",
+            gtfs.stops.len(),
+            gtfs.trips.len()
+        );
+
+        // 2. Fetch Data
+        let client = reqwest::Client::new();
+        let routes = fetch_routes(&client).await.expect("Failed to fetch routes");
+        println!("Fetched {} routes", routes.len());
+
+        let mut vehicles = Vec::new();
+        let mut stops_map = AHashMap::new();
+
+        for route in routes {
+            if let Ok(v) = fetch_vehicles_for_route(&client, route.id).await {
+                if !v.is_empty() {
+                    vehicles.extend(v);
+                    // Fetch stops only if we have vehicles to save time/bandwidth in test
+                    if let Ok(s) = fetch_stops_for_route(&client, route.id).await {
+                        stops_map.insert(route.id, s);
+                    }
+                }
+            }
+        }
+        println!(
+            "Fetched {} vehicles and stops for {} routes",
+            vehicles.len(),
+            stops_map.len()
+        );
+
+        // 3. Convert
+        let route_mapping = route_abbr_to_gtfs_id();
+        let entities = convert_to_gtfs_rt(vehicles, &stops_map, &gtfs, &route_mapping);
+
+        println!("Generated {} GTFS-RT entities", entities.len());
+
+        // 4. Inspect results
+        let matched_trips = entities
+            .iter()
+            .filter(|e| {
+                e.vehicle
+                    .as_ref()
+                    .and_then(|v| v.trip.as_ref())
+                    .and_then(|t| t.trip_id.as_ref())
+                    .is_some()
+            })
+            .count();
+        println!(
+            "Matched {} trips out of {} vehicles",
+            matched_trips,
+            entities.len()
+        );
+
+        if !entities.is_empty() {
+            // Assert that we are producing valid entities
+            let sample = entities.first().unwrap();
+            println!("Sample Entity: {:?}", sample);
         }
     }
 }
