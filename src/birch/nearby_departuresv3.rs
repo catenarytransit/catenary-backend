@@ -167,7 +167,6 @@ pub async fn nearby_from_coords_v3(
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
-
     let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
 
     let start = Instant::now();

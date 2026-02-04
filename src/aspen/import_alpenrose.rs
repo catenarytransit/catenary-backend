@@ -1223,6 +1223,31 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
+                        if trip_descriptor.trip_id.is_some() {
+                            let recalculate_route_id: Option<String> =
+                                match &trip_update.trip.trip_id {
+                                    Some(trip_id) => {
+                                        let compressed_trip = trip_id_to_trip.get(trip_id);
+                                        match compressed_trip {
+                                            Some(compressed_trip) => {
+                                                let route = route_id_to_route
+                                                    .get(&compressed_trip.route_id);
+                                                match route {
+                                                    Some(route) => Some(route.route_id.clone()),
+                                                    None => trip_update.trip.route_id.clone(),
+                                                }
+                                            }
+                                            None => trip_update.trip.route_id.clone(),
+                                        }
+                                    }
+                                    None => trip_update.trip.route_id.clone(),
+                                };
+
+                            if let Some(recalculate_route_id) = recalculate_route_id {
+                                trip_descriptor.route_id = Some(recalculate_route_id);
+                            }
+                        }
+
                         if catenary::THROW_AWAY_START_DATES.contains(&chateau_id) {
                             trip_descriptor.start_date = None;
                         }
