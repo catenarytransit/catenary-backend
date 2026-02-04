@@ -44,6 +44,7 @@ lazy_static! {
         "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt",
         "f-9vff-fortworthtransportationauthority~rt~catenary~unwire",
         "f-9vg-dart~rt~catenary~unwire",
+        "f-dr7f-greaterbridgeporttransit~rt",
         "f-flixbus~eu~rt",
         "f-flixbus~us~rt",
     ]);
@@ -106,6 +107,7 @@ pub async fn single_fetch_time(
     chicago_text_str: Arc<RwLock<Option<String>>>,
     chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
@@ -142,6 +144,7 @@ pub async fn single_fetch_time(
                 let last_fetch_per_feed = last_fetch_per_feed.clone();
                 let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
                 let rtcquebec_gtfs = rtcquebec_gtfs.clone();
+                let bridgeport_gtfs = bridgeport_gtfs.clone();
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
@@ -605,15 +608,7 @@ pub async fn single_fetch_time(
                                     }
                                 }
                             },
-                            "f-tlms~rt" => {
-                                custom_rt_feeds::tlms::fetch_tlms_data(
-                                    &mut kv_client,
-                                    &feed_id,
-                                    &client,
-                                )
-                                .await;
-                            }
-                            "f-rtcquebec~rt" => {
+                             "f-rtcquebec~rt" => {
                                 let rtc_lock = rtcquebec_gtfs.read().await;
                                 if let Some(gtfs) = rtc_lock.as_ref() {
                                     custom_rt_feeds::rtcquebec::fetch_rtc_data(
@@ -624,6 +619,28 @@ pub async fn single_fetch_time(
                                     )
                                     .await;
                                 }
+                            }
+                            "f-dr7f-greaterbridgeporttransit~rt" => {
+                                let lock = bridgeport_gtfs.read().await;
+                                if let Some(gtfs) = lock.as_ref() {
+                                    if let Err(e) = custom_rt_feeds::bridgeport::fetch_bridgeport_data(
+                                        &mut kv_client,
+                                        &feed_id,
+                                        &client,
+                                        gtfs,
+                                    )
+                                    .await {
+                                        eprintln!("Error fetching bridgeport: {}", e);
+                                    }
+                                }
+                            }
+                            "f-tlms~rt" => {
+                                custom_rt_feeds::tlms::fetch_tlms_data(
+                                    &mut kv_client,
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
                             }
                             "f-dp3-cta~bus~rt" | "f-dp3-cta~bus~rt" => {
                                 let cta_bus_lock = cta_bus_gtfs.read().await;

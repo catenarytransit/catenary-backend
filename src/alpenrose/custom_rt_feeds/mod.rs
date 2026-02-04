@@ -1,4 +1,5 @@
 pub mod amtrak;
+pub mod bridgeport;
 //pub mod anteater_express;
 pub mod chicagotransit;
 pub mod flixbus;

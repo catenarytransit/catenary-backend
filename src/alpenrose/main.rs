@@ -83,6 +83,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
@@ -391,8 +392,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                         match gtfs {
                             Ok(gtfs) => {
-                                println!("Amtrak GTFS downloaded.");
-                                *amtrak_gtfs.write().await = Some(gtfs);
+                                 println!("Amtrak GTFS downloaded.");
+                                 *amtrak_gtfs.write().await = Some(gtfs);
                             }
                             Err(e) => eprintln!("Failed to download Amtrak GTFS: {}", e),
                         }
@@ -421,6 +422,33 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                             }
                             Ok(Err(e)) => eprintln!("Failed to read RTC Quebec GTFS: {}", e),
                             Err(e) => eprintln!("Join error RTC Quebec: {}", e),
+                        }
+                    });
+                }
+
+                // Bridgeport Transit
+                if assigned_feeds.contains("f-dr7f-greaterbridgeporttransit~rt")
+                    && !downloads_started.contains("bridgeport")
+                {
+                    println!("Spawning Bridgeport Transit download task...");
+                    downloads_started.insert("bridgeport".to_string());
+                    let bridgeport_gtfs = bridgeport_gtfs.clone();
+                    tokio::spawn(async move {
+                        let gtfs = gtfs_structures::GtfsReader::default()
+                            .read_shapes(false)
+                            .read_from_url_async(
+                                "https://data.trilliumtransit.com/gtfs/gbt-ct-us/gbt-ct-us.zip",
+                            )
+                            .await;
+
+                        match gtfs {
+                            Ok(gtfs) => {
+                                println!("Bridgeport GTFS downloaded.");
+                                *bridgeport_gtfs.write().await = Some(gtfs);
+                            }
+                            Err(e) => {
+                                eprintln!("Failed to download Bridgeport GTFS: {}", e)
+                            }
                         }
                     });
                 }
@@ -655,6 +683,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_trips_str),
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
+                Arc::clone(&bridgeport_gtfs),
                 Arc::clone(&mnr_gtfs),
                 Arc::clone(&via_gtfs),
                 Arc::clone(&cta_bus_gtfs),
@@ -667,6 +696,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 too_many_requests_log.clone(),
             )
             .await?;
+
 
             //check if the worker is still alive
 
