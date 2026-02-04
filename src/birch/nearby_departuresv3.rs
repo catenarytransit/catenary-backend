@@ -349,7 +349,9 @@ pub async fn nearby_from_coords_v3(
         )
         .await;
         if let Ok(c) = new_client {
-            etcd = Some(c);
+            etcd = Some(c.clone());
+            let mut etcd_reuser_write = etcd_reuser.write().await;
+            *etcd_reuser_write = Some(c);
         }
     }
     let etcd_arc = Arc::new(etcd);
