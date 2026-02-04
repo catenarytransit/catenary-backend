@@ -4,7 +4,6 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
-use scc::HashIndex;
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -18,7 +17,7 @@ use crate::import_alpenrose::new_rt_data;
 pub async fn alpenrose_process_threads(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
-    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
@@ -96,7 +95,7 @@ pub async fn alpenrose_process_threads(
 pub async fn alpenrose_loop_process_thread(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
-    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     redis_client: redis::Client,
