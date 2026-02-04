@@ -42,6 +42,7 @@ struct NearbyFromCoordsV3 {
     radius: Option<f64>,
     limit_per_station: Option<usize>,
     limit_per_headsign: Option<usize>,
+    skip_realtime: Option<bool>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -168,6 +169,7 @@ pub async fn nearby_from_coords_v3(
     let start = Instant::now();
     let limit_per_station = query.limit_per_station.unwrap_or(10);
     let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
+    let skip_realtime = query.skip_realtime.unwrap_or(false);
 
     let conn_pool = pool.as_ref();
     let db_connection_start = Instant::now();
@@ -412,6 +414,7 @@ pub async fn nearby_from_coords_v3(
                 stop_name_map,
                 full_info_map_clone,
                 stop_dist_map_clone,
+                skip_realtime,
             )
             .await
         });
@@ -643,6 +646,7 @@ async fn fetch_chateau_data(
     stop_name_map: HashMap<String, Option<String>>,
     stop_full_info_map: HashMap<String, catenary::models::Stop>,
     stop_dist_map: HashMap<String, f64>,
+    skip_realtime: bool,
 ) -> Option<(
     HashMap<(String, StationKey), Vec<DepartureItem>>,
     HashMap<
@@ -964,7 +968,8 @@ async fn fetch_chateau_data(
     let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
     let mut rt_alerts: BTreeMap<String, catenary::aspen_dataset::AspenisedAlert> = BTreeMap::new();
 
-    if let Some(etcd) = etcd_arc.as_ref() {
+    if !skip_realtime {
+        if let Some(etcd) = etcd_arc.as_ref() {
         if !trip_ids.is_empty() {
             let mut etcd_clone = etcd.clone();
             if let Ok(resp) = etcd_clone
@@ -996,6 +1001,7 @@ async fn fetch_chateau_data(
                     }
                 }
             }
+        }
         }
     }
 
