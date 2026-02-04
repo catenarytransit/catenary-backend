@@ -394,14 +394,29 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
+                let relevant_stop_ids: AHashSet<&str> = trip_updates
+                    .values()
+                    .flat_map(|tu| {
+                        tu.stop_time_update
+                            .iter()
+                            .filter_map(|stu| stu.stop_id.as_deref())
+                    })
+                    .collect();
+
+                let stop_id_to_parent_id: AHashMap<String, String> = relevant_stop_ids
+                    .iter()
+                    .filter_map(|stop_id| {
+                        authoritative_data
+                            .stop_id_to_parent_id
+                            .get(*stop_id)
+                            .map(|parent| (stop_id.to_string(), parent.to_string()))
+                    })
+                    .collect();
+
                 Some(TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
-                    stop_id_to_parent_id: authoritative_data
-                        .stop_id_to_parent_id
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect(),
+                    stop_id_to_parent_id,
                 })
             }
         }
@@ -446,14 +461,29 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
+                let relevant_stop_ids: AHashSet<&str> = trip_updates
+                    .values()
+                    .flat_map(|tu| {
+                        tu.stop_time_update
+                            .iter()
+                            .filter_map(|stu| stu.stop_id.as_deref())
+                    })
+                    .collect();
+
+                let stop_id_to_parent_id: AHashMap<String, String> = relevant_stop_ids
+                    .iter()
+                    .filter_map(|stop_id| {
+                        authoritative_data
+                            .stop_id_to_parent_id
+                            .get(*stop_id)
+                            .map(|parent| (stop_id.to_string(), parent.to_string()))
+                    })
+                    .collect();
+
                 Some(TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
-                    stop_id_to_parent_id: authoritative_data
-                        .stop_id_to_parent_id
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.to_string()))
-                        .collect(),
+                    stop_id_to_parent_id,
                 })
             }
         }
