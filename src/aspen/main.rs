@@ -395,8 +395,14 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         route_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
+
+        let start_of_function = std::time::Instant::now();
+
         self.authoritative_data_store
             .peek_with(&chateau_id, |_, authoritative_data| {
+                let time_it_took_to_peek = start_of_function.elapsed();
+                println!("Time it took to peek: {}ms", time_it_took_to_peek.as_millis());
+                
                 let route_id_list = route_ids.iter().cloned().collect::<AHashSet<String>>();
 
                 let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
