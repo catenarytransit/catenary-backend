@@ -1177,10 +1177,10 @@ impl AspenRpc for AspenServer {
 
             let hash_data_duration = hash_data_start.elapsed();
 
-            println!(
-                "wrote {realtime_feed_id} in chateau {chateau_id}, took {} ms, is new data: {new_data}",
-                hash_data_duration.as_millis()
-            );
+            // println!(
+            //     "wrote {realtime_feed_id} in chateau {chateau_id}, took {} ms, is new data: {new_data}",
+            //     hash_data_duration.as_millis()
+            // );
 
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 

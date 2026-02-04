@@ -48,10 +48,10 @@ pub async fn fetch_stop_data_for_chateau(
         .load::<catenary::models::ItineraryPatternRow>(&mut conn)
         .await
         .unwrap_or_default();
-    println!(
-        "PERF: itinerary_pattern fetch took {}ms",
-        global_start.elapsed().as_millis()
-    );
+    // println!(
+    //     "PERF: itinerary_pattern fetch took {}ms",
+    //     global_start.elapsed().as_millis()
+    // );
     let t_section = std::time::Instant::now();
 
     let mut itins_btreemap = BTreeMap::<String, Vec<catenary::models::ItineraryPatternRow>>::new();
@@ -101,11 +101,11 @@ pub async fn fetch_stop_data_for_chateau(
                 .await
                 .unwrap_or_default()
         };
-        println!(
-            "PERF: itinerary_pattern_meta fetch took {}ms (count: {})",
-            t_section.elapsed().as_millis(),
-            itin_meta.len()
-        );
+        // println!(
+        //     "PERF: itinerary_pattern_meta fetch took {}ms (count: {})",
+        //     t_section.elapsed().as_millis(),
+        //     itin_meta.len()
+        // );
         let t_section = std::time::Instant::now();
 
         let mut itin_meta_btreemap =
@@ -237,10 +237,10 @@ pub async fn fetch_stop_data_for_chateau(
 
         let (agencies_ret, shapes_result) = tokio::join!(agencies_task, shapes_task);
 
-        println!(
-            "PERF: parallel meta fetch block took {}ms",
-            t_section.elapsed().as_millis()
-        );
+        // println!(
+        //     "PERF: parallel meta fetch block took {}ms",
+        //     t_section.elapsed().as_millis()
+        // );
 
         let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
         for db_shape in shapes_result {
@@ -325,11 +325,11 @@ pub async fn fetch_stop_data_for_chateau(
                         .await
                         .unwrap_or_default();
 
-                println!(
-                    "PERF: service_id fetch (distinct) took {}ms. Count: {}",
-                    t_section.elapsed().as_millis(),
-                    service_ids.len()
-                );
+                // println!(
+                //     "PERF: service_id fetch (distinct) took {}ms. Count: {}",
+                //     t_section.elapsed().as_millis(),
+                //     service_ids.len()
+                // );
 
                 // 2. Fetch Calendar / Calendar Dates for these specific service IDs
                 let mut conn_cal = pool_for_schedule.get().await.unwrap();
@@ -381,12 +381,12 @@ pub async fn fetch_stop_data_for_chateau(
                     }
                 }
 
-                println!(
-                    "PERF: Active Services Calculation took {}ms. Active: {} / {}",
-                    t_section.elapsed().as_millis(),
-                    active_services.len(),
-                    service_ids.len()
-                );
+                // println!(
+                //     "PERF: Active Services Calculation took {}ms. Active: {} / {}",
+                //     t_section.elapsed().as_millis(),
+                //     active_services.len(),
+                //     service_ids.len()
+                // );
 
                 active_service_ids_opt = Some(active_services);
             }
@@ -462,11 +462,11 @@ pub async fn fetch_stop_data_for_chateau(
                 .await
                 .unwrap_or_default()
         };
-        println!(
-            "PERF: trips_compressed fetch took {}ms. Count: {}",
-            t_section.elapsed().as_millis(),
-            trips.len()
-        );
+        // println!(
+        //     "PERF: trips_compressed fetch took {}ms. Count: {}",
+        //     t_section.elapsed().as_millis(),
+        //     trips.len()
+        // );
         let t_section = std::time::Instant::now();
 
         let mut trip_compressed_btreemap =
@@ -485,10 +485,10 @@ pub async fn fetch_stop_data_for_chateau(
             .load::<catenary::models::Calendar>(&mut conn_calendar)
             .await
             .unwrap_or_default();
-        println!(
-            "PERF: calendar fetch took {}ms",
-            t_section.elapsed().as_millis()
-        );
+        // println!(
+        //     "PERF: calendar fetch took {}ms",
+        //     t_section.elapsed().as_millis()
+        // );
         let t_section = std::time::Instant::now();
 
         let mut calendar_dates_query = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
@@ -509,10 +509,10 @@ pub async fn fetch_stop_data_for_chateau(
             .load::<catenary::models::CalendarDate>(&mut conn_calendar)
             .await
             .unwrap_or_default();
-        println!(
-            "PERF: calendar_dates fetch took {}ms",
-            t_section.elapsed().as_millis()
-        );
+        // println!(
+        //     "PERF: calendar_dates fetch took {}ms",
+        //     t_section.elapsed().as_millis()
+        // );
 
         (trip_compressed_btreemap, calendar, calendar_dates)
     };
@@ -529,10 +529,10 @@ pub async fn fetch_stop_data_for_chateau(
         (trip_compressed_btreemap, calendar, calendar_dates),
     ) = tokio::join!(meta_task, schedule_task);
 
-    println!(
-        "PERF: TOTAL fetch_stop_data_for_chateau took {}ms",
-        global_start.elapsed().as_millis()
-    );
+    // println!(
+    //     "PERF: TOTAL fetch_stop_data_for_chateau took {}ms",
+    //     global_start.elapsed().as_millis()
+    // );
 
     (
         chateau_id,

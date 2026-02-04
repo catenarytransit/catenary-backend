@@ -861,13 +861,13 @@ async fn fetch_chateau_data(
         .filter(|t| approved_itins.contains(t.itinerary_pattern_id.as_str()))
         .collect();
 
-    println!(
-        "V3_OPT: Fetch for {} took {}ms. Found {} trips (filtered by {} itins).",
-        chateau,
-        t_v3_fetch.elapsed().as_millis(),
-        trips_compressed_result.len(),
-        actual_itinerary_ids.len()
-    );
+    // println!(
+    //     "V3_OPT: Fetch for {} took {}ms. Found {} trips (filtered by {} itins).",
+    //     chateau,
+    //     t_v3_fetch.elapsed().as_millis(),
+    //     trips_compressed_result.len(),
+    //     actual_itinerary_ids.len()
+    // );
 
     // Fetch Calendar (Moved here to optimize performance)
     let mut service_ids_to_fetch = HashSet::new();
