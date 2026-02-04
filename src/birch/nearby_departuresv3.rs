@@ -1051,7 +1051,10 @@ async fn fetch_chateau_data(
 
     let alerts_idx_timer = std::time::Instant::now();
     let alert_index = AlertIndex::new(&rt_alerts);
-    println!("alerts index formation time: {:?}", alerts_idx_timer.elapsed());
+    println!(
+        "alerts index formation time: {:?}",
+        alerts_idx_timer.elapsed()
+    );
 
     let relevant_stop_ids: HashSet<String> = stop_to_key_map
         .keys()
@@ -1059,6 +1062,9 @@ async fn fetch_chateau_data(
         .map(|(_, sid)| sid.clone())
         .collect();
     let departure_time = departure_time_chrono.timestamp();
+
+    let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
+    let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
 
     for trip_id in trip_ids {
         let trip = trips_compressed.get(&trip_id).unwrap();
@@ -1106,9 +1112,6 @@ async fn fetch_chateau_data(
             Some(r) => r,
             None => continue,
         };
-
-        let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
-        let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
 
         for row in rows {
             if !relevant_stop_ids.contains(row.stop_id.as_str()) {
@@ -1292,7 +1295,8 @@ async fn fetch_chateau_data(
                             if stu.schedule_relationship == Some(catenary::aspen_dataset::AspenisedStopTimeScheduleRelationship::Skipped) { is_cancelled = true; }
                         }
                         if update.trip.schedule_relationship == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) { is_cancelled = true; }
-                        total_time_added_looking_at_rt_alerts += timer_looking_at_rt_alerts.elapsed();
+                        total_time_added_looking_at_rt_alerts +=
+                            timer_looking_at_rt_alerts.elapsed();
                     }
 
                     if let Some(d) = rt_dep {
@@ -1409,10 +1413,16 @@ async fn fetch_chateau_data(
                 }
             }
         }
-
-        println!("Total time added looking at rt alerts: {}", total_time_added_looking_at_rt_alerts.as_secs_f64());
-        println!("Total time added looking at rt trips: {}", total_time_added_looking_at_rt_trips.as_secs_f64());
     }
+
+    println!(
+        "Total time added looking at rt alerts: {} ms",
+        total_time_added_looking_at_rt_alerts.as_millis()
+    );
+    println!(
+        "Total time added looking at rt trips: {} ms",
+        total_time_added_looking_at_rt_trips.as_millis()
+    );
 
     // Filter closest stop for Local
     for (_route_key, headsigns_map) in local_departures.iter_mut() {
