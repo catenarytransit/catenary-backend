@@ -1,18 +1,16 @@
 use catenary::aspen::lib::AlertsforManyStops;
 
 use catenary::aspen_dataset::AspenisedAlert;
-use scc::HashMap as SccHashMap;
+use scc::HashIndex;
 use std::sync::Arc;
 
 pub fn get_alerts_from_route_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     chateau_id: &str,
     route_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
-
+    authoritative_data_store
+        .peek_with(&chateau_id.to_string(), |_, aspenised_data| {
             let alerts = aspenised_data.impacted_routes_alerts.get(route_id);
 
             match alerts {
@@ -39,20 +37,17 @@ pub fn get_alerts_from_route_id(
                     None
                 }
             }
-        }
-        None => None,
-    }
+        })
+        .flatten()
 }
 
 pub fn get_alerts_from_stop_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     chateau_id: &str,
     stop_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
-
+    authoritative_data_store
+        .peek_with(&chateau_id.to_string(), |_, aspenised_data| {
             let alerts = aspenised_data.impacted_stops_alerts.get(stop_id);
 
             match alerts {
@@ -79,20 +74,17 @@ pub fn get_alerts_from_stop_id(
                     None
                 }
             }
-        }
-        None => None,
-    }
+        })
+        .flatten()
 }
 
 pub fn get_alert_from_trip_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     chateau_id: &str,
     trip_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
-
+    authoritative_data_store
+        .peek_with(&chateau_id.to_string(), |_, aspenised_data| {
             let alerts = aspenised_data.impacted_trips_alerts.get(trip_id);
 
             match alerts {
@@ -119,13 +111,12 @@ pub fn get_alert_from_trip_id(
                     None
                 }
             }
-        }
-        None => None,
-    }
+        })
+        .flatten()
 }
 
 pub fn get_alert_from_stop_ids(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     chateau_id: &str,
     stop_ids: Vec<String>,
 ) -> Option<AlertsforManyStops> {

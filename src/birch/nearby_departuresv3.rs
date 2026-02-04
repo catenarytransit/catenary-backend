@@ -1004,19 +1004,26 @@ async fn fetch_chateau_data(
 
                                 let timer_get_trips = std::time::Instant::now();
                                 let timeout_result = tokio::time::timeout(
-                                    std::time::Duration::from_secs(1),
+                                    std::time::Duration::from_millis(500),
                                     async {
                                         tokio::join!(
                                             client.get_all_trips_with_route_ids(
                                                 tarpc::context::current(),
                                                 chateau.clone(),
-                                                route_ids.clone().into_iter().map(|x| x.into()).collect()
+                                                route_ids
+                                                    .clone()
+                                                    .into_iter()
+                                                    .map(|x| x.into())
+                                                    .collect()
                                             ),
-                                            client
-                                                .get_all_alerts(tarpc::context::current(), chateau.clone())
+                                            client.get_all_alerts(
+                                                tarpc::context::current(),
+                                                chateau.clone()
+                                            )
                                         )
-                                    }
-                                ).await;
+                                    },
+                                )
+                                .await;
                                 let time_get_trips = timer_get_trips.elapsed();
 
                                 match timeout_result {

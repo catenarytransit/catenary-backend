@@ -65,6 +65,7 @@ use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::Injector;
 use gtfs_realtime::FeedMessage;
+use scc::HashIndex;
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
@@ -108,7 +109,7 @@ pub struct GtfsRealtimeHashStore {
 pub struct AspenServer {
     pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    pub authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
@@ -118,7 +119,7 @@ pub struct AspenServer {
     pub alpenrose_to_process_queue_chateaux: Arc<Mutex<HashSet<String>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
-    pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    pub backup_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     pub backup_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
@@ -135,18 +136,11 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>> {
-        match self
-            .authoritative_data_store
-            .as_ref()
-            .get_async(&chateau_id)
-            .await
-        {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let mut stop_ids_set = AHashSet::new();
-                for stop_id in stop_ids {
-                    stop_ids_set.insert(stop_id);
+                for stop_id in &stop_ids {
+                    stop_ids_set.insert(stop_id.clone());
                 }
 
                 let mut stops: AHashMap<String, AspenisedStop> = AHashMap::new();
@@ -159,10 +153,8 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
-                Some(stops)
-            }
-            None => None,
-        }
+                stops
+            })
     }
 
     async fn get_shape(
@@ -171,23 +163,19 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         shape_id: String,
     ) -> Option<EcoString> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let shape = aspenised_data.shape_id_to_shape.get(shape_id.as_str());
 
                 match shape {
-                    Some(shape) => Some(shape.clone()),
+                    Some(shape) => shape.clone(),
                     None => {
                         println!("Shape not found for shape id {}", shape_id);
                         None
                     }
                 }
-                .flatten()
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn trip_mod_lookup_for_trip_id_service_day(
@@ -197,15 +185,11 @@ impl AspenRpc for AspenServer {
         trip_id: String,
         service_day: chrono::NaiveDate,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let trip_modification_ids = aspenised_data
                     .trip_id_to_trip_modification_ids
                     .get(trip_id.as_str());
-
-                //get all the trip modifications
 
                 let mut trip_modifications: Vec<&AspenisedTripModification> = vec![];
 
@@ -225,8 +209,6 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
-                //filter for matching service day
-
                 let trip_modification = trip_modifications.iter().find(|trip_modification| {
                     trip_modification.service_dates.contains(&service_day)
                 });
@@ -238,9 +220,8 @@ impl AspenRpc for AspenServer {
                         None
                     }
                 }
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn get_trip_modification(
@@ -249,10 +230,8 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_id: String,
     ) -> Option<AspenisedTripModification> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let trip_modification = aspenised_data
                     .trip_modifications
                     .get(modification_id.as_str());
@@ -267,9 +246,8 @@ impl AspenRpc for AspenServer {
                         None
                     }
                 }
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn get_nonscheduled_trips_updates_from_stop_ids(
@@ -278,13 +256,11 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<Vec<AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let mut trip_update_ids_to_get: AHashSet<EcoString> = AHashSet::new();
 
-                for stop_id in stop_ids {
+                for stop_id in &stop_ids {
                     if let Some(trip_update_ids) = aspenised_data
                         .stop_id_to_non_scheduled_trip_ids
                         .get(stop_id.as_str())
@@ -305,10 +281,8 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
-                Some(trip_data_to_send)
-            }
-            None => None,
-        }
+                trip_data_to_send
+            })
     }
 
     async fn get_trip_modifications(
@@ -317,19 +291,18 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         modification_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedTripModification>> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let mut trip_modifications: AHashMap<String, AspenisedTripModification> =
                     AHashMap::new();
 
-                for modification_id in modification_ids {
+                for modification_id in &modification_ids {
                     if let Some(trip_modification) = aspenised_data
                         .trip_modifications
                         .get(modification_id.as_str())
                     {
-                        trip_modifications.insert(modification_id, trip_modification.clone());
+                        trip_modifications
+                            .insert(modification_id.clone(), trip_modification.clone());
                     } else {
                         println!(
                             "Trip modification not found for modification id {}",
@@ -338,10 +311,8 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
-                Some(trip_modifications)
-            }
-            None => None,
-        }
+                trip_modifications
+            })
     }
 
     async fn hello(self, _: context::Context, name: String) -> String {
@@ -360,12 +331,9 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            None => None,
-            Some(authoritative_data) => {
-                let authoritative_data = authoritative_data.get();
-
-                let trip_id_list = trip_ids.into_iter().collect::<AHashSet<String>>();
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, authoritative_data| {
+                let trip_id_list = trip_ids.iter().cloned().collect::<AHashSet<String>>();
 
                 let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
                 let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
@@ -413,13 +381,12 @@ impl AspenRpc for AspenServer {
                     })
                     .collect();
 
-                Some(TripsSelectionResponse {
+                TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
                     stop_id_to_parent_id,
-                })
-            }
-        }
+                }
+            })
     }
 
     async fn get_all_trips_with_route_ids(
@@ -428,12 +395,9 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         route_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            None => None,
-            Some(authoritative_data) => {
-                let authoritative_data = authoritative_data.get();
-
-                let route_id_list = route_ids.into_iter().collect::<AHashSet<String>>();
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, authoritative_data| {
+                let route_id_list = route_ids.iter().cloned().collect::<AHashSet<String>>();
 
                 let mut trip_id_to_trip_update_ids: AHashMap<String, Vec<String>> = AHashMap::new();
                 let mut trip_updates: AHashMap<String, AspenisedTripUpdate> = AHashMap::new();
@@ -480,13 +444,12 @@ impl AspenRpc for AspenServer {
                     })
                     .collect();
 
-                Some(TripsSelectionResponse {
+                TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
                     stop_id_to_parent_id,
-                })
-            }
-        }
+                }
+            })
     }
 
     async fn get_gtfs_rt(
@@ -1215,13 +1178,11 @@ impl AspenRpc for AspenServer {
         existing_fasthash_of_routes: Option<u64>,
         route_types_filter: Option<Vec<i16>>,
     ) -> Option<GetVehicleLocationsResponse> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let fast_hash_of_routes = aspenised_data.vehicle_routes_cache_hash;
 
-                Some(GetVehicleLocationsResponse {
+                GetVehicleLocationsResponse {
                     vehicle_route_cache: {
                         let send_nothing = match &existing_fasthash_of_routes {
                             Some(existing_fasthash_of_routes) => {
@@ -1282,10 +1243,8 @@ impl AspenRpc for AspenServer {
                     },
                     hash_of_routes: fast_hash_of_routes,
                     last_updated_time_ms: aspenised_data.last_updated_time_ms,
-                })
-            }
-            None => None,
-        }
+                }
+            })
     }
 
     async fn get_vehicle_locations_with_route_filtering(
@@ -1295,10 +1254,8 @@ impl AspenRpc for AspenServer {
         existing_fasthash_of_routes: Option<u64>,
         route_ids: Option<Vec<String>>,
     ) -> Option<GetVehicleLocationsResponse> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let fast_hash_of_routes = aspenised_data.vehicle_routes_cache_hash;
 
                 let vehicle_pos_new = aspenised_data
@@ -1317,7 +1274,7 @@ impl AspenRpc for AspenServer {
                     .map(|(a, b)| (a.clone(), b.clone()))
                     .collect::<AHashMap<_, _>>();
 
-                Some(GetVehicleLocationsResponse {
+                GetVehicleLocationsResponse {
                     vehicle_route_cache: match existing_fasthash_of_routes {
                         Some(existing_fasthash_of_routes) => {
                             match existing_fasthash_of_routes == fast_hash_of_routes {
@@ -1330,10 +1287,8 @@ impl AspenRpc for AspenServer {
                     vehicle_positions: vehicle_pos_new,
                     hash_of_routes: fast_hash_of_routes,
                     last_updated_time_ms: aspenised_data.last_updated_time_ms,
-                })
-            }
-            None => None,
-        }
+                }
+            })
     }
 
     async fn get_single_vehicle_location_from_gtfsid(
@@ -1342,10 +1297,8 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         gtfs_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let vehicle_position = aspenised_data.vehicle_positions.get(&gtfs_id);
 
                 match vehicle_position {
@@ -1355,9 +1308,8 @@ impl AspenRpc for AspenServer {
                         None
                     }
                 }
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn get_single_vehicle_location_from_vehicle_label(
@@ -1366,10 +1318,8 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         vehicle_id: String,
     ) -> Option<AspenisedVehiclePosition> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let gtfs_id = aspenised_data.vehicle_label_to_gtfs_id.get(&vehicle_id);
 
                 match gtfs_id {
@@ -1386,9 +1336,8 @@ impl AspenRpc for AspenServer {
                     }
                     None => None,
                 }
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn get_trip_updates_from_route_ids(
@@ -1397,13 +1346,11 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         route_ids: Vec<String>,
     ) -> Option<Vec<AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let mut data_out: Vec<AspenisedTripUpdate> = Vec::new();
 
-                for route_id in route_ids {
+                for route_id in &route_ids {
                     let trip_updates_id_list = aspenised_data
                         .trip_updates_lookup_by_route_id_to_trip_update_ids
                         .get(route_id.as_str());
@@ -1420,10 +1367,8 @@ impl AspenRpc for AspenServer {
                     }
                 }
 
-                Some(data_out)
-            }
-            None => None,
-        }
+                data_out
+            })
     }
 
     async fn get_trip_updates_from_trip_id(
@@ -1432,10 +1377,8 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         trip_id: String,
     ) -> Option<Vec<AspenisedTripUpdate>> {
-        match self.authoritative_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
+        self.authoritative_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| {
                 let trip_updates_id_list = aspenised_data
                     .trip_updates_lookup_by_trip_id_to_trip_update_ids
                     .get(trip_id.as_str());
@@ -1468,9 +1411,8 @@ impl AspenRpc for AspenServer {
                         None
                     }
                 }
-            }
-            None => None,
-        }
+            })
+            .flatten()
     }
 
     async fn get_all_alerts(
@@ -1524,14 +1466,8 @@ impl AspenRpc for AspenServer {
         _context: tarpc::context::Context,
         chateau_id: String,
     ) -> Option<AspenisedData> {
-        match self.backup_data_store.as_ref().get_async(&chateau_id).await {
-            Some(aspenised_data) => {
-                let aspenised_data = aspenised_data.get();
-
-                Some(aspenised_data.clone())
-            }
-            None => None,
-        }
+        self.backup_data_store
+            .peek_with(&chateau_id, |_, aspenised_data| aspenised_data.clone())
     }
 
     async fn insert_backup_aspen_dataset(
@@ -1675,8 +1611,8 @@ async fn main() -> anyhow::Result<()> {
 
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
-    let authoritative_data_store = Arc::new(SccHashMap::new());
-    let backup_data_store = Arc::new(SccHashMap::new());
+    let authoritative_data_store = Arc::new(HashIndex::new());
+    let backup_data_store = Arc::new(HashIndex::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashSet::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =

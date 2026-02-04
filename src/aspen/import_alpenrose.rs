@@ -31,6 +31,7 @@ use catenary::compact_formats::{
 };
 use lazy_static::lazy_static;
 
+use scc::HashIndex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
@@ -119,7 +120,7 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 }
 
 pub async fn new_rt_data(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<HashIndex<String, catenary::aspen_dataset::AspenisedData>>,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     chateau_id: &str,
     realtime_feed_id: &str,
@@ -143,13 +144,12 @@ pub async fn new_rt_data(
         .await
         .or_insert(Instant::now());
 
-    // Fetch existing data once - extracting only what we need to avoid holding the lock
+    // Fetch existing data using lock-free peek_with
     let (mut compressed_trip_internal_cache, previous_authoritative_data_store) =
-        match authoritative_data_store.get_async(chateau_id).await {
-            Some(data) => (
-                data.compressed_trip_internal_cache.clone(),
-                Some(data.get().clone()),
-            ),
+        match authoritative_data_store.peek_with(&chateau_id.to_string(), |_, data| {
+            (data.compressed_trip_internal_cache.clone(), data.clone())
+        }) {
+            Some((cache, data)) => (cache, Some(data)),
             None => (CompressedTripInternalCache::new(), None),
         };
 
@@ -1985,13 +1985,11 @@ pub async fn new_rt_data(
         parent_id_to_children_ids,
     };
 
-    // Insert the aspenised data - clone only for persistence, move into map when possible
+    // Insert the aspenised data - use insert_async which handles both insert and update for HashIndex
     let aspenised_data_for_persist = aspenised_data.clone();
-    authoritative_data_store
-        .entry_async(chateau_id.to_string())
-        .await
-        .and_modify(|d| *d = aspenised_data_for_persist.clone())
-        .or_insert(aspenised_data);
+    let _ = authoritative_data_store
+        .insert_async(chateau_id.to_string(), aspenised_data)
+        .await;
 
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
