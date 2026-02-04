@@ -395,13 +395,15 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         route_ids: Vec<String>,
     ) -> Option<TripsSelectionResponse> {
-
         let start_of_function = std::time::Instant::now();
 
         self.authoritative_data_store
             .peek_with(&chateau_id, |_, authoritative_data| {
                 let time_it_took_to_peek = start_of_function.elapsed();
-                println!("Time it took to peek: {}ms", time_it_took_to_peek.as_millis());
+                println!(
+                    "Time it took to peek: {}ms",
+                    time_it_took_to_peek.as_millis()
+                );
 
                 let route_id_list = route_ids.iter().cloned().collect::<AHashSet<String>>();
 
@@ -450,15 +452,19 @@ impl AspenRpc for AspenServer {
                     })
                     .collect();
 
+                let time_it_took_to_process = start_of_function.elapsed();
+                println!(
+                    "Time it took to process trips_with_route_ids: {}ms, with {} trip updates",
+                    time_it_took_to_process.as_millis(),
+                    trip_updates.len()
+                );
+
                 TripsSelectionResponse {
                     trip_updates,
                     trip_id_to_trip_update_ids,
                     stop_id_to_parent_id,
                 }
             })
-
-            let time_it_took_to_process = start_of_function.elapsed();
-            println!("Time it took to process trips_with_route_ids: {}ms", time_it_took_to_process.as_millis());
     }
 
     async fn get_gtfs_rt(
