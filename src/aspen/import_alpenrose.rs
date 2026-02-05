@@ -810,30 +810,7 @@ pub async fn new_rt_data(
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
-            let vehicle_id_to_trip_update_start_time: AHashMap<String, String> =
-                if realtime_feed_id == "f-irvine~ca~us~rt" {
-                    if let Some(trip_updates_gtfs_rt_data) = authoritative_gtfs_rt
-                        .get_sync(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-                    {
-                        let mut map = AHashMap::new();
-                        for entity in trip_updates_gtfs_rt_data.get().entity.iter() {
-                            if let Some(trip_update) = &entity.trip_update {
-                                if let (Some(vehicle), Some(start_time)) =
-                                    (&trip_update.vehicle, &trip_update.trip.start_time)
-                                {
-                                    if let Some(id) = &vehicle.id {
-                                        map.insert(id.clone(), start_time.clone());
-                                    }
-                                }
-                            }
-                        }
-                        map
-                    } else {
-                        AHashMap::new()
-                    }
-                } else {
-                    AHashMap::new()
-                };
+            let vehicle_id_to_trip_update_start_time: AHashMap<String, String> = AHashMap::new();
 
             if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -1011,18 +988,7 @@ pub async fn new_rt_data(
                                     trip_id: trip.trip_id.clone(),
                                     direction_id: trip.direction_id,
                                     start_date: start_date,
-                                    start_time: match realtime_feed_id.as_str() {
-                                        "f-irvine~ca~us~rt" => vehicle_pos
-                                            .vehicle
-                                            .as_ref()
-                                            .and_then(|v| v.id.as_ref())
-                                            .and_then(|id| {
-                                                vehicle_id_to_trip_update_start_time
-                                                    .get(id)
-                                                    .cloned()
-                                            }),
-                                        _ => trip.start_time.clone(),
-                                    },
+                                    start_time: trip.start_time.clone(),
                                     schedule_relationship: option_i32_to_schedule_relationship(
                                         &trip.schedule_relationship,
                                     ),
