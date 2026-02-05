@@ -1254,21 +1254,8 @@ impl AspenRpc for AspenServer {
                                 .vehicle_positions
                                 .iter()
                                 .filter(|(_gtfs_id, vehicle_position)| {
-                                    match &vehicle_position.trip {
-                                        Some(trip) => match &trip.route_id {
-                                            Some(route_id) => {
-                                                match aspenised_data
-                                                    .vehicle_routes_cache
-                                                    .get(route_id)
-                                                {
-                                                    Some(route_info) => route_types_filter
-                                                        .contains(&route_info.route_type),
-                                                    None => false,
-                                                }
-                                            }
-                                            None => false,
-                                        },
-                                        None => false,
+                                    match &vehicle_position.route_type {
+                                        route_type => route_types_filter.contains(route_type),
                                     }
                                 })
                                 .map(|(a, b)| (a.clone(), b.clone()))
