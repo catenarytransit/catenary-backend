@@ -349,44 +349,44 @@ pub async fn departures_at_osm_station(
 
     let stop_data_fetch_timer = Instant::now();
 
-    let mut futures = Vec::new();
-    for (chateau_id_to_search, stop_ids_to_search) in &stops_to_search {
-        let pool = pool.get_ref().clone();
-        let chateau_id = chateau_id_to_search.clone();
-        let stop_ids: Vec<String> = stop_ids_to_search.iter().cloned().collect();
-        let include_shapes = include_shapes;
+    let stops_stream = futures::stream::iter(stops_to_search.iter())
+        .map(|(chateau_id_to_search, stop_ids_to_search)| {
+            let pool = pool.get_ref().clone();
+            let chateau_id = chateau_id_to_search.clone();
+            let stop_ids: Vec<String> = stop_ids_to_search.iter().cloned().collect();
+            let include_shapes = include_shapes;
 
-        let lookback_days = match chateau_id.as_str() {
-            "sncb"
-            | "schweiz"
-            | "sncf"
-            | "deutschland"
-            | "nederlandse~spoorwegen"
-            | "nationalrailuk" => 2,
-            "île~de~france~mobilités" => 2,
-            "bus~dft~gov~uk" => 8,
-            _ => 14,
-        };
+            let lookback_days = match chateau_id.as_str() {
+                "sncb"
+                | "schweiz"
+                | "sncf"
+                | "deutschland"
+                | "nederlandse~spoorwegen"
+                | "nationalrailuk" => 2,
+                "île~de~france~mobilités" => 2,
+                "bus~dft~gov~uk" => 8,
+                _ => 14,
+            };
 
-        let check_start_date =
-            greater_than_date_time.date_naive() - chrono::Duration::days(lookback_days);
-        let check_end_date = (greater_than_date_time + req_lookahead)
-            .date_naive()
-            .succ_opt()
-            .unwrap();
+            let check_start_date =
+                greater_than_date_time.date_naive() - chrono::Duration::days(lookback_days);
+            let check_end_date = (greater_than_date_time + req_lookahead)
+                .date_naive()
+                .succ_opt()
+                .unwrap();
 
-        futures.push(async move {
-            fetch_stop_data_for_chateau(
-                pool,
-                chateau_id,
-                stop_ids,
-                include_shapes,
-                Some((check_start_date, check_end_date)),
-                None, // direction_pattern_ids - not optimizing this path
-            )
-            .await
-        });
-    }
+            async move {
+                fetch_chateau_data_optimized(
+                    pool,
+                    chateau_id,
+                    stop_ids,
+                    include_shapes,
+                    Some((check_start_date, check_end_date)),
+                )
+                .await
+            }
+        })
+        .buffer_unordered(10);
 
     // Fetch realtime data from aspen
     let mut chateau_metadata = HashMap::new();
@@ -405,7 +405,7 @@ pub async fn departures_at_osm_station(
         });
     }
 
-    let (results, etcd_results) = join!(join_all(futures), join_all(etcd_futures));
+    let (results, etcd_results) = join!(stops_stream.collect::<Vec<_>>(), join_all(etcd_futures));
 
     for (
         chateau_id,
@@ -1122,4 +1122,314 @@ pub async fn departures_at_osm_station(
             event_generation_ms: event_generation_time.as_millis(),
         },
     })
+}
+
+async fn fetch_chateau_data_optimized(
+    pool: Arc<CatenaryPostgresPool>,
+    chateau_id: String,
+    stop_ids: Vec<String>,
+    include_shapes: bool,
+    date_filter: Option<(NaiveDate, NaiveDate)>,
+) -> crate::departures_shared::StopDataResult {
+    let mut conn = pool.get().await.unwrap();
+
+    // 1. Fetch Direction Pattern IDs containing these stops
+    let direction_rows: Vec<catenary::models::DirectionPatternRow> =
+        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()))
+            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids))
+            .select(catenary::models::DirectionPatternRow::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default();
+
+    if direction_rows.is_empty() {
+        return (
+            chateau_id,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            vec![],
+            vec![],
+        );
+    }
+
+    let direction_pattern_ids: Vec<String> = direction_rows
+        .iter()
+        .map(|r| r.direction_pattern_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    // 2. Fetch Meta based on Direction Patterns
+    let mut conn_meta = pool.get().await.unwrap();
+    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
+        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id.clone()))
+            .filter(
+                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                    .eq_any(&direction_pattern_ids),
+            )
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load(&mut conn_meta)
+            .await
+            .unwrap_or_default();
+
+    let itinerary_ids: Vec<String> = itin_meta_list
+        .iter()
+        .map(|m| m.itinerary_pattern_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let route_ids: Vec<CompactString> = itin_meta_list.iter().map(|m| m.route_id.clone()).collect();
+
+    let pool_clone = pool.clone();
+    let chateau_clone_itin = chateau_id.clone();
+    let chateau_clone_dm = chateau_id.clone();
+    let chateau_clone_routes = chateau_id.clone();
+    let chateau_clone_agencies = chateau_id.clone();
+    let chateau_clone_dr = chateau_id.clone();
+    let chateau_clone_shapes = chateau_id.clone();
+
+    let direction_pattern_ids_clone = direction_pattern_ids.clone();
+
+    // START PARALLEL FETCHES
+    let (itins_result, direction_meta_result, direction_rows_result, routes_result) = tokio::join!(
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone_itin))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                        .eq_any(&itinerary_ids),
+                )
+                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&stop_ids))
+                .select(catenary::models::ItineraryPatternRow::as_select())
+                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_clone_dm),
+                )
+                .filter(
+                    catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                        .eq_any(&direction_pattern_ids_clone),
+                )
+                .select(catenary::models::DirectionPatternMeta::as_select())
+                .load::<catenary::models::DirectionPatternMeta>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_clone_dr))
+                .filter(
+                    catenary::schema::gtfs::direction_pattern::direction_pattern_id
+                        .eq_any(&direction_pattern_ids_clone),
+                )
+                .select(catenary::models::DirectionPatternRow::as_select())
+                .load::<catenary::models::DirectionPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default()
+        },
+        async {
+            let mut conn = pool_clone.get().await.unwrap();
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_clone_routes))
+                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
+                .select(catenary::models::Route::as_select())
+                .load::<catenary::models::Route>(&mut conn)
+                .await
+                .unwrap_or_default()
+        }
+    );
+
+    // Fetch Agencies
+    let agency_ids: Vec<String> = routes_result
+        .iter()
+        .filter_map(|r| r.agency_id.clone())
+        .collect();
+    let agencies_result: Vec<catenary::models::Agency> = if !agency_ids.is_empty() {
+        let mut conn = pool.get().await.unwrap();
+        catenary::schema::gtfs::agencies::dsl::agencies
+            .filter(catenary::schema::gtfs::agencies::chateau.eq(chateau_clone_agencies))
+            .filter(catenary::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
+            .select(catenary::models::Agency::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default()
+    } else {
+        vec![]
+    };
+
+    // Fetch Shapes if needed
+    let mut shapes_map = BTreeMap::new();
+    if include_shapes {
+        let shape_ids: Vec<String> = direction_meta_result
+            .iter()
+            .filter_map(|m| m.gtfs_shape_id.clone())
+            .collect();
+        if !shape_ids.is_empty() {
+            let mut conn = pool.get().await.unwrap();
+            let shapes: Vec<catenary::models::Shape> = catenary::schema::gtfs::shapes::dsl::shapes
+                .filter(catenary::schema::gtfs::shapes::chateau.eq(chateau_clone_shapes))
+                .filter(catenary::schema::gtfs::shapes::shape_id.eq_any(&shape_ids))
+                .load(&mut conn)
+                .await
+                .unwrap_or_default();
+
+            for s in shapes {
+                let poly = polyline::encode_coordinates(
+                    geo::LineString::new(
+                        s.linestring
+                            .points
+                            .iter()
+                            .map(|p| coord! { x: p.x, y: p.y })
+                            .collect(),
+                    ),
+                    5,
+                )
+                .unwrap();
+                shapes_map.insert(s.shape_id.into(), poly);
+            }
+        }
+    }
+
+    // Fetch Trips (Compressed)
+    let trips_result: Vec<catenary::models::CompressedTrip> = {
+        let mut conn = pool.get().await.unwrap();
+        let trips_raw: Vec<catenary::models::CompressedTrip> =
+            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id.clone()))
+                .filter(catenary::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
+                .select(catenary::models::CompressedTrip::as_select())
+                .load(&mut conn)
+                .await
+                .unwrap_or_default();
+
+        let valid_itins: HashSet<&str> = itinerary_ids.iter().map(|s| s.as_str()).collect();
+        trips_raw
+            .into_iter()
+            .filter(|t| valid_itins.contains(t.itinerary_pattern_id.as_str()))
+            .collect()
+    };
+
+    // Fetch Calendar
+    let service_ids: Vec<CompactString> = trips_result
+        .iter()
+        .map(|t| t.service_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
+    let (calendar, calendar_dates) = if !service_ids.is_empty() {
+        let pool_cal = pool.clone();
+        let pool_cd = pool.clone();
+        let chateau_cal = chateau_id.clone();
+        let chateau_cd = chateau_id.clone();
+        let s_ids_1 = service_ids.clone();
+        let s_ids_2 = service_ids.clone();
+        let (start_date, end_date) = date_filter.unwrap_or((
+            chrono::Utc::now().date_naive() - chrono::Duration::days(1),
+            chrono::Utc::now().date_naive() + chrono::Duration::days(1),
+        ));
+
+        tokio::join!(
+            async move {
+                let mut conn = pool_cal.get().await.unwrap();
+                catenary::schema::gtfs::calendar::dsl::calendar
+                    .filter(catenary::schema::gtfs::calendar::chateau.eq(chateau_cal))
+                    .filter(catenary::schema::gtfs::calendar::service_id.eq_any(&s_ids_1))
+                    .select(catenary::models::Calendar::as_select())
+                    .load(&mut conn)
+                    .await
+                    .unwrap_or_default()
+            },
+            async move {
+                let mut conn = pool_cd.get().await.unwrap();
+                catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                    .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau_cd))
+                    .filter(catenary::schema::gtfs::calendar_dates::service_id.eq_any(&s_ids_2))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
+                    .filter(catenary::schema::gtfs::calendar_dates::gtfs_date.le(end_date))
+                    .select(catenary::models::CalendarDate::as_select())
+                    .load(&mut conn)
+                    .await
+                    .unwrap_or_default()
+            }
+        )
+    } else {
+        (vec![], vec![])
+    };
+
+    // Construct Result Maps
+    let mut itins_map = BTreeMap::new();
+    for i in itins_result {
+        itins_map
+            .entry(i.itinerary_pattern_id.clone())
+            .or_insert_with(Vec::new)
+            .push(i);
+    }
+
+    let mut itin_meta_map = BTreeMap::new();
+    for i in itin_meta_list {
+        itin_meta_map.insert(i.itinerary_pattern_id.clone(), i);
+    }
+
+    let mut dir_meta_map = BTreeMap::new();
+    for i in direction_meta_result {
+        dir_meta_map.insert(i.direction_pattern_id.clone(), i);
+    }
+
+    let mut dir_rows_map = BTreeMap::new();
+    for i in direction_rows_result {
+        dir_rows_map
+            .entry(i.direction_pattern_id.clone())
+            .or_insert_with(Vec::new)
+            .push(i);
+    }
+    // Sort direction rows
+    for rows in dir_rows_map.values_mut() {
+        rows.sort_by_key(|r| r.stop_sequence);
+    }
+
+    let mut trips_map = BTreeMap::new();
+    for t in trips_result {
+        trips_map.insert(t.trip_id.clone(), t);
+    }
+
+    let mut routes_map = BTreeMap::new();
+    for r in routes_result {
+        routes_map.insert(r.route_id.clone().into(), r);
+    }
+
+    let mut agencies_map = BTreeMap::new();
+    for a in agencies_result {
+        agencies_map.insert(a.agency_id.clone(), a);
+    }
+
+    (
+        chateau_id,
+        itins_map,
+        itin_meta_map,
+        dir_meta_map,
+        trips_map,
+        dir_rows_map,
+        routes_map,
+        agencies_map,
+        shapes_map,
+        calendar,
+        calendar_dates,
+    )
 }
