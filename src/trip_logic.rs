@@ -280,6 +280,12 @@ pub async fn fetch_trip_rt_update(
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
 ) -> Result<ResponseForGtfsRtRefresh, String> {
+    if chateau == "irvine~ca~us" {
+        println!(
+            "DEBUG: fetch_trip_rt_update called for trip {}",
+            query.trip_id
+        );
+    }
     let etcd = etcd_client::Client::connect(
         etcd_connection_ips.ip_addresses.as_slice(),
         etcd_connection_options
@@ -312,12 +318,21 @@ pub async fn fetch_trip_rt_update(
             if let Some(fetch_assigned_node_for_this_chateau_data) =
                 fetch_assigned_node_for_this_chateau_kv_first
             {
+                if chateau == "irvine~ca~us" {
+                    println!("DEBUG: fetch_trip_rt_update: Found assigned chateau node via etcd");
+                }
                 let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
                     fetch_assigned_node_for_this_chateau_data.value(),
                 )
                 .unwrap();
 
                 let socket = assigned_chateau_data.socket;
+                if chateau == "irvine~ca~us" {
+                    println!(
+                        "DEBUG: fetch_trip_rt_update: Connecting to aspen at {}",
+                        socket
+                    );
+                }
                 let aspen_client = if let Some(client) =
                     aspen_client_manager.get_client(socket).await
                 {
@@ -334,6 +349,11 @@ pub async fn fetch_trip_rt_update(
 
                 match aspen_client {
                     Ok(aspen_client) => {
+                        if chateau == "irvine~ca~us" {
+                            println!(
+                                "DEBUG: fetch_trip_rt_update: Got aspen client, fetching trip updates"
+                            );
+                        }
                         let get_trip = aspen_client
                             .get_trip_updates_from_trip_id(
                                 context::current(),
@@ -344,11 +364,22 @@ pub async fn fetch_trip_rt_update(
 
                         match get_trip {
                             Ok(Some(get_trip)) => {
+                                if chateau == "irvine~ca~us" {
+                                    println!(
+                                        "DEBUG: fetch_trip_rt_update: received {} trip options from aspen",
+                                        get_trip.len()
+                                    );
+                                }
                                 println!("recieved {} trip options from aspen", get_trip.len());
                                 if !get_trip.is_empty() {
                                     let rt_trip_update = match get_trip.len() {
                                         1 => &get_trip[0],
                                         _ => {
+                                            if chateau == "irvine~ca~us" {
+                                                println!(
+                                                    "DEBUG: fetch_trip_rt_update: Multiple trip updates found, filtering..."
+                                                );
+                                            }
                                             println!(
                                                 "Multiple trip updates found for trip id {} {}",
                                                 chateau, query.trip_id
@@ -440,25 +471,54 @@ pub async fn fetch_trip_rt_update(
                                         }),
                                     })
                                 } else {
+                                    if chateau == "irvine~ca~us" {
+                                        println!(
+                                            "DEBUG: fetch_trip_rt_update: get_trip response was empty list"
+                                        );
+                                    }
                                     Ok(ResponseForGtfsRtRefresh {
                                         found_data: false,
                                         data: None,
                                     })
                                 }
                             }
-                            _ => Ok(ResponseForGtfsRtRefresh {
-                                found_data: false,
-                                data: None,
-                            }),
+                            _ => {
+                                if chateau == "irvine~ca~us" {
+                                    println!(
+                                        "DEBUG: fetch_trip_rt_update: get_trip failed or returned None. Is Error: {}, Is None: {}",
+                                        get_trip.is_err(),
+                                        get_trip.as_ref().map(|x| x.is_none()).unwrap_or(false)
+                                    );
+                                }
+                                Ok(ResponseForGtfsRtRefresh {
+                                    found_data: false,
+                                    data: None,
+                                })
+                            }
                         }
                     }
-                    _ => Err("Could not connect to realtime data server".to_string()),
+                    _ => {
+                        if chateau == "irvine~ca~us" {
+                            println!(
+                                "DEBUG: fetch_trip_rt_update: Failed to connect to realtime server (aspen_client error)"
+                            );
+                        }
+                        Err("Could not connect to realtime data server".to_string())
+                    }
                 }
             } else {
+                if chateau == "irvine~ca~us" {
+                    println!("DEBUG: fetch_trip_rt_update: No assigned chateau data found in etcd");
+                }
                 Err("Could not connect to realtime data server".to_string())
             }
         }
-        _ => Err("Could not connect to zookeeper".to_string()),
+        _ => {
+            if chateau == "irvine~ca~us" {
+                println!("DEBUG: fetch_trip_rt_update: Failed to fetch assigned node from etcd");
+            }
+            Err("Could not connect to zookeeper".to_string())
+        }
     }
 }
 
@@ -471,6 +531,12 @@ pub async fn fetch_trip_information(
     aspen_client_manager: Arc<AspenClientManager>,
     mut timer: Option<&mut simple_server_timing_header::Timer>,
 ) -> Result<TripIntroductionInformation, String> {
+    if chateau == "irvine~ca~us" {
+        println!(
+            "DEBUG: fetch_trip_information called for trip {}",
+            query.trip_id
+        );
+    }
     if let Some(t) = &mut timer {
         t.add("open_pg_connection");
     }
@@ -527,6 +593,13 @@ pub async fn fetch_trip_information(
 
     let trip_compressed: Vec<crate::models::CompressedTrip> = trip_compressed.unwrap();
 
+    if chateau == "irvine~ca~us" {
+        println!(
+            "DEBUG: fetch_trip_information: Trip compressed found count: {}",
+            trip_compressed.len()
+        );
+    }
+
     if let Some(t) = &mut timer {
         t.add("connect_to_etcd");
     }
@@ -561,6 +634,11 @@ pub async fn fetch_trip_information(
 
     // RT ONLY TRIP LOGIC
     if trip_compressed.is_empty() {
+        if chateau == "irvine~ca~us" {
+            println!(
+                "DEBUG: fetch_trip_information: Trip compressed empty, attempting RT ONLY TRIP LOGIC"
+            );
+        }
         let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
             .as_ref()
             .ok()
@@ -589,11 +667,20 @@ pub async fn fetch_trip_information(
             };
 
             if let Err(aspen_client_err) = &aspen_client {
+                if chateau == "irvine~ca~us" {
+                    println!("DEBUG: fetch_trip_information: RT ONLY - Failed to connect to aspen");
+                }
                 eprintln!("{:#?}", aspen_client_err);
                 return Err("Could not connect to realtime data server".to_string());
             }
 
             let aspen_client = aspen_client.unwrap();
+
+            if chateau == "irvine~ca~us" {
+                println!(
+                    "DEBUG: fetch_trip_information: RT ONLY - Connected to aspen, fetching trip updates"
+                );
+            }
 
             let get_trips = aspen_client
                 .get_trip_updates_from_trip_id(
@@ -817,10 +904,17 @@ pub async fn fetch_trip_information(
                 }
             }
         }
+        if chateau == "irvine~ca~us" {
+            println!("DEBUG: fetch_trip_information: RT ONLY - Failed to find trip in RT database");
+        }
         return Err("Compressed trip not found and realtime lookup failed".to_string());
     }
 
     // STATIC DB FETCHING
+
+    if chateau == "irvine~ca~us" {
+        println!("DEBUG: fetch_trip_information: Proceeding with STATIC DB FETCHING");
+    }
 
     let trip_compressed = trip_compressed[0].clone();
 
@@ -1113,12 +1207,22 @@ pub async fn fetch_trip_information(
         vec_service_dates.sort_by_key(|x| x.2.abs().num_seconds());
 
         if vec_service_dates.is_empty() {
+            if chateau == "irvine~ca~us" {
+                println!("DEBUG: fetch_trip_information: No service date found for trip");
+            }
             // Fallback or Error? User Logic calls it "Trip not found" or "No service date found"
             // But if we are here we have static data.
             return Err("No service date found for this trip".to_string());
         }
 
         let (start_naive_date, _, _) = vec_service_dates[0];
+
+        if chateau == "irvine~ca~us" {
+            println!(
+                "DEBUG: fetch_trip_information: Selected service date: {}",
+                start_naive_date
+            );
+        }
 
         start_naive_date
     };
@@ -1198,6 +1302,9 @@ pub async fn fetch_trip_information(
     let mut cancelled_stop_times = vec![];
 
     if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+        if chateau == "irvine~ca~us" {
+            println!("DEBUG: fetch_trip_information: Static Path - Found assigned chateau in etcd");
+        }
         let fetch_assigned_node_for_this_chateau_kv_first =
             fetch_assigned_node_for_this_chateau.kvs().first();
 
@@ -1228,6 +1335,9 @@ pub async fn fetch_trip_information(
 
             match aspen_client {
                 Ok(aspen_client) => {
+                    if chateau == "irvine~ca~us" {
+                        println!("DEBUG: fetch_trip_information: Static Path - Connected to aspen");
+                    }
                     let get_trip = aspen_client
                         .get_trip_updates_from_trip_id(
                             context::current(),
@@ -1243,11 +1353,22 @@ pub async fn fetch_trip_information(
                     if let Ok(get_trip) = get_trip {
                         match get_trip {
                             Some(get_trip) => {
+                                if chateau == "irvine~ca~us" {
+                                    println!(
+                                        "DEBUG: fetch_trip_information: Static Path - Received {} trip updates from aspen",
+                                        get_trip.len()
+                                    );
+                                }
                                 println!("recieved {} trip options from aspen", get_trip.len());
                                 if !get_trip.is_empty() {
                                     let rt_trip_update = match get_trip.len() {
                                         1 => &get_trip[0],
                                         _ => {
+                                            if chateau == "irvine~ca~us" {
+                                                println!(
+                                                    "DEBUG: fetch_trip_information: Static Path - Multiple updates found, filtering"
+                                                );
+                                            }
                                             println!(
                                                 "Multiple trip updates found for trip id {} {}",
                                                 chateau, query.trip_id
@@ -1763,6 +1884,13 @@ pub async fn fetch_trip_information(
                                                 }
                                             });
 
+                                        if chateau == "irvine~ca~us" {
+                                            println!(
+                                                "DEBUG: fetch_trip_information: Static Path - Processing stop update. Matched stop: {}",
+                                                stop_time.is_some()
+                                            );
+                                        }
+
                                         if let Some(stop_time) = stop_time {
                                             if let Some(arrival) = &stop_time_update.arrival {
                                                 stop_time.rt_arrival = Some(arrival.clone());
@@ -1790,8 +1918,21 @@ pub async fn fetch_trip_information(
                                 }
                             }
                             _ => {
+                                if chateau == "irvine~ca~us" {
+                                    println!(
+                                        "DEBUG: fetch_trip_information: Static Path - Trip id not found in get_trip result: {}",
+                                        query.trip_id
+                                    );
+                                }
                                 eprintln!("Trip id not found {} {}", chateau, query.trip_id);
                             }
+                        }
+                    } else {
+                        if chateau == "irvine~ca~us" {
+                            println!(
+                                "DEBUG: fetch_trip_information: Static Path - get_trip failed: {:?}",
+                                get_trip.err()
+                            );
                         }
                     }
 
