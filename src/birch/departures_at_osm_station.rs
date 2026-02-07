@@ -119,13 +119,13 @@ struct StopEvent {
 
 #[derive(Serialize, Clone, Debug)]
 pub struct DeparturesAtOsmStationDebug {
-    pub total_time_ms: u128,
-    pub etcd_connection_time_ms: u128,
-    pub db_connection_time_ms: u128,
-    pub initial_osm_query_ms: u128,
-    pub stop_data_fetch_ms: u128,
-    pub aspen_data_fetch_ms: u128,
-    pub event_generation_ms: u128,
+    pub total_time_ms: u64,
+    pub etcd_connection_time_ms: u64,
+    pub db_connection_time_ms: u64,
+    pub initial_osm_query_ms: u64,
+    pub stop_data_fetch_ms: u64,
+    pub aspen_data_fetch_ms: u64,
+    pub event_generation_ms: u64,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -265,10 +265,10 @@ pub async fn departures_at_osm_station(
             alerts: BTreeMap::new(),
             agencies: BTreeMap::new(),
             debug: DeparturesAtOsmStationDebug {
-                total_time_ms: start.elapsed().as_millis(),
-                etcd_connection_time_ms: etcd_connection_time.as_millis(),
-                db_connection_time_ms: db_connection_time.as_millis(),
-                initial_osm_query_ms: initial_osm_query_time.as_millis(),
+                total_time_ms: start.elapsed().as_millis() as u64,
+                etcd_connection_time_ms: etcd_connection_time.as_millis() as u64,
+                db_connection_time_ms: db_connection_time.as_millis() as u64,
+                initial_osm_query_ms: initial_osm_query_time.as_millis() as u64,
                 stop_data_fetch_ms: 0,
                 aspen_data_fetch_ms: 0,
                 event_generation_ms: 0,
@@ -1113,13 +1113,13 @@ pub async fn departures_at_osm_station(
         alerts,
         agencies,
         debug: DeparturesAtOsmStationDebug {
-            total_time_ms: start.elapsed().as_millis(),
-            etcd_connection_time_ms: etcd_connection_time.as_millis(),
-            db_connection_time_ms: db_connection_time.as_millis(),
-            initial_osm_query_ms: initial_osm_query_time.as_millis(),
-            stop_data_fetch_ms: stop_data_fetch_time.as_millis(),
-            aspen_data_fetch_ms: aspen_data_fetch_time.as_millis(),
-            event_generation_ms: event_generation_time.as_millis(),
+            total_time_ms: start.elapsed().as_millis() as u64,
+            etcd_connection_time_ms: etcd_connection_time.as_millis() as u64,
+            db_connection_time_ms: db_connection_time.as_millis() as u64,
+            initial_osm_query_ms: initial_osm_query_time.as_millis() as u64,
+            stop_data_fetch_ms: stop_data_fetch_time.as_millis() as u64,
+            aspen_data_fetch_ms: aspen_data_fetch_time.as_millis() as u64,
+            event_generation_ms: event_generation_time.as_millis() as u64,
         },
     })
 }
