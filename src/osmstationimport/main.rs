@@ -573,9 +573,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     None => continue,
                 };
 
-                if mode != "rail" {
-                    continue;
-                }
+                // if mode != "rail" {
+                //    continue;
+                // }
 
                 ways_found += 1;
                 let node_refs: Vec<i64> = way.nodes.iter().map(|n| n.0).collect();
@@ -773,10 +773,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         false
     }
 
-    let existing_rail_nodes: Vec<&NodeData> = node_data
-        .values()
-        .filter(|n| n.mode_type == "rail")
-        .collect();
+    let existing_stations: Vec<&NodeData> = node_data.values().collect();
 
     let mut derivative_count = 0;
 
@@ -799,7 +796,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let centroid_lat = coords.iter().map(|(lat, _)| lat).sum::<f64>() / coords.len() as f64;
         let centroid_lon = coords.iter().map(|(_, lon)| lon).sum::<f64>() / coords.len() as f64;
 
-        let has_nearby_rail_node = existing_rail_nodes.iter().any(|node| {
+        let has_nearby_rail_node = existing_stations.iter().any(|node| {
             let centroid_point = Point::new(centroid_lon, centroid_lat);
             let node_point = Point::new(node.lon, node.lat);
             let dist = Haversine.distance(centroid_point, node_point);
