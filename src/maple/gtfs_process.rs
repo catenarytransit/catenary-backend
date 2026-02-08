@@ -531,14 +531,16 @@ pub async fn gtfs_process_feed(
                 .routes
                 .iter()
                 .filter(|(_route_id, route)| {
-                    route.route_type == gtfs_structures::RouteType::Subway || route.id == "6" // Finch West LRT
+                    route.route_type == gtfs_structures::RouteType::Subway
+                    || route.id == "6" // Finch West LRT
+                    || route.id == "5" // Eglinton LRT
                 })
                 .map(|(route_id, _route)| route_id)
                 .cloned()
                 .collect();
 
             println!(
-                "keeping {} routes for TTC (Subway + 6)",
+                "keeping {} routes for TTC (Subway + LRT)",
                 route_ids_to_keep.len()
             );
 
