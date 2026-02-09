@@ -647,6 +647,10 @@ pub async fn departures_at_stop(
             .iter()
             .filter(|(_alert_id, alert)| {
                 alert.informed_entity.iter().any(|entity| {
+                    if let Some(stop_id) = &entity.stop_id {
+                        return relevant_stops.contains(stop_id);
+                    }
+
                     let route_match = entity
                         .route_id
                         .as_ref()
@@ -656,10 +660,6 @@ pub async fn departures_at_stop(
                             .as_ref()
                             .map_or(false, |t_id| relevant_trips.contains(t_id))
                     });
-                    let stop_match = entity
-                        .stop_id
-                        .as_ref()
-                        .map_or(false, |s_id| relevant_stops.contains(s_id));
 
                     // An entity is relevant if it matches a route, trip, or stop we are looking at.
                     // If an entity selector is broad (e.g., no specific route/trip/stop), we should include it if it's for the agency.
@@ -667,7 +667,7 @@ pub async fn departures_at_stop(
                         && entity.trip.is_none()
                         && entity.stop_id.is_none();
 
-                    route_match || trip_match || stop_match || is_general_alert
+                    route_match || trip_match || is_general_alert
                 })
             })
             .map(|(id, alert)| (id.clone(), alert.clone()))
@@ -854,6 +854,7 @@ pub async fn departures_at_stop(
                     for itin_option in valid_trip.itinerary_options.iter() {
                         let mut trip_cancelled: bool = false;
                         let mut trip_deleted: bool = false;
+                        let mut stop_cancelled: bool = false;
 
                         let mut departure_time_rt: Option<u64> = None;
                         let mut platform: Option<String> = None;
@@ -880,7 +881,32 @@ pub async fn departures_at_stop(
                                         event_time >= start && event_time <= end
                                     });
                                     if is_active {
-                                        trip_cancelled = true;
+                                        // Check if any informed entity has a stop_id
+                                        let has_stop_id = alert
+                                            .informed_entity
+                                            .iter()
+                                            .any(|e| e.stop_id.is_some());
+
+                                        if has_stop_id {
+                                            // If it has a stop_id, check if it matches OUR stop_id
+                                            let matches_stop =
+                                                alert.informed_entity.iter().any(|e| {
+                                                    match &e.stop_id {
+                                                        Some(s) => {
+                                                            s.as_str()
+                                                                == itin_option.stop_id.as_str()
+                                                        }
+                                                        None => false,
+                                                    }
+                                                });
+
+                                            if matches_stop {
+                                                stop_cancelled = true;
+                                            }
+                                        } else {
+                                            // No stop_id means it affects the whole trip/route
+                                            trip_cancelled = true;
+                                        }
                                     }
                                 }
                             }
@@ -1077,7 +1103,7 @@ pub async fn departures_at_stop(
                             chateau: chateau_id.clone(),
                             trip_id: valid_trip.trip_id.clone().to_string(),
                             stop_id: itin_option.stop_id.clone().to_string(),
-                            stop_cancelled: false,
+                            stop_cancelled: stop_cancelled,
                             trip_cancelled: trip_cancelled,
                             trip_deleted: trip_deleted,
                             trip_modified: false,
@@ -1357,7 +1383,32 @@ pub async fn departures_at_stop(
                                             event_time >= start && event_time <= end
                                         });
                                         if is_active {
-                                            trip_cancelled = true;
+                                            // Check if any informed entity has a stop_id
+                                            let has_stop_id = alert
+                                                .informed_entity
+                                                .iter()
+                                                .any(|e| e.stop_id.is_some());
+
+                                            if has_stop_id {
+                                                // If it has a stop_id, check if it matches OUR stop_id
+                                                let matches_stop = alert
+                                                    .informed_entity
+                                                    .iter()
+                                                    .any(|e| match &e.stop_id {
+                                                        Some(s) => {
+                                                            s.as_str()
+                                                                == itin_option.stop_id.as_str()
+                                                        }
+                                                        None => false,
+                                                    });
+
+                                                if matches_stop {
+                                                    stop_cancelled = true;
+                                                }
+                                            } else {
+                                                // No stop_id means it affects the whole trip/route
+                                                trip_cancelled = true;
+                                            }
                                         }
                                     }
                                 }

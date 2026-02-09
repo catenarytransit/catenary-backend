@@ -1420,7 +1420,7 @@ pub async fn gtfs_process_feed(
                     .filter_map(|stop_id| gtfs.stops.get(stop_id.as_str()))
                     .filter(|stop| {
                         stop.latitude.is_some() && stop.longitude.is_some()
-                            && 
+                            &&
                             //not within 1 degree of null is_null_island
                             !(
                                 stop.latitude.unwrap() > -1.0
@@ -1567,7 +1567,6 @@ pub async fn gtfs_process_feed(
                         .execute(conn)
                         .await?;
                     }
-    
                     for dir_chunk in d_rows {
                         diesel::insert_into(
                             catenary::schema::gtfs::direction_pattern::dsl::direction_pattern,
@@ -1576,7 +1575,6 @@ pub async fn gtfs_process_feed(
                         .execute(conn)
                         .await?;
                     }
-    
                     Ok(())
                 })
             })

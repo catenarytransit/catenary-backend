@@ -815,10 +815,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 );
 
                                 std::mem::drop(ingest_progress);
-    
+
                                 if gtfs_process_result.is_ok() {
                                     // at the end, UPDATE gtfs.static_download_attempts where onstop_feed_id and download_unix_time_ms match as ingested
-    
+
                                     let _ = diesel::update(static_download_attempts)
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::onestop_feed_id.eq(&feed_id))
                                         .filter(catenary::schema::gtfs::static_download_attempts::dsl::downloaded_unix_time_ms.eq(this_download_data.download_timestamp_ms as i64))
@@ -935,7 +935,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         // We only delete attempts that haven't successfully finished; since this
                                         // attempt failed, we don't have feed_start_date to safely delete successful ones
                                         use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
-                                        
+
                                         let incomplete_attempts = ingested_static
                                             .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id))
                                             .filter(catenary::schema::gtfs::ingested_static::dsl::attempt_id.ne(&attempt_id))
@@ -986,10 +986,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         .set(catenary::schema::gtfs::static_download_attempts::dsl::ingested.eq(true))
                                         .execute(conn)
                                         .await;
-                                
+
                                 let mut ingest_progress = ingest_progress.lock().unwrap();
                                 *ingest_progress += 1;
-        
+
                                 println!(
                                     "Completion progress: {}/{} [{:.2}%]",
                                     ingest_progress,

@@ -626,6 +626,58 @@ pub async fn departures_at_osm_station(
         .collect();
 
     // Process trip data and create events
+    // Filter alerts
+    let mut filtered_alerts: BTreeMap<
+        String,
+        BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>,
+    > = BTreeMap::new();
+    for (chateau_id, chateau_alerts) in &alerts {
+        let relevant_routes: BTreeSet<String> = routes
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |r| r.keys().cloned().collect());
+        let relevant_trips: BTreeSet<String> = trip_compressed_btreemap_by_chateau
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |t| t.keys().cloned().collect());
+        let relevant_stops: BTreeSet<String> = stops_to_search
+            .get(chateau_id)
+            .map_or_else(BTreeSet::new, |s| s.iter().cloned().collect());
+
+        let chateau_filtered_alerts = chateau_alerts
+            .iter()
+            .filter(|(_alert_id, alert)| {
+                alert.informed_entity.iter().any(|entity| {
+                    if let Some(stop_id) = &entity.stop_id {
+                        return relevant_stops.contains(stop_id);
+                    }
+
+                    let route_match = entity
+                        .route_id
+                        .as_ref()
+                        .map_or(false, |r_id| relevant_routes.contains(r_id));
+                    let trip_match = entity.trip.as_ref().map_or(false, |t| {
+                        t.trip_id
+                            .as_ref()
+                            .map_or(false, |t_id| relevant_trips.contains(t_id))
+                    });
+
+                    // An entity is relevant if it matches a route, trip, or stop we are looking at.
+                    // If an entity selector is broad (e.g., no specific route/trip/stop), we should include it if it's for the agency.
+                    let is_general_alert = entity.route_id.is_none()
+                        && entity.trip.is_none()
+                        && entity.stop_id.is_none();
+
+                    route_match || trip_match || is_general_alert
+                })
+            })
+            .map(|(id, alert)| (id.clone(), alert.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        if !chateau_filtered_alerts.is_empty() {
+            filtered_alerts.insert(chateau_id.clone(), chateau_filtered_alerts);
+        }
+    }
+    alerts = filtered_alerts;
+
     let mut alert_indices: HashMap<String, AlertIndex> = HashMap::new();
     for (chateau_id, chateau_alerts) in &alerts {
         alert_indices.insert(chateau_id.clone(), AlertIndex::new(chateau_alerts));
@@ -839,7 +891,25 @@ pub async fn departures_at_osm_station(
                                                     event_time >= start && event_time <= end
                                                 });
                                                 if is_active {
-                                                    trip_cancelled = true;
+                                                    // Check if any informed entity has a stop_id
+                                                    let has_stop_id = alert.informed_entity.iter().any(|e| e.stop_id.is_some());
+
+                                                    if has_stop_id {
+                                                        // If it has a stop_id, check if it matches OUR stop_id
+                                                        let matches_stop = alert.informed_entity.iter().any(|e| {
+                                                            match &e.stop_id {
+                                                                Some(s) => s.as_str() == itin_option.stop_id.as_str(),
+                                                                None => false,
+                                                            }
+                                                        });
+
+                                                        if matches_stop {
+                                                            stop_cancelled = true;
+                                                        }
+                                                    } else {
+                                                        // No stop_id means it affects the whole trip/route
+                                                        trip_cancelled = true;
+                                                    }
                                                 }
                                             }
                                         }

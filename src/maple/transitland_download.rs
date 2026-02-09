@@ -800,7 +800,7 @@ pub async fn download_return_eligible_feeds(
                                             Ok(bytes)
                                         }
                                     };
-            
+
                                     if let Ok(bytes_result) = bytes_result {
                                         let data = bytes_result.as_ref();
                                         let byte_length = data.len();
@@ -816,13 +816,9 @@ pub async fn download_return_eligible_feeds(
             
                                         answer.hash = Some(hash);
                                         answer.byte_size = Some(byte_length as u64);
-            
+
                                         // stringify the hash
                                         let hash_str = hash.to_string();
-
-
-
-            
                                        
                                         //query the SQL database for any ingests that have the same zip
                                         
@@ -857,8 +853,8 @@ pub async fn download_return_eligible_feeds(
                                                     let check_for_previous_insert_sucesses = download_attempts_postgres_lookup
                                                         .iter()
                                                         .find(|&x| x.ingested && !x.mark_for_redo);
-            
-                                                        //thus, don't perform the ingest
+
+                                                    //thus, don't perform the ingest
                                                     if check_for_previous_insert_sucesses.is_some() {
                                                         println!("Don't need to insert: {}, already inserted", &staticfeed.feed_id);
                                                         answer.ingest = false;
@@ -882,7 +878,7 @@ pub async fn download_return_eligible_feeds(
                                             // Create and write file
                                             if let Ok(mut out) = File::create(&this_zip_path) {
                                                 let _ = out.write(&(bytes_result));
-                                                
+
                                                 // Register this URL as downloaded for other feeds to reuse
                                                 url_downloaded_paths
                                                     .lock()
@@ -890,7 +886,7 @@ pub async fn download_return_eligible_feeds(
                                                     .insert(staticfeed.url.clone(), this_zip_path.clone());
                                             }
                                         }
-                                        
+
                                         let mut download_progress  = download_progress.lock().unwrap();
                                         *download_progress += 1;
 
