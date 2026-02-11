@@ -390,7 +390,10 @@ impl BulkFetchCoordinator {
                     } else {
                         println!("DEBUG: Etcd fetch failed for {}", chateau_id);
                         *etcd_reuser.write().await = None;
-                        println!("DEBUG: Flushed Etcd reuser due to failure for {}", chateau_id);
+                        println!(
+                            "DEBUG: Flushed Etcd reuser due to failure for {}",
+                            chateau_id
+                        );
                     }
                     None
                 }
