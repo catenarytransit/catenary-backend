@@ -348,29 +348,11 @@ pub async fn nearby_from_coords_v3(
 
     // 5. Connect to Etcd
     let etcd_connection_start = Instant::now();
-    let etcd_reuser = etcd_reuser.as_ref();
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            if client.clone().status().await.is_ok() {
-                etcd = Some(client.clone());
-            }
-        }
-    }
+    let etcd_result =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
 
-    if etcd.is_none() {
-        let new_client = etcd_client::Client::connect(
-            etcd_connection_ips.ip_addresses.as_slice(),
-            etcd_connection_options.as_ref().as_ref().to_owned(),
-        )
-        .await;
-        if let Ok(c) = new_client {
-            etcd = Some(c.clone());
-            let mut etcd_reuser_write = etcd_reuser.write().await;
-            *etcd_reuser_write = Some(c);
-        }
-    }
+    let etcd = etcd_result.ok();
     let etcd_arc = Arc::new(etcd);
     let etcd_connection_time = etcd_connection_start.elapsed();
 

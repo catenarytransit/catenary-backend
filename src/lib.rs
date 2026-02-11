@@ -1016,3 +1016,41 @@ pub struct GirolleFeedDownloadResult {
     pub byte_size: Option<usize>,
     pub url: String,
 }
+
+pub async fn get_etcd_client(
+    etcd_connection_ips: &EtcdConnectionIps,
+    etcd_connection_options: &Option<etcd_client::ConnectOptions>,
+    etcd_reuser: &tokio::sync::RwLock<Option<etcd_client::Client>>,
+) -> Result<etcd_client::Client, String> {
+    {
+        let etcd_reuser_contents = etcd_reuser.read().await;
+        if let Some(client) = etcd_reuser_contents.as_ref() {
+            let mut client = client.clone();
+            if client.status().await.is_ok() {
+                return Ok(client);
+            }
+        }
+    }
+
+    let new_client = etcd_client::Client::connect(
+        etcd_connection_ips.ip_addresses.as_slice(),
+        etcd_connection_options.as_ref().cloned(),
+    )
+    .await;
+
+    match new_client {
+        Ok(client) => {
+            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
+            *etcd_reuser_write_lock = Some(client.clone());
+            Ok(client)
+        }
+        Err(e) => Err(format!("{}", e)),
+    }
+}
+
+pub async fn invalidate_etcd_client(
+    etcd_reuser: &tokio::sync::RwLock<Option<etcd_client::Client>>,
+) {
+    let mut lock = etcd_reuser.write().await;
+    *lock = None;
+}

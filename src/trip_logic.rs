@@ -279,6 +279,7 @@ pub async fn fetch_trip_rt_update(
     etcd_connection_ips: Arc<EtcdConnectionIps>,
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
+    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 ) -> Result<ResponseForGtfsRtRefresh, String> {
     if chateau == "irvine~ca~us" {
         println!(
@@ -286,15 +287,8 @@ pub async fn fetch_trip_rt_update(
             query.trip_id
         );
     }
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options
-            .as_ref()
-            .as_ref()
-            .to_owned()
-            .cloned(),
-    )
-    .await;
+    let etcd =
+        crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
@@ -517,7 +511,7 @@ pub async fn fetch_trip_rt_update(
             if chateau == "irvine~ca~us" {
                 println!("DEBUG: fetch_trip_rt_update: Failed to fetch assigned node from etcd");
             }
-            Err("Could not connect to zookeeper".to_string())
+            Err("Could not connect to etcd".to_string())
         }
     }
 }
@@ -530,6 +524,7 @@ pub async fn fetch_trip_information(
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
     mut timer: Option<&mut simple_server_timing_header::Timer>,
+    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 ) -> Result<TripIntroductionInformation, String> {
     if chateau == "irvine~ca~us" {
         println!(
@@ -604,15 +599,8 @@ pub async fn fetch_trip_information(
         t.add("connect_to_etcd");
     }
 
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options
-            .as_ref()
-            .as_ref()
-            .to_owned()
-            .cloned(),
-    )
-    .await;
+    let etcd =
+        crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);

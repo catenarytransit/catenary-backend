@@ -90,6 +90,7 @@ impl TripWebSocket {
                     act.etcd_connection_ips.clone(),
                     act.etcd_connection_options.clone(),
                     act.aspen_client_manager.clone(),
+                    act.etcd_reuser.clone(),
                 );
 
                 let params_clone = params.clone();
@@ -471,6 +472,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             self.etcd_connection_options.clone(),
                             self.aspen_client_manager.clone(),
                             None,
+                            self.etcd_reuser.clone(),
                         );
 
                         let fut = async move { fs.await };

@@ -63,36 +63,11 @@ pub async fn get_vehicle_information_from_label(
 ) -> impl Responder {
     let (chateau, vehicle_label) = path.into_inner();
 
-    let etcd_reuser = etcd_reuser.as_ref();
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
 
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        let mut client_is_healthy = false;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            let mut client = client.clone();
-
-            if client.status().await.is_ok() {
-                etcd = Some(client.clone());
-                client_is_healthy = true;
-            }
-        }
-
-        if !client_is_healthy {
-            drop(etcd_reuser_contents);
-            let new_client = etcd_client::Client::connect(
-                etcd_connection_ips.ip_addresses.as_slice(),
-                etcd_connection_options.as_ref().as_ref().to_owned(),
-            )
-            .await
-            .unwrap();
-            etcd = Some(new_client.clone());
-            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-            *etcd_reuser_write_lock = Some(new_client);
-        }
-    }
-
-    if etcd.is_none() {
+    if etcd.is_err() {
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
             .body("Could not connect to etcd");
@@ -172,36 +147,11 @@ pub async fn get_vehicle_information(
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 
-    let etcd_reuser = etcd_reuser.as_ref();
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
 
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        let mut client_is_healthy = false;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            let mut client = client.clone();
-
-            if client.status().await.is_ok() {
-                etcd = Some(client.clone());
-                client_is_healthy = true;
-            }
-        }
-
-        if !client_is_healthy {
-            drop(etcd_reuser_contents);
-            let new_client = etcd_client::Client::connect(
-                etcd_connection_ips.ip_addresses.as_slice(),
-                etcd_connection_options.as_ref().as_ref().to_owned(),
-            )
-            .await
-            .unwrap();
-            etcd = Some(new_client.clone());
-            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-            *etcd_reuser_write_lock = Some(new_client);
-        }
-    }
-
-    if etcd.is_none() {
+    if etcd.is_err() {
         return HttpResponse::InternalServerError()
             .append_header(("Cache-Control", "no-cache"))
             .body("Could not connect to etcd");
@@ -283,6 +233,7 @@ pub async fn get_trip_rt_update(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
     let query = query.into_inner();
@@ -293,6 +244,7 @@ pub async fn get_trip_rt_update(
         etcd_connection_ips.as_ref().clone(),
         etcd_connection_options.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
+        etcd_reuser.as_ref().clone(),
     )
     .await
     {
@@ -309,6 +261,7 @@ pub async fn get_trip_init(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
@@ -322,6 +275,7 @@ pub async fn get_trip_init(
         etcd_connection_options.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
         Some(&mut timer),
+        etcd_reuser.as_ref().clone(),
     )
     .await
     {

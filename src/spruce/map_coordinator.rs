@@ -225,32 +225,9 @@ impl BulkFetchCoordinator {
         let aspen_manager = self.aspen_client_manager.clone();
 
         let fut = async move {
-            let mut etcd = None;
-            {
-                let etcd_reuser_contents = etcd_reuser.read().await;
-                let mut client_is_healthy = false;
-                if let Some(client) = etcd_reuser_contents.as_ref() {
-                    let mut client = client.clone();
-                    if client.status().await.is_ok() {
-                        etcd = Some(client.clone());
-                        client_is_healthy = true;
-                    }
-                }
+            let etcd_result = catenary::get_etcd_client(&etcd_ips, &etcd_opts, &etcd_reuser).await;
 
-                if !client_is_healthy {
-                    drop(etcd_reuser_contents);
-                    if let Ok(new_client) = etcd_client::Client::connect(
-                        etcd_ips.ip_addresses.as_slice(),
-                        etcd_opts.as_ref().clone(),
-                    )
-                    .await
-                    {
-                        etcd = Some(new_client.clone());
-                        let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-                        *etcd_reuser_write_lock = Some(new_client);
-                    }
-                }
-            }
+            let etcd = etcd_result.ok();
 
             if etcd.is_none() {
                 return Vec::new();
@@ -389,7 +366,7 @@ impl BulkFetchCoordinator {
                         }
                     } else {
                         println!("DEBUG: Etcd fetch failed for {}", chateau_id);
-                        *etcd_reuser.write().await = None;
+                        catenary::invalidate_etcd_client(&etcd_reuser).await;
                         println!(
                             "DEBUG: Flushed Etcd reuser due to failure for {}",
                             chateau_id

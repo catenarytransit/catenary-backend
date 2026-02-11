@@ -265,33 +265,14 @@ pub async fn bulk_realtime_fetch_v3(
     params: web::Json<BulkFetchParamsV3>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
-    let etcd_reuser = etcd_reuser.as_ref();
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
 
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        let mut client_is_healthy = false;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            let mut client = client.clone();
-
-            if client.status().await.is_ok() {
-                etcd = Some(client.clone());
-                client_is_healthy = true;
-            }
-        }
-
-        if !client_is_healthy {
-            drop(etcd_reuser_contents);
-            let new_client = etcd_client::Client::connect(
-                etcd_connection_ips.ip_addresses.as_slice(),
-                etcd_connection_options.as_ref().as_ref().to_owned(),
-            )
-            .await
-            .unwrap();
-            etcd = Some(new_client.clone());
-            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-            *etcd_reuser_write_lock = Some(new_client);
-        }
+    if etcd.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
     }
 
     let mut etcd = etcd.unwrap();
@@ -668,15 +649,14 @@ pub async fn get_realtime_locations(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     path: web::Path<(String, String, u64, u64)>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let (chateau_id, category, client_last_updated_time_ms, existing_fasthash_of_routes) =
         path.into_inner();
 
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
