@@ -366,7 +366,7 @@ pub async fn nearby_from_coords_v3(
             pool: pool.get_ref().clone(),
             etcd_connection_ips: etcd_connection_ips.get_ref().clone(),
             etcd_connection_options: etcd_connection_options.get_ref().clone(),
-            etcd_reuser: etcd_reuser.clone(),
+            etcd_reuser: etcd_reuser.get_ref().clone(),
         },
         query.into_inner(),
         station_groups, // consumes map

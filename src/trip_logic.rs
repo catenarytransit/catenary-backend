@@ -1679,12 +1679,12 @@ pub async fn fetch_trip_information(
                                                                         if let Some(stop) = from_pg_again.iter().find(|x| x.gtfs_id == *stop_id) {
                                                                             found_stop = Some(StopPostgresOrAspen::Postgres(stop.clone()));
                                                                         }
-                                                                    } 
+                                                                    }
 
                                                                     if found_stop.is_none() {
                                                                         if let Some(stop) = stops_data_for_modifications_from_aspen.get(stop_id) {
                                                                             found_stop = Some(StopPostgresOrAspen::Aspen(stop.clone()));
-                                                                        } 
+                                                                        }
                                                                     }
 
                                                                     found_stop
@@ -1694,13 +1694,13 @@ pub async fn fetch_trip_information(
 
                                                             match stop {
                                                                 None => None,
-                                                                Some(stop) => 
+                                                                Some(stop) =>
                                                                 {
                                                                     let stop_id = match &stop {
                                                                         StopPostgresOrAspen::Postgres(stop) => stop.gtfs_id.clone(),
                                                                         StopPostgresOrAspen::Aspen(stop) => stop.stop_id.clone().unwrap_or("".to_string())
                                                                     };
-    
+
                                                                     let stop_name = match &stop {
                                                                         StopPostgresOrAspen::Postgres(stop) => stop.name.clone(),
                                                                         StopPostgresOrAspen::Aspen(stop) => match stop.stop_name.clone() {
@@ -1708,7 +1708,7 @@ pub async fn fetch_trip_information(
                                                                             None => None
                                                                         }
                                                                     };
-                                                                
+
                                                                     let stop_latitude = match &stop {
                                                                         StopPostgresOrAspen::Postgres(stop) => stop.point.map(|point| point.y),
                                                                         StopPostgresOrAspen::Aspen(stop) => stop.stop_lat.map(|x| x as f64)
@@ -1717,19 +1717,19 @@ pub async fn fetch_trip_information(
                                                                         StopPostgresOrAspen::Postgres(stop) => stop.point.map(|point| point.x),
                                                                         StopPostgresOrAspen::Aspen(stop) => stop.stop_lon.map(|x| x as f64)
                                                                     };
-    
+
                                                                     let stop_timezone = match &stop {
                                                                         StopPostgresOrAspen::Postgres(stop) =>stop.timezone.as_ref().map(|pg_timezone| chrono_tz::Tz::from_str_insensitive(&pg_timezone).ok()).flatten(),
                                                                         StopPostgresOrAspen::Aspen(_) => {
                                                                             reference_stop.timezone
                                                                         }
                                                                     };
-    
+
                                                                     let stop_code = match &stop {
                                                                         StopPostgresOrAspen::Postgres(stop) => stop.code.clone(),
                                                                         StopPostgresOrAspen::Aspen(_) => None
                                                                     };
-    
+
                                                                 return Some(StopTimeIntroduction {
                                                                     stop_id: stop_id.into(),
                                                                     name: stop_name,
@@ -1747,7 +1747,7 @@ pub async fn fetch_trip_information(
                                                                     rt_departure: None,
                                                                     schedule_relationship: None,
                                                                     rt_platform_string: None,
-                                                                    timepoint: Some(false),                           
+                                                                    timepoint: Some(false),
                                                                     replaced_stop: true,
                                                                     osm_station_id: None,
                                                                 });
