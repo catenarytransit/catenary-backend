@@ -260,6 +260,7 @@ impl BulkFetchCoordinator {
             let tasks = chateaus_to_fetch.into_iter().map(|chateau_id| {
                 let mut etcd = etcd.clone();
                 let aspen_manager = aspen_manager.clone();
+                let etcd_reuser = etcd_reuser.clone();
 
                 async move {
                     let fetch_assigned_node = etcd
@@ -388,6 +389,8 @@ impl BulkFetchCoordinator {
                         }
                     } else {
                         println!("DEBUG: Etcd fetch failed for {}", chateau_id);
+                        *etcd_reuser.write().await = None;
+                        println!("DEBUG: Flushed Etcd reuser due to failure for {}", chateau_id);
                     }
                     None
                 }
