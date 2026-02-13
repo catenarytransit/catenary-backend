@@ -1207,7 +1207,26 @@ async fn fetch_chateau_data(
                                 let end = ap.end.unwrap_or(u64::MAX);
                                 (departure_ts as u64) >= start && (departure_ts as u64) <= end
                             });
-                            if is_active {
+
+                            let applies_to_trip_without_a_referenced_stop = alert
+                                .informed_entity
+                                .iter()
+                                .filter(|e| e.stop_id.is_none())
+                                .any(|e| {
+                                    let route_match = e
+                                        .route_id
+                                        .as_ref()
+                                        .map_or(false, |r_id| *r_id == trip.route_id);
+                                    let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                        t.trip_id
+                                            .as_ref()
+                                            .map_or(false, |t_id| *t_id == trip.trip_id)
+                                    });
+
+                                    route_match || trip_match
+                                });
+
+                            if is_active && applies_to_trip_without_a_referenced_stop {
                                 is_cancelled = true;
                             }
                         }
