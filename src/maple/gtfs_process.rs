@@ -229,6 +229,15 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
+        "f-seoulmetro" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./south-korea-latest.osm.pbf",
+                None,
+                true,
+                false,
+            )?;
+        }
         "f-amtrak~gold~runner"
         | "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
