@@ -38,7 +38,7 @@ sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config 
 
 #### install coin cbc integer linear programming solver.
 ```bash
-sudo apt install coinor-cbc coinor-cbc-dev
+sudo apt-get install coinor-cbc coinor-libcbc-dev
 ```
 
 ### Install postgres
