@@ -979,6 +979,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_agencies::get_agencies_for_chateau)
             .service(proxy_for_maptiler_terrain_tiles)
             .service(proxy_for_maptiler_coutours_tiles)
+            .service(proxy_for_mapbox_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
