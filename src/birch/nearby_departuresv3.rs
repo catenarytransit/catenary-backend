@@ -353,16 +353,8 @@ pub async fn nearby_from_coords_v3(
         }
     }
 
-    let mut chateau_futures = Vec::new();
-    for (chateau, stop_ids) in chateau_stops {
-        let pool = pool.get_ref().clone();
-        let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
-        let etcd_clone = etcd_arc.clone();
-        let dep_time = departure_time_chrono;
-        let chateau_clone = chateau.clone();
-        let ld_arc_clone = long_distance_chateaux_arc.clone();
-
-        let stop_to_key_map: HashMap<(String, String), StationKey> = stops
+    let stop_to_key_map_all: Arc<HashMap<(String, String), StationKey>> = Arc::new(
+        stops
             .iter()
             .map(|s| {
                 (
@@ -376,17 +368,36 @@ pub async fn nearby_from_coords_v3(
                     },
                 )
             })
-            .collect();
-        let stop_platform_map: HashMap<String, Option<String>> = stops
+            .collect(),
+    );
+    let stop_platform_map_all: Arc<HashMap<String, Option<String>>> = Arc::new(
+        stops
             .iter()
             .map(|s| (s.gtfs_id.clone(), s.platform_code.clone()))
-            .collect();
-        let stop_name_map: HashMap<String, Option<String>> = stops
+            .collect(),
+    );
+    let stop_name_map_all: Arc<HashMap<String, Option<String>>> = Arc::new(
+        stops
             .iter()
             .map(|s| (s.gtfs_id.clone(), s.name.clone()))
-            .collect();
-        let full_info_map_clone = stop_full_info_map.clone();
-        let stop_dist_map_clone = stop_dist_map.clone();
+            .collect(),
+    );
+    let stop_full_info_map_arc = Arc::new(stop_full_info_map);
+    let stop_dist_map_arc = Arc::new(stop_dist_map);
+
+    let mut chateau_futures = Vec::new();
+    for (chateau, stop_ids) in chateau_stops {
+        let pool = pool.get_ref().clone();
+        let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
+        let etcd_clone = etcd_arc.clone();
+        let dep_time = departure_time_chrono;
+        let chateau_clone = chateau.clone();
+        let ld_arc_clone = long_distance_chateaux_arc.clone();
+        let stop_to_key_map = stop_to_key_map_all.clone();
+        let stop_platform_map = stop_platform_map_all.clone();
+        let stop_name_map = stop_name_map_all.clone();
+        let full_info_map_clone = stop_full_info_map_arc.clone();
+        let stop_dist_map_clone = stop_dist_map_arc.clone();
 
         chateau_futures.push(async move {
             fetch_chateau_data(
@@ -409,27 +420,8 @@ pub async fn nearby_from_coords_v3(
     }
 
     let pipeline_start = Instant::now();
-    let pipeline_results: Vec<
-        Option<(
-            HashMap<(String, StationKey), Vec<DepartureItem>>,
-            HashMap<
-                LocalRouteKey,
-                (
-                    catenary::models::Route,
-                    String,
-                    HashMap<String, Vec<LocalDepartureItem>>,
-                ),
-            >,
-            HashMap<String, RouteInfoExport>,
-            HashMap<String, StopOutputV3>,
-        )>,
-    > = futures::stream::iter(chateau_futures)
-        .buffer_unordered(10)
-        .collect()
-        .await;
-    let pipeline_processing_time = pipeline_start.elapsed();
 
-    // Flatten results
+    // Flatten results while streaming to keep peak memory lower.
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> =
         HashMap::new();
     let mut local_departures: HashMap<LocalRouteKey, HashMap<String, Vec<LocalDepartureItem>>> =
@@ -439,7 +431,8 @@ pub async fn nearby_from_coords_v3(
     let mut routes_output: HashMap<String, HashMap<String, RouteInfoExport>> = HashMap::new();
     let mut stops_output: HashMap<String, HashMap<String, StopOutputV3>> = HashMap::new();
 
-    for res in pipeline_results {
+    let mut chateau_stream = futures::stream::iter(chateau_futures).buffer_unordered(3);
+    while let Some(res) = chateau_stream.next().await {
         if let Some((ld_part, local_part, route_part, stop_part)) = res {
             let mut chateau_opt = None;
             if let Some((c, _)) = ld_part.keys().next() {
@@ -475,6 +468,8 @@ pub async fn nearby_from_coords_v3(
             }
         }
     }
+
+    let pipeline_processing_time = pipeline_start.elapsed();
 
     // A. Long Distance Output Generation
     let mut ld_output: Vec<StationDepartureGroupExport> = Vec::new();
@@ -580,7 +575,7 @@ pub async fn nearby_from_coords_v3(
 
         for (_, items) in &sorted_headsigns {
             for item in items {
-                if let Some(d) = stop_dist_map.get(item.stop_id.as_str()) {
+                if let Some(d) = stop_dist_map_arc.get(item.stop_id.as_str()) {
                     if *d < min_dist {
                         min_dist = *d;
                     }
@@ -629,11 +624,11 @@ async fn fetch_chateau_data(
     departure_time_chrono: chrono::DateTime<chrono::Utc>,
     etcd_arc: Arc<Option<etcd_client::Client>>,
     long_distance_chateaux: Arc<HashSet<&str>>,
-    stop_to_key_map: HashMap<(String, String), StationKey>,
-    stop_platform_map: HashMap<String, Option<String>>,
-    stop_name_map: HashMap<String, Option<String>>,
-    stop_full_info_map: HashMap<String, catenary::models::Stop>,
-    stop_dist_map: HashMap<String, f64>,
+    stop_to_key_map: Arc<HashMap<(String, String), StationKey>>,
+    stop_platform_map: Arc<HashMap<String, Option<String>>>,
+    stop_name_map: Arc<HashMap<String, Option<String>>>,
+    stop_full_info_map: Arc<HashMap<String, catenary::models::Stop>>,
+    stop_dist_map: Arc<HashMap<String, f64>>,
     skip_realtime: bool,
     rt_timeout_ms: u64,
 ) -> Option<(
@@ -1002,19 +997,15 @@ async fn fetch_chateau_data(
                                     std::time::Duration::from_millis(rt_timeout_ms),
                                     async {
                                         tokio::join!(
-                                            client.get_all_trips_with_route_ids(
+                                            client.get_all_trips_with_ids(
                                                 tarpc::context::current(),
                                                 chateau.clone(),
-                                                route_ids
-                                                    .clone()
-                                                    .into_iter()
-                                                    .map(|x| x.into())
-                                                    .collect()
+                                                trip_ids.clone()
                                             ),
                                             client.get_all_alerts(
                                                 tarpc::context::current(),
                                                 chateau.clone()
-                                            )
+                                            ),
                                         )
                                     },
                                 )
