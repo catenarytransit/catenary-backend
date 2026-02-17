@@ -974,15 +974,20 @@ async fn fetch_chateau_data(
             if !trip_ids.is_empty() {
                 let mut etcd_clone = etcd.clone();
                 let start_realtime_fetch = std::time::Instant::now();
+
+                println!("Etcd aspen assignment fetching...");
+
                 if let Ok(resp) = etcd_clone
-                    .get(format!("/aspen_assigned_chateaux/{}", chateau), None)
+                    .get(format!("/aspen_assigned_chateaux/{}", &chateau), None)
                     .await
                 {
                     let etcd_time = start_realtime_fetch.elapsed();
+                    println!("Etcd aspen assignment fetched in {:?}", etcd_time);
                     if let Some(kv) = resp.kvs().first() {
                         if let Ok(meta) =
                             catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value())
                         {
+                            println!("Etcd {} aspen assignment deserialized", &chateau);
                             let timer_to_connect_to_aspen = std::time::Instant::now();
                             if let Ok(client) =
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await

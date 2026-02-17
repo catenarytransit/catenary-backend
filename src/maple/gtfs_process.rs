@@ -68,7 +68,9 @@ pub struct GtfsSummary {
     pub bbox: Option<geo::Rect>,
 }
 
-const METRA_MINI_IDS: &[&str] = &["UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN"];
+const METRA_MINI_IDS: &[&str] = &[
+    "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
+];
 
 fn execute_pfaedle_rs(
     gtfs_path: &str,
