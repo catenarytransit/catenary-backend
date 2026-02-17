@@ -1054,6 +1054,8 @@ async fn fetch_chateau_data(
                         }
                     }
                 }
+            } else {
+                eprintln!("Failed to get etcd data for chateau {}", chateau.as_str());
             }
         }
     }
