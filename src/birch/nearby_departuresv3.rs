@@ -1024,6 +1024,18 @@ async fn fetch_chateau_data(
                                         );
 
                                         if let Ok(Some(tr)) = t {
+                                            //    pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
+                                            //pub trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+                                            // pub stop_id_to_parent_id: AHashMap<String, String>,
+
+                                            println!(
+                                                "Nearby Departures {} rt trip_updates {}, trip_id_to_trip_updates {}, and stop_id_to_parent_id {}",
+                                                chateau.as_str(),
+                                                tr.trip_updates.len(),
+                                                tr.trip_id_to_trip_update_ids.len(),
+                                                tr.stop_id_to_parent_id.len()
+                                            );
+
                                             rt_data = Some(tr);
                                         }
                                         if let Ok(Some(al)) = a {
