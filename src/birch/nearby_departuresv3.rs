@@ -978,7 +978,10 @@ async fn fetch_chateau_data(
                 println!("Etcd aspen assignment fetching...");
 
                 if let Ok(resp) = etcd_clone
-                    .get(format!("/aspen_assigned_chateaux/{}", &chateau), None)
+                    .get(
+                        format!("/aspen_assigned_chateaux/{}", &chateau),
+                        Some(etcd_client::GetOptions::new().with_limit(1)),
+                    )
                     .await
                 {
                     let etcd_time = start_realtime_fetch.elapsed();
