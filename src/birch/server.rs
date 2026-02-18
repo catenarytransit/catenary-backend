@@ -139,6 +139,19 @@ async fn index(req: HttpRequest) -> impl Responder {
         .body("Hello World from Catenary Map Birch HTTP endpoint!")
 }
 
+/// Writes to /proc/self/oom_score_adj to increase likelihood of termination
+/// upon system memory exhaustion.
+fn prioritise_self_for_oom() -> std::io::Result<()> {
+    // The value 1000 indicates 100% memory usage heuristic equivalent,
+    // making this process the primary target for the OOM killer.
+    let mut file = OpenOptions::new()
+        .write(true)
+        .open("/proc/self/oom_score_adj")?;
+    
+    file.write_all(b"512")?;
+    Ok(())
+}
+
 async fn robots(req: actix_web::HttpRequest) -> impl actix_web::Responder {
     let banned_bots = vec![
         "CCBot",
@@ -863,6 +876,8 @@ async fn main() -> std::io::Result<()> {
         Arc::new(tokio::sync::RwLock::new(None));
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
+
+    let _ = prioritise_self_for_oom();
 
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
