@@ -158,6 +158,7 @@ pub struct LocalDepartureItem {
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
+#[hotpath::measure]
 #[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(lat = ?query.lat, lon = ?query.lon))]
 pub async fn nearby_from_coords_v3(
     req: HttpRequest,
@@ -617,6 +618,7 @@ pub async fn nearby_from_coords_v3(
     })
 }
 
+#[hotpath::measure]
 async fn fetch_chateau_data(
     pool: Arc<CatenaryPostgresPool>,
     chateau: String,
@@ -991,7 +993,8 @@ async fn fetch_chateau_data(
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                             {
                                 let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
-
+                                
+                                hotpath::measure_block!("fetch_data_from_aspen", {
                                 let timer_get_trips = std::time::Instant::now();
                                 let timeout_result = tokio::time::timeout(
                                     std::time::Duration::from_millis(rt_timeout_ms),
@@ -1049,6 +1052,7 @@ async fn fetch_chateau_data(
                                         );
                                     }
                                 }
+                            });
                             }
                         }
                     }

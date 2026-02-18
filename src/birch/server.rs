@@ -35,12 +35,12 @@
     clippy::useless_vec
 )]
 
-#[cfg(not(target_env = "msvc"))]
-use tikv_jemallocator::Jemalloc;
+//#[cfg(not(target_env = "msvc"))]
+//use tikv_jemallocator::Jemalloc;
 
-#[cfg(not(target_env = "msvc"))]
-#[global_allocator]
-static GLOBAL: Jemalloc = Jemalloc;
+//#[cfg(not(target_env = "msvc"))]
+//#[global_allocator]
+//static GLOBAL: Jemalloc = Jemalloc;
 
 mod postgis_download;
 use postgis_download::*;
@@ -783,6 +783,7 @@ async fn ip_addr_to_geo_api(
 }
 
 #[actix_web::main]
+#[hotpath::main]
 async fn main() -> std::io::Result<()> {
     // 1. Configure the OTLP Exporter
     // 1. Configure the OTLP Exporter
