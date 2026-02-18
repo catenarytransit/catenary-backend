@@ -592,34 +592,40 @@ pub struct MovedStopData {
 /// Index for efficient alert lookups by route or trip
 #[derive(Clone)]
 pub struct AlertIndex {
-    by_route: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
-    by_trip: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>>,
+    by_route: HashMap<String, Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>>,
+    by_trip: HashMap<String, Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>>,
     #[allow(dead_code)]
-    general: Vec<(String, catenary::aspen_dataset::AspenisedAlert)>,
+    general: Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>,
 }
 
+#[hotpath::measure_all]
 impl AlertIndex {
     pub fn new(alerts: &BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>) -> Self {
-        let mut by_route: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>> =
-            HashMap::new();
-        let mut by_trip: HashMap<String, Vec<(String, catenary::aspen_dataset::AspenisedAlert)>> =
-            HashMap::new();
+        let mut by_route: HashMap<
+            String,
+            Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>,
+        > = HashMap::new();
+        let mut by_trip: HashMap<
+            String,
+            Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>,
+        > = HashMap::new();
         let general = Vec::new();
 
         for (id, alert) in alerts {
+            let alert = Arc::new(alert.clone());
             for entity in &alert.informed_entity {
                 if let Some(r_id) = &entity.route_id {
                     by_route
                         .entry(r_id.clone())
                         .or_default()
-                        .push((id.clone(), alert.clone()));
+                        .push((id.clone(), Arc::clone(&alert)));
                 }
                 if let Some(trip) = &entity.trip {
                     if let Some(t_id) = &trip.trip_id {
                         by_trip
                             .entry(t_id.clone())
                             .or_default()
-                            .push((id.clone(), alert.clone()));
+                            .push((id.clone(), Arc::clone(&alert)));
                     }
                 }
             }
@@ -645,13 +651,13 @@ impl AlertIndex {
         &self,
         route_id: &str,
         trip_id: &str,
-    ) -> Vec<&catenary::aspen_dataset::AspenisedAlert> {
+    ) -> Vec<Arc<catenary::aspen_dataset::AspenisedAlert>> {
         let mut candidates = Vec::new();
         if let Some(alerts) = self.by_route.get(route_id) {
-            candidates.extend(alerts);
+            candidates.extend(alerts.iter().cloned());
         }
         if let Some(alerts) = self.by_trip.get(trip_id) {
-            candidates.extend(alerts);
+            candidates.extend(alerts.iter().cloned());
         }
 
         candidates.sort_by(|a, b| a.0.cmp(&b.0));
