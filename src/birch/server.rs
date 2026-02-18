@@ -145,6 +145,7 @@ fn prioritise_self_for_oom() -> std::io::Result<()> {
     // The value 1000 indicates 100% memory usage heuristic equivalent,
     // making this process the primary target for the OOM killer.
     use std::fs::OpenOptions;
+    use std::io::Write;
     let mut file = OpenOptions::new()
         .write(true)
         .open("/proc/self/oom_score_adj")?;
