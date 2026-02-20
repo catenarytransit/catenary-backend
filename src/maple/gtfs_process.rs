@@ -240,6 +240,15 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
+        "f-u8v-kyivpastrans" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-ukraine-latest.osm.pbf",
+                None,
+                true,
+                true,
+            )?;
+        }
         "f-amtrak~gold~runner"
         | "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
