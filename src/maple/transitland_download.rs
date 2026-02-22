@@ -1025,6 +1025,12 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             );
         }
         _ => {}
+        "f-u8mb-odesa~city~council" => {
+            headers.insert(
+                "ApiKey",
+                "a8c6d35e-f2c1-4f72-b902-831fa9215009".parse().unwrap(),
+            );
+        }
     };
 
     if feed_id == "f-u05-tcl~systral" {
