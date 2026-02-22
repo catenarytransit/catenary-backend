@@ -93,7 +93,12 @@ pub async fn fetch_lirr_mnr_track_data(
                     "https://backend-unified.mylirr.org/arrivals/{}?amtrak=true",
                     stop_code
                 );
-                match client.get(&url).send().await {
+                match client
+                    .get(&url)
+                    .header("accept-version", "3.0")
+                    .send()
+                    .await
+                {
                     Ok(resp) => match resp.json::<LirrMnrApiResponse>().await {
                         Ok(data) => Some((stop_code, data)),
                         Err(e) => {
