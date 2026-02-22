@@ -144,6 +144,103 @@ pub async fn gtfs_process_feed(
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
 
     match feed_id {
+        "f-dqc-virginiarailwayexpress" => {
+            let stops_txt_path = format!("{}/{}/stops.txt", gtfs_unzipped_path, feed_id);
+
+            //current headers
+            //stop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon,zone_id,stop_url,location_type,parent_station,stop_timezone
+
+            // new headers
+            // stop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon,zone_id,stop_url,location_type,parent_station,stop_timezone,platform_code
+
+            // algorithm: for any station that has a parent_station, write the name of the parent station as the name, and move the original name to platform_code
+
+            let stops_txt = std::fs::read_to_string(&stops_txt_path)?;
+            let mut reader = csv::Reader::from_reader(stops_txt.as_bytes());
+
+            // Collect all records first
+            #[derive(Debug, Clone)]
+            struct StopRecord {
+                stop_id: String,
+                stop_code: String,
+                stop_name: String,
+                stop_desc: String,
+                stop_lat: String,
+                stop_lon: String,
+                zone_id: String,
+                stop_url: String,
+                location_type: String,
+                parent_station: String,
+                stop_timezone: String,
+            }
+
+            let mut stops: Vec<StopRecord> = Vec::new();
+
+            for result in reader.records() {
+                let record = result?;
+                stops.push(StopRecord {
+                    stop_id: record.get(0).unwrap_or("").to_string(),
+                    stop_code: record.get(1).unwrap_or("").to_string(),
+                    stop_name: record.get(2).unwrap_or("").to_string(),
+                    stop_desc: record.get(3).unwrap_or("").to_string(),
+                    stop_lat: record.get(4).unwrap_or("").to_string(),
+                    stop_lon: record.get(5).unwrap_or("").to_string(),
+                    zone_id: record.get(6).unwrap_or("").to_string(),
+                    stop_url: record.get(7).unwrap_or("").to_string(),
+                    location_type: record.get(8).unwrap_or("").to_string(),
+                    parent_station: record.get(9).unwrap_or("").to_string(),
+                    stop_timezone: record.get(10).unwrap_or("").to_string(),
+                });
+            }
+
+            // Build a map from stop_id to stop_name for parent station lookups
+            let stop_name_by_id: HashMap<String, String> = stops
+                .iter()
+                .map(|s| (s.stop_id.clone(), s.stop_name.clone()))
+                .collect();
+
+            // Rewrite the file with the new platform_code column
+            let mut output = String::new();
+            output.push_str("stop_id,stop_code,stop_name,stop_desc,stop_lat,stop_lon,zone_id,stop_url,location_type,parent_station,stop_timezone,platform_code\n");
+
+            for stop in &stops {
+                let (display_name, platform_code) = if !stop.parent_station.is_empty() {
+                    let parent_name = stop_name_by_id
+                        .get(&stop.parent_station)
+                        .cloned()
+                        .unwrap_or_else(|| stop.stop_name.clone());
+                    (parent_name, stop.stop_name.clone())
+                } else {
+                    (stop.stop_name.clone(), String::new())
+                };
+
+                fn csv_escape(s: &str) -> String {
+                    if s.contains(',') || s.contains('"') || s.contains('\n') {
+                        format!("\"{}\"", s.replace('"', "\"\""))
+                    } else {
+                        s.to_string()
+                    }
+                }
+
+                output.push_str(&format!(
+                    "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                    csv_escape(&stop.stop_id),
+                    csv_escape(&stop.stop_code),
+                    csv_escape(&display_name),
+                    csv_escape(&stop.stop_desc),
+                    csv_escape(&stop.stop_lat),
+                    csv_escape(&stop.stop_lon),
+                    csv_escape(&stop.zone_id),
+                    csv_escape(&stop.stop_url),
+                    csv_escape(&stop.location_type),
+                    csv_escape(&stop.parent_station),
+                    csv_escape(&stop.stop_timezone),
+                    csv_escape(&platform_code),
+                ));
+            }
+
+            std::fs::write(&stops_txt_path, output)?;
+        }
         "f-gtfs~de" => {
             // Remove banned agencies (duplicates from other feeds) before processing
             crate::raw_file_agency_remover::remove_banned_agencies(
