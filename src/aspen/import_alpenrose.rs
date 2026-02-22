@@ -1405,6 +1405,52 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
+                                "metro~northrailroad" => {
+                                    if let TrackData::MetroNorthRailroad(Some(mnr_data)) =
+                                        &fetched_track_data
+                                    {
+                                        if let Some(trip) = compressed_trip {
+                                            if let Some(trip_short_name) = &trip.trip_short_name {
+                                                if let Some(stop_id) = &stu.stop_id {
+                                                    if let Some(train_data) = mnr_data
+                                                        .track_lookup
+                                                        .get(trip_short_name.as_str())
+                                                    {
+                                                        if let Some(track) =
+                                                            train_data.get(stop_id.as_str())
+                                                        {
+                                                            platform_resp =
+                                                                Some(track.clone().into());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                "longislandrailroad" => {
+                                    if let TrackData::LongIslandRailroad(Some(lirr_data)) =
+                                        &fetched_track_data
+                                    {
+                                        if let Some(trip) = compressed_trip {
+                                            if let Some(trip_short_name) = &trip.trip_short_name {
+                                                if let Some(stop_id) = &stu.stop_id {
+                                                    if let Some(train_data) = lirr_data
+                                                        .track_lookup
+                                                        .get(trip_short_name.as_str())
+                                                    {
+                                                        if let Some(track) =
+                                                            train_data.get(stop_id.as_str())
+                                                        {
+                                                            platform_resp =
+                                                                Some(track.clone().into());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
 

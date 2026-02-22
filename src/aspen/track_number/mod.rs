@@ -2,6 +2,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub mod lirr_mnr;
 pub mod metrolinx_platforms;
 pub mod viarail;
 
@@ -19,6 +20,8 @@ pub enum TrackData {
     Amtrak(AmtrakTrackDataMultisource),
     NationalRail(HashMap<String, Vec<PlatformInfo>>),
     ViaRail(Option<viarail::ViaRailTrackData>),
+    MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
+    LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     None,
 }
 
@@ -266,6 +269,12 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             Some(data) => TrackData::ViaRail(Some(data)),
             None => TrackData::ViaRail(None),
         },
+        "metro~northrailroad" => TrackData::MetroNorthRailroad(
+            lirr_mnr::fetch_lirr_mnr_track_data(chateau_id, pool).await,
+        ),
+        "longislandrailroad" => TrackData::LongIslandRailroad(
+            lirr_mnr::fetch_lirr_mnr_track_data(chateau_id, pool).await,
+        ),
         _ => TrackData::None,
     }
 }
