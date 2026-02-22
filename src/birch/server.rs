@@ -35,12 +35,12 @@
     clippy::useless_vec
 )]
 
-//#[cfg(not(target_env = "msvc"))]
-//use tikv_jemallocator::Jemalloc;
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
 
-//#[cfg(not(target_env = "msvc"))]
-//#[global_allocator]
-//static GLOBAL: Jemalloc = Jemalloc;
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 mod postgis_download;
 use postgis_download::*;
@@ -149,7 +149,7 @@ fn prioritise_self_for_oom() -> std::io::Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .open("/proc/self/oom_score_adj")?;
-    
+
     file.write_all(b"512")?;
     Ok(())
 }
@@ -798,7 +798,6 @@ async fn ip_addr_to_geo_api(
 }
 
 #[actix_web::main]
-#[hotpath::main]
 async fn main() -> std::io::Result<()> {
     // 1. Configure the OTLP Exporter
     // 1. Configure the OTLP Exporter
