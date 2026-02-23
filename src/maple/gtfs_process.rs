@@ -144,6 +144,58 @@ pub async fn gtfs_process_feed(
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
 
     match feed_id {
+                "f-u8mb-odesa~city~council" => {
+            let trips_path = format!("{}/{}/trips.txt", gtfs_unzipped_path, feed_id);
+            let stop_times_path = format!("{}/{}/stop_times.txt", gtfs_unzipped_path, feed_id);
+
+            // 1. Collect all valid trip_ids from trips.txt
+            let trips_csv = std::fs::read_to_string(&trips_path)?;
+            let mut trips_reader = csv::Reader::from_reader(trips_csv.as_bytes());
+
+            let valid_trip_ids: HashSet<String> = trips_reader
+                .records()
+                .filter_map(|r| r.ok())
+                .filter_map(|r| r.get(0).map(|s| s.to_string())) // Assuming trip_id is the first column
+                .collect();
+
+            // 2. Filter stop_times.txt to remove orphans
+            let stop_times_csv = std::fs::read_to_string(&stop_times_path)?;
+            let mut st_reader = csv::Reader::from_reader(stop_times_csv.as_bytes());
+            let headers = st_reader.headers()?.clone();
+
+            let mut valid_stop_times = Vec::new();
+            let mut total_st_rows = 0;
+            let mut removed_st_count = 0;
+
+            for result in st_reader.records() {
+                let record = result?;
+                total_st_rows += 1;
+
+                // Assuming trip_id is the second column (index 1) in stop_times.txt
+                if let Some(trip_id) = record.get(1) {
+                    if valid_trip_ids.contains(trip_id) {
+                        valid_stop_times.push(record);
+                    } else {
+                        removed_st_count += 1;
+                    }
+                }
+            }
+
+            // 3. Write the cleaned stop_times back to the file system
+            let mut wtr = csv::Writer::from_writer(Vec::new());
+            wtr.write_record(&headers)?;
+            for record in valid_stop_times {
+                wtr.write_record(&record)?;
+            }
+
+            let final_csv = String::from_utf8(wtr.into_inner()?)?;
+            std::fs::write(&stop_times_path, final_csv)?;
+
+            println!(
+                "Odesa Data Integrity: Removed {} orphaned stop times out of {} total records.",
+                removed_st_count, total_st_rows
+            );
+        }
         "f-dqc-virginiarailwayexpress" => {
             let stops_txt_path = format!("{}/{}/stops.txt", gtfs_unzipped_path, feed_id);
 
