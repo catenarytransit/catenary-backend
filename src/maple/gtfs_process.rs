@@ -394,6 +394,7 @@ pub async fn gtfs_process_feed(
         | "f-rhdf80com~seau~interurbain~fr"
         | "f-rhdf80sco~seau~scolaire~fr"
         | "f-auvergne~rhône~alpes~oùra"
+        | "f-rhdf02sco~seau~scolaire~fr"
         | "f-hauts~de~france~loise~1" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
