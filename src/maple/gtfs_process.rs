@@ -144,7 +144,7 @@ pub async fn gtfs_process_feed(
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
 
     match feed_id {
-                "f-u8mb-odesa~city~council" => {
+        "f-u8mb-odesa~city~council" => {
             let trips_path = format!("{}/{}/trips.txt", gtfs_unzipped_path, feed_id);
             let stop_times_path = format!("{}/{}/stop_times.txt", gtfs_unzipped_path, feed_id);
 
@@ -1253,6 +1253,14 @@ pub async fn gtfs_process_feed(
 
         for trip_to_remove in trips_to_remove {
             gtfs.trips.remove(&trip_to_remove);
+        }
+
+        for (trip_id, trip) in gtfs.trips.iter_mut() {
+            use titlecase::{Titlecase, titlecase};
+
+            if let Some(headsign) = &mut trip.trip_headsign {
+                *headsign = headsign.titlecase();
+            }
         }
     }
 
