@@ -469,7 +469,7 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-hrvatske~željeznice" => {
+        "f-hzpp" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
