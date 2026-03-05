@@ -5,12 +5,6 @@
 use ahash::AHashMap;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::convert_text_12h_to_24h;
-use lazy_static::lazy_static;
-use regex::Regex;
-
-lazy_static! {
-    static ref TRANSIT_APP_REGEX: Regex = Regex::new(r"(?i)(the )?transit app").unwrap();
-}
 
 /// Cleans alert text for specific chateaus (metrolinktrains, metro~losangeles).
 /// - Removes "Please " prefix and capitalizes the next word
@@ -54,18 +48,30 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
 
     if let Some(header_text) = &mut alert.header_text {
         for a in header_text.translation.iter_mut() {
-            let cleaned = TRANSIT_APP_REGEX
-                .replace_all(&convert_text_12h_to_24h(&a.text), "Catenary Maps")
-                .to_string();
+            let cleaned = convert_text_12h_to_24h(&a.text)
+                .replace("Download the Transit App for real-time information.", "")
+                .replace("Download the Transit App for real-time information", "")
+                .replace("Descargue la aplicación Transit para información en tiempo real.", "")
+                .replace("Descargue la aplicación Transit para información en tiempo real", "")
+                .replace("Riders are encouraged to check current routing and stop locations on the Routes & Schedules page, use the Transit App for trip planning and real-time information and alerts, or visit rt.scmetro.org.", "")
+                .replace("Riders are encouraged to check current routing and stop locations on the Routes & Schedules page, use the Transit App for trip planning and real-time information and alerts, or visit rt.scmetro.org", "")
+                .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org.", "")
+                .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org", "");
             a.text = clean_alert_text(&cleaned, chateau_id);
         }
     }
 
     if let Some(desc_text) = &mut alert.description_text {
         for a in desc_text.translation.iter_mut() {
-            let cleaned = TRANSIT_APP_REGEX
-                .replace_all(&convert_text_12h_to_24h(&a.text), "Catenary Maps")
-                .to_string()
+            let cleaned = convert_text_12h_to_24h(&a.text)
+                .replace("Download the Transit App for real-time information.", "")
+                .replace("Download the Transit App for real-time information", "")
+                .replace("Descargue la aplicación Transit para información en tiempo real.", "")
+                .replace("Descargue la aplicación Transit para información en tiempo real", "")
+                .replace("Riders are encouraged to check current routing and stop locations on the Routes & Schedules page, use the Transit App for trip planning and real-time information and alerts, or visit rt.scmetro.org.", "")
+                .replace("Riders are encouraged to check current routing and stop locations on the Routes & Schedules page, use the Transit App for trip planning and real-time information and alerts, or visit rt.scmetro.org", "")
+                .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org.", "")
+                .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org", "")
                 .replace("For Real-Time tracking, please visit rt.scmetro.org.", "")
                 .replace(
                     "Para el rastreo en tiempo real, por favor visite https://rt.scmetro.org.",
