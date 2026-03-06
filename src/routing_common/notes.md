@@ -50,7 +50,7 @@ To avoid memory exhaustion (e.g., processing `planet.pbf`), generation is perfor
 
 ### Public Transport Graph
 - **Strategy**: **Merge-Based Clustering**.
-- **Scope**: Graphs are generated per region/chateau to bound memory usage.
+- **Scope**: Graphs are generated per region to bound memory usage.
 - **Clustering**:
     - Stops are partitioned into **Clusters** to minimize the number of cut edges (trips crossing boundaries) while maintaining a balanced cluster size (e.g., 500-1000 stops).
     - **Algorithm**: Greedy Merge-Based Clustering.
@@ -193,3 +193,5 @@ Transfer Patterns are expensive to compute and cannot be re-run frequently. Howe
 [3]: U. Lauther, “An Extremely Fast, Exact Algorithm for Finding Shortest Paths in Static Networks with Geographical Background,” Siemens AG, Corporate Technology Software & Engineering, vol. 6, pp. 219–230, May 2004.  
 <a name="cite_4"></a>
 [4]: E. Großmann, J. Sauer, C. Schulz, and P. Steil, “Arc-Flags Meet Trip-Based Public Transit Routing,” arXiv (Cornell University), Feb. 2023, doi: https://doi.org/10.48550/arxiv.2302.07168.  
+<a name="cite_5"></a>
+[5]: https://github.com/motis-project/nigiri
