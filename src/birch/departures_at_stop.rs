@@ -1055,6 +1055,12 @@ pub async fn departures_at_stop(
                         let midnight_of_service_date_unix_time =
                             valid_trip.reference_start_of_service_date.timestamp() as u64;
 
+                        let direction_meta = direction_meta_btreemap_by_chateau
+                            .get(chateau_id.as_str())
+                            .unwrap()
+                            .get(&valid_trip.direction_pattern_id)
+                            .unwrap();
+
                         events.push(StopEvent {
                             last_stop: itin_option.gtfs_stop_sequence
                                 == (direction_meta.row_count as u32).saturating_sub(1),
