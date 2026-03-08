@@ -79,6 +79,7 @@ pub struct ItineraryPatternMeta {
     pub timezone: String,
     pub route_id: CompactString,
     pub direction_pattern_id: Option<String>,
+    pub row_count: i32,
 }
 
 #[derive(Queryable, Selectable, Insertable, Clone, Serialize, Deserialize, Debug)]
@@ -409,6 +410,7 @@ pub struct DirectionPatternMeta {
     pub direction_id: Option<bool>,
     pub stop_headsigns_unique_list: Option<Vec<Option<String>>>,
     pub direction_pattern_id_parents: Option<String>,
+    pub row_count: i32,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]

@@ -1055,37 +1055,9 @@ pub async fn departures_at_stop(
                         let midnight_of_service_date_unix_time =
                             valid_trip.reference_start_of_service_date.timestamp() as u64;
 
-                        let last_stop_in_direction = direction_to_rows_by_chateau
-                            .get(chateau_id.as_str())
-                            .unwrap()
-                            .get(&valid_trip.direction_pattern_id)
-                            .unwrap()
-                            .last()
-                            .unwrap();
-
-                        let itin_option_contains_multiple_of_last_stop = valid_trip
-                            .itinerary_options
-                            .iter()
-                            .filter(|itin_option| {
-                                itin_option.stop_id == last_stop_in_direction.stop_id
-                            })
-                            .count()
-                            > 1;
-
-                        let direction_meta = direction_meta_btreemap_by_chateau
-                            .get(chateau_id.as_str())
-                            .unwrap()
-                            .get(&valid_trip.direction_pattern_id)
-                            .unwrap();
-
                         events.push(StopEvent {
-                            last_stop: match itin_option_contains_multiple_of_last_stop {
-                                true => {
-                                    itin_option.gtfs_stop_sequence
-                                        == last_stop_in_direction.stop_sequence
-                                }
-                                false => last_stop_in_direction.stop_id == itin_option.stop_id,
-                            },
+                            last_stop: itin_option.gtfs_stop_sequence
+                                == (direction_meta.row_count as u32).saturating_sub(1),
                             scheduled_arrival: itin_option
                                 .arrival_time_since_start
                                 .map(|x| x as u64)
@@ -1417,21 +1389,6 @@ pub async fn departures_at_stop(
                             let midnight_of_service_date_unix_time =
                                 valid_trip.reference_start_of_service_date.timestamp() as u64;
 
-                            let last_stop_in_direction = direction_to_rows_by_chateau
-                                .get(chateau_id.as_str())
-                                .unwrap()
-                                .get(&valid_trip.direction_pattern_id)
-                                .unwrap()
-                                .last()
-                                .unwrap();
-
-                            let itin_option_contains_multiple_of_last_stop = valid_trip
-                                .itinerary_options
-                                .iter()
-                                .filter(|opt| opt.stop_id == last_stop_in_direction.stop_id)
-                                .count()
-                                > 1;
-
                             let direction_meta = direction_meta_btreemap_by_chateau
                                 .get(chateau_id.as_str())
                                 .unwrap()
@@ -1441,15 +1398,8 @@ pub async fn departures_at_stop(
                             // 3. Push Event
                             if !trip_deleted {
                                 events.push(StopEvent {
-                                    last_stop: match itin_option_contains_multiple_of_last_stop {
-                                        true => {
-                                            itin_option.gtfs_stop_sequence
-                                                == last_stop_in_direction.stop_sequence
-                                        }
-                                        false => {
-                                            last_stop_in_direction.stop_id == itin_option.stop_id
-                                        }
-                                    },
+                                    last_stop: itin_option.gtfs_stop_sequence
+                                        == (direction_meta.row_count as u32).saturating_sub(1),
                                     scheduled_arrival: itin_option
                                         .arrival_time_since_start
                                         .map(|x| x as u64)

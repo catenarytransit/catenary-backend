@@ -81,7 +81,7 @@ mod get_agencies;
 mod get_vehicle_trip_information;
 mod gtfs_rt_api;
 //mod nearby_departures;
-mod nearby_departuresv2;
+//mod nearby_departuresv2;
 mod nearby_departuresv3;
 mod route_info;
 use rand::Rng;
@@ -968,7 +968,7 @@ async fn main() -> std::io::Result<()> {
             .service(aspenised_data_over_https::get_rt_of_route)
             .service(chicago_proxy::ttarrivals_proxy)
             //.service(nearby_departures::nearby_from_coords)
-            .service(nearby_departuresv2::nearby_from_coords_v2)
+            //.service(nearby_departuresv2::nearby_from_coords_v2)
             .service(nearby_departuresv3::nearby_from_coords_v3)
             .service(departures_at_stop::departures_at_stop)
             .service(departures_at_osm_station::departures_at_osm_station)

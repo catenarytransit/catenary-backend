@@ -135,6 +135,7 @@ pub mod gtfs {
             direction_id -> Nullable<Bool>,
             stop_headsigns_unique_list -> Nullable<Array<Nullable<Text>>>,
             direction_pattern_id_parents -> Nullable<Text>,
+            row_count -> Int4,
         }
     }
 
@@ -281,6 +282,7 @@ pub mod gtfs {
             shape_id -> Nullable<Text>,
             timezone -> Text,
             direction_pattern_id -> Nullable<Text>,
+            row_count -> Int4,
         }
     }
 

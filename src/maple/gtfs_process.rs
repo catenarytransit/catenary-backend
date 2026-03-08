@@ -1690,6 +1690,7 @@ pub async fn gtfs_process_feed(
                             .collect::<Vec<Option<String>>>()
                     },
                 ),
+                row_count: itin_pattern.stop_sequences.len() as i32,
             };
 
             d_final.push(direction_pattern_meta);
@@ -1805,6 +1806,7 @@ pub async fn gtfs_process_feed(
                 shape_id: itinerary.shape_id.clone(),
                 route_id: itinerary.route_id.clone(),
                 direction_pattern_id: Some(itinerary.direction_pattern_id.to_string()),
+                row_count: itinerary.stop_sequences.len() as i32,
             };
 
             t_final.push(itinerary_pg_meta);

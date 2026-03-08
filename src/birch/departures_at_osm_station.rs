@@ -1058,11 +1058,7 @@ pub async fn departures_at_osm_station(
                                             });
 
                                     let is_last_stop = itin_option.gtfs_stop_sequence
-                                        == valid_trip
-                                            .itinerary_options
-                                            .last()
-                                            .map(|x| x.gtfs_stop_sequence)
-                                            .unwrap_or(0);
+                                        == (direction_meta.row_count as u32).saturating_sub(1);
 
                                     local_events.push(StopEvent {
                                         scheduled_arrival: scheduled_arrival_time,
