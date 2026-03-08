@@ -1162,9 +1162,9 @@ async fn fetch_chateau_data(
                         let tz = chrono_tz::Tz::from_str_insensitive(&itinerary_meta.timezone)
                             .unwrap_or(chrono_tz::UTC);
                         let midnight_ts = tz
-                            .from_local_datetime(&date.and_hms_opt(0, 0, 0).unwrap())
+                            .from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap())
                             .single()
-                            .map(|t| t.timestamp())
+                            .map(|t| t.timestamp() - 12 * 3600)
                             .unwrap_or(0);
                         let departure_ts =
                             midnight_ts + trip.start_time as i64 + dep_time_offset as i64;
