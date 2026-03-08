@@ -113,7 +113,7 @@ We follow the hierarchy approach given by Bast et al. in Transfer Patterns[[1]](
 
 ---
 
-# Serialization & Loading
+# Serialisation & Loading
 
 - Each chunk is serialized into a separate file (e.g., `chunk_12.pbf` using Protocol Buffers or FlatBuffers).
 - Boundary definitions (links to other chunks) must be stored.
