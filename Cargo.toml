@@ -208,7 +208,6 @@ opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.32.1"
 datadog-opentelemetry = "0.2.1"
 wincode = "0.4.4"
-hotpath = { version = "0.10.1", features = ["tokio", "hotpath-alloc", "hotpath", "crossbeam", "futures"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = {version = "0.6", features = ["profiling"]}

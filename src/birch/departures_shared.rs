@@ -598,7 +598,6 @@ pub struct AlertIndex {
     general: Vec<(String, Arc<catenary::aspen_dataset::AspenisedAlert>)>,
 }
 
-#[hotpath::measure_all]
 impl AlertIndex {
     pub fn new(alerts: &BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>) -> Self {
         let mut by_route: HashMap<
