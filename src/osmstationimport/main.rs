@@ -46,6 +46,10 @@ use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
+use serde_json::json;
+use elasticsearch::Elasticsearch;
+use elasticsearch::http::transport::{Transport, TransportBuilder};
+use elasticsearch::BulkParts;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Import OSM railway stations from PBF files", long_about = None)]
@@ -57,6 +61,10 @@ struct Args {
     /// Force re-import even if file was already imported
     #[arg(long, default_value_t = false)]
     force: bool,
+    
+    /// Optional Elasticsearch URL (overrides ELASTICSEARCH_URL env var)
+    #[arg(long)]
+    elastic_url: Option<String>,
 }
 
 /// Compute SHA256 hash of a file
@@ -729,6 +737,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             local_ref: data.local_ref.clone(),
             parent_osm_id,
             is_derivative: data.is_derivative,
+            admin_hierarchy: None,
         };
 
         stations.push(station);
@@ -835,6 +844,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 local_ref: None,
                 parent_osm_id: None,
                 is_derivative: true,
+                admin_hierarchy: None,
             };
 
             if let Some(name) = &way.name {
@@ -996,6 +1006,209 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         println!("Deleted {} old import records", deleted_imports);
     } else {
         println!("No old entries to delete");
+    }
+
+    // =========================================================================
+    // PASS 5: Elasticsearch Insertion and Admin Region Lookup
+    // =========================================================================
+    println!("\n=== Pass 5: Elasticsearch bulk indexing & Admin Region Lookup ===");
+
+    // Determine ES URL
+    let es_url = args.elastic_url.unwrap_or_else(|| {
+        std::env::var("ELASTICSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string())
+    });
+
+    println!("Connecting to Elasticsearch at {}...", es_url);
+    
+    // Connect to Elasticsearch
+    let transport = match TransportBuilder::new(
+        elasticsearch::http::transport::SingleNodeConnectionPool::new(
+            es_url.parse().expect("Invalid Elasticsearch URL")
+        )
+    ).build() {
+        Ok(t) => Some(t),
+        Err(e) => {
+            println!("Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.", e);
+            None
+        }
+    };
+
+    let elasticclient = transport.map(Elasticsearch::new);
+
+    if let Some(client) = &elasticclient {
+        // Query Cypress admin indices for parent regions and push stations
+        let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> = Vec::new();
+        let es_batch_size = 500;
+        
+        for (i, station) in stations.iter().enumerate() {
+            // Default parent to None initially
+            let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
+
+            // 1. Perform reverse geocode lookup against `osm` ES index
+            let query = json!({
+                "query": {
+                    "bool": {
+                        "filter": {
+                            "geo_shape": {
+                                "bbox": {
+                                    "shape": {
+                                        "type": "point",
+                                        "coordinates": [station.point.x, station.point.y]
+                                    },
+                                    "relation": "intersects"
+                                }
+                            }
+                        }
+                    }
+                },
+                "sort": [
+                    { "admin_level": { "order": "desc" } }
+                ],
+                "size": 1
+            });
+
+            match client
+                .search(elasticsearch::SearchParts::Index(&["osm"]))
+                .body(query)
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    if let Ok(response_body) = response.json::<serde_json::Value>().await {
+                        if let Some(hits) = response_body["hits"]["hits"].as_array() {
+                            if let Some(first_hit) = hits.get(0) {
+                                if let Some(source) = first_hit.get("_source") {
+                                    // Extract admin region names from existing `osm` boundary mappings
+                                    let mut parent = serde_json::Map::new();
+                                    
+                                    // Map standard OSM admin levels to Cypress parent concepts
+                                    // level 2 = country, level 4 = region, level 6 = county, level 8 = locality
+                                    if let Some(al2) = source.get("admin_level_2_names").and_then(|v| v.as_str()) {
+                                        parent.insert("country".to_string(), json!({"name": {"default": al2}}));
+                                    }
+                                    if let Some(al4) = source.get("admin_level_4_names").and_then(|v| v.as_str()) {
+                                        parent.insert("region".to_string(), json!({"name": {"default": al4}}));
+                                    }
+                                    if let Some(al6) = source.get("admin_level_6_names").and_then(|v| v.as_str()) {
+                                        parent.insert("county".to_string(), json!({"name": {"default": al6}}));
+                                    }
+                                    if let Some(al8) = source.get("admin_level_8_names").and_then(|v| v.as_str()) {
+                                        parent.insert("locality".to_string(), json!({"name": {"default": al8}}));
+                                    }
+                                    
+                                    if !parent.is_empty() {
+                                        parent_obj = Some(serde_json::Value::Object(parent));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("Error querying ES for admin boundaries for station {}: {}", station.osm_id, e);
+                }
+            }
+            
+            // Re-update the postgres row with the discovered admin hierarchy
+            if parent_obj.is_some() && parent_obj != station.admin_hierarchy {
+                if let Err(e) = diesel::update(stations_dsl::osm_stations.filter(stations_dsl::osm_id.eq(station.osm_id)))
+                    .set(stations_dsl::admin_hierarchy.eq(&parent_obj))
+                    .execute(conn)
+                    .await
+                {
+                    println!("Failed to update admin hierarchy in PG for station {}: {}", station.osm_id, e);
+                }
+            }
+
+            // 2. Fetch associated GTFS routes
+            // Look up associated GTFS routes by querying the gtfs.stops table where osm_station_id matches 
+            use catenary::schema::gtfs::stops::dsl as stops_q_dsl;
+            use catenary::schema::gtfs::routes::dsl as routes_q_dsl;
+
+            // Find route IDs at this station that are valid
+            let associated_routes = stops_q_dsl::stops
+                .inner_join(routes_q_dsl::routes.on(
+                    diesel::dsl::sql::<diesel::sql_types::Bool>(
+                        "gtfs.stops.routes @> ARRAY[gtfs.routes.route_id]"
+                    )
+                ))
+                .filter(stops_q_dsl::osm_station_id.eq(station.osm_id))
+                .select((routes_q_dsl::long_name, routes_q_dsl::short_name, routes_q_dsl::route_type))
+                .distinct()
+                .load::<(Option<String>, Option<String>, i16)>(conn)
+                .await
+                .unwrap_or_default();
+
+            let mut route_names = Vec::new();
+            let mut route_types = Vec::new();
+            for (long_name, short_name, rtype) in associated_routes {
+                if let Some(ln) = long_name { route_names.push(ln); }
+                if let Some(sn) = short_name { route_names.push(sn); }
+                route_types.push(rtype);
+            }
+
+            // 3. Queue for ES index
+            es_bodies.push(json!({"index": {"_id": station.osm_id}}).into());
+            es_bodies.push(
+                json!({
+                    "osm_id": station.osm_id,
+                    "osm_type": station.osm_type,
+                    "import_id": station.import_id,
+                    "mode_type": station.mode_type,
+                    "operator": station.operator,
+                    "network": station.network,
+                    "station_name": station.name_translations.clone().unwrap_or(json!({"default": station.name})),
+                    "point": {
+                        "lat": station.point.y,
+                        "lon": station.point.x,
+                    },
+                    "parent": parent_obj,
+                    "route_names_search": route_names,
+                    "route_types": route_types,
+                })
+                .into(),
+            );
+
+            if es_bodies.len() >= es_batch_size * 2 || i == stations.len() - 1 {
+                let response = client
+                    .bulk(BulkParts::Index("osm_stations"))
+                    .body(es_bodies)
+                    .send()
+                    .await?;
+
+                let response_body = response.json::<serde_json::Value>().await?;
+                if response_body.get("errors").and_then(|x| x.as_bool()) == Some(true) {
+                    println!("ES bulk insert had errors: {:?}", response_body);
+                }
+                
+                print!("\r  Indexed {}/{} to Elasticsearch", i + 1, stations.len());
+                std::io::Write::flush(&mut std::io::stdout())?;
+                es_bodies = Vec::new();
+            }
+        }
+        println!("\n  Elasticsearch indexing complete.");
+        
+        // Delete old ES entries
+        if !old_import_ids.is_empty() {
+            println!("  Deleting old ES docs...");
+            for old_id in old_import_ids {
+                let delete_query = json!({
+                    "query": {
+                        "term": { "import_id": old_id }
+                    }
+                });
+                if let Err(e) = client
+                    .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&["osm_stations"]))
+                    .body(delete_query)
+                    .send()
+                    .await
+                {
+                    println!("  Failed to delete old import {} from ES: {}", old_id, e);
+                }
+            }
+        }
+    } else {
+        println!("Skipping Elasticsearch indexing (no connection).");
     }
 
     println!("\nImport complete! {} stations imported.", stations.len());

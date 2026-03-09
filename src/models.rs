@@ -528,4 +528,6 @@ pub struct OsmStation {
     pub parent_osm_id: Option<i64>,
     #[diesel(sql_type = diesel::sql_types::Bool)]
     pub is_derivative: bool,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
+    pub admin_hierarchy: Option<serde_json::Value>,
 }

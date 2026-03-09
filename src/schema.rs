@@ -325,6 +325,7 @@ pub mod gtfs {
             local_ref -> Nullable<Text>,
             parent_osm_id -> Nullable<Int8>,
             is_derivative -> Bool,
+            admin_hierarchy -> Nullable<Jsonb>,
         }
     }
 

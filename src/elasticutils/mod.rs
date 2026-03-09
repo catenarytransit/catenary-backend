@@ -26,7 +26,7 @@ pub fn single_elastic_connect(
 }
 
 pub async fn wipe_db(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {
-    let idx_list = ["osm", "stops", "routes", "agencies"];
+    let idx_list = ["osm", "stops", "routes", "agencies", "osm_stations"];
 
     for index_name in idx_list {
         let delete_response = client
@@ -768,6 +768,257 @@ pub async fn make_index_and_mappings(
                 }
                 }
             }),
+        ),
+        (
+            "osm_stations",
+            json!({
+                "settings": {
+                    "analysis": {
+                        "tokenizer": {
+                            "my_korean_analyzer_user_dict": {
+                                "type": "my_korean_analyzer_tokenizer",
+                                "decompound_mode": "mixed",
+                            },
+                        },
+                        "analyzer": {
+                            "my_korean_analyzer": {
+                                "tokenizer": "my_korean_analyzer_user_dict",
+                                "filter": [
+                                    "my_korean_analyzer_part_of_speech",
+                                    "my_korean_analyzer_readingform",
+                                    "lowercase"
+                                ]
+                            }
+                        },
+                        "filter": {
+                            "my_korean_analyzer_part_of_speech": {
+                                "type": "my_korean_analyzer_part_of_speech",
+                                "stoptags": [
+                                    "E", "IC", "J", "MAJ", "MM", "SP", "SSC",
+                                    "SSO", "SC", "SE", "XPN", "XSA", "XSN", "XSV",
+                                    "UNA", "NA", "VSV"
+                                ]
+                            },
+                            "icu_collation_ar": { "type": "icu_collation", "language": "ar" },
+                            "icu_collation_ca": { "type": "icu_collation", "language": "ca" },
+                            "icu_collation_cs": { "type": "icu_collation", "language": "cs" },
+                            "icu_collation_de": { "type": "icu_collation", "language": "de" },
+                            "icu_collation_en": { "type": "icu_collation", "language": "en" },
+                            "icu_collation_es": { "type": "icu_collation", "language": "es" },
+                            "icu_collation_et": { "type": "icu_collation", "language": "et" },
+                            "icu_collation_fi": { "type": "icu_collation", "language": "fi" },
+                            "icu_collation_fr": { "type": "icu_collation", "language": "fr" },
+                            "icu_collation_hr": { "type": "icu_collation", "language": "hr" },
+                            "icu_collation_it": { "type": "icu_collation", "language": "it" },
+                            "icu_collation_ja": { "type": "icu_collation", "language": "ja" },
+                            "icu_collation_ko": { "type": "icu_collation", "language": "ko" },
+                            "icu_collation_nl": { "type": "icu_collation", "language": "nl" },
+                            "icu_collation_no": { "type": "icu_collation", "language": "no" },
+                            "icu_collation_pl": { "type": "icu_collation", "language": "pl" },
+                            "icu_collation_pt": { "type": "icu_collation", "language": "pt" },
+                            "icu_collation_ro": { "type": "icu_collation", "language": "ro" },
+                            "icu_collation_ru": { "type": "icu_collation", "language": "ru" },
+                            "icu_collation_sk": { "type": "icu_collation", "language": "sk" },
+                            "icu_collation_sr": { "type": "icu_collation", "language": "sr" },
+                            "icu_collation_sv": { "type": "icu_collation", "language": "sv" },
+                            "icu_collation_th": { "type": "icu_collation", "language": "th" },
+                            "icu_collation_zh_cn": { "type": "icu_collation", "language": "zh-CN" },
+                            "icu_collation_zh_tw": { "type": "icu_collation", "language": "zh-TW" }
+                        },
+                        "normalizer": {
+                            "ar_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ar"] },
+                            "ca_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ca"] },
+                            "cs_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_cs"] },
+                            "de_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_de"] },
+                            "en_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_en"] },
+                            "es_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_es"] },
+                            "et_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_et"] },
+                            "fi_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_fi"] },
+                            "fr_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_fr"] },
+                            "hr_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_hr"] },
+                            "it_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_it"] },
+                            "ja_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ja"] },
+                            "ko_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ko"] },
+                            "nl_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_nl"] },
+                            "no_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_no"] },
+                            "pl_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_pl"] },
+                            "pt_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_pt"] },
+                            "ro_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ro"] },
+                            "ru_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ru"] },
+                            "sk_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_sk"] },
+                            "sr_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_sr"] },
+                            "sv_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_sv"] },
+                            "th_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_th"] },
+                            "zh_cn_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_zh_cn"] },
+                            "zh_tw_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_zh_tw"] }
+                        }
+                    }
+                },
+                "mappings": {
+                    "dynamic": "strict",
+                    "dynamic_templates": [
+                        {
+                            "copy_to_station_name_search": {
+                                "path_match": "station_name.*",
+                                "mapping": {
+                                    "copy_to": "station_name_search"
+                                }
+                            }
+                        },
+                        {
+                            "copy_to_route_names_search": {
+                            "path_match": "route_names_search.*",
+                            "mapping": {
+                                "copy_to": "route_names_search"
+                            }
+                            }
+                        }
+                    ],
+                    "properties": {
+                        "osm_id": { "type": "long" },
+                        "osm_type": { "type": "keyword" },
+                        "mode_type": { "type": "keyword" },
+                        "operator": { "type": "text", "analyzer": "standard" },
+                        "network": { "type": "text", "analyzer": "standard" },
+                        "import_id": { "type": "integer" },
+                        "point": { "type": "geo_point" },
+                        "station_name_search": { "type": "text", "analyzer": "standard" },
+                        "route_names_search": { "type": "text", "analyzer": "standard" },
+                        "route_types": { "type": "short" },
+                        "station_name": {
+                            "type": "object",
+                            "dynamic": true,
+                            "properties": generate_language_properties()
+                        },
+                        "route_names": {
+                            "type": "object",
+                            "dynamic": true,
+                            "properties": generate_language_properties()
+                        },
+                        "admin_level_2_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_3_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_4_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_5_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_6_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_7_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_8_names": { "type": "text", "analyzer": "standard" },
+                        "admin_level_9_names": { "type": "text", "analyzer": "standard" },
+                        "parent": {
+                            "type": "object",
+                            "properties": {
+                                "country": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "macro_region": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "region": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "macro_county": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "county": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "local_admin": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "locality": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "borough": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                },
+                                "neighbourhood": {
+                                    "type": "object",
+                                    "properties": {
+                                        "name": {
+                                            "type": "object",
+                                            "dynamic": true,
+                                            "properties": generate_language_properties()
+                                        },
+                                        "abbr": { "type": "keyword" },
+                                        "id": { "type": "long" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            })
         ),
     ];
 

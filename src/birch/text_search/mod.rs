@@ -490,7 +490,7 @@ pub async fn text_search_v1(
 
     let stops_response_future = elasticclient
         .as_ref()
-        .search(SearchParts::Index(&["stops"]))
+        .search(SearchParts::Index(&["stops", "osm_stations"]))
         .from(0)
         .size(30)
         .body(stops_query)
@@ -545,6 +545,21 @@ pub async fn text_search_v1(
                                         });
                                     }
                                 }
+                            } else if let Some(osm_id) = source.get("osm_id").and_then(|x| x.as_i64()) {
+                                // This is an osm_station doc from the multi-search
+                                let stop_id = format!("osm:{}", osm_id);
+                                let chateau = "osm_stations".to_string();
+                                
+                                let existing_key = (chateau.clone(), stop_id.clone());
+                                if !existing_hits.contains(&existing_key) {
+                                    existing_hits.insert(existing_key);
+                                    
+                                    hit_rankings_for_stops.push(StopRankingInfo {
+                                        chateau: chateau,
+                                        gtfs_id: stop_id,
+                                        score: score,
+                                    });
+                                }
                             }
                         }
                         _ => {}
@@ -580,25 +595,95 @@ pub async fn text_search_v1(
                 let conn_pre = conn_pool.get().await;
                 let conn = &mut conn_pre.unwrap();
 
-                let diesel_stop_query = catenary::schema::gtfs::stops::table
-                    .filter(catenary::schema::gtfs::stops::chateau.eq(&chateau))
-                    .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(stops))
-                    .select(catenary::models::Stop::as_select())
-                    .load(conn)
-                    .await;
+                if chateau == "osm_stations" {
+                    // Extract numeric osm_ids from "osm:12345" strings
+                    let osm_ids: Vec<i64> = stops.iter()
+                        .filter_map(|s| s.strip_prefix("osm:").and_then(|id_str| id_str.parse().ok()))
+                        .collect();
 
-                match diesel_stop_query {
-                    Ok(stops) => {
-                        let mut stop_map: BTreeMap<String, catenary::models::Stop> =
-                            BTreeMap::new();
-                        for stop in stops {
-                            stop_map.insert(stop.gtfs_id.clone(), stop);
+                    let diesel_station_query = catenary::schema::gtfs::osm_stations::table
+                        .filter(catenary::schema::gtfs::osm_stations::osm_id.eq_any(osm_ids))
+                        .select(catenary::models::OsmStation::as_select())
+                        .load(conn)
+                        .await;
+
+                    match diesel_station_query {
+                        Ok(stations) => {
+                            let mut stop_map: BTreeMap<String, catenary::models::Stop> = BTreeMap::new();
+                            for station in stations {
+                                let gtfs_id = format!("osm:{}", station.osm_id);
+                                
+                                // Map OsmStation fields into the Stop model
+                                let stop = catenary::models::Stop {
+                                    onestop_feed_id: "osm_stations".to_string(),
+                                    attempt_id: "0".to_string(),
+                                    gtfs_id: gtfs_id.clone(),
+                                    name: station.name.clone().or(Some("Unknown Station".to_string())),
+                                    name_translations: station.name_translations.clone(),
+                                    displayname: None,
+                                    code: None,
+                                    gtfs_desc: None,
+                                    gtfs_desc_translations: None,
+                                    location_type: 1, // Station
+                                    parent_station: station.parent_osm_id.map(|id| format!("osm:{}", id)),
+                                    zone_id: None,
+                                    url: station.wikidata.map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
+                                    point: Some(station.point.clone()),
+                                    timezone: None,
+                                    wheelchair_boarding: 0,
+                                    primary_route_type: match station.mode_type.as_str() {
+                                        "rail" => Some(2),
+                                        "subway" => Some(1),
+                                        "tram" => Some(0),
+                                        _ => None,
+                                    },
+                                    level_id: station.level,
+                                    platform_code: station.local_ref.or(station.ref_),
+                                    platform_code_translations: None,
+                                    routes: vec![],
+                                    route_types: vec![],
+                                    children_ids: vec![],
+                                    children_route_types: vec![],
+                                    station_feature: true,
+                                    hidden: false,
+                                    chateau: "osm_stations".to_string(),
+                                    location_alias: None,
+                                    tts_name: None,
+                                    tts_name_translations: None,
+                                    allowed_spatial_query: true,
+                                    osm_station_id: Some(station.osm_id),
+                                    osm_platform_id: None,
+                                };
+                                stop_map.insert(gtfs_id, stop);
+                            }
+                            Ok((chateau, stop_map))
                         }
-                        Ok((chateau, stop_map))
+                        Err(e) => {
+                            eprintln!("Error querying osm_stations: {}", e);
+                            Err(e)
+                        }
                     }
-                    Err(e) => {
-                        eprintln!("Error querying stops: {}", e);
-                        Err(e)
+                } else {
+                    let diesel_stop_query = catenary::schema::gtfs::stops::table
+                        .filter(catenary::schema::gtfs::stops::chateau.eq(&chateau))
+                        .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(stops))
+                        .select(catenary::models::Stop::as_select())
+                        .load(conn)
+                        .await;
+
+                    match diesel_stop_query {
+                        Ok(stops) => {
+                            let mut stop_map: BTreeMap<String, catenary::models::Stop> =
+                                BTreeMap::new();
+                            for stop in stops {
+                                stop_map.insert(stop.gtfs_id.clone(), stop);
+                            }
+                            Ok((chateau, stop_map))
+                        }
+                        Err(e) => {
+                            eprintln!("Error querying stops: {}", e);
+                            Err(e)
+                        }
                     }
                 }
             }
@@ -731,12 +816,79 @@ pub async fn text_search_v1(
             .unwrap_or(&BTreeSet::new())
             .clone();
 
-        let queried_children_stops = catenary::schema::gtfs::stops::table
-            .filter(catenary::schema::gtfs::stops::chateau.eq(chateau))
-            .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(children_stops))
-            .select(catenary::models::Stop::as_select())
-            .load::<catenary::models::Stop>(conn)
-            .await;
+        let queried_children_stops = if chateau == "osm_stations" {
+            let osm_ids: Vec<i64> = children_stops.iter()
+                .filter_map(|s| s.strip_prefix("osm:").and_then(|id_str| id_str.parse().ok()))
+                .collect();
+
+            let diesel_station_query = catenary::schema::gtfs::osm_stations::table
+                .filter(catenary::schema::gtfs::osm_stations::osm_id.eq_any(osm_ids))
+                .select(catenary::models::OsmStation::as_select())
+                .load(conn)
+                .await;
+
+            match diesel_station_query {
+                Ok(stations) => {
+                    let mut queried_stops = Vec::new();
+                    for station in stations {
+                        let gtfs_id = format!("osm:{}", station.osm_id);
+                        let stop = catenary::models::Stop {
+                            onestop_feed_id: "osm_stations".to_string(),
+                            attempt_id: "0".to_string(),
+                            gtfs_id: gtfs_id.clone(),
+                            name: station.name.clone().or(Some("Unknown Station".to_string())),
+                            name_translations: station.name_translations.clone(),
+                            displayname: None,
+                            code: None,
+                            gtfs_desc: None,
+                            gtfs_desc_translations: None,
+                            location_type: 1, // Station
+                            parent_station: station.parent_osm_id.map(|id| format!("osm:{}", id)),
+                            zone_id: None,
+                            url: station.wikidata.map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
+                            point: Some(station.point.clone()),
+                            timezone: None,
+                            wheelchair_boarding: 0,
+                            primary_route_type: match station.mode_type.as_str() {
+                                "rail" => Some(2),
+                                "subway" => Some(1),
+                                "tram" => Some(0),
+                                _ => None,
+                            },
+                            level_id: station.level,
+                            platform_code: station.local_ref.or(station.ref_),
+                            platform_code_translations: None,
+                            routes: vec![],
+                            route_types: vec![],
+                            children_ids: vec![],
+                            children_route_types: vec![],
+                            station_feature: true,
+                            hidden: false,
+                            chateau: "osm_stations".to_string(),
+                            location_alias: None,
+                            tts_name: None,
+                            tts_name_translations: None,
+                            allowed_spatial_query: true,
+                            osm_station_id: Some(station.osm_id),
+                            osm_platform_id: None,
+                        };
+                        queried_stops.push(stop);
+                    }
+                    Ok(queried_stops)
+                }
+                Err(e) => {
+                    eprintln!("Error querying osm_stations children: {}", e);
+                    Err(e)
+                }
+            }
+        } else {
+            catenary::schema::gtfs::stops::table
+                .filter(catenary::schema::gtfs::stops::chateau.eq(chateau))
+                .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(children_stops))
+                .select(catenary::models::Stop::as_select())
+                .load::<catenary::models::Stop>(conn)
+                .await
+        };
 
         match queried_children_stops {
             Ok(queried_children_stops) => {
