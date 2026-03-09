@@ -775,10 +775,6 @@ pub async fn make_index_and_mappings(
                 "settings": {
                     "analysis": {
                         "tokenizer": {
-                            "my_korean_analyzer_user_dict": {
-                                "type": "my_korean_analyzer_tokenizer",
-                                "decompound_mode": "mixed",
-                            },
                             "peliasTokenizer": {
                                 "type": "pattern",
                                 "pattern": "[\\s,/\\\\-]+"
@@ -802,14 +798,6 @@ pub async fn make_index_and_mappings(
                             }
                         },
                         "analyzer": {
-                            "my_korean_analyzer": {
-                                "tokenizer": "my_korean_analyzer_user_dict",
-                                "filter": [
-                                    "my_korean_analyzer_part_of_speech",
-                                    "my_korean_analyzer_readingform",
-                                    "lowercase"
-                                ]
-                            },
                             "peliasIndex": {
                             "type": "custom",
                             "tokenizer": "peliasTokenizer",
