@@ -97,43 +97,11 @@ pub async fn osm_station_search(
     });
 
     if let (Some(lat), Some(lon)) = (focus_lat, focus_lon) {
-        if let Some(functions) = es_query["function_score"]["functions"].as_array_mut() {
-            functions.push(json!({
-                "script_score": {
-                  "script": {
-                    "source": "
-                      double offset = 5.0;
-                      double scale = 150.0;
-                      double decay = 0.5;
-                      double floor = 0.35;
-      
-                      double distance = doc['point'].arcDistance(params.user_lat, params.user_lon) / 1000.0;
-                      
-                      if (distance <= offset) { return 1.0; }
-                      
-                      double scale_minus_offset = scale - offset;
-                      if (scale_minus_offset <= 0) { return floor; }
-                      double k = -Math.log(decay) / Math.pow(scale_minus_offset, 2);
-                      
-                      double effective_distance = distance - offset;
-                      double decay_score = Math.exp(-k * Math.pow(effective_distance, 2));
-                      
-                      return Math.max(decay_score, floor);
-                    ",
-                    "params": {
-                      "user_lat": lat,
-                      "user_lon": lon
-                    }
-                  }
-                },
-                "weight": query.focus_weight.unwrap_or(0.05)
-            }));
-        }
     }
 
     let search_body = json!({
         "query": es_query,
-        "size": 20
+        "size": 30
     });
 
     let search_response = match elasticclient
