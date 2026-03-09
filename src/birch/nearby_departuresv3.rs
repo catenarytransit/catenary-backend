@@ -992,64 +992,63 @@ async fn fetch_chateau_data(
                             {
                                 let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
 
-                                    let timer_get_trips = std::time::Instant::now();
-                                    let timeout_result = tokio::time::timeout(
-                                        std::time::Duration::from_millis(rt_timeout_ms),
-                                        async {
-                                            tokio::join!(
-                                                client.get_all_trips_with_ids(
-                                                    tarpc::context::current(),
-                                                    chateau.clone(),
-                                                    trip_ids.clone()
-                                                ),
-                                                client.get_all_alerts(
-                                                    tarpc::context::current(),
-                                                    chateau.clone()
-                                                ),
-                                            )
-                                        },
-                                    )
-                                    .await;
-                                    let time_get_trips = timer_get_trips.elapsed();
+                                let timer_get_trips = std::time::Instant::now();
+                                let timeout_result = tokio::time::timeout(
+                                    std::time::Duration::from_millis(rt_timeout_ms),
+                                    async {
+                                        tokio::join!(
+                                            client.get_all_trips_with_ids(
+                                                tarpc::context::current(),
+                                                chateau.clone(),
+                                                trip_ids.clone()
+                                            ),
+                                            client.get_all_alerts(
+                                                tarpc::context::current(),
+                                                chateau.clone()
+                                            ),
+                                        )
+                                    },
+                                )
+                                .await;
+                                let time_get_trips = timer_get_trips.elapsed();
 
-                                    match timeout_result {
-                                        Ok((t, a)) => {
+                                match timeout_result {
+                                    Ok((t, a)) => {
+                                        println!(
+                                            "nearby deps realtime data fetch chateau {}, etcd time {:?}, aspen connect time {:?}, get trips time {:?}",
+                                            chateau.as_str(),
+                                            etcd_time,
+                                            time_to_connect_to_aspen,
+                                            time_get_trips
+                                        );
+
+                                        if let Ok(Some(tr)) = t {
+                                            //    pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
+                                            //pub trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
+                                            // pub stop_id_to_parent_id: AHashMap<String, String>,
+
                                             println!(
-                                                "nearby deps realtime data fetch chateau {}, etcd time {:?}, aspen connect time {:?}, get trips time {:?}",
+                                                "Nearby Departures {} rt trip_updates {}, trip_id_to_trip_updates {}, and stop_id_to_parent_id {}",
                                                 chateau.as_str(),
-                                                etcd_time,
-                                                time_to_connect_to_aspen,
-                                                time_get_trips
+                                                tr.trip_updates.len(),
+                                                tr.trip_id_to_trip_update_ids.len(),
+                                                tr.stop_id_to_parent_id.len()
                                             );
 
-                                            if let Ok(Some(tr)) = t {
-                                                //    pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
-                                                //pub trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
-                                                // pub stop_id_to_parent_id: AHashMap<String, String>,
-
-                                                println!(
-                                                    "Nearby Departures {} rt trip_updates {}, trip_id_to_trip_updates {}, and stop_id_to_parent_id {}",
-                                                    chateau.as_str(),
-                                                    tr.trip_updates.len(),
-                                                    tr.trip_id_to_trip_update_ids.len(),
-                                                    tr.stop_id_to_parent_id.len()
-                                                );
-
-                                                rt_data = Some(tr);
-                                            }
-                                            if let Ok(Some(al)) = a {
-                                                rt_alerts = al.into_iter().collect();
-                                            }
+                                            rt_data = Some(tr);
                                         }
-                                        Err(_) => {
-                                            println!(
-                                                "realtime fetch timeout for chateau {} after {:?}",
-                                                chateau.as_str(),
-                                                time_get_trips
-                                            );
+                                        if let Ok(Some(al)) = a {
+                                            rt_alerts = al.into_iter().collect();
                                         }
                                     }
-                                
+                                    Err(_) => {
+                                        println!(
+                                            "realtime fetch timeout for chateau {} after {:?}",
+                                            chateau.as_str(),
+                                            time_get_trips
+                                        );
+                                    }
+                                }
                             }
                         }
                     }

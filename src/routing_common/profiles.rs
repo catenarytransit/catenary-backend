@@ -102,11 +102,7 @@ impl RoutingProfile for FootProfile {
         if !props.is_foot_accessible() {
             return INFEASIBLE;
         }
-        if props.is_elevator() {
-            90
-        } else {
-            0
-        }
+        if props.is_elevator() { 90 } else { 0 }
     }
 
     fn adjacent(

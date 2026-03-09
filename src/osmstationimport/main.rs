@@ -37,19 +37,19 @@ use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use elasticsearch::BulkParts;
+use elasticsearch::Elasticsearch;
+use elasticsearch::http::transport::{Transport, TransportBuilder};
 use geo::{Distance, Haversine, Point};
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use regex::Regex;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::sync::Arc;
-use serde_json::json;
-use elasticsearch::Elasticsearch;
-use elasticsearch::http::transport::{Transport, TransportBuilder};
-use elasticsearch::BulkParts;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Import OSM railway stations from PBF files", long_about = None)]
@@ -61,7 +61,7 @@ struct Args {
     /// Force re-import even if file was already imported
     #[arg(long, default_value_t = false)]
     force: bool,
-    
+
     /// Optional Elasticsearch URL (overrides ELASTICSEARCH_URL env var)
     #[arg(long)]
     elastic_url: Option<String>,
@@ -1019,16 +1019,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
 
     println!("Connecting to Elasticsearch at {}...", es_url);
-    
+
     // Connect to Elasticsearch
     let transport = match TransportBuilder::new(
         elasticsearch::http::transport::SingleNodeConnectionPool::new(
-            es_url.parse().expect("Invalid Elasticsearch URL")
-        )
-    ).build() {
+            es_url.parse().expect("Invalid Elasticsearch URL"),
+        ),
+    )
+    .build()
+    {
         Ok(t) => Some(t),
         Err(e) => {
-            println!("Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.", e);
+            println!(
+                "Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.",
+                e
+            );
             None
         }
     };
@@ -1037,9 +1042,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     if let Some(client) = &elasticclient {
         // Query Cypress admin indices for parent regions and push stations
-        let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> = Vec::new();
+        let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
+            Vec::new();
         let es_batch_size = 500;
-        
+
         for (i, station) in stations.iter().enumerate() {
             // Default parent to None initially
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
@@ -1080,22 +1086,42 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                 if let Some(source) = first_hit.get("_source") {
                                     // Extract admin region names from existing `osm` boundary mappings
                                     let mut parent = serde_json::Map::new();
-                                    
+
                                     // Map standard OSM admin levels to Cypress parent concepts
                                     // level 2 = country, level 4 = region, level 6 = county, level 8 = locality
-                                    if let Some(al2) = source.get("admin_level_2_names").and_then(|v| v.as_str()) {
-                                        parent.insert("country".to_string(), json!({"name": {"default": al2}}));
+                                    if let Some(al2) =
+                                        source.get("admin_level_2_names").and_then(|v| v.as_str())
+                                    {
+                                        parent.insert(
+                                            "country".to_string(),
+                                            json!({"name": {"default": al2}}),
+                                        );
                                     }
-                                    if let Some(al4) = source.get("admin_level_4_names").and_then(|v| v.as_str()) {
-                                        parent.insert("region".to_string(), json!({"name": {"default": al4}}));
+                                    if let Some(al4) =
+                                        source.get("admin_level_4_names").and_then(|v| v.as_str())
+                                    {
+                                        parent.insert(
+                                            "region".to_string(),
+                                            json!({"name": {"default": al4}}),
+                                        );
                                     }
-                                    if let Some(al6) = source.get("admin_level_6_names").and_then(|v| v.as_str()) {
-                                        parent.insert("county".to_string(), json!({"name": {"default": al6}}));
+                                    if let Some(al6) =
+                                        source.get("admin_level_6_names").and_then(|v| v.as_str())
+                                    {
+                                        parent.insert(
+                                            "county".to_string(),
+                                            json!({"name": {"default": al6}}),
+                                        );
                                     }
-                                    if let Some(al8) = source.get("admin_level_8_names").and_then(|v| v.as_str()) {
-                                        parent.insert("locality".to_string(), json!({"name": {"default": al8}}));
+                                    if let Some(al8) =
+                                        source.get("admin_level_8_names").and_then(|v| v.as_str())
+                                    {
+                                        parent.insert(
+                                            "locality".to_string(),
+                                            json!({"name": {"default": al8}}),
+                                        );
                                     }
-                                    
+
                                     if !parent.is_empty() {
                                         parent_obj = Some(serde_json::Value::Object(parent));
                                     }
@@ -1105,35 +1131,47 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     }
                 }
                 Err(e) => {
-                    println!("Error querying ES for admin boundaries for station {}: {}", station.osm_id, e);
+                    println!(
+                        "Error querying ES for admin boundaries for station {}: {}",
+                        station.osm_id, e
+                    );
                 }
             }
-            
+
             // Re-update the postgres row with the discovered admin hierarchy
             if parent_obj.is_some() && parent_obj != station.admin_hierarchy {
-                if let Err(e) = diesel::update(stations_dsl::osm_stations.filter(stations_dsl::osm_id.eq(station.osm_id)))
-                    .set(stations_dsl::admin_hierarchy.eq(&parent_obj))
-                    .execute(conn)
-                    .await
+                if let Err(e) = diesel::update(
+                    stations_dsl::osm_stations.filter(stations_dsl::osm_id.eq(station.osm_id)),
+                )
+                .set(stations_dsl::admin_hierarchy.eq(&parent_obj))
+                .execute(conn)
+                .await
                 {
-                    println!("Failed to update admin hierarchy in PG for station {}: {}", station.osm_id, e);
+                    println!(
+                        "Failed to update admin hierarchy in PG for station {}: {}",
+                        station.osm_id, e
+                    );
                 }
             }
 
             // 2. Fetch associated GTFS routes
-            // Look up associated GTFS routes by querying the gtfs.stops table where osm_station_id matches 
-            use catenary::schema::gtfs::stops::dsl as stops_q_dsl;
+            // Look up associated GTFS routes by querying the gtfs.stops table where osm_station_id matches
             use catenary::schema::gtfs::routes::dsl as routes_q_dsl;
+            use catenary::schema::gtfs::stops::dsl as stops_q_dsl;
 
             // Find route IDs at this station that are valid
             let associated_routes = stops_q_dsl::stops
-                .inner_join(routes_q_dsl::routes.on(
-                    diesel::dsl::sql::<diesel::sql_types::Bool>(
-                        "gtfs.stops.routes @> ARRAY[gtfs.routes.route_id]"
-                    )
-                ))
+                .inner_join(
+                    routes_q_dsl::routes.on(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                        "gtfs.stops.routes @> ARRAY[gtfs.routes.route_id]",
+                    )),
+                )
                 .filter(stops_q_dsl::osm_station_id.eq(station.osm_id))
-                .select((routes_q_dsl::long_name, routes_q_dsl::short_name, routes_q_dsl::route_type))
+                .select((
+                    routes_q_dsl::long_name,
+                    routes_q_dsl::short_name,
+                    routes_q_dsl::route_type,
+                ))
                 .distinct()
                 .load::<(Option<String>, Option<String>, i16)>(conn)
                 .await
@@ -1142,8 +1180,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let mut route_names = Vec::new();
             let mut route_types = Vec::new();
             for (long_name, short_name, rtype) in associated_routes {
-                if let Some(ln) = long_name { route_names.push(ln); }
-                if let Some(sn) = short_name { route_names.push(sn); }
+                if let Some(ln) = long_name {
+                    route_names.push(ln);
+                }
+                if let Some(sn) = short_name {
+                    route_names.push(sn);
+                }
                 route_types.push(rtype);
             }
 
@@ -1180,14 +1222,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 if response_body.get("errors").and_then(|x| x.as_bool()) == Some(true) {
                     println!("ES bulk insert had errors: {:?}", response_body);
                 }
-                
+
                 print!("\r  Indexed {}/{} to Elasticsearch", i + 1, stations.len());
                 std::io::Write::flush(&mut std::io::stdout())?;
                 es_bodies = Vec::new();
             }
         }
         println!("\n  Elasticsearch indexing complete.");
-        
+
         // Delete old ES entries
         if !old_import_ids.is_empty() {
             println!("  Deleting old ES docs...");

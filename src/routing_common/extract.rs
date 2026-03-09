@@ -302,7 +302,7 @@ pub fn get_speed_limit(t: &OsmTags) -> SpeedLimit {
                     SpeedLimit::Kmh80
                 } else {
                     SpeedLimit::Kmh50
-                }
+                };
             }
             "primary_link" => return SpeedLimit::Kmh30,
             "secondary" => {
@@ -310,7 +310,7 @@ pub fn get_speed_limit(t: &OsmTags) -> SpeedLimit {
                     SpeedLimit::Kmh80
                 } else {
                     SpeedLimit::Kmh60
-                }
+                };
             }
             "secondary_link" => return SpeedLimit::Kmh30,
             "tertiary" => {
@@ -318,7 +318,7 @@ pub fn get_speed_limit(t: &OsmTags) -> SpeedLimit {
                     SpeedLimit::Kmh60
                 } else {
                     SpeedLimit::Kmh50
-                }
+                };
             }
             "tertiary_link" => return SpeedLimit::Kmh20,
             "unclassified" => return SpeedLimit::Kmh50,

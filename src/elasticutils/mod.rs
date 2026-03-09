@@ -1018,7 +1018,7 @@ pub async fn make_index_and_mappings(
                         }
                     }
                 }
-            })
+            }),
         ),
     ];
 

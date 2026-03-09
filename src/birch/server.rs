@@ -50,6 +50,7 @@ mod departures_at_osm_station;
 mod departures_at_stop;
 mod departures_shared;
 mod osm_station_lookup;
+mod osm_station_search;
 mod transfer_calc;
 use actix_web::middleware::DefaultHeaders;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
@@ -973,6 +974,7 @@ async fn main() -> std::io::Result<()> {
             .service(departures_at_stop::departures_at_stop)
             .service(departures_at_osm_station::departures_at_osm_station)
             .service(osm_station_lookup::osm_station_lookup)
+            .service(osm_station_search::osm_station_search)
             .service(get_vehicle_trip_information::get_trip_init)
             .service(get_vehicle_trip_information::get_trip_rt_update)
             .service(get_vehicle_trip_information::get_vehicle_information)

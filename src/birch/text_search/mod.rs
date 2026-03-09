@@ -129,8 +129,8 @@ pub async fn text_search_v1(
         _ => ("10km", "10km", 0.1),
     };
 
-    let stops_query = match (query.user_lat, query.user_lon) {
-        (Some(user_lat), Some(user_lon)) => json!({
+    let stops_query = match map_pos_exists {
+        true => json!({
             "query": {
                 "function_score": {
                     "query": {
@@ -142,46 +142,53 @@ pub async fn text_search_v1(
                     },
                     "functions": [
                         {
-                            "script_score": {
-                              "script": {
-                                "source": "
-                                  double offset = params.offset_in_km;
-                                  double scale = params.scale_in_km;
-                                  double decay = params.decay_at_scale;
-                                  double floor = params.min_score_floor;
-                  
-                                  double distance = doc['point'].arcDistance(params.user_lat, params.user_lon) / 1000.0;
-                                  
-                                  if (distance <= offset) {
+                    "exp": {
+                      "point": {
+                        "origin": { "lat": query.map_lat.unwrap(), "lon": query.map_lon.unwrap() }, // User's map centre
+                        "offset": offset_map_gauss, // Full score within 5000 metres
+                        "scale": scale_map_gauss // Score decays significantly beyond 100 km
+                      }
+                    },
+                    "weight": map_weight
+                  },
+                      {
+                        "script_score": {
+                          "script": {
+                            "source": "
+                                  if (!doc.containsKey('route_types') || doc['route_types'].empty) {
                                     return 1.0;
                                   }
-                                  
-                                  // decay constant 'k'
-                                  // decay = exp(-k * (scale - offset)^2)
-                                  double scale_minus_offset = scale - offset;
-                                  if (scale_minus_offset <= 0) {
-                                    return floor; // Avoid division by zero if scale is within offset
+                                  if (doc['route_types'].contains(2)) {
+                                    return 3.0;
                                   }
-                                  double k = -Math.log(decay) / Math.pow(scale_minus_offset, 2);
-                                  
-                                  // scoring
-                                  double effective_distance = distance - offset;
-                                  double decay_score = Math.exp(-k * Math.pow(effective_distance, 2));
-                                  
-                                  return Math.max(decay_score, floor);
-                                ",
-                                "params": {
-                                  "user_lat": user_lat,
-                                  "user_lon": user_lon,
-                                  "offset_in_km": 5.0,
-                                  "scale_in_km": 150.0,
-                                  "decay_at_scale": 0.5,
-                                  "min_score_floor": 0.35
-                                }
-                              }
-                            },
-                            "weight": 0.03
-                          },
+                                  if (doc['route_types'].contains(1)) {
+                                    return 2.0;
+                                  }
+                                  if (doc['route_types'].contains(0)) {
+                                    return 1.5;
+                                  }
+                                  return 1.0;
+                                "
+                          }
+                        }
+                      }
+                    ],
+                    "score_mode": "multiply", // How to combine scores from multiple functions
+                    "boost_mode": "multiply" // How to combine the function score with the query score
+                  }
+            }
+        }),
+        false => json!({
+            "query": {
+                "function_score": {
+                    "query": {
+                      "multi_match" : {
+                        "query":  query.text.clone(),
+                        "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
+                        "type": "cross_fields"
+                     }
+                    },
+                    "functions": [
                       {
                         "script_score": {
                           "script": {
@@ -190,7 +197,7 @@ pub async fn text_search_v1(
                                 return 1.0;
                               }
                               if (doc['route_types'].contains(2)) {
-                                return 4.0;
+                                return 3.0;
                               }
                               if (doc['route_types'].contains(1)) {
                                 return 2.0;
@@ -209,94 +216,6 @@ pub async fn text_search_v1(
                   }
             }
         }),
-        _ => match map_pos_exists {
-            true => json!({
-                "query": {
-                    "function_score": {
-                        "query": {
-                          "multi_match" : {
-                            "query":  query.text.clone(),
-                            "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
-                            "type": "cross_fields"
-                         }
-                        },
-                        "functions": [
-                            {
-                        "exp": {
-                          "point": {
-                            "origin": { "lat": query.map_lat.unwrap(), "lon": query.map_lon.unwrap() }, // User's map centre
-                            "offset": offset_map_gauss, // Full score within 5000 metres
-                            "scale": scale_map_gauss // Score decays significantly beyond 100 km
-                          }
-                        },
-                        "weight": map_weight
-                      },
-                          {
-                            "script_score": {
-                              "script": {
-                                "source": "
-                                  if (!doc.containsKey('route_types') || doc['route_types'].empty) {
-                                    return 1.0;
-                                  }
-                                  if (doc['route_types'].contains(2)) {
-                                    return 3.0;
-                                  }
-                                  if (doc['route_types'].contains(1)) {
-                                    return 2.0;
-                                  }
-                                  if (doc['route_types'].contains(0)) {
-                                    return 1.5;
-                                  }
-                                  return 1.0;
-                                "
-                              }
-                            }
-                          }
-                        ],
-                        "score_mode": "multiply", // How to combine scores from multiple functions
-                        "boost_mode": "multiply" // How to combine the function score with the query score
-                      }
-                }
-            }),
-            false => json!({
-                "query": {
-                    "function_score": {
-                        "query": {
-                          "multi_match" : {
-                            "query":  query.text.clone(),
-                            "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
-                            "type": "cross_fields"
-                         }
-                        },
-                        "functions": [
-                          {
-                            "script_score": {
-                              "script": {
-                                "source": "
-                              if (!doc.containsKey('route_types') || doc['route_types'].empty) {
-                                return 1.0;
-                              }
-                              if (doc['route_types'].contains(2)) {
-                                return 3.0;
-                              }
-                              if (doc['route_types'].contains(1)) {
-                                return 2.0;
-                              }
-                              if (doc['route_types'].contains(0)) {
-                                return 1.5;
-                              }
-                              return 1.0;
-                            "
-                              }
-                            }
-                          }
-                        ],
-                        "score_mode": "multiply", // How to combine scores from multiple functions
-                        "boost_mode": "multiply" // How to combine the function score with the query score
-                      }
-                }
-            }),
-        },
     };
 
     let mut route_type_function = json!({
@@ -343,15 +262,15 @@ pub async fn text_search_v1(
 
     let route_type_function = route_type_function;
 
-    let routes_query = match (query.user_lat, query.user_lon) {
-        (Some(user_lat), Some(user_lon)) => json!({
+    let routes_query = match map_pos_exists {
+        true => json!({
             "query": {
                 "function_score": {
                     "query": {
                         "multi_match" : {
                             "query":  cleaned_query_text.clone(),
                             "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
-                            "type": "cross_fields"
+                             "type": "cross_fields"
                         }
                     },
                     "functions": [
@@ -359,66 +278,6 @@ pub async fn text_search_v1(
                             "script_score": {
                                 "script": {
                                     "source": "
-                                  double min_distance = -1.0;
-                                  if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                    def distances = doc['important_points'].arcDistance(params.lat, params.lon);
-                                    if (distances instanceof List) {
-                                      for (double d : distances) {
-                                        if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
-                                      }
-                                    } else {
-                                      min_distance = distances;
-                                    }
-                                  }
-                                  if (min_distance < 0) { return 1.0; }
-
-                                  double pivot = 10000.0;
-                                  double score = pivot / (pivot + min_distance);
-
-                                  // Adjust by route_type: buses (3) penalised more, other modes less
-                                  if (doc.containsKey(\"route_type\")) {
-                                    def rt = doc['route_type'].value;
-                                    if (rt == 3) {
-                                      // bus -> stronger distance penalty
-                                      score = Math.pow(score, 1.3);
-                                    } else {
-                                      // rail/metro/tram/etc -> weaker distance penalty
-                                      score = Math.sqrt(score);
-                                    }
-                                  }
-
-                                  return score;
-                                ",
-                                    "params": {
-                                        "lat": user_lat,
-                                        "lon": user_lon
-                                    }
-                                }
-                            }
-                        },
-                        route_type_function.clone(),
-                    ],
-                    "score_mode": "multiply",
-                    "boost_mode": "multiply"
-                }
-            }
-        }),
-        _ => match map_pos_exists {
-            true => json!({
-                "query": {
-                    "function_score": {
-                        "query": {
-                            "multi_match" : {
-                                "query":  cleaned_query_text.clone(),
-                                "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
-                                 "type": "cross_fields"
-                            }
-                        },
-                        "functions": [
-                            {
-                                "script_score": {
-                                    "script": {
-                                        "source": "
                                       double min_distance = -1.0;
                                       if (doc.containsKey('important_points') && !doc['important_points'].empty) {
                                         def distances = doc['important_points'].arcDistance(params.lat, params.lon);
@@ -452,40 +311,39 @@ pub async fn text_search_v1(
 
                                       return score;
                                     ",
-                                        "params": {
-                                            "lat": query.map_lat.unwrap(),
-                                            "lon": query.map_lon.unwrap(),
-                                            "pivot": offset_map_gauss
-                                        }
+                                    "params": {
+                                        "lat": query.map_lat.unwrap(),
+                                        "lon": query.map_lon.unwrap(),
+                                        "pivot": offset_map_gauss
                                     }
                                 }
-                            },
-                            route_type_function.clone(),
-                        ],
-                        "score_mode": "multiply",
-                        "boost_mode": "multiply"
-                    }
-                }
-            }),
-            false => json!({
-                "query": {
-                    "function_score": {
-                        "query": {
-                          "multi_match" : {
-                            "query":  query.text.clone(),
-                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
-                            "type": "cross_fields"
-                         }
+                            }
                         },
-                        "functions": [
-                            route_type_function.clone()
-                        ],
-                        "score_mode": "multiply",
-                        "boost_mode": "multiply"
-                    }
+                        route_type_function.clone(),
+                    ],
+                    "score_mode": "multiply",
+                    "boost_mode": "multiply"
                 }
-            }),
-        },
+            }
+        }),
+        false => json!({
+            "query": {
+                "function_score": {
+                    "query": {
+                      "multi_match" : {
+                        "query":  query.text.clone(),
+                        "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
+                        "type": "cross_fields"
+                     }
+                    },
+                    "functions": [
+                        route_type_function.clone()
+                    ],
+                    "score_mode": "multiply",
+                    "boost_mode": "multiply"
+                }
+            }
+        }),
     };
 
     let stops_response_future = elasticclient
@@ -545,15 +403,17 @@ pub async fn text_search_v1(
                                         });
                                     }
                                 }
-                            } else if let Some(osm_id) = source.get("osm_id").and_then(|x| x.as_i64()) {
+                            } else if let Some(osm_id) =
+                                source.get("osm_id").and_then(|x| x.as_i64())
+                            {
                                 // This is an osm_station doc from the multi-search
                                 let stop_id = format!("osm:{}", osm_id);
                                 let chateau = "osm_stations".to_string();
-                                
+
                                 let existing_key = (chateau.clone(), stop_id.clone());
                                 if !existing_hits.contains(&existing_key) {
                                     existing_hits.insert(existing_key);
-                                    
+
                                     hit_rankings_for_stops.push(StopRankingInfo {
                                         chateau: chateau,
                                         gtfs_id: stop_id,
@@ -597,8 +457,12 @@ pub async fn text_search_v1(
 
                 if chateau == "osm_stations" {
                     // Extract numeric osm_ids from "osm:12345" strings
-                    let osm_ids: Vec<i64> = stops.iter()
-                        .filter_map(|s| s.strip_prefix("osm:").and_then(|id_str| id_str.parse().ok()))
+                    let osm_ids: Vec<i64> = stops
+                        .iter()
+                        .filter_map(|s| {
+                            s.strip_prefix("osm:")
+                                .and_then(|id_str| id_str.parse().ok())
+                        })
                         .collect();
 
                     let diesel_station_query = catenary::schema::gtfs::osm_stations::table
@@ -609,25 +473,33 @@ pub async fn text_search_v1(
 
                     match diesel_station_query {
                         Ok(stations) => {
-                            let mut stop_map: BTreeMap<String, catenary::models::Stop> = BTreeMap::new();
+                            let mut stop_map: BTreeMap<String, catenary::models::Stop> =
+                                BTreeMap::new();
                             for station in stations {
                                 let gtfs_id = format!("osm:{}", station.osm_id);
-                                
+
                                 // Map OsmStation fields into the Stop model
                                 let stop = catenary::models::Stop {
                                     onestop_feed_id: "osm_stations".to_string(),
                                     attempt_id: "0".to_string(),
                                     gtfs_id: gtfs_id.clone(),
-                                    name: station.name.clone().or(Some("Unknown Station".to_string())),
+                                    name: station
+                                        .name
+                                        .clone()
+                                        .or(Some("Unknown Station".to_string())),
                                     name_translations: station.name_translations.clone(),
                                     displayname: None,
                                     code: None,
                                     gtfs_desc: None,
                                     gtfs_desc_translations: None,
                                     location_type: 1, // Station
-                                    parent_station: station.parent_osm_id.map(|id| format!("osm:{}", id)),
+                                    parent_station: station
+                                        .parent_osm_id
+                                        .map(|id| format!("osm:{}", id)),
                                     zone_id: None,
-                                    url: station.wikidata.map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
+                                    url: station
+                                        .wikidata
+                                        .map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
                                     point: Some(station.point.clone()),
                                     timezone: None,
                                     wheelchair_boarding: 0,
@@ -817,8 +689,12 @@ pub async fn text_search_v1(
             .clone();
 
         let queried_children_stops = if chateau == "osm_stations" {
-            let osm_ids: Vec<i64> = children_stops.iter()
-                .filter_map(|s| s.strip_prefix("osm:").and_then(|id_str| id_str.parse().ok()))
+            let osm_ids: Vec<i64> = children_stops
+                .iter()
+                .filter_map(|s| {
+                    s.strip_prefix("osm:")
+                        .and_then(|id_str| id_str.parse().ok())
+                })
                 .collect();
 
             let diesel_station_query = catenary::schema::gtfs::osm_stations::table
@@ -845,7 +721,9 @@ pub async fn text_search_v1(
                             location_type: 1, // Station
                             parent_station: station.parent_osm_id.map(|id| format!("osm:{}", id)),
                             zone_id: None,
-                            url: station.wikidata.map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
+                            url: station
+                                .wikidata
+                                .map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
                             point: Some(station.point.clone()),
                             timezone: None,
                             wheelchair_boarding: 0,

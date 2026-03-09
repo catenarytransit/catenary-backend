@@ -1,6 +1,6 @@
 use crate::routing_common::types::*;
 use crate::routing_common::ways::*;
-use rstar::{RTree, RTreeObject, AABB};
+use rstar::{AABB, RTree, RTreeObject};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
