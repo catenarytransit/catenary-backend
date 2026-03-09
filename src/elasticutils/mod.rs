@@ -1041,6 +1041,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
