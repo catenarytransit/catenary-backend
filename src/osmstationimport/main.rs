@@ -1055,7 +1055,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             // Default parent to None initially
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
-            // 1. Perform reverse geocode lookup against `osm` ES index
+            // 1. Perform reverse geocode lookup against `places` ES index
             let query = json!({
                 "query": {
                     "bool": {
@@ -1063,8 +1063,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             "geo_shape": {
                                 "bbox": {
                                     "shape": {
-                                        "type": "point",
-                                        "coordinates": [station.point.x, station.point.y]
+                                        "type": "circle",
+                                        "coordinates": [station.point.x, station.point.y],
+                                        "radius": "1000m"
                                     },
                                     "relation": "intersects"
                                 }
@@ -1072,14 +1073,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                     }
                 },
-                "sort": [
-                    { "admin_level": { "order": "desc" } }
-                ],
-                "size": 1
+                "size": 10
             });
 
             match client
-                .search(elasticsearch::SearchParts::Index(&["osm"]))
+                .search(elasticsearch::SearchParts::Index(&["places"]))
                 .body(query)
                 .send()
                 .await
@@ -1087,50 +1085,34 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 Ok(response) => {
                     if let Ok(response_body) = response.json::<serde_json::Value>().await {
                         if let Some(hits) = response_body["hits"]["hits"].as_array() {
-                            if let Some(first_hit) = hits.get(0) {
-                                if let Some(source) = first_hit.get("_source") {
-                                    // Extract admin region names from existing `osm` boundary mappings
-                                    let mut parent = serde_json::Map::new();
+                            let mut best_parent = serde_json::Map::new();
+                            let mut max_keys = 0;
 
-                                    // Map standard OSM admin levels to Cypress parent concepts
-                                    // level 2 = country, level 4 = region, level 6 = county, level 8 = locality
-                                    if let Some(al2) =
-                                        source.get("admin_level_2_names").and_then(|v| v.as_str())
-                                    {
-                                        parent.insert(
-                                            "country".to_string(),
-                                            json!({"name": {"default": al2}}),
-                                        );
-                                    }
-                                    if let Some(al4) =
-                                        source.get("admin_level_4_names").and_then(|v| v.as_str())
-                                    {
-                                        parent.insert(
-                                            "region".to_string(),
-                                            json!({"name": {"default": al4}}),
-                                        );
-                                    }
-                                    if let Some(al6) =
-                                        source.get("admin_level_6_names").and_then(|v| v.as_str())
-                                    {
-                                        parent.insert(
-                                            "county".to_string(),
-                                            json!({"name": {"default": al6}}),
-                                        );
-                                    }
-                                    if let Some(al8) =
-                                        source.get("admin_level_8_names").and_then(|v| v.as_str())
-                                    {
-                                        parent.insert(
-                                            "locality".to_string(),
-                                            json!({"name": {"default": al8}}),
-                                        );
-                                    }
+                            for hit in hits {
+                                if let Some(source) = hit.get("_source") {
+                                    // Extract admin region names from `places` mappings
+                                    if let Some(parent_data) = source.get("parent").and_then(|v| v.as_object()) {
+                                        let mut current_parent = serde_json::Map::new();
 
-                                    if !parent.is_empty() {
-                                        parent_obj = Some(serde_json::Value::Object(parent));
+                                        for (level, level_data) in parent_data {
+                                            if let Some(name) = level_data.get("name").and_then(|v| v.as_str()) {
+                                                current_parent.insert(
+                                                    level.clone(),
+                                                    json!({"name": {"default": name}}),
+                                                );
+                                            }
+                                        }
+
+                                        if current_parent.len() > max_keys {
+                                            max_keys = current_parent.len();
+                                            best_parent = current_parent;
+                                        }
                                     }
                                 }
+                            }
+
+                            if !best_parent.is_empty() {
+                                parent_obj = Some(serde_json::Value::Object(best_parent));
                             }
                         }
                     }
