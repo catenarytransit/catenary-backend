@@ -1167,6 +1167,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 continue;
             }
 
+            if station.local_ref.is_some() {
+                continue;
+            }
+
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
             if fetched_parent.is_some() {
