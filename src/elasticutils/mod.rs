@@ -1182,6 +1182,7 @@ pub async fn make_index_and_mappings(
         let create_response = client
             .indices()
             .create(IndicesCreateParts::Index(index_name))
+            .body(&mapping_json)
             .send()
             .await;
 
@@ -1189,82 +1190,26 @@ pub async fn make_index_and_mappings(
             Ok(response) => {
                 if response.status_code().is_success() {
                     let response_body = response.json::<Value>().await?;
-                    println!("Index created successfully: {:?}", response_body);
+                    println!("Index '{}' created successfully with all settings/mappings: {:?}", index_name, response_body);
                 } else {
                     let status = response.status_code();
                     let body = response.text().await?;
-                    println!("Received non-success status [{}]: {}", status, body.trim());
-                    if !body.contains("resource_already_exists_exception") {
+                    
+                    if body.contains("resource_already_exists_exception") {
+                        println!("Index '{}' exists. If you need to update it, use the Close/Open pattern.", index_name);
+                        // Optional: Call a separate function here to handle updates if index exists
+                    } else {
                         return Err(Box::new(std::io::Error::new(
                             std::io::ErrorKind::Other,
-                            format!("Failed to create index with status {}: {}", status, body),
+                            format!("Failed to create index {}: {}", status, body),
                         )));
                     }
-                    println!(
-                        "Index '{}' already exists. Proceeding to update mapping.",
-                        index_name
-                    );
                 }
             }
             Err(e) => {
                 eprintln!("Error creating index: {:?}", e);
                 return Err(Box::new(e));
             }
-        }
-
-        let put_settings_response = client
-            .indices()
-            .put_settings(IndicesPutSettingsParts::Index(&[index_name]))
-            .reopen(true)
-            .body(mapping_json.get("settings").unwrap())
-            .send()
-            .await?;
-
-        if put_settings_response.status_code().is_success() {
-            let response_body = put_settings_response.json::<Value>().await?;
-            println!("Settings updated successfully: {:?}", response_body);
-        } else {
-            let status = put_settings_response.status_code();
-            let error_body = put_settings_response.text().await?;
-            eprintln!(
-                "Error updating settings. Status: {}. Body: {}",
-                status, error_body
-            );
-            // Create a custom error to return
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Failed to put settings with status {}: {}",
-                    status, error_body
-                ),
-            )));
-        }
-
-        let put_mapping_response = client
-            .indices()
-            .put_mapping(IndicesPutMappingParts::Index(&[index_name]))
-            .body(mapping_json.get("mappings").unwrap())
-            .send()
-            .await?;
-
-        if put_mapping_response.status_code().is_success() {
-            let response_body = put_mapping_response.json::<Value>().await?;
-            println!("Mapping updated successfully: {:?}", response_body);
-        } else {
-            let status = put_mapping_response.status_code();
-            let error_body = put_mapping_response.text().await?;
-            eprintln!(
-                "Error updating mapping. Status: {}. Body: {}",
-                status, error_body
-            );
-            // Create a custom error to return
-            return Err(Box::new(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Failed to put mapping with status {}: {}",
-                    status, error_body
-                ),
-            )));
         }
     }
 
