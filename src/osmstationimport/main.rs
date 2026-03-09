@@ -1071,7 +1071,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .query(&[
                     ("point.lat", station.point.y),
                     ("point.lon", station.point.x),
-                    ("size", 10),
+                ])
+                .query(&[
+                    ("size", 10u8),
                 ])
                 .send()
                 .await
