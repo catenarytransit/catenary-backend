@@ -881,6 +881,7 @@ pub async fn make_index_and_mappings(
                         "operator": { "type": "text", "analyzer": "standard" },
                         "network": { "type": "text", "analyzer": "standard" },
                         "import_id": { "type": "integer" },
+                        "file_name": { "type": "keyword" },
                         "point": { "type": "geo_point" },
                         "station_name_search": { "type": "text", "analyzer": "standard" },
                         "route_names_search": { "type": "text", "analyzer": "standard" },

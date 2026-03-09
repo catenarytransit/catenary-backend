@@ -1041,22 +1041,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let elasticclient = transport.map(Elasticsearch::new);
 
     if let Some(client) = &elasticclient {
-        // Remove any existing rows on the next import
-        println!("  Deleting all existing ES docs in osm_stations index...");
-        let delete_query = json!({
-            "query": {
-                "match_all": {}
-            }
-        });
-        if let Err(e) = client
-            .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&["osm_stations"]))
-            .body(delete_query)
-            .send()
-            .await
-        {
-            println!("  Failed to delete existing docs from ES: {}", e);
-        }
-
         // Query Cypress admin indices for parent regions and push stations
         let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
             Vec::new();
@@ -1217,6 +1201,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     "osm_id": station.osm_id,
                     "osm_type": station.osm_type,
                     "import_id": station.import_id,
+                    "file_name": &file_name,
                     "mode_type": station.mode_type,
                     "operator": station.operator,
                     "network": station.network,
@@ -1250,6 +1235,28 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
         println!("\n  Elasticsearch indexing complete.");
+        
+        println!("  Deleting old ES docs for file {}...", file_name);
+        let delete_query = json!({
+            "query": {
+                "bool": {
+                    "must": [
+                        { "term": { "file_name": &file_name } }
+                    ],
+                    "must_not": [
+                        { "term": { "import_id": import_id } }
+                    ]
+                }
+            }
+        });
+        if let Err(e) = client
+            .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&["osm_stations"]))
+            .body(delete_query)
+            .send()
+            .await
+        {
+            println!("  Failed to delete old docs from ES: {}", e);
+        }
     } else {
         println!("Skipping Elasticsearch indexing (no connection).");
     }
