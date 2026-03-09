@@ -1062,12 +1062,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
             // 1. Perform reverse geocode lookup against Cypress API
+
+            let base_url = args.cypress_url.trim_end_matches('/');
+            let url = format!("{}/v2/reverse", base_url);
+
             match http_client
-                .get(format!("{}/v2/reverse", args.cypress_url))
+                .get(url)
                 .query(&[
                     ("point.lat", station.point.y),
                     ("point.lon", station.point.x),
-                    ("size", 10.0),
+                    ("size", 10),
                 ])
                 .send()
                 .await
