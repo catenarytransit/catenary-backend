@@ -1072,8 +1072,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .send()
                 .await
             {
-                Ok(response) => {
-                    if let Ok(response_body) = response.json::<serde_json::Value>().await {
+                Ok(response) => match response.json::<serde_json::Value>().await {
+                    Ok(response_body) => {
                         if let Some(features) = response_body["features"].as_array() {
                             let mut best_parent = serde_json::Map::new();
                             let mut max_keys = 0;
@@ -1130,9 +1130,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             if !best_parent.is_empty() {
                                 parent_obj = Some(serde_json::Value::Object(best_parent));
                             }
+                        } else {
+                            println!(
+                                "No features array in Cypress API response for station {}",
+                                station.osm_id
+                            );
                         }
                     }
-                }
+                    Err(e) => {
+                        println!(
+                            "Error decoding Cypress API response for station {}: {}",
+                            station.osm_id, e
+                        );
+                    }
+                },
                 Err(e) => {
                     println!(
                         "Error querying Cypress API for admin boundaries for station {}: {}",
