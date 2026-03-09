@@ -779,6 +779,27 @@ pub async fn make_index_and_mappings(
                                 "type": "my_korean_analyzer_tokenizer",
                                 "decompound_mode": "mixed",
                             },
+                            "peliasTokenizer": {
+                                "type": "pattern",
+                                "pattern": "[\\s,/\\\\-]+"
+                            }
+                        },
+                        "char_filter": {
+                            "alphanumeric": {
+                            "type": "pattern_replace",
+                            "pattern": "[^a-zA-Z0-9]",
+                            "replacement": ""
+                            },
+                            "numeric": {
+                            "type": "pattern_replace",
+                            "pattern": "[^0-9]",
+                            "replacement": " "
+                            },
+                            "nfkc_normalizer": {
+                            "type": "icu_normalizer",
+                            "name": "nfkc",
+                            "mode": "compose"
+                            }
                         },
                         "analyzer": {
                             "my_korean_analyzer": {
@@ -788,6 +809,86 @@ pub async fn make_index_and_mappings(
                                     "my_korean_analyzer_readingform",
                                     "lowercase"
                                 ]
+                            },
+                            "peliasIndex": {
+                            "type": "custom",
+                            "tokenizer": "peliasTokenizer",
+                            "char_filter": ["nfkc_normalizer"],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "peliasAsciiFolding",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
+                            },
+                            "peliasIndexOneEdgeGram": {
+                            "type": "custom",
+                            "tokenizer": "peliasTokenizer",
+                            "char_filter": ["nfkc_normalizer"],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "peliasAsciiFolding",
+                                "peliasOneEdgeGramFilter",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
+                            },
+                            "peliasQuery": {
+                            "type": "custom",
+                            "tokenizer": "peliasTokenizer",
+                            "char_filter": ["nfkc_normalizer"],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "peliasAsciiFolding",
+                                "peliasSynonymFilter",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
+                            },
+                            "peliasAdmin": {
+                            "type": "custom",
+                            "tokenizer": "peliasTokenizer",
+                            "char_filter": ["nfkc_normalizer"],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "peliasAsciiFolding",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
+                            },
+                            "peliasStreet": {
+                            "type": "custom",
+                            "tokenizer": "peliasTokenizer",
+                            "char_filter": ["nfkc_normalizer"],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "remove_duplicate_spaces",
+                                "peliasSynonymFilter",
+                                "peliasAsciiFolding",
+                                "remove_ordinals",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
+                            },
+                            "peliasZip": {
+                            "type": "custom",
+                            "tokenizer": "keyword",
+                            "char_filter": [
+                                "alphanumeric",
+                                "nfkc_normalizer"
+                            ],
+                            "filter": [
+                                "lowercase",
+                                "trim",
+                                "peliasAsciiFolding",
+                                "unique_only_same_position",
+                                "notnull"
+                            ]
                             }
                         },
                         "filter": {
@@ -823,7 +924,48 @@ pub async fn make_index_and_mappings(
                             "icu_collation_sv": { "type": "icu_collation", "language": "sv" },
                             "icu_collation_th": { "type": "icu_collation", "language": "th" },
                             "icu_collation_zh_cn": { "type": "icu_collation", "language": "zh-CN" },
-                            "icu_collation_zh_tw": { "type": "icu_collation", "language": "zh-TW" }
+                            "icu_collation_zh_tw": { "type": "icu_collation", "language": "zh-TW" },
+                            "peliasAsciiFolding": {
+                            "type": "asciifolding",
+                            "preserve_original": true
+                            },
+                            "peliasSynonymFilter": {
+                            "type": "synonym",
+                            "synonyms": [
+                                "street,st,str",
+                                "avenue,ave,av",
+                                "road,rd",
+                                "boulevard,blvd,bd",
+                                "place,pl",
+                                "square,sq",
+                                "drive,dr",
+                                "lane,ln",
+                                "court,ct"
+                            ]
+                            },
+                            "peliasOneEdgeGramFilter": {
+                            "type": "edge_ngram",
+                            "min_gram": 1,
+                            "max_gram": 24
+                            },
+                            "notnull": {
+                            "type": "length",
+                            "min": 1
+                            },
+                            "unique_only_same_position": {
+                            "type": "unique",
+                            "only_on_same_position": true
+                            },
+                            "remove_duplicate_spaces": {
+                            "type": "pattern_replace",
+                            "pattern": " +",
+                            "replacement": " "
+                            },
+                            "remove_ordinals": {
+                            "type": "pattern_replace",
+                            "pattern": "(?i)((^| )((1)st?|(2)nd?|(3)rd?|([4-9])th?)|(([0-9]*)(1[0-9])th?)|(([0-9]*[02-9])((1)st?|(2)nd?|(3)rd?|([04-9])th?))($| ))",
+                            "replacement": "$2$4$5$6$7$9$10$12$14$15$16$17$18"
+                            }
                         },
                         "normalizer": {
                             "ar_collation": { "type": "custom", "filter": ["lowercase", "icu_collation_ar"] },
@@ -864,14 +1006,6 @@ pub async fn make_index_and_mappings(
                                     "copy_to": "station_name_search"
                                 }
                             }
-                        },
-                        {
-                            "copy_to_parent_names_search": {
-                                "path_match": "parent.*.names.*",
-                                "mapping": {
-                                    "copy_to": "parent_names_search"
-                                }
-                            }
                         }
                     ],
                     "properties": {
@@ -884,179 +1018,161 @@ pub async fn make_index_and_mappings(
                         "file_name": { "type": "keyword" },
                         "point": { "type": "geo_point" },
                         "station_name_search": { "type": "text", "analyzer": "standard" },
-                        "parent_names_search": { "type": "text", "analyzer": "standard" },
                         "station_name": {
                             "type": "object",
                             "dynamic": true,
                             "properties": generate_language_properties()
                         },
-                        "admin_level_2_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_3_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_4_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_5_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_6_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_7_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_8_names": { "type": "text", "analyzer": "standard" },
-                        "admin_level_9_names": { "type": "text", "analyzer": "standard" },
                         "parent": {
-                            "type": "object",
-                            "properties": {
-                                "country": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "macro_region": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "region": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "macro_county": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "county": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "local_admin": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "locality": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "borough": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                },
-                                "neighbourhood": {
-                                    "type": "object",
-                                    "properties": {
-                                        "name": {
-                                            "type": "text",
-                                            "analyzer": "standard",
-                                            "copy_to": "parent_names_search"
-                                        },
-                                        "names": {
-                                            "type": "object",
-                                            "dynamic": true,
-                                            "properties": generate_language_properties()
-                                        },
-                                        "abbr": { "type": "keyword" },
-                                        "id": { "type": "long" }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                          "type": "object",
+                          "properties": {
+                              "country": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "macro_region": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "region": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "macro_county": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "county": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "local_admin": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "locality": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "borough": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              },
+                              "neighbourhood": {
+                              "type": "object",
+                              "properties": {
+                                  "name": {
+                                  "type": "text",
+                                  "analyzer": "peliasAdmin",
+                                  "search_analyzer": "peliasQuery"
+                                  },
+                                  "abbr": {
+                                  "type": "keyword"
+                                  },
+                                  "id": {
+                                  "type": "long"
+                                  }
+                              }
+                              }
+                          }
+                      }
+                  }
                 }
             }),
         ),

@@ -1110,22 +1110,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                                 if let Some(name) =
                                                     props.get(layer).and_then(|v| v.as_str())
                                                 {
-                                                    let mut names_map = serde_json::Map::new();
-                                                    names_map.insert("default".to_string(), json!(name));
-
-                                                    if let Some(translated_names) =
-                                                        props.get(names_layer).and_then(|v| v.as_object())
-                                                    {
-                                                        for (lang, trans_name) in translated_names {
-                                                            names_map.insert(lang.clone(), trans_name.clone());
-                                                        }
-                                                    }
-
                                                     current_parent.insert(
                                                         layer.to_string(),
                                                         json!({
-                                                            "name": name,
-                                                            "names": names_map
+                                                            "name": name
                                                         }),
                                                     );
                                                 }
