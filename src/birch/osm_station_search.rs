@@ -60,11 +60,15 @@ pub async fn osm_station_search(
                         "station_name_search^3",
                         "operator",
                         "network",
-                        "admin_level_2_names",
-                        "admin_level_4_names",
-                        "admin_level_6_names",
-                        "admin_level_8_names",
-                        "parent_names_search"
+                        "parent.country.name",
+                        "parent.macro_region.name",
+                        "parent.region.name",
+                        "parent.macro_county.name",
+                        "parent.county.name",
+                        "parent.local_admin.name",
+                        "parent.locality.name",
+                        "parent.borough.name",
+                        "parent.neighbourhood.name"
                     ],
                     "type": "cross_fields",
                     "operator": "and"
