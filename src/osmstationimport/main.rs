@@ -1047,7 +1047,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_client = reqwest::Client::new();
 
     if let Some(client) = &elasticclient {
-        println!("Connected to ES");
+        println!("Connected to ES. Ensuring index mappings exist...");
+        if let Err(e) = catenary::elasticutils::make_index_and_mappings(client).await {
+            println!("Warning: Failed to create or update ES mappings: {}", e);
+        }
+
         // Query Cypress admin indices for parent regions and push stations
         let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
             Vec::new();
