@@ -1041,12 +1041,33 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let elasticclient = transport.map(Elasticsearch::new);
 
     if let Some(client) = &elasticclient {
+        // Remove any existing rows on the next import
+        println!("  Deleting all existing ES docs in osm_stations index...");
+        let delete_query = json!({
+            "query": {
+                "match_all": {}
+            }
+        });
+        if let Err(e) = client
+            .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&["osm_stations"]))
+            .body(delete_query)
+            .send()
+            .await
+        {
+            println!("  Failed to delete existing docs from ES: {}", e);
+        }
+
         // Query Cypress admin indices for parent regions and push stations
         let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
             Vec::new();
         let es_batch_size = 500;
 
         for (i, station) in stations.iter().enumerate() {
+            // Don't import any stations that have a parent into elasticsearch. Exclude those.
+            if station.parent_osm_id.is_some() {
+                continue;
+            }
+
             // Default parent to None initially
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
@@ -1229,26 +1250,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
         println!("\n  Elasticsearch indexing complete.");
-
-        // Delete old ES entries
-        if !old_import_ids.is_empty() {
-            println!("  Deleting old ES docs...");
-            for old_id in old_import_ids {
-                let delete_query = json!({
-                    "query": {
-                        "term": { "import_id": old_id }
-                    }
-                });
-                if let Err(e) = client
-                    .delete_by_query(elasticsearch::DeleteByQueryParts::Index(&["osm_stations"]))
-                    .body(delete_query)
-                    .send()
-                    .await
-                {
-                    println!("  Failed to delete old import {} from ES: {}", old_id, e);
-                }
-            }
-        }
     } else {
         println!("Skipping Elasticsearch indexing (no connection).");
     }
