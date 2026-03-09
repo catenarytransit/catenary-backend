@@ -1154,7 +1154,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     (station, fetched_parent)
                 }
             })
-            .buffer_unordered(20);
+            .buffer_unordered(40);
 
         let mut processed = 0;
         let total_stations = stations.len();
