@@ -1053,110 +1053,132 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             Vec::new();
         let es_batch_size = 100;
 
-        for (i, station) in stations.iter().enumerate() {
+        use futures::stream::{self, StreamExt};
+
+        let mut fetch_stream = stream::iter(stations.iter())
+            .map(|station| {
+                let http_client = http_client.clone();
+                let base_url = args.cypress_url.trim_end_matches('/').to_string();
+                async move {
+                    if station.parent_osm_id.is_some() {
+                        return (station, None);
+                    }
+
+                    // 1. Perform reverse geocode lookup against Cypress API
+                    let url = format!("{}/v2/reverse", base_url);
+                    let mut fetched_parent = None;
+
+                    match http_client
+                        .get(&url)
+                        .query(&[
+                            ("point.lat", station.point.y),
+                            ("point.lon", station.point.x),
+                        ])
+                        .query(&[
+                            ("size", 10u8),
+                        ])
+                        .send()
+                        .await
+                    {
+                        Ok(response) => match response.json::<serde_json::Value>().await {
+                            Ok(response_body) => {
+                                if let Some(features) = response_body["features"].as_array() {
+                                    let mut best_parent = serde_json::Map::new();
+                                    let mut max_keys = 0;
+
+                                    for feature in features {
+                                        if let Some(props) = feature.get("properties") {
+                                            let mut current_parent = serde_json::Map::new();
+
+                                            let admin_layers = [
+                                                ("country", "country_names"),
+                                                ("macro_region", "macro_region_names"),
+                                                ("region", "region_names"),
+                                                ("macro_county", "macro_county_names"),
+                                                ("county", "county_names"),
+                                                ("local_admin", "local_admin_names"),
+                                                ("locality", "locality_names"),
+                                                ("borough", "borough_names"),
+                                                ("neighbourhood", "neighbourhood_names"),
+                                            ];
+
+                                            for (layer, names_layer) in admin_layers {
+                                                if let Some(name) =
+                                                    props.get(layer).and_then(|v| v.as_str())
+                                                {
+                                                    let mut names_map = serde_json::Map::new();
+                                                    names_map.insert("default".to_string(), json!(name));
+
+                                                    if let Some(translated_names) =
+                                                        props.get(names_layer).and_then(|v| v.as_object())
+                                                    {
+                                                        for (lang, trans_name) in translated_names {
+                                                            names_map.insert(lang.clone(), trans_name.clone());
+                                                        }
+                                                    }
+
+                                                    current_parent.insert(
+                                                        layer.to_string(),
+                                                        json!({
+                                                            "name": name,
+                                                            "names": names_map
+                                                        }),
+                                                    );
+                                                }
+                                            }
+
+                                            if current_parent.len() > max_keys {
+                                                max_keys = current_parent.len();
+                                                best_parent = current_parent;
+                                            }
+                                        }
+                                    }
+
+                                    if !best_parent.is_empty() {
+                                        fetched_parent = Some(serde_json::Value::Object(best_parent));
+                                    }
+                                } else {
+                                    println!(
+                                        "No features array in Cypress API response for station {}",
+                                        station.osm_id
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                println!(
+                                    "Error decoding Cypress API response for station {}: {}",
+                                    station.osm_id, e
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            println!(
+                                "Error querying Cypress API for admin boundaries for station {}: {}",
+                                station.osm_id, e
+                            );
+                        }
+                    }
+
+                    (station, fetched_parent)
+                }
+            })
+            .buffer_unordered(20);
+
+        let mut processed = 0;
+        let total_stations = stations.len();
+
+        while let Some((station, fetched_parent)) = fetch_stream.next().await {
+            processed += 1;
+
             // Don't import any stations that have a parent into elasticsearch. Exclude those.
             if station.parent_osm_id.is_some() {
                 continue;
             }
 
-            // Default parent to None initially
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
-            // 1. Perform reverse geocode lookup against Cypress API
-
-            let base_url = args.cypress_url.trim_end_matches('/');
-            let url = format!("{}/v2/reverse", base_url);
-
-            match http_client
-                .get(url)
-                .query(&[
-                    ("point.lat", station.point.y),
-                    ("point.lon", station.point.x),
-                ])
-                .query(&[
-                    ("size", 10u8),
-                ])
-                .send()
-                .await
-            {
-                Ok(response) => match response.json::<serde_json::Value>().await {
-                    Ok(response_body) => {
-                        if let Some(features) = response_body["features"].as_array() {
-                            let mut best_parent = serde_json::Map::new();
-                            let mut max_keys = 0;
-
-                            for feature in features {
-                                if let Some(props) = feature.get("properties") {
-                                    let mut current_parent = serde_json::Map::new();
-
-                                    let admin_layers = [
-                                        ("country", "country_names"),
-                                        ("macro_region", "macro_region_names"),
-                                        ("region", "region_names"),
-                                        ("macro_county", "macro_county_names"),
-                                        ("county", "county_names"),
-                                        ("local_admin", "local_admin_names"),
-                                        ("locality", "locality_names"),
-                                        ("borough", "borough_names"),
-                                        ("neighbourhood", "neighbourhood_names"),
-                                    ];
-
-                                    for (layer, names_layer) in admin_layers {
-                                        if let Some(name) =
-                                            props.get(layer).and_then(|v| v.as_str())
-                                        {
-                                            let mut names_map = serde_json::Map::new();
-                                            names_map.insert("default".to_string(), json!(name));
-
-                                            if let Some(translated_names) =
-                                                props.get(names_layer).and_then(|v| v.as_object())
-                                            {
-                                                for (lang, trans_name) in translated_names {
-                                                    names_map
-                                                        .insert(lang.clone(), trans_name.clone());
-                                                }
-                                            }
-
-                                            current_parent.insert(
-                                                layer.to_string(),
-                                                json!({
-                                                    "name": name,
-                                                    "names": names_map
-                                                }),
-                                            );
-                                        }
-                                    }
-
-                                    if current_parent.len() > max_keys {
-                                        max_keys = current_parent.len();
-                                        best_parent = current_parent;
-                                    }
-                                }
-                            }
-
-                            if !best_parent.is_empty() {
-                                parent_obj = Some(serde_json::Value::Object(best_parent));
-                            }
-                        } else {
-                            println!(
-                                "No features array in Cypress API response for station {}",
-                                station.osm_id
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        println!(
-                            "Error decoding Cypress API response for station {}: {}",
-                            station.osm_id, e
-                        );
-                    }
-                },
-                Err(e) => {
-                    println!(
-                        "Error querying Cypress API for admin boundaries for station {}: {}",
-                        station.osm_id, e
-                    );
-                }
+            if fetched_parent.is_some() {
+                parent_obj = fetched_parent;
             }
 
             // Re-update the postgres row with the discovered admin hierarchy
@@ -1199,10 +1221,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .into(),
             );
 
-            if es_bodies.len() >= es_batch_size * 2 || i == stations.len() - 1 {
+            if es_bodies.len() >= es_batch_size * 2 || processed == total_stations {
                 let response = client
                     .bulk(BulkParts::Index("osm_stations"))
-                    .body(es_bodies)
+                    .body(std::mem::take(&mut es_bodies))
                     .send()
                     .await?;
 
@@ -1211,9 +1233,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     println!("ES bulk insert had errors: {:?}", response_body);
                 }
 
-                print!("\r  Indexed {}/{} to Elasticsearch", i + 1, stations.len());
+                print!(
+                    "\r  Indexed {}/{} to Elasticsearch",
+                    processed, total_stations
+                );
                 std::io::Write::flush(&mut std::io::stdout())?;
-                es_bodies = Vec::new();
             }
         }
         println!("\n  Elasticsearch indexing complete.");
