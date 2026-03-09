@@ -339,7 +339,7 @@ pub async fn make_index_and_mappings(
                         }
                     ],
                 "properties": {
-                    "stop_id": {
+                    "gtfs_id": {
                         "type": "text",
                     },
                     "stop_code": {
@@ -866,11 +866,11 @@ pub async fn make_index_and_mappings(
                             }
                         },
                         {
-                            "copy_to_route_names_search": {
-                            "path_match": "route_names_search.*",
-                            "mapping": {
-                                "copy_to": "route_names_search"
-                            }
+                            "copy_to_parent_names_search": {
+                                "path_match": "parent.*.names.*",
+                                "mapping": {
+                                    "copy_to": "parent_names_search"
+                                }
                             }
                         }
                     ],
@@ -884,14 +884,8 @@ pub async fn make_index_and_mappings(
                         "file_name": { "type": "keyword" },
                         "point": { "type": "geo_point" },
                         "station_name_search": { "type": "text", "analyzer": "standard" },
-                        "route_names_search": { "type": "text", "analyzer": "standard" },
-                        "route_types": { "type": "short" },
+                        "parent_names_search": { "type": "text", "analyzer": "standard" },
                         "station_name": {
-                            "type": "object",
-                            "dynamic": true,
-                            "properties": generate_language_properties()
-                        },
-                        "route_names": {
                             "type": "object",
                             "dynamic": true,
                             "properties": generate_language_properties()
@@ -911,6 +905,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -923,6 +922,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -935,6 +939,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -947,6 +956,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -959,6 +973,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -971,6 +990,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -983,6 +1007,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()
@@ -995,6 +1024,11 @@ pub async fn make_index_and_mappings(
                                     "type": "object",
                                     "properties": {
                                         "name": {
+                                            "type": "text",
+                                            "analyzer": "standard",
+                                            "copy_to": "parent_names_search"
+                                        },
+                                        "names": {
                                             "type": "object",
                                             "dynamic": true,
                                             "properties": generate_language_properties()

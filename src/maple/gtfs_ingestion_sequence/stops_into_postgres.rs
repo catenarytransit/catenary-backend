@@ -362,7 +362,7 @@ pub async fn stops_into_postgres_and_elastic(
 
                 insertable_elastic.push(
                     json!({
-                        "stop_id": stop_id.clone(),
+                        "gtfs_id": stop_id.clone(),
                         "chateau": chateau_id.to_string(),
                         "attempt_id": attempt_id.to_string(),
                         "onestop_feed_id": feed_id.to_string(),

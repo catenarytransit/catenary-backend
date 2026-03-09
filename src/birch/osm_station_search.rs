@@ -58,17 +58,13 @@ pub async fn osm_station_search(
                     "query": query.text.clone(),
                     "fields": [
                         "station_name_search^3",
-                        "route_names_search^2",
                         "operator",
                         "network",
                         "admin_level_2_names",
                         "admin_level_4_names",
                         "admin_level_6_names",
                         "admin_level_8_names",
-                        "parent.country.name",
-                        "parent.region.name",
-                        "parent.county.name",
-                        "parent.locality.name"
+                        "parent_names_search"
                     ],
                     "type": "cross_fields",
                     "operator": "and"

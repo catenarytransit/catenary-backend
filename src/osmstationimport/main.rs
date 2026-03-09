@@ -65,6 +65,10 @@ struct Args {
     /// Optional Elasticsearch URL (overrides ELASTICSEARCH_URL env var)
     #[arg(long)]
     elastic_url: Option<String>,
+
+    /// Cypress API URL for reverse geocoding
+    #[arg(long, default_value = "http://localhost:3000")]
+    cypress_url: String,
 }
 
 /// Compute SHA256 hash of a file
@@ -1040,6 +1044,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let elasticclient = transport.map(Elasticsearch::new);
 
+    let http_client = reqwest::Client::new();
+
     if let Some(client) = &elasticclient {
         // Query Cypress admin indices for parent regions and push stations
         let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
@@ -1055,58 +1061,68 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             // Default parent to None initially
             let mut parent_obj: Option<serde_json::Value> = station.admin_hierarchy.clone();
 
-            // 1. Perform reverse geocode lookup against `places` ES index
-            let query = json!({
-                "query": {
-                    "bool": {
-                        "filter": {
-                            "geo_shape": {
-                                "bbox": {
-                                    "shape": {
-                                        "type": "circle",
-                                        "coordinates": [station.point.x, station.point.y],
-                                        "radius": "1000m"
-                                    },
-                                    "relation": "intersects"
-                                }
-                            }
-                        }
-                    }
-                },
-                "size": 10
-            });
-
-            match client
-                .search(elasticsearch::SearchParts::Index(&["places"]))
-                .body(query)
+            // 1. Perform reverse geocode lookup against Cypress API
+            match http_client
+                .get(format!("{}/v2/reverse", args.cypress_url))
+                .query(&[
+                    ("point.lat", station.point.y),
+                    ("point.lon", station.point.x),
+                    ("size", 10.0),
+                ])
                 .send()
                 .await
             {
                 Ok(response) => {
                     if let Ok(response_body) = response.json::<serde_json::Value>().await {
-                        if let Some(hits) = response_body["hits"]["hits"].as_array() {
+                        if let Some(features) = response_body["features"].as_array() {
                             let mut best_parent = serde_json::Map::new();
                             let mut max_keys = 0;
 
-                            for hit in hits {
-                                if let Some(source) = hit.get("_source") {
-                                    // Extract admin region names from `places` mappings
-                                    if let Some(parent_data) = source.get("parent").and_then(|v| v.as_object()) {
-                                        let mut current_parent = serde_json::Map::new();
+                            for feature in features {
+                                if let Some(props) = feature.get("properties") {
+                                    let mut current_parent = serde_json::Map::new();
 
-                                        for (level, level_data) in parent_data {
-                                            if let Some(name) = level_data.get("name").and_then(|v| v.as_str()) {
-                                                current_parent.insert(
-                                                    level.clone(),
-                                                    json!({"name": {"default": name}}),
-                                                );
+                                    let admin_layers = [
+                                        ("country", "country_names"),
+                                        ("macro_region", "macro_region_names"),
+                                        ("region", "region_names"),
+                                        ("macro_county", "macro_county_names"),
+                                        ("county", "county_names"),
+                                        ("local_admin", "local_admin_names"),
+                                        ("locality", "locality_names"),
+                                        ("borough", "borough_names"),
+                                        ("neighbourhood", "neighbourhood_names"),
+                                    ];
+
+                                    for (layer, names_layer) in admin_layers {
+                                        if let Some(name) =
+                                            props.get(layer).and_then(|v| v.as_str())
+                                        {
+                                            let mut names_map = serde_json::Map::new();
+                                            names_map.insert("default".to_string(), json!(name));
+
+                                            if let Some(translated_names) =
+                                                props.get(names_layer).and_then(|v| v.as_object())
+                                            {
+                                                for (lang, trans_name) in translated_names {
+                                                    names_map
+                                                        .insert(lang.clone(), trans_name.clone());
+                                                }
                                             }
-                                        }
 
-                                        if current_parent.len() > max_keys {
-                                            max_keys = current_parent.len();
-                                            best_parent = current_parent;
+                                            current_parent.insert(
+                                                layer.to_string(),
+                                                json!({
+                                                    "name": name,
+                                                    "names": names_map
+                                                }),
+                                            );
                                         }
+                                    }
+
+                                    if current_parent.len() > max_keys {
+                                        max_keys = current_parent.len();
+                                        best_parent = current_parent;
                                     }
                                 }
                             }
@@ -1119,7 +1135,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
                 Err(e) => {
                     println!(
-                        "Error querying ES for admin boundaries for station {}: {}",
+                        "Error querying Cypress API for admin boundaries for station {}: {}",
                         station.osm_id, e
                     );
                 }
@@ -1143,38 +1159,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
             // 2. Fetch associated GTFS routes
             // Look up associated GTFS routes by querying the gtfs.stops table where osm_station_id matches
-            use catenary::schema::gtfs::routes::dsl as routes_q_dsl;
-            use catenary::schema::gtfs::stops::dsl as stops_q_dsl;
-
-            // Find route IDs at this station that are valid
-            let associated_routes = stops_q_dsl::stops
-                .inner_join(
-                    routes_q_dsl::routes.on(diesel::dsl::sql::<diesel::sql_types::Bool>(
-                        "gtfs.stops.routes @> ARRAY[gtfs.routes.route_id]",
-                    )),
-                )
-                .filter(stops_q_dsl::osm_station_id.eq(station.osm_id))
-                .select((
-                    routes_q_dsl::long_name,
-                    routes_q_dsl::short_name,
-                    routes_q_dsl::route_type,
-                ))
-                .distinct()
-                .load::<(Option<String>, Option<String>, i16)>(conn)
-                .await
-                .unwrap_or_default();
-
-            let mut route_names = Vec::new();
-            let mut route_types = Vec::new();
-            for (long_name, short_name, rtype) in associated_routes {
-                if let Some(ln) = long_name {
-                    route_names.push(ln);
-                }
-                if let Some(sn) = short_name {
-                    route_names.push(sn);
-                }
-                route_types.push(rtype);
-            }
 
             // 3. Queue for ES index
             es_bodies.push(json!({"index": {"_id": station.osm_id}}).into());
@@ -1193,8 +1177,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         "lon": station.point.x,
                     },
                     "parent": parent_obj,
-                    "route_names_search": route_names,
-                    "route_types": route_types,
                 })
                 .into(),
             );
@@ -1217,7 +1199,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
         println!("\n  Elasticsearch indexing complete.");
-        
+
         println!("  Deleting old ES docs for file {}...", file_name);
         let delete_query = json!({
             "query": {
