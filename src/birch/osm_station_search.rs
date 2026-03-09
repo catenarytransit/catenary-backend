@@ -57,7 +57,7 @@ pub async fn osm_station_search(
                 "multi_match": {
                     "query": query.text.clone(),
                     "fields": [
-                        "station_name_search^3",
+                        "station_name_search^5",
                         "operator",
                         "network",
                         "parent.country.name",
@@ -157,8 +157,8 @@ pub async fn osm_station_search(
         .await
         .unwrap_or_default();
 
-    let mut station_to_routes: HashMap<i64, Vec<String>> = HashMap::new();
-    let mut all_route_ids: Vec<String> = Vec::new();
+    let mut station_to_routes: HashMap<i64, Vec<(String, String)>> = HashMap::new();
+    let mut routes_by_chateau: HashMap<String, Vec<String>> = HashMap::new();
     for stop in stops {
         if let Some(osm_id) = stop.osm_station_id {
             for route_id_opt in stop.routes {
@@ -166,26 +166,43 @@ pub async fn osm_station_search(
                     station_to_routes
                         .entry(osm_id)
                         .or_default()
-                        .push(route_id.clone());
-                    all_route_ids.push(route_id);
+                        .push((stop.chateau.clone(), route_id.clone()));
+                    routes_by_chateau
+                        .entry(stop.chateau.clone())
+                        .or_default()
+                        .push(route_id);
                 }
             }
         }
     }
 
-    all_route_ids.sort();
-    all_route_ids.dedup();
+    for route_ids in routes_by_chateau.values_mut() {
+        route_ids.sort();
+        route_ids.dedup();
+    }
 
-    let routes: Vec<catenary::models::Route> = catenary::schema::gtfs::routes::dsl::routes
-        .filter(catenary::schema::gtfs::routes::route_id.eq_any(&all_route_ids))
-        .select(catenary::models::Route::as_select())
-        .load::<catenary::models::Route>(&mut conn)
-        .await
-        .unwrap_or_default();
+    let mut routes: Vec<catenary::models::Route> = Vec::new();
+
+    for (chateau, route_ids) in routes_by_chateau {
+        if route_ids.is_empty() {
+            continue;
+        }
+
+        let mut chateau_routes: Vec<catenary::models::Route> =
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(&chateau))
+                .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
+                .select(catenary::models::Route::as_select())
+                .load::<catenary::models::Route>(&mut conn)
+                .await
+                .unwrap_or_default();
+
+        routes.append(&mut chateau_routes);
+    }
 
     let mut route_map = HashMap::new();
     for route in routes {
-        route_map.insert(route.route_id.clone(), route);
+        route_map.insert((route.chateau.clone(), route.route_id.clone()), route);
     }
 
     let mut final_results = Vec::new();
@@ -211,15 +228,19 @@ pub async fn osm_station_search(
         }
 
         let mut station_routes = Vec::new();
-        if let Some(route_ids) = station_to_routes.get(&station.osm_id) {
-            for rid in route_ids {
-                if let Some(r) = route_map.get(rid) {
+        if let Some(route_keys) = station_to_routes.get(&station.osm_id) {
+            for rkey in route_keys {
+                if let Some(r) = route_map.get(rkey) {
                     station_routes.push(r.clone());
                 }
             }
         }
 
-        station_routes.dedup_by(|a, b| a.route_id == b.route_id);
+        station_routes.dedup_by(|a, b| a.route_id == b.route_id && a.chateau == b.chateau);
+
+        if station_routes.is_empty() {
+            continue;
+        }
 
         final_results.push(OsmStationSearchResult {
             osm_id: station.osm_id,
