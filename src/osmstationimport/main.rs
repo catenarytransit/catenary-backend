@@ -1047,10 +1047,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http_client = reqwest::Client::new();
 
     if let Some(client) = &elasticclient {
+        println!("Connected to ES");
         // Query Cypress admin indices for parent regions and push stations
         let mut es_bodies: Vec<elasticsearch::http::request::JsonBody<serde_json::Value>> =
             Vec::new();
-        let es_batch_size = 500;
+        let es_batch_size = 100;
 
         for (i, station) in stations.iter().enumerate() {
             // Don't import any stations that have a parent into elasticsearch. Exclude those.
