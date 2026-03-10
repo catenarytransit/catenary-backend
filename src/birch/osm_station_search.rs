@@ -96,8 +96,7 @@ pub async fn osm_station_search(
         }
     });
 
-    if let (Some(lat), Some(lon)) = (focus_lat, focus_lon) {
-    }
+    if let (Some(lat), Some(lon)) = (focus_lat, focus_lon) {}
 
     let search_body = json!({
         "query": es_query,

@@ -1118,13 +1118,19 @@ pub async fn make_index_and_mappings(
             Ok(response) => {
                 if response.status_code().is_success() {
                     let response_body = response.json::<Value>().await?;
-                    println!("Index '{}' created successfully with all settings/mappings: {:?}", index_name, response_body);
+                    println!(
+                        "Index '{}' created successfully with all settings/mappings: {:?}",
+                        index_name, response_body
+                    );
                 } else {
                     let status = response.status_code();
                     let body = response.text().await?;
-                    
+
                     if body.contains("resource_already_exists_exception") {
-                        println!("Index '{}' exists. If you need to update it, use the Close/Open pattern.", index_name);
+                        println!(
+                            "Index '{}' exists. If you need to update it, use the Close/Open pattern.",
+                            index_name
+                        );
                         // Optional: Call a separate function here to handle updates if index exists
                     } else {
                         return Err(Box::new(std::io::Error::new(

@@ -21,6 +21,7 @@ use futures::StreamExt;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
@@ -101,6 +102,21 @@ pub struct TextSearchResponse {
     pub routes_section: TextSearchResponseRoutesSection,
 }
 
+fn haversine_distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let r = 6_371_000.0_f64; // Earth radius in meters
+
+    let lat1_rad = lat1.to_radians();
+    let lat2_rad = lat2.to_radians();
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+
+    let a =
+        (dlat / 2.0).sin().powi(2) + lat1_rad.cos() * lat2_rad.cos() * (dlon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+
+    r * c
+}
+
 #[actix_web::get("/text_search_v1")]
 pub async fn text_search_v1(
     _req: HttpRequest,
@@ -118,7 +134,7 @@ pub async fn text_search_v1(
         _ => false,
     };
 
-    let (offset_map_gauss, scale_map_gauss, map_weight) = match query.map_z {
+    let (offset_map_gauss, _scale_map_gauss, map_weight) = match query.map_z {
         Some(z) => match z > 12. {
             true => ("20km", "150km", 0.05),
             false => match z > 10. {
@@ -129,94 +145,44 @@ pub async fn text_search_v1(
         _ => ("10km", "10km", 0.1),
     };
 
-    let stops_query = match map_pos_exists {
-        true => json!({
+    let stops_query = json!({
             "query": {
-                "function_score": {
-                    "query": {
-                      "multi_match" : {
-                        "query":  query.text.clone(),
-                        "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
-                        "type": "cross_fields"
-                     }
-                    },
-                    "functions": [
-                        {
-                    "exp": {
-                      "point": {
-                        "origin": { "lat": query.map_lat.unwrap(), "lon": query.map_lon.unwrap() }, // User's map centre
-                        "offset": offset_map_gauss, // Full score within 5000 metres
-                        "scale": scale_map_gauss // Score decays significantly beyond 100 km
-                      }
-                    },
-                    "weight": map_weight
-                  },
-                      {
-                        "script_score": {
-                          "script": {
-                            "source": "
-                                  if (!doc.containsKey('route_types') || doc['route_types'].empty) {
-                                    return 1.0;
-                                  }
-                                  if (doc['route_types'].contains(2)) {
-                                    return 3.0;
-                                  }
-                                  if (doc['route_types'].contains(1)) {
-                                    return 2.0;
-                                  }
-                                  if (doc['route_types'].contains(0)) {
-                                    return 1.5;
-                                  }
-                                  return 1.0;
-                                "
-                          }
+                    "function_score": {
+                            "query": {
+                                "multi_match" : {
+                                    "query":  query.text.clone(),
+                                    "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
+                                    "type": "cross_fields"
+                             }
+                            },
+                            "functions": [
+                                {
+                                    "script_score": {
+                                        "script": {
+                                            "source": "
+                                                    if (!doc.containsKey('route_types') || doc['route_types'].empty) {
+                                                        return 1.0;
+                                                    }
+                                                    if (doc['route_types'].contains(2)) {
+                                                        return 3.0;
+                                                    }
+                                                    if (doc['route_types'].contains(1)) {
+                                                        return 2.0;
+                                                    }
+                                                    if (doc['route_types'].contains(0)) {
+                                                        return 1.5;
+                                                    }
+                                                    return 1.0;
+                                                "
+                                        }
+                                    }
+                                }
+                            ],
+                            "score_mode": "multiply", // How to combine scores from multiple functions
+                            "boost_mode": "multiply" // How to combine the function score with the query score
                         }
-                      }
-                    ],
-                    "score_mode": "multiply", // How to combine scores from multiple functions
-                    "boost_mode": "multiply" // How to combine the function score with the query score
-                  }
             }
-        }),
-        false => json!({
-            "query": {
-                "function_score": {
-                    "query": {
-                      "multi_match" : {
-                        "query":  query.text.clone(),
-                        "fields": [ "stop_name*^3", "route_name_search", "agency_name_search" ],
-                        "type": "cross_fields"
-                     }
-                    },
-                    "functions": [
-                      {
-                        "script_score": {
-                          "script": {
-                            "source": "
-                              if (!doc.containsKey('route_types') || doc['route_types'].empty) {
-                                return 1.0;
-                              }
-                              if (doc['route_types'].contains(2)) {
-                                return 3.0;
-                              }
-                              if (doc['route_types'].contains(1)) {
-                                return 2.0;
-                              }
-                              if (doc['route_types'].contains(0)) {
-                                return 1.5;
-                              }
-                              return 1.0;
-                            "
-                          }
-                        }
-                      }
-                    ],
-                    "score_mode": "multiply", // How to combine scores from multiple functions
-                    "boost_mode": "multiply" // How to combine the function score with the query score
-                  }
-            }
-        }),
-    };
+    });
 
     let mut route_type_function = json!({
         "script_score": {
@@ -262,95 +228,30 @@ pub async fn text_search_v1(
 
     let route_type_function = route_type_function;
 
-    let routes_query = match map_pos_exists {
-        true => json!({
-            "query": {
-                "function_score": {
-                    "query": {
-                        "multi_match" : {
-                            "query":  cleaned_query_text.clone(),
-                            "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
-                             "type": "cross_fields"
-                        }
-                    },
-                    "functions": [
-                        {
-                            "script_score": {
-                                "script": {
-                                    "source": "
-                                      double min_distance = -1.0;
-                                      if (doc.containsKey('important_points') && !doc['important_points'].empty) {
-                                        def distances = doc['important_points'].arcDistance(params.lat, params.lon);
-                                        if (distances instanceof List) {
-                                          for (double d : distances) {
-                                            if (min_distance == -1.0 || d < min_distance) { min_distance = d; }
-                                          }
-                                        } else {
-                                          min_distance = distances;
-                                        }
-                                      }
-                                      if (min_distance < 0) { return 1.0; }
-
-                                      String pivot_str = params.pivot;
-                                      double pivot_km = Double.parseDouble(pivot_str.substring(0, pivot_str.length() - 2));
-                                      double pivot_meters = pivot_km * 1000.0;
-
-                                      double score = pivot_meters / (pivot_meters + min_distance);
-
-                                      // Adjust by route_type: buses (3) penalised more, other modes less
-                                      if (doc.containsKey(\"route_type\")) {
-                                        def rt = doc['route_type'].value;
-                                        if (rt == 3) {
-                                          // bus -> stronger distance penalty
-                                          score = Math.pow(score, 1.3);
-                                        } else {
-                                          // rail/metro/tram/etc -> weaker distance penalty
-                                          score = Math.sqrt(score);
-                                        }
-                                      }
-
-                                      return score;
-                                    ",
-                                    "params": {
-                                        "lat": query.map_lat.unwrap(),
-                                        "lon": query.map_lon.unwrap(),
-                                        "pivot": offset_map_gauss
-                                    }
-                                }
-                            }
-                        },
-                        route_type_function.clone(),
-                    ],
-                    "score_mode": "multiply",
-                    "boost_mode": "multiply"
-                }
-            }
-        }),
-        false => json!({
-            "query": {
-                "function_score": {
-                    "query": {
-                      "multi_match" : {
-                        "query":  query.text.clone(),
+    let routes_query = json!({
+        "query": {
+            "function_score": {
+                "query": {
+                    "multi_match" : {
+                        "query":  cleaned_query_text.clone(),
                         "fields": [ "route_long_name.*^1.5", "route_short_name.*^3", "agency_name_search" ],
-                        "type": "cross_fields"
-                     }
-                    },
-                    "functions": [
-                        route_type_function.clone()
-                    ],
-                    "score_mode": "multiply",
-                    "boost_mode": "multiply"
-                }
+                         "type": "cross_fields"
+                    }
+                },
+                "functions": [
+                    route_type_function.clone()
+                ],
+                "score_mode": "multiply",
+                "boost_mode": "multiply"
             }
-        }),
-    };
+        }
+    });
 
     let stops_response_future = elasticclient
         .as_ref()
-        .search(SearchParts::Index(&["stops", "osm_stations"]))
+        .search(SearchParts::Index(&["stops"]))
         .from(0)
-        .size(30)
+        .size(100)
         .body(stops_query)
         .send();
 
@@ -358,7 +259,7 @@ pub async fn text_search_v1(
         .as_ref()
         .search(SearchParts::Index(&["routes"]))
         .from(0)
-        .size(30)
+        .size(100)
         .body(routes_query)
         .send();
 
@@ -385,11 +286,9 @@ pub async fn text_search_v1(
                 match (hit.get("_score"), hit.get("_source")) {
                     (Some(score), Some(source)) => match (score.as_f64(), source.as_object()) {
                         (Some(score), Some(source)) => {
-                            if let Some(chateau) =
-                                source.get("chateau").map(|x| x.as_str()).flatten()
-                            {
+                            if let Some(chateau) = source.get("chateau").and_then(|x| x.as_str()) {
                                 if let Some(stop_id) =
-                                    source.get("stop_id").map(|x| x.as_str()).flatten()
+                                    source.get("stop_id").and_then(|x| x.as_str())
                                 {
                                     let existing_key = (chateau.to_string(), stop_id.to_string());
 
@@ -399,26 +298,9 @@ pub async fn text_search_v1(
                                         hit_rankings_for_stops.push(StopRankingInfo {
                                             chateau: chateau.to_string(),
                                             gtfs_id: stop_id.to_string(),
-                                            score: score,
+                                            score,
                                         });
                                     }
-                                }
-                            } else if let Some(osm_id) =
-                                source.get("osm_id").and_then(|x| x.as_i64())
-                            {
-                                // This is an osm_station doc from the multi-search
-                                let stop_id = format!("osm:{}", osm_id);
-                                let chateau = "osm_stations".to_string();
-
-                                let existing_key = (chateau.clone(), stop_id.clone());
-                                if !existing_hits.contains(&existing_key) {
-                                    existing_hits.insert(existing_key);
-
-                                    hit_rankings_for_stops.push(StopRankingInfo {
-                                        chateau: chateau,
-                                        gtfs_id: stop_id,
-                                        score: score,
-                                    });
                                 }
                             }
                         }
@@ -455,107 +337,25 @@ pub async fn text_search_v1(
                 let conn_pre = conn_pool.get().await;
                 let conn = &mut conn_pre.unwrap();
 
-                if chateau == "osm_stations" {
-                    // Extract numeric osm_ids from "osm:12345" strings
-                    let osm_ids: Vec<i64> = stops
-                        .iter()
-                        .filter_map(|s| {
-                            s.strip_prefix("osm:")
-                                .and_then(|id_str| id_str.parse().ok())
-                        })
-                        .collect();
+                let diesel_stop_query = catenary::schema::gtfs::stops::table
+                    .filter(catenary::schema::gtfs::stops::chateau.eq(&chateau))
+                    .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(stops))
+                    .select(catenary::models::Stop::as_select())
+                    .load(conn)
+                    .await;
 
-                    let diesel_station_query = catenary::schema::gtfs::osm_stations::table
-                        .filter(catenary::schema::gtfs::osm_stations::osm_id.eq_any(osm_ids))
-                        .select(catenary::models::OsmStation::as_select())
-                        .load(conn)
-                        .await;
-
-                    match diesel_station_query {
-                        Ok(stations) => {
-                            let mut stop_map: BTreeMap<String, catenary::models::Stop> =
-                                BTreeMap::new();
-                            for station in stations {
-                                let gtfs_id = format!("osm:{}", station.osm_id);
-
-                                // Map OsmStation fields into the Stop model
-                                let stop = catenary::models::Stop {
-                                    onestop_feed_id: "osm_stations".to_string(),
-                                    attempt_id: "0".to_string(),
-                                    gtfs_id: gtfs_id.clone(),
-                                    name: station
-                                        .name
-                                        .clone()
-                                        .or(Some("Unknown Station".to_string())),
-                                    name_translations: station.name_translations.clone(),
-                                    displayname: None,
-                                    code: None,
-                                    gtfs_desc: None,
-                                    gtfs_desc_translations: None,
-                                    location_type: 1, // Station
-                                    parent_station: station
-                                        .parent_osm_id
-                                        .map(|id| format!("osm:{}", id)),
-                                    zone_id: None,
-                                    url: station
-                                        .wikidata
-                                        .map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
-                                    point: Some(station.point.clone()),
-                                    timezone: None,
-                                    wheelchair_boarding: 0,
-                                    primary_route_type: match station.mode_type.as_str() {
-                                        "rail" => Some(2),
-                                        "subway" => Some(1),
-                                        "tram" => Some(0),
-                                        _ => None,
-                                    },
-                                    level_id: station.level,
-                                    platform_code: station.local_ref.or(station.ref_),
-                                    platform_code_translations: None,
-                                    routes: vec![],
-                                    route_types: vec![],
-                                    children_ids: vec![],
-                                    children_route_types: vec![],
-                                    station_feature: true,
-                                    hidden: false,
-                                    chateau: "osm_stations".to_string(),
-                                    location_alias: None,
-                                    tts_name: None,
-                                    tts_name_translations: None,
-                                    allowed_spatial_query: true,
-                                    osm_station_id: Some(station.osm_id),
-                                    osm_platform_id: None,
-                                };
-                                stop_map.insert(gtfs_id, stop);
-                            }
-                            Ok((chateau, stop_map))
+                match diesel_stop_query {
+                    Ok(stops) => {
+                        let mut stop_map: BTreeMap<String, catenary::models::Stop> =
+                            BTreeMap::new();
+                        for stop in stops {
+                            stop_map.insert(stop.gtfs_id.clone(), stop);
                         }
-                        Err(e) => {
-                            eprintln!("Error querying osm_stations: {}", e);
-                            Err(e)
-                        }
+                        Ok((chateau, stop_map))
                     }
-                } else {
-                    let diesel_stop_query = catenary::schema::gtfs::stops::table
-                        .filter(catenary::schema::gtfs::stops::chateau.eq(&chateau))
-                        .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(stops))
-                        .select(catenary::models::Stop::as_select())
-                        .load(conn)
-                        .await;
-
-                    match diesel_stop_query {
-                        Ok(stops) => {
-                            let mut stop_map: BTreeMap<String, catenary::models::Stop> =
-                                BTreeMap::new();
-                            for stop in stops {
-                                stop_map.insert(stop.gtfs_id.clone(), stop);
-                            }
-                            Ok((chateau, stop_map))
-                        }
-                        Err(e) => {
-                            eprintln!("Error querying stops: {}", e);
-                            Err(e)
-                        }
+                    Err(e) => {
+                        eprintln!("Error querying stops: {}", e);
+                        Err(e)
                     }
                 }
             }
@@ -688,85 +488,12 @@ pub async fn text_search_v1(
             .unwrap_or(&BTreeSet::new())
             .clone();
 
-        let queried_children_stops = if chateau == "osm_stations" {
-            let osm_ids: Vec<i64> = children_stops
-                .iter()
-                .filter_map(|s| {
-                    s.strip_prefix("osm:")
-                        .and_then(|id_str| id_str.parse().ok())
-                })
-                .collect();
-
-            let diesel_station_query = catenary::schema::gtfs::osm_stations::table
-                .filter(catenary::schema::gtfs::osm_stations::osm_id.eq_any(osm_ids))
-                .select(catenary::models::OsmStation::as_select())
-                .load(conn)
-                .await;
-
-            match diesel_station_query {
-                Ok(stations) => {
-                    let mut queried_stops = Vec::new();
-                    for station in stations {
-                        let gtfs_id = format!("osm:{}", station.osm_id);
-                        let stop = catenary::models::Stop {
-                            onestop_feed_id: "osm_stations".to_string(),
-                            attempt_id: "0".to_string(),
-                            gtfs_id: gtfs_id.clone(),
-                            name: station.name.clone().or(Some("Unknown Station".to_string())),
-                            name_translations: station.name_translations.clone(),
-                            displayname: None,
-                            code: None,
-                            gtfs_desc: None,
-                            gtfs_desc_translations: None,
-                            location_type: 1, // Station
-                            parent_station: station.parent_osm_id.map(|id| format!("osm:{}", id)),
-                            zone_id: None,
-                            url: station
-                                .wikidata
-                                .map(|w| format!("https://www.wikidata.org/wiki/{}", w)),
-                            point: Some(station.point.clone()),
-                            timezone: None,
-                            wheelchair_boarding: 0,
-                            primary_route_type: match station.mode_type.as_str() {
-                                "rail" => Some(2),
-                                "subway" => Some(1),
-                                "tram" => Some(0),
-                                _ => None,
-                            },
-                            level_id: station.level,
-                            platform_code: station.local_ref.or(station.ref_),
-                            platform_code_translations: None,
-                            routes: vec![],
-                            route_types: vec![],
-                            children_ids: vec![],
-                            children_route_types: vec![],
-                            station_feature: true,
-                            hidden: false,
-                            chateau: "osm_stations".to_string(),
-                            location_alias: None,
-                            tts_name: None,
-                            tts_name_translations: None,
-                            allowed_spatial_query: true,
-                            osm_station_id: Some(station.osm_id),
-                            osm_platform_id: None,
-                        };
-                        queried_stops.push(stop);
-                    }
-                    Ok(queried_stops)
-                }
-                Err(e) => {
-                    eprintln!("Error querying osm_stations children: {}", e);
-                    Err(e)
-                }
-            }
-        } else {
-            catenary::schema::gtfs::stops::table
-                .filter(catenary::schema::gtfs::stops::chateau.eq(chateau))
-                .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(children_stops))
-                .select(catenary::models::Stop::as_select())
-                .load::<catenary::models::Stop>(conn)
-                .await
-        };
+        let queried_children_stops = catenary::schema::gtfs::stops::table
+            .filter(catenary::schema::gtfs::stops::chateau.eq(chateau))
+            .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(children_stops))
+            .select(catenary::models::Stop::as_select())
+            .load::<catenary::models::Stop>(conn)
+            .await;
 
         match queried_children_stops {
             Ok(queried_children_stops) => {
@@ -1128,6 +855,47 @@ pub async fn text_search_v1(
                 }
                 stop.agency_names = agency_names.into_iter().collect();
             }
+        }
+    }
+
+    if map_pos_exists {
+        if let (Some(map_lat), Some(map_lon)) = (query.map_lat, query.map_lon) {
+            let map_lat_f64 = map_lat as f64;
+            let map_lon_f64 = map_lon as f64;
+
+            let pivot_km: f64 = offset_map_gauss
+                .trim_end_matches("km")
+                .parse()
+                .unwrap_or(50.0);
+            let pivot_meters = pivot_km * 1000.0_f64;
+
+            for ranking in &mut hit_rankings_for_stops {
+                if let Some(stops_by_id) = all_stops_chateau_groups.get(&ranking.chateau) {
+                    if let Some(stop) = stops_by_id.get(&ranking.gtfs_id) {
+                        if let Some(point) = stop.point {
+                            let dist_m = haversine_distance_meters(
+                                map_lat_f64,
+                                map_lon_f64,
+                                point.y(),
+                                point.x(),
+                            );
+
+                            let geo_score = if dist_m <= 0.0 {
+                                1.0
+                            } else {
+                                pivot_meters / (pivot_meters + dist_m)
+                            };
+
+                            let final_score =
+                                ranking.score * (1.0 + (map_weight as f64 * geo_score));
+                            ranking.score = final_score;
+                        }
+                    }
+                }
+            }
+
+            hit_rankings_for_stops
+                .sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(Ordering::Equal));
         }
     }
 
