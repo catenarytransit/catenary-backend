@@ -58,8 +58,6 @@ pub async fn osm_station_search(
                     "query": query.text.clone(),
                     "fields": [
                         "station_name_search^5",
-                        "operator",
-                        "network",
                         "parent.country.name",
                         "parent.macro_region.name",
                         "parent.region.name",
