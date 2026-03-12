@@ -1106,17 +1106,36 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                                 ("neighbourhood", "neighbourhood_names"),
                                             ];
 
+                                            
+
                                             for (layer, names_layer) in admin_layers {
+
+                                            let mut translations = serde_json::Map::new();
+
                                                 if let Some(name) =
                                                     props.get(layer).and_then(|v| v.as_str())
                                                 {
-                                                    current_parent.insert(
-                                                        layer.to_string(),
-                                                        json!({
-                                                            "name": name
-                                                        }),
-                                                    );
+                                                   
                                                 }
+
+                                                if let Some(names) = props.get(names_layer) {
+                                                    //expect an object here of string to strings like "en" -> Munich, "de" -> München, etc
+                                                    if let Some(names_map) = names.as_object() {
+                                                        for (lang, value) in names_map {
+                                                            if let Some(name_str) = value.as_str() {
+                                                                translations.insert(
+                                                                    lang.clone(),
+                                                                    serde_json::Value::String(name_str.to_string()),
+                                                                );
+                                                            }
+                                                        }
+                                                    }
+                                                } 
+
+                                                 current_parent.insert(
+                                                        layer.to_string(),
+                                                        translations.into_iter().map(|(k, v)| (k, v)).collect::<serde_json::Value>(),
+                                                    );
                                             }
 
                                             if current_parent.len() > max_keys {
