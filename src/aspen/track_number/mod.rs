@@ -44,6 +44,7 @@ struct MetrolinkTrackData {
 #[derive(Clone, Debug)]
 pub struct AmtrakTrackDataMultisource {
     pub metrolink: Option<MetrolinkOutputTrackData>,
+    pub lirr_mnr: Option<lirr_mnr::LirrMnrTrackData>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -219,7 +220,7 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
         "amtrak" => {
             let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
 
-            let mut multisource = AmtrakTrackDataMultisource { metrolink: None };
+            let mut multisource = AmtrakTrackDataMultisource { metrolink: None, lirr_mnr: None };
 
             match reqwest::get(url).await {
                 Ok(r) => {
@@ -246,6 +247,8 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
                     println!("Error fetching Metrolink data: {}", e);
                 }
             }
+
+            multisource.lirr_mnr = lirr_mnr::fetch_lirr_mnr_track_data(chateau_id, pool).await;
 
             TrackData::Amtrak(multisource)
         }
