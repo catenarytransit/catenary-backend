@@ -14,6 +14,7 @@ pub struct LirrMnrApiResponse {
 pub struct LirrMnrArrival {
     pub train_num: String,
     pub railroad: String,
+    pub branch: String,
     /// Actual track assignment (may be absent if not yet assigned)
     pub track: Option<String>,
     /// Scheduled track
@@ -44,21 +45,42 @@ pub async fn fetch_lirr_mnr_track_data(
         chateau as chateau_col, code as code_col, gtfs_id, stops,
     };
 
+    let railroad_filter = match chateau_id {
+        "metro~northrailroad" => "MNR",
+        "longislandrailroad" => "LIRR",
+        "amtrak" => "MNR", // only MNR has Amtrak data; LIRR only shares tracks at PSNY and it doesn't have Amtrak data there
+        _ => return None,
+    };
+
+    let is_amtrak = chateau_id == "amtrak";
+
     // Fetch (gtfs_id, stop_code) for all stops in this chateau that have a stop code
-    let stops_list: Vec<(String, String)> = match stops
-        .filter(chateau_col.eq(chateau_id))
-        .filter(code_col.is_not_null())
-        .select((gtfs_id, code_col))
-        .load::<(String, Option<String>)>(&mut conn)
-        .await
-    {
-        Ok(s) => s
-            .into_iter()
-            .filter_map(|(id, c)| c.map(|c| (id, c)))
-            .collect(),
-        Err(e) => {
-            eprintln!("Error fetching stops for {}: {}", chateau_id, e);
-            return None;
+    let stops_list: Vec<(String, String)> = if is_amtrak {
+        vec![
+            ("2NR".to_string(), "NRO".to_string()),
+            ("2SM".to_string(), "STM".to_string()),
+            ("2BP".to_string(), "BRP".to_string()),
+            ("2NH".to_string(), "NHV".to_string()),
+            ("2SS".to_string(), "STS".to_string()),
+            ("0YK".to_string(), "YNY".to_string()),
+            ("0PO".to_string(), "POU".to_string()),
+        ]
+    } else { 
+        match stops
+            .filter(chateau_col.eq(chateau_id))
+            .filter(code_col.is_not_null())
+            .select((gtfs_id, code_col))
+            .load::<(String, Option<String>)>(&mut conn)
+            .await
+        {
+            Ok(s) => s
+                .into_iter()
+                .filter_map(|(id, c)| c.map(|c| (id, c)))
+                .collect(),
+            Err(e) => {
+                eprintln!("Error fetching stops for {}: {}", chateau_id, e);
+                return None;
+            }
         }
     };
 
@@ -76,12 +98,6 @@ pub async fn fetch_lirr_mnr_track_data(
     }
 
     let unique_stop_codes: Vec<String> = code_to_ids.keys().cloned().collect();
-
-    let railroad_filter = match chateau_id {
-        "metro~northrailroad" => "MNR",
-        "longislandrailroad" => "LIRR",
-        _ => return None,
-    };
 
     let client = reqwest::Client::new();
 
@@ -134,9 +150,9 @@ pub async fn fetch_lirr_mnr_track_data(
         };
 
         for arrival in &data.arrivals {
-            if arrival.railroad != railroad_filter {
-                continue;
-            }
+            if arrival.railroad != railroad_filter { continue }
+            if arrival.branch == "AM" && !is_amtrak { continue }
+            if arrival.branch != "AM" && is_amtrak { continue }
 
             // Prefer live track over scheduled track; skip if neither is available
             let track = match arrival.track.as_deref().filter(|t| !t.is_empty()) {

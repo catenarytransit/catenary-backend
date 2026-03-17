@@ -1286,6 +1286,20 @@ pub async fn new_rt_data(
                                                     }
                                                 }
                                             }
+                                        } else if let Some(lirr_mnr_data) = &amtrak_track_multisource.lirr_mnr {
+                                            if let Some(trip) = compressed_trip {
+                                                if let Some(trip_short_name) = &trip.trip_short_name {
+                                                    if let Some(stop_id) = &stu.stop_id {
+                                                        if let Some(train_data) =
+                                                            lirr_mnr_data.track_lookup.get(trip_short_name.as_str())
+                                                        {
+                                                            if let Some(track) = train_data.get(stop_id.as_str()) {
+                                                                platform_resp = Some(track.clone().into());
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
                                     }
                                 }
