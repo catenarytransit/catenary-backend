@@ -73,7 +73,6 @@ pub async fn fetch_lirr_mnr_track_data(
         chateau as chateau_col, code as code_col, gtfs_id, stops,
     };
 
-    // Build reverse mapping: MTA stop code -> list of GTFS stop IDs
     let mut code_to_ids: HashMap<String, Vec<String>> = HashMap::new();
 
     if is_amtrak {
@@ -110,26 +109,30 @@ pub async fn fetch_lirr_mnr_track_data(
         return None;
     }
 
-    let client = reqwest::Client::new();
-    let trains: Vec<UnifiedTrain> = match client
-        .get("https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=BOTH")
-        .header("accept-version", "3.0")
-        .header("cache-control", "no-cache")
-        .header("dnt", "1")
-        .header("origin", "https://radar.mta.info")
-        .header("pragma", "no-cache")
-        .send()
+    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
+    let direct_client = reqwest::Client::new();
+    let resp = match proxy_pool
+        .proxy_request(&direct_client, |c| {
+            c.get("https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=BOTH")
+                .header("accept-version", "3.0")
+                .header("cache-control", "no-cache")
+                .header("dnt", "1")
+                .header("origin", "https://radar.mta.info")
+                .header("pragma", "no-cache")
+        })
         .await
     {
-        Ok(resp) => match resp.json::<Vec<UnifiedTrain>>().await {
-            Ok(data) => data,
-            Err(e) => {
-                eprintln!("Error parsing unified locations response: {}", e);
-                return None;
-            }
-        },
+        Ok(r) => r,
         Err(e) => {
             eprintln!("Error fetching unified locations: {}", e);
+            return None;
+        }
+    };
+
+    let trains: Vec<UnifiedTrain> = match resp.json::<Vec<UnifiedTrain>>().await {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("Error parsing unified locations response: {}", e);
             return None;
         }
     };

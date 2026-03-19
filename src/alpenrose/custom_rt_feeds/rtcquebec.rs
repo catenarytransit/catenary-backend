@@ -1,30 +1,8 @@
 use catenary::duration_since_unix_epoch;
 use catenary::get_node_for_realtime_feed_id_kvclient;
 use chrono::Timelike;
-use futures::future::join_all;
 use prost::Message;
-use rand::Rng;
 use std::collections::HashSet;
-
-const HTTP_PROXY_ADDRESSES: &[&str] = &[
-    "4.239.94.226:3128",
-    "149.56.24.51:3128",
-    "16.52.47.20:3128",
-    "51.79.80.224:3535",
-    "167.114.98.246:9595",
-    "15.223.57.73:3128",
-    "35.183.180.110:3128",
-    "158.69.59.135:80",
-    "69.70.244.34:80",
-    "23.132.28.133:3128",
-    "204.83.205.117:3128",
-    "74.48.160.189:3128",
-    "142.93.202.130:3128",
-    "23.227.38.125:80",
-    "23.227.39.52:80",
-    "23.227.38.128:80",
-    "23.227.39.65:80",
-];
 
 pub async fn fetch_rtc_data(
     etcd: &mut etcd_client::KvClient,
@@ -32,70 +10,40 @@ pub async fn fetch_rtc_data(
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
-    //test proxy addresses, filter out the ones that don't work
+    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
+    let proxy_urls = proxy_pool.proxy_urls();
 
-    let mut working_proxies = Vec::new();
-    let mut futures = Vec::new();
-
-    for proxy in HTTP_PROXY_ADDRESSES.iter() {
-        let proxy = proxy.to_string();
-        let future = async move {
-            let proxy_url = proxy.clone();
-
-            let proxy_client = reqwest::Client::builder()
-                .proxy(reqwest::Proxy::http(&proxy_url).unwrap())
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap();
-
-            let res = proxy_client
-                .get("https://api.ipify.org?format=json")
-                .send()
-                .await;
-
-            match res {
-                Ok(_) => Some(proxy.to_string()),
-                Err(_) => {
-                    println!("Proxy {} is not working", &proxy);
-                    None
-                }
-            }
-        };
-
-        futures.push(future);
-    }
-
-    let results = join_all(futures).await;
-
-    for result in results {
-        if let Some(proxy) = result {
-            working_proxies.push(proxy);
-        }
-    }
-
-    if working_proxies.len() == 0 {
-        eprintln!("No working proxies found");
+    if proxy_urls.is_empty() {
+        eprintln!("No proxies available for RTC Quebec");
         return;
     }
 
-    let client_proxy = reqwest::Client::builder()
-        .proxy(
-            reqwest::Proxy::http(
-                working_proxies[rand::rng().random_range(0..working_proxies.len())].clone(),
-            )
-            .unwrap(),
-        )
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap();
+    // Strip protocol prefixes for HTTP-only proxies expected by rtc_quebec_gtfs_rt
+    let http_proxies: Vec<String> = proxy_urls
+        .iter()
+        .filter(|u| u.starts_with("http://"))
+        .map(|u| u.strip_prefix("http://").unwrap_or(u).to_string())
+        .collect();
+
+    if http_proxies.is_empty() {
+        eprintln!("No HTTP proxies available for RTC Quebec");
+        return;
+    }
+
+    let client_proxy = match proxy_pool.random_proxy_client() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Failed to build proxy client for RTC Quebec: {}", e);
+            return;
+        }
+    };
 
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;
 
-        let proxy_addresses_vec: Vec<String> =
-            working_proxies.iter().map(|x| x.to_string()).collect();
+        let proxy_addresses_vec: Vec<String> = http_proxies.clone();
 
         let rtc_gtfs_rt_res = rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(
             gtfs,

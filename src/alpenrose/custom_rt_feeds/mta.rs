@@ -53,10 +53,13 @@ pub async fn fetch_mta_metronorth_data(
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
-    let request = client
-        .get(fetch_url)
-        .header("Accept-Version", "3.0")
-        .send()
+    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
+    let direct_client = reqwest::Client::new();
+
+    let request = proxy_pool
+        .proxy_request(&direct_client, |c| {
+            c.get(fetch_url).header("Accept-Version", "3.0")
+        })
         .await;
 
     let gtfs_rt_trips = get_mta_trips(client, MNR_TRIPS_FEED).await;
@@ -122,16 +125,15 @@ async fn get_mta_trips(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error + Sync + Send>> {
-    let bytes = client
-        .get(url)
-        //exposed on purpose. Not my key, this is from the MTA
-        .header("x-api-key", "hvThsOlHmP2XzvYWlKKC17YPcq07meIg2V2RPLbC")
-        .send()
-        .await?
-        .bytes()
-        .await?
-        .to_vec();
+    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
+    let resp = proxy_pool
+        .proxy_request(client, |c| {
+            c.get(url)
+                .header("x-api-key", "hvThsOlHmP2XzvYWlKKC17YPcq07meIg2V2RPLbC")
+        })
+        .await?;
 
+    let bytes = resp.bytes().await?.to_vec();
     let decoded: gtfs_realtime::FeedMessage = gtfs_realtime::FeedMessage::decode(bytes.as_slice())?;
 
     Ok(decoded)

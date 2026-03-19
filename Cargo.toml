@@ -30,6 +30,7 @@ reqwest = { version = "0.12", features = [
     "cookies",
     "multipart",
     "blocking",
+    "socks",
 ] }
 protobuf = "3.7.2"
 csv = "1.4"
