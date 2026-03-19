@@ -16,7 +16,6 @@ pub async fn fetch_mta_lirr_data(
     feed_id: &str,
     client: &reqwest::Client,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    /*
     let fetch_url =
         "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
 
@@ -25,21 +24,33 @@ pub async fn fetch_mta_lirr_data(
         .header("Accept-Version", "3.0")
         .send()
         .await;
-     */
 
     let gtfs_rt_trips = get_mta_trips(client, LIRR_TRIPS_FEED).await;
 
-    if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-        let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
+    if let Ok(request) = request {
+        if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
+            let body = request.text().await.unwrap_or_default();
 
-        send_mta_rail_to_aspen(
-            etcd,
-            MtaRailroad::LIRR,
-            lirr_trip_updates_bytes.clone(),
-            lirr_trip_updates_bytes,
-            feed_id,
-        )
-        .await;
+            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
+
+            if let Ok(import_data) = import_data {
+                let converted = convert(&import_data, MtaRailroad::LIRR, &gtfs_rt_trips);
+
+                let lirr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
+
+                let lirr_vehicle_position_bytes = lirr_vehicle_position.encode_to_vec();
+                let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
+
+                send_mta_rail_to_aspen(
+                    etcd,
+                    MtaRailroad::LIRR,
+                    lirr_vehicle_position_bytes,
+                    lirr_trip_updates_bytes,
+                    feed_id,
+                )
+                .await;
+            }
+        }
     }
 
     Ok(())
@@ -53,13 +64,10 @@ pub async fn fetch_mta_metronorth_data(
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let fetch_url = "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=MNR";
 
-    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
-    let direct_client = reqwest::Client::new();
-
-    let request = proxy_pool
-        .proxy_request(&direct_client, |c| {
-            c.get(fetch_url).header("Accept-Version", "3.0")
-        })
+    let request = client
+        .get(fetch_url)
+        .header("Accept-Version", "3.0")
+        .send()
         .await;
 
     let gtfs_rt_trips = get_mta_trips(client, MNR_TRIPS_FEED).await;
@@ -125,12 +133,10 @@ async fn get_mta_trips(
     client: &reqwest::Client,
     url: &str,
 ) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error + Sync + Send>> {
-    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
-    let resp = proxy_pool
-        .proxy_request(client, |c| {
-            c.get(url)
-                .header("x-api-key", "hvThsOlHmP2XzvYWlKKC17YPcq07meIg2V2RPLbC")
-        })
+    let resp = client
+        .get(url)
+        .header("x-api-key", "hvThsOlHmP2XzvYWlKKC17YPcq07meIg2V2RPLbC")
+        .send()
         .await?;
 
     let bytes = resp.bytes().await?.to_vec();
@@ -614,6 +620,10 @@ mod tests {
         let gtfs_rt_trips = get_mta_trips(&client, LIRR_TRIPS_FEED).await.unwrap();
 
         for entity in gtfs_rt_trips.entity.iter() {
+            println!("id: {}", entity.id);
+            if let Some(trip) = &entity.trip_update {
+                println!("{:#?}", trip.trip);
+            }
             println!("{:#?}", entity.vehicle);
         }
     }

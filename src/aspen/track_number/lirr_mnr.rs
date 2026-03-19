@@ -109,17 +109,15 @@ pub async fn fetch_lirr_mnr_track_data(
         return None;
     }
 
-    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
     let direct_client = reqwest::Client::new();
-    let resp = match proxy_pool
-        .proxy_request(&direct_client, |c| {
-            c.get("https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=BOTH")
-                .header("accept-version", "3.0")
-                .header("cache-control", "no-cache")
-                .header("dnt", "1")
-                .header("origin", "https://radar.mta.info")
-                .header("pragma", "no-cache")
-        })
+    let resp = match direct_client
+        .get("https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=BOTH")
+        .header("accept-version", "3.0")
+        .header("cache-control", "no-cache")
+        .header("dnt", "1")
+        .header("origin", "https://radar.mta.info")
+        .header("pragma", "no-cache")
+        .send()
         .await
     {
         Ok(r) => r,
