@@ -167,9 +167,7 @@ pub async fn fetch_lirr_mnr_track_data(
             };
 
             if let Some(gtfs_ids) = code_to_ids.get(&stop.code) {
-                let train_entry = track_lookup
-                    .entry(train.train_num.clone())
-                    .or_default();
+                let train_entry = track_lookup.entry(train.train_num.clone()).or_default();
                 for gid in gtfs_ids {
                     train_entry
                         .entry(gid.clone())

@@ -220,7 +220,10 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
         "amtrak" => {
             let url = "https://rtt.metrolinktrains.com/StationScheduleList.json";
 
-            let mut multisource = AmtrakTrackDataMultisource { metrolink: None, lirr_mnr: None };
+            let mut multisource = AmtrakTrackDataMultisource {
+                metrolink: None,
+                lirr_mnr: None,
+            };
 
             match reqwest::get(url).await {
                 Ok(r) => {
