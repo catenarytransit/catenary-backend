@@ -1286,7 +1286,8 @@ pub async fn new_rt_data(
                                                     }
                                                 }
                                             }
-                                        } else if let Some(lirr_mnr_data) =
+                                        }
+                                        if let Some(lirr_mnr_data) =
                                             &amtrak_track_multisource.lirr_mnr
                                         {
                                             if let Some(trip) = compressed_trip {
@@ -1297,8 +1298,10 @@ pub async fn new_rt_data(
                                                             .track_lookup
                                                             .get(trip_short_name.as_str())
                                                         {
-
-                                                            println!("Track data found for Amtrak train {}: {:#?}", trip_short_name, train_data);
+                                                            println!(
+                                                                "Track data found for Amtrak train {}: {:#?}",
+                                                                trip_short_name, train_data
+                                                            );
 
                                                             if let Some(track) =
                                                                 train_data.get(stop_id.as_str())

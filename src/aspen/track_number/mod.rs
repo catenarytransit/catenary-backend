@@ -71,7 +71,12 @@ pub struct MetrolinkOutputTrackData {
 mod tests {
     #[tokio::test]
     async fn test_fetch_track_data() {
-        let track_data = super::fetch_track_data("metrolinktrains").await;
+        dotenvy::dotenv().ok();
+        let pool = crate::postgres_tools::make_async_pool()
+            .await
+            .unwrap_or_else(|e| panic!("pool init failed: {}", e));
+
+        let track_data = super::fetch_track_data("metrolinktrains", &pool).await;
         match track_data {
             super::TrackData::Metrolink(m_data) => {
                 assert!(m_data.is_some());
@@ -79,7 +84,7 @@ mod tests {
             _ => panic!("Expected Metrolink data"),
         }
 
-        let track_data = super::fetch_track_data("amtrak").await;
+        let track_data = super::fetch_track_data("amtrak", &pool).await;
         match track_data {
             super::TrackData::Amtrak(a_data) => {
                 assert!(a_data.metrolink.is_some());
