@@ -1,10 +1,9 @@
+use rand::Rng;
 use rand::seq::IndexedRandom;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::OnceCell;
-use rand::Rng;
 
-const PROXY_LIST_URL: &str =
-    "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/countries/US/data.txt";
+const PROXY_LIST_URL: &str = "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/countries/US/data.txt";
 
 const COOLDOWN_SECS: u64 = 300;
 
@@ -128,7 +127,10 @@ impl ProxyPool {
             match result {
                 Ok(resp) => return Ok(resp),
                 Err(e) => {
-                    eprintln!("Direct request failed, switching to proxies for {}s: {}", COOLDOWN_SECS, e);
+                    eprintln!(
+                        "Direct request failed, switching to proxies for {}s: {}",
+                        COOLDOWN_SECS, e
+                    );
                     self.mark_direct_failed();
                 }
             }
@@ -138,19 +140,16 @@ impl ProxyPool {
             return Err("No proxies available and direct request failed".into());
         }
 
-        let mut last_err: Box<dyn std::error::Error + Send + Sync> =
-            "no proxies attempted".into();
+        let mut last_err: Box<dyn std::error::Error + Send + Sync> = "no proxies attempted".into();
         for _ in 0..3 {
             match self.random_proxy_client() {
-                Ok(proxy_client) => {
-                    match build_request(&proxy_client).send().await {
-                        Ok(resp) => return Ok(resp),
-                        Err(e) => {
-                            eprintln!("Proxied request failed: {}", e);
-                            last_err = e.into();
-                        }
+                Ok(proxy_client) => match build_request(&proxy_client).send().await {
+                    Ok(resp) => return Ok(resp),
+                    Err(e) => {
+                        eprintln!("Proxied request failed: {}", e);
+                        last_err = e.into();
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("Failed to build proxy client: {}", e);
                     last_err = e;

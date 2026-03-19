@@ -99,8 +99,8 @@ pub mod compact_formats;
 pub mod connections_lookup;
 pub mod genentech_auth;
 pub mod graph_formats;
-pub mod stop_matching;
 pub mod proxy_pool;
+pub mod stop_matching;
 pub mod trip_logic;
 
 lazy_static! {

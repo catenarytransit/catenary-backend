@@ -11,11 +11,12 @@ const LIRR_TRIPS_FEED: &str =
 const MNR_TRIPS_FEED: &str =
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr";
 
-pub async fn fetch_mta_lirr_data(
-    etcd: &mut etcd_client::KvClient,
-    feed_id: &str,
+pub async fn get_and_convert_lirr(
     client: &reqwest::Client,
-) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+) -> Result<
+    (Vec<gtfs_realtime::FeedEntity>, gtfs_realtime::FeedMessage),
+    Box<dyn std::error::Error + Sync + Send>,
+> {
     let fetch_url =
         "https://backend-unified.mylirr.org/locations?geometry=TRACK_TURF&railroad=LIRR";
 
@@ -23,34 +24,38 @@ pub async fn fetch_mta_lirr_data(
         .get(fetch_url)
         .header("Accept-Version", "3.0")
         .send()
+        .await?;
+
+    let gtfs_rt_trips = get_mta_trips(client, LIRR_TRIPS_FEED).await?;
+
+    let body = request.text().await?;
+
+    let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str())?;
+
+    let converted = convert(&import_data, MtaRailroad::LIRR, &gtfs_rt_trips);
+
+    Ok((converted, gtfs_rt_trips))
+}
+
+pub async fn fetch_mta_lirr_data(
+    etcd: &mut etcd_client::KvClient,
+    feed_id: &str,
+    client: &reqwest::Client,
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
+    if let Ok((converted, gtfs_rt_trips)) = get_and_convert_lirr(client).await {
+        let lirr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
+
+        let lirr_vehicle_position_bytes = lirr_vehicle_position.encode_to_vec();
+        let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
+
+        send_mta_rail_to_aspen(
+            etcd,
+            MtaRailroad::LIRR,
+            lirr_vehicle_position_bytes,
+            lirr_trip_updates_bytes,
+            feed_id,
+        )
         .await;
-
-    let gtfs_rt_trips = get_mta_trips(client, LIRR_TRIPS_FEED).await;
-
-    if let Ok(request) = request {
-        if let Ok(gtfs_rt_trips) = gtfs_rt_trips {
-            let body = request.text().await.unwrap_or_default();
-
-            let import_data = serde_json::from_str::<Vec<MtaTrain>>(body.as_str());
-
-            if let Ok(import_data) = import_data {
-                let converted = convert(&import_data, MtaRailroad::LIRR, &gtfs_rt_trips);
-
-                let lirr_vehicle_position = catenary::make_feed_from_entity_vec(converted);
-
-                let lirr_vehicle_position_bytes = lirr_vehicle_position.encode_to_vec();
-                let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
-
-                send_mta_rail_to_aspen(
-                    etcd,
-                    MtaRailroad::LIRR,
-                    lirr_vehicle_position_bytes,
-                    lirr_trip_updates_bytes,
-                    feed_id,
-                )
-                .await;
-            }
-        }
     }
 
     Ok(())
@@ -106,22 +111,20 @@ pub async fn fetch_mta_metronorth_data(
 fn get_lirr_train_id(entity: &gtfs_realtime::FeedEntity) -> String {
     let mut train_id = String::from("");
 
-    if entity.vehicle.is_some() {
-        let vehicle = entity.vehicle.as_ref().unwrap();
+    if let Some(trip_update) = &entity.trip_update {
+        let trip = &trip_update.trip;
 
-        if vehicle.trip.is_some() {
-            let trip = vehicle.trip.as_ref().unwrap();
+        if trip.trip_id.is_some() {
+            let pre_train_id = trip.trip_id.as_ref().unwrap().clone();
 
-            if trip.trip_id.is_some() {
-                let pre_train_id = trip.trip_id.as_ref().unwrap().clone();
+            //split by underscore
 
-                //split by underscore
+            let split: Vec<&str> = pre_train_id.split('_').collect();
 
-                let split: Vec<&str> = pre_train_id.split('_').collect();
+            //get last element
 
-                //get last element
-
-                train_id = String::from(split[split.len() - 1]);
+            if let Some(substring_id) = split.get(2) {
+                train_id = substring_id.to_string();
             }
         }
     }
@@ -402,20 +405,24 @@ fn convert(
                 })
                 .collect::<Vec<gtfs_realtime::FeedEntity>>();
 
+            println!(
+                "Candidates valid: {:?}",
+                candidates_for_id
+                    .iter()
+                    .map(|x| x
+                        .trip_update
+                        .as_ref()
+                        .unwrap()
+                        .trip
+                        .trip_id
+                        .as_ref()
+                        .unwrap()
+                        .clone())
+                    .collect::<Vec<String>>()
+            );
+
             if !candidates_for_id.is_empty() {
                 supporting_gtfs = Some(candidates_for_id[0].clone());
-            }
-
-            if mta.railroad == "LIRR" {
-                //filter for vehicle only
-                let candidates_for_id = candidates_for_id
-                    .into_iter()
-                    .filter(|mta_entity| mta_entity.vehicle.is_some())
-                    .collect::<Vec<gtfs_realtime::FeedEntity>>();
-
-                if !candidates_for_id.is_empty() {
-                    supporting_gtfs = Some(candidates_for_id[0].clone());
-                }
             }
 
             (mta, supporting_gtfs)
@@ -429,65 +436,32 @@ fn convert(
             stop: None,
             trip_modifications: None,
             vehicle: Some(gtfs_realtime::VehiclePosition {
-                vehicle: match &supporting_gtfs {
-                    Some(supporting_gtfs) => {
-                        supporting_gtfs.clone().vehicle.unwrap().vehicle.clone()
-                    }
-                    None => None,
-                },
+                vehicle: supporting_gtfs
+                    .as_ref()
+                    .and_then(|g| g.vehicle.as_ref())
+                    .and_then(|v| v.vehicle.clone()),
                 trip: match mta.railroad.as_str() {
                     "MNR" => {
-                        match &supporting_gtfs {
-                            Some(supporting_gtfs) => {
-                                let mut trip =
-                                    supporting_gtfs.vehicle.as_ref().unwrap().trip.clone();
-
-                                //insert route id
-
-                                //trip.route_id = supporting_gtfs.clone().trip_update.unwrap().trip.route_id.clone();
-
-                                if trip.is_some() {
-                                    match supporting_gtfs.trip_update.is_some() {
-                                        true => {
-                                            trip.as_mut().unwrap().route_id.clone_from(
-                                                &supporting_gtfs
-                                                    .trip_update
-                                                    .as_ref()
-                                                    .unwrap()
-                                                    .trip
-                                                    .route_id,
-                                            );
-
-                                            trip.as_mut().unwrap().trip_id.clone_from(
-                                                &supporting_gtfs
-                                                    .trip_update
-                                                    .as_ref()
-                                                    .unwrap()
-                                                    .trip
-                                                    .trip_id,
-                                            )
-                                        }
-                                        false => {
-                                            trip.as_mut().unwrap().route_id = None;
-                                        }
-                                    };
+                        let mut trip = supporting_gtfs
+                            .as_ref()
+                            .and_then(|g| g.vehicle.as_ref())
+                            .and_then(|v| v.trip.clone());
+                        if let Some(ref mut t) = trip {
+                            if let Some(sg) = &supporting_gtfs {
+                                if let Some(tu) = &sg.trip_update {
+                                    t.route_id.clone_from(&tu.trip.route_id);
+                                    t.trip_id.clone_from(&tu.trip.trip_id);
+                                } else {
+                                    t.route_id = None;
                                 }
-
-                                trip
                             }
-                            None => None,
                         }
+                        trip
                     }
-                    "LIRR" => {
-                        // println!("supporting gtfs {:?}", &supporting_gtfs);
-
-                        match &supporting_gtfs {
-                            Some(supporting_gtfs) => {
-                                supporting_gtfs.clone().vehicle.unwrap().trip.clone()
-                            }
-                            None => None,
-                        }
-                    }
+                    "LIRR" => supporting_gtfs
+                        .as_ref()
+                        .and_then(|g| g.trip_update.as_ref())
+                        .and_then(|v| Some(v.trip.clone())),
                     _ => panic!("Not MNR or LIRR"),
                 },
                 position: Some(gtfs_realtime::Position {
@@ -497,28 +471,18 @@ fn convert(
                     odometer: None,
                     speed: Some(mta.location.speed.unwrap_or(0.0) * 0.44704),
                 }),
-                current_stop_sequence: match &supporting_gtfs {
-                    Some(supporting_gtfs) => {
-                        supporting_gtfs
-                            .clone()
-                            .vehicle
-                            .unwrap()
-                            .current_stop_sequence
-                    }
-                    None => None,
-                },
-                stop_id: match &supporting_gtfs {
-                    Some(supporting_gtfs) => {
-                        supporting_gtfs.clone().vehicle.unwrap().stop_id.clone()
-                    }
-                    None => None,
-                },
-                current_status: match &supporting_gtfs {
-                    Some(supporting_gtfs) => {
-                        supporting_gtfs.clone().vehicle.unwrap().current_status
-                    }
-                    None => None,
-                },
+                current_stop_sequence: supporting_gtfs
+                    .as_ref()
+                    .and_then(|g| g.vehicle.as_ref())
+                    .and_then(|v| v.current_stop_sequence),
+                stop_id: supporting_gtfs
+                    .as_ref()
+                    .and_then(|g| g.vehicle.as_ref())
+                    .and_then(|v| v.stop_id.clone()),
+                current_status: supporting_gtfs
+                    .as_ref()
+                    .and_then(|g| g.vehicle.as_ref())
+                    .and_then(|v| v.current_status),
                 timestamp: Some(mta.location.timestamp as u64),
                 congestion_level: None,
                 occupancy_status: None,
@@ -616,15 +580,13 @@ mod tests {
     #[tokio::test]
     async fn test_lirr() {
         let client = reqwest::Client::new();
+        let (converted, _) = get_and_convert_lirr(&client).await.unwrap();
+        //println!("{:#?}", converted);
 
-        let gtfs_rt_trips = get_mta_trips(&client, LIRR_TRIPS_FEED).await.unwrap();
-
-        for entity in gtfs_rt_trips.entity.iter() {
-            println!("id: {}", entity.id);
-            if let Some(trip) = &entity.trip_update {
-                println!("{:#?}", trip.trip);
+        for e in converted {
+            if let Some(vehicle) = &e.vehicle {
+                println!("vehicle's trip {:?}", vehicle.trip);
             }
-            println!("{:#?}", entity.vehicle);
         }
     }
 }
