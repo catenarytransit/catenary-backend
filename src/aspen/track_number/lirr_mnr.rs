@@ -1,6 +1,7 @@
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -173,6 +174,63 @@ pub async fn fetch_lirr_mnr_track_data(
                     train_entry
                         .entry(gid.clone())
                         .or_insert_with(|| track.to_string());
+                }
+            }
+        }
+    }
+
+    let gtfs_rt_url = if is_mnr {
+        Some("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/mnr%2Fgtfs-mnr")
+    } else if is_lirr {
+        Some("https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/lirr%2Fgtfs-lirr")
+    } else {
+        None
+    };
+
+    if let Some(url) = gtfs_rt_url {
+        if let Ok(resp) = direct_client.get(url).send().await {
+            if let Ok(bytes) = resp.bytes().await {
+                use prost::Message;
+                if let Ok(feed) = catenary::mta_gtfs_rt::FeedMessage::decode(bytes.as_ref()) {
+                    for entity in feed.entity {
+                        if let Some(trip_update) = entity.trip_update {
+                            let trip_id = trip_update.trip.trip_id.unwrap_or_default();
+                            let train_num_split = trip_id
+                                .split('_')
+                                .map(|x| x.to_string())
+                                .collect::<Vec<String>>();
+
+                            let train_num = match is_mnr {
+                                true => entity.id.clone(),
+                                false => match &train_num_split.get(2) {
+                                    Some(x) => x.to_string(),
+                                    None => trip_id.to_string(),
+                                }
+                                .to_string(),
+                            };
+
+                            for stu in trip_update.stop_time_update {
+                                if let Some(mta_info) = stu.mta_railroad_stop_time_update {
+                                    if let Some(ref track) = mta_info.track {
+                                        if !track.is_empty() {
+                                            if let Some(stop_id) = &stu.stop_id {
+                                                // check if we want to populate it via unified codes -> gtfs stop ids. In GTFS-RT, the `stop_id` is the raw GTFS `stop_id`.
+                                                // So we don't need `code_to_ids`, the feed maps directly to `gtfs_id`!
+                                                let train_entry = track_lookup
+                                                    .entry(train_num.to_string())
+                                                    .or_default();
+                                                train_entry
+                                                    .entry(stop_id.to_string())
+                                                    .or_insert_with(|| track.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    eprintln!("Failed to decode MTARR GTFS-RT feed");
                 }
             }
         }

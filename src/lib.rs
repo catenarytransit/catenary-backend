@@ -50,6 +50,7 @@ pub mod id_cleanup;
 pub mod ip_to_location;
 pub mod maple_syrup;
 pub mod models;
+pub mod mta_gtfs_rt;
 pub mod postgis_to_diesel;
 pub mod postgres_tools;
 pub mod santa_cruz;
