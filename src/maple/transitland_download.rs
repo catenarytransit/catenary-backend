@@ -246,6 +246,10 @@ fn requires_authentication(feed_id: &str, url: &str) -> bool {
         "f-u05-tcl~systral",
         "f-gtfs~de",
         "f-dr5-nj~transit~rail",
+        "f-sr-jadrolinija",
+        "f-srcz-pulapromet",
+        "f-u243-autotrolej",
+        "f-u2j7-gpp~osijek",
     ];
 
     if auth_feeds.contains(&feed_id) {
@@ -1018,6 +1022,18 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
                 );
             }
         }
+        "f-sr-jadrolinija" | "f-srcz-pulapromet" | "f-u243-autotrolej" | "f-u2j7-gpp~osijek" => {
+            let client = make_reqwest_client();
+
+            let token = get_croatia_npt_token(client).await;
+
+            if let Ok(token) = token {
+                headers.insert(
+                    "Authorization",
+                    format!("bearer {}", token).parse().unwrap(),
+                );
+            }
+        }
         "f-9qh-omnitrans" => {
             headers.insert(
                 "x-umo-iq-api-key",
@@ -1061,6 +1077,45 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
     }
 
     request.headers(headers)
+}
+
+async fn get_croatia_npt_token(
+    client: reqwest::Client,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let username = std::env::var("CROATIA_NPT_USERNAME").unwrap_or_default();
+    let password = std::env::var("CROATIA_NPT_PASSWORD").unwrap_or_default();
+
+    if username.is_empty() || password.is_empty() {
+        println!("Warning: CROATIA_NPT_USERNAME or CROATIA_NPT_PASSWORD is not set");
+    }
+
+    let mut form_data = HashMap::new();
+    form_data.insert("grant_type", "password");
+    form_data.insert("username", username.as_str());
+    form_data.insert("password", password.as_str());
+
+    let response = client
+        .post("https://b2b.promet-info.hr/uc/user/token")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .form(&form_data)
+        .send();
+
+    match response.await {
+        Ok(resp) => {
+            let resp_data = resp.json::<TokenResponse>().await;
+            match resp_data {
+                Ok(token_data) => Ok(token_data.access_token),
+                Err(e) => {
+                    println!("Error parsing Croatian NPT token response: {}", e);
+                    Err(Box::new(e))
+                }
+            }
+        }
+        Err(e) => {
+            println!("Error fetching Croatian NPT token: {}", e);
+            Err(Box::new(e))
+        }
+    }
 }
 
 #[cfg(test)]
