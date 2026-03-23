@@ -149,6 +149,9 @@ pub async fn get_vehicle_data_endpoint(
             )
             .await
         }
+        "ttc" => {
+            generic_number_lookup(conn, "north_america/canada/ontario/ttc", &query.label).await
+        }
         "santacruzmetro" => {
             generic_number_lookup(
                 conn,
