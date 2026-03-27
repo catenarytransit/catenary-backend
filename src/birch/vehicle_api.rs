@@ -160,6 +160,20 @@ pub async fn get_vehicle_data_endpoint(
             )
             .await
         }
+        "foothilltransit" => {
+            let only_numbers = query
+                .label
+                .chars()
+                .filter(|x| x.is_numeric())
+                .collect::<String>();
+
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/foothilltransit",
+                &only_numbers,
+            )
+            .await
+        }
         "vancouver-british-columbia-canada" => {
             generic_number_lookup(
                 conn,
