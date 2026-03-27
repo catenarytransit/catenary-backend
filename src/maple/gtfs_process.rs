@@ -353,6 +353,15 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-u-nl" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                true,
+                true,
+            )?;
+        }
         "f-u3h-koleje~dolnoslaskie" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
