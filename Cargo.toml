@@ -264,10 +264,6 @@ path = "src/manual_login_manager/main.rs"
 #path = "src/test_tarpc/main.rs"
 
 [[bin]]
-name = "sage"
-path = "src/sage/main.rs"
-
-[[bin]]
 name = "setup_ip_db"
 path = "src/ip_addr_geo_db_update/main.rs"
 
