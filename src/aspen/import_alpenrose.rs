@@ -452,6 +452,7 @@ pub async fn new_rt_data(
         }
 
         // matches missing foothill transit trip ids like t474-b283A-sl7-XX-XX where XX-XX is the section that could be changed
+        // and maps them onto the scheduled trip metadata from Postgres.
         if chateau_id == "foothilltransit" {
             let missing_ft_trip_ids = trip_ids_to_lookup
                 .iter()
@@ -483,8 +484,10 @@ pub async fn new_rt_data(
                         if parts.len() >= 3 {
                             let prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
                             if let Some(matched_trip) = prefix_map.get(&prefix) {
-                                let mut cloned_trip = matched_trip.clone();
-                                cloned_trip.trip_id = missing_id.clone();
+                                // Keep the canonical trip_id from the database, but index the
+                                // metadata under the realtime trip_id so downstream lookups by
+                                // realtime ID can still resolve schedule data.
+                                let cloned_trip = matched_trip.clone();
                                 trip_id_to_trip.insert(missing_id.clone(), cloned_trip);
 
                                 fixed_id_count = fixed_id_count + 1;
@@ -1030,30 +1033,48 @@ pub async fn new_rt_data(
                             trip: vehicle_pos
                                 .trip
                                 .as_ref()
-                                .map(|trip| AspenisedVehicleTripInfo {
-                                    trip_id: trip.trip_id.clone(),
-                                    direction_id: trip.direction_id,
-                                    start_date: start_date,
-                                    start_time: trip.start_time.clone(),
-                                    schedule_relationship: option_i32_to_schedule_relationship(
-                                        &trip.schedule_relationship,
-                                    ),
-                                    route_id: recalculate_route_id.clone(),
-                                    trip_headsign: trip_headsign,
-                                    trip_short_name: match &trip.trip_id {
-                                        Some(trip_id) => {
-                                            let trip = trip_id_to_trip.get(&trip_id.clone());
-                                            match trip {
-                                                Some(trip) => trip
-                                                    .trip_short_name
-                                                    .as_ref()
-                                                    .map(|x| x.to_string()),
-                                                None => None,
+                                .map(|trip| {
+                                    // Prefer the canonical trip_id from the scheduled data when
+                                    // available (e.g., for Foothill Transit where the realtime
+                                    // IDs may differ from the database IDs).
+                                    let corrected_trip_id = match &trip.trip_id {
+                                        Some(trip_id) => match trip_id_to_trip.get(trip_id) {
+                                            Some(static_trip) => {
+                                                Some(static_trip.trip_id.clone())
                                             }
-                                        }
+                                            None => Some(trip_id.clone()),
+                                        },
                                         None => None,
-                                    },
-                                    delay: None,
+                                    };
+
+                                    AspenisedVehicleTripInfo {
+                                        trip_id: corrected_trip_id,
+                                        direction_id: trip.direction_id,
+                                        start_date: start_date,
+                                        start_time: trip.start_time.clone(),
+                                        schedule_relationship: option_i32_to_schedule_relationship(
+                                            &trip.schedule_relationship,
+                                        ),
+                                        route_id: recalculate_route_id.clone(),
+                                        trip_headsign: trip_headsign,
+                                        // Use the original realtime trip_id for lookup into the
+                                        // scheduled data; the metadata itself (including
+                                        // trip_short_name) comes from Postgres.
+                                        trip_short_name: match &trip.trip_id {
+                                            Some(trip_id) => {
+                                                let trip = trip_id_to_trip.get(&trip_id.clone());
+                                                match trip {
+                                                    Some(trip) => trip
+                                                        .trip_short_name
+                                                        .as_ref()
+                                                        .map(|x| x.to_string()),
+                                                    None => None,
+                                                }
+                                            }
+                                            None => None,
+                                        },
+                                        delay: None,
+                                    }
                                 }),
                             position: position,
                             timestamp: vehicle_pos.timestamp,
@@ -1234,6 +1255,21 @@ pub async fn new_rt_data(
                         };
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
+
+                        // Normalize the trip_id in the realtime descriptor to the canonical
+                        // trip_id from the scheduled data when available. This ensures that
+                        // downstream consumers see IDs consistent with the database even when
+                        // the GTFS-rt feed uses a slightly different identifier (e.g.,
+                        // Foothill Transit).
+                        if let Some(td_trip_id) = &trip_descriptor.trip_id {
+                            if let Some(static_trip) = trip_id_to_trip.get(td_trip_id) {
+                                // Only overwrite when the scheduled ID differs; otherwise
+                                // leave the original as-is.
+                                if static_trip.trip_id != *td_trip_id {
+                                    trip_descriptor.trip_id = Some(static_trip.trip_id.clone());
+                                }
+                            }
+                        }
 
                         if trip_descriptor.trip_id.is_some() {
                             let recalculate_route_id: Option<String> =
