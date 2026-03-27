@@ -451,6 +451,44 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
 
+        // matches missing foothill transit trip ids like t474-b283A-sl7-XX-XX where XX-XX is the section that could be changed
+        if chateau_id == "foothilltransit" {
+            let missing_ft_trip_ids = trip_ids_to_lookup
+                .iter()
+                .filter(|x| !trip_id_to_trip.contains_key(x.as_str()))
+                .cloned()
+                .collect::<Vec<String>>();
+
+            if !missing_ft_trip_ids.is_empty() {
+                if let Ok(all_ft_trips) = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                    .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
+                    .load::<catenary::models::CompressedTrip>(conn)
+                    .await
+                {
+                    let mut prefix_map = AHashMap::new();
+                    for trip in all_ft_trips {
+                        let parts: Vec<&str> = trip.trip_id.split('-').collect();
+                        if parts.len() >= 3 {
+                            let prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
+                            prefix_map.insert(prefix, trip);
+                        }
+                    }
+
+                    for missing_id in missing_ft_trip_ids {
+                        let parts: Vec<&str> = missing_id.split('-').collect();
+                        if parts.len() >= 3 {
+                            let prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
+                            if let Some(matched_trip) = prefix_map.get(&prefix) {
+                                let mut cloned_trip = matched_trip.clone();
+                                cloned_trip.trip_id = missing_id.clone();
+                                trip_id_to_trip.insert(missing_id.clone(), cloned_trip);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let trip_id_to_trip = trip_id_to_trip;
 
         let service_ids_to_lookup = trip_id_to_trip
