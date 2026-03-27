@@ -459,6 +459,10 @@ pub async fn new_rt_data(
                 .cloned()
                 .collect::<Vec<String>>();
 
+            println!("Missing foothill transit trip ids count: {:?}", missing_ft_trip_ids.len());
+
+            let mut fixed_id_count: usize = 0;
+
             if !missing_ft_trip_ids.is_empty() {
                 if let Ok(all_ft_trips) = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
                     .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
@@ -482,10 +486,14 @@ pub async fn new_rt_data(
                                 let mut cloned_trip = matched_trip.clone();
                                 cloned_trip.trip_id = missing_id.clone();
                                 trip_id_to_trip.insert(missing_id.clone(), cloned_trip);
+
+                                fixed_id_count = fixed_id_count + 1;
                             }
                         }
                     }
                 }
+
+                println!("Fixed {} foothill transit trip ids via pattern matching", fixed_id_count);
             }
         }
 
