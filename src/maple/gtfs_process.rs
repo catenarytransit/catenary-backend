@@ -407,7 +407,6 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        "f-amtrak~gold~runner"
         | "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
         | "f-dr5-mtanyclirr"
@@ -417,6 +416,15 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
+                true,
+                false,
+            )?;
+        }
+        "f-amtrak~gold~runner" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
                 true,
                 false,
             )?;
