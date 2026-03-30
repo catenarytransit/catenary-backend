@@ -407,7 +407,7 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
-        | "f-northern~indiana~commuter~transportation~district"
+        "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
         | "f-dr5-mtanyclirr"
         | "f-dr7-mtanyc~metro~north"
@@ -1102,6 +1102,10 @@ pub async fn gtfs_process_feed(
         }
         "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
         "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
+        "f-bus~dft~gov~uk~england" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+            gtfs,
+            &Vec::from([String::from("FlixBus")]),
+        ),
         "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
             &Vec::from([

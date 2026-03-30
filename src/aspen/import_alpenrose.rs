@@ -460,15 +460,21 @@ pub async fn new_rt_data(
                 .cloned()
                 .collect::<Vec<String>>();
 
-            println!("Missing foothill transit trip ids count: {:?}", missing_ft_trip_ids.len());
+            println!(
+                "Missing foothill transit trip ids count: {:?}",
+                missing_ft_trip_ids.len()
+            );
 
             let mut fixed_id_count: usize = 0;
 
             if !missing_ft_trip_ids.is_empty() {
-                if let Ok(all_ft_trips) = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                    .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
-                    .load::<catenary::models::CompressedTrip>(conn)
-                    .await
+                if let Ok(all_ft_trips) =
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id),
+                        )
+                        .load::<catenary::models::CompressedTrip>(conn)
+                        .await
                 {
                     let mut prefix_map = AHashMap::new();
                     for trip in all_ft_trips {
@@ -496,7 +502,10 @@ pub async fn new_rt_data(
                     }
                 }
 
-                println!("Fixed {} foothill transit trip ids via pattern matching", fixed_id_count);
+                println!(
+                    "Fixed {} foothill transit trip ids via pattern matching",
+                    fixed_id_count
+                );
             }
         }
 
@@ -1030,52 +1039,47 @@ pub async fn new_rt_data(
                             .flatten();
 
                         let mut pos_aspenised = AspenisedVehiclePosition {
-                            trip: vehicle_pos
-                                .trip
-                                .as_ref()
-                                .map(|trip| {
-                                    // Prefer the canonical trip_id from the scheduled data when
-                                    // available (e.g., for Foothill Transit where the realtime
-                                    // IDs may differ from the database IDs).
-                                    let corrected_trip_id = match &trip.trip_id {
-                                        Some(trip_id) => match trip_id_to_trip.get(trip_id) {
-                                            Some(static_trip) => {
-                                                Some(static_trip.trip_id.clone())
-                                            }
-                                            None => Some(trip_id.clone()),
-                                        },
-                                        None => None,
-                                    };
+                            trip: vehicle_pos.trip.as_ref().map(|trip| {
+                                // Prefer the canonical trip_id from the scheduled data when
+                                // available (e.g., for Foothill Transit where the realtime
+                                // IDs may differ from the database IDs).
+                                let corrected_trip_id = match &trip.trip_id {
+                                    Some(trip_id) => match trip_id_to_trip.get(trip_id) {
+                                        Some(static_trip) => Some(static_trip.trip_id.clone()),
+                                        None => Some(trip_id.clone()),
+                                    },
+                                    None => None,
+                                };
 
-                                    AspenisedVehicleTripInfo {
-                                        trip_id: corrected_trip_id,
-                                        direction_id: trip.direction_id,
-                                        start_date: start_date,
-                                        start_time: trip.start_time.clone(),
-                                        schedule_relationship: option_i32_to_schedule_relationship(
-                                            &trip.schedule_relationship,
-                                        ),
-                                        route_id: recalculate_route_id.clone(),
-                                        trip_headsign: trip_headsign,
-                                        // Use the original realtime trip_id for lookup into the
-                                        // scheduled data; the metadata itself (including
-                                        // trip_short_name) comes from Postgres.
-                                        trip_short_name: match &trip.trip_id {
-                                            Some(trip_id) => {
-                                                let trip = trip_id_to_trip.get(&trip_id.clone());
-                                                match trip {
-                                                    Some(trip) => trip
-                                                        .trip_short_name
-                                                        .as_ref()
-                                                        .map(|x| x.to_string()),
-                                                    None => None,
-                                                }
+                                AspenisedVehicleTripInfo {
+                                    trip_id: corrected_trip_id,
+                                    direction_id: trip.direction_id,
+                                    start_date: start_date,
+                                    start_time: trip.start_time.clone(),
+                                    schedule_relationship: option_i32_to_schedule_relationship(
+                                        &trip.schedule_relationship,
+                                    ),
+                                    route_id: recalculate_route_id.clone(),
+                                    trip_headsign: trip_headsign,
+                                    // Use the original realtime trip_id for lookup into the
+                                    // scheduled data; the metadata itself (including
+                                    // trip_short_name) comes from Postgres.
+                                    trip_short_name: match &trip.trip_id {
+                                        Some(trip_id) => {
+                                            let trip = trip_id_to_trip.get(&trip_id.clone());
+                                            match trip {
+                                                Some(trip) => trip
+                                                    .trip_short_name
+                                                    .as_ref()
+                                                    .map(|x| x.to_string()),
+                                                None => None,
                                             }
-                                            None => None,
-                                        },
-                                        delay: None,
-                                    }
-                                }),
+                                        }
+                                        None => None,
+                                    },
+                                    delay: None,
+                                }
+                            }),
                             position: position,
                             timestamp: vehicle_pos.timestamp,
                             vehicle: vehicle_pos.vehicle.as_ref().map(|vehicle| {
