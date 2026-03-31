@@ -1037,10 +1037,9 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             // }
 
             // Basic auth also seems to work
-            request = request.basic_auth(
-                std::env::var("CROATIA_NPT_USERNAME").unwrap_or_default(),
-                Some(std::env::var("CROATIA_NPT_PASSWORD").unwrap_or_default()),
-            );
+            let username = std::env::var("CROATIA_NPT_USERNAME");
+            let password = std::env::var("CROATIA_NPT_PASSWORD");
+            request = request.basic_auth(username, Some(password));
         }
         "f-9qh-omnitrans" => {
             headers.insert(
