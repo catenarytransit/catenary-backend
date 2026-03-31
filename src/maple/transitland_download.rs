@@ -246,10 +246,10 @@ fn requires_authentication(feed_id: &str, url: &str) -> bool {
         "f-u05-tcl~systral",
         "f-gtfs~de",
         "f-dr5-nj~transit~rail",
-        "f-sr-jadrolinija",
-        "f-srcz-pulapromet",
-        "f-u243-autotrolej",
-        "f-u2j7-gpp~osijek",
+        // "f-sr-jadrolinija",
+        // "f-srcz-pulapromet",
+        // "f-u243-autotrolej",
+        // "f-u2j7-gpp~osijek",
     ];
 
     if auth_feeds.contains(&feed_id) {
@@ -1023,15 +1023,28 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             }
         }
         "f-sr-jadrolinija" | "f-srcz-pulapromet" | "f-u243-autotrolej" | "f-u2j7-gpp~osijek" => {
-            let client = make_reqwest_client();
+            // https://www.promet-info.hr/_resources/doc/hc_B2B_en.pdf
 
-            let token = get_croatia_npt_token(client).await;
+            // let client = make_reqwest_client();
 
-            if let Ok(token) = token {
-                headers.insert(
-                    "Authorization",
-                    format!("bearer {}", token).parse().unwrap(),
-                );
+            // let token = get_croatia_npt_token(client).await;
+
+            // if let Ok(token) = token {
+            //     headers.insert(
+            //         "Authorization",
+            //         format!("bearer {}", token).parse().unwrap(),
+            //     );
+            // }
+
+            // Basic auth also seems to work
+            let username = std::env::var("CROATIA_NPT_USERNAME");
+            let password = std::env::var("CROATIA_NPT_PASSWORD");
+
+            if let Ok(username) = username {
+                if let Ok(password) = password {
+                    println!("Password found for Croatia!");
+                    request = request.basic_auth(username, Some(password));
+                }
             }
         }
         "f-9qh-omnitrans" => {
@@ -1075,6 +1088,8 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             }
         }
     }
+
+
 
     request.headers(headers)
 }
