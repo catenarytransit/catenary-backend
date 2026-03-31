@@ -1023,6 +1023,8 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             }
         }
         "f-sr-jadrolinija" | "f-srcz-pulapromet" | "f-u243-autotrolej" | "f-u2j7-gpp~osijek" => {
+            // https://www.promet-info.hr/_resources/doc/hc_B2B_en.pdf
+
             // let client = make_reqwest_client();
 
             // let token = get_croatia_npt_token(client).await;
@@ -1034,6 +1036,7 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             //     );
             // }
 
+            // Basic auth also seems to work
             request = request.basic_auth(
                 std::env::var("CROATIA_NPT_USERNAME").unwrap_or_default(),
                 Some(std::env::var("CROATIA_NPT_PASSWORD").unwrap_or_default()),
