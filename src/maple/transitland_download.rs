@@ -246,10 +246,10 @@ fn requires_authentication(feed_id: &str, url: &str) -> bool {
         "f-u05-tcl~systral",
         "f-gtfs~de",
         "f-dr5-nj~transit~rail",
-        "f-sr-jadrolinija",
-        "f-srcz-pulapromet",
-        "f-u243-autotrolej",
-        "f-u2j7-gpp~osijek",
+        // "f-sr-jadrolinija",
+        // "f-srcz-pulapromet",
+        // "f-u243-autotrolej",
+        // "f-u2j7-gpp~osijek",
     ];
 
     if auth_feeds.contains(&feed_id) {
@@ -1023,16 +1023,21 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             }
         }
         "f-sr-jadrolinija" | "f-srcz-pulapromet" | "f-u243-autotrolej" | "f-u2j7-gpp~osijek" => {
-            let client = make_reqwest_client();
+            // let client = make_reqwest_client();
 
-            let token = get_croatia_npt_token(client).await;
+            // let token = get_croatia_npt_token(client).await;
 
-            if let Ok(token) = token {
-                headers.insert(
-                    "Authorization",
-                    format!("bearer {}", token).parse().unwrap(),
-                );
-            }
+            // if let Ok(token) = token {
+            //     headers.insert(
+            //         "Authorization",
+            //         format!("bearer {}", token).parse().unwrap(),
+            //     );
+            // }
+
+            request = request.basic_auth(
+                std::env::var("CROATIA_NPT_USERNAME").unwrap_or_default(),
+                Some(std::env::var("CROATIA_NPT_PASSWORD").unwrap_or_default()),
+            );
         }
         "f-9qh-omnitrans" => {
             headers.insert(
@@ -1075,6 +1080,8 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             }
         }
     }
+
+
 
     request.headers(headers)
 }
