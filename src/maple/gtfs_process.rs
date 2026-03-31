@@ -901,6 +901,17 @@ pub async fn gtfs_process_feed(
             }
             gtfs
         }
+        "f-northern~indiana~commuter~transportation~district" => {
+            let mut gtfs = gtfs;
+
+            gtfs.routes["so_shore"].short_name = Some("SSL Lakeshore").to_string();
+            gtfs.routes["so_shore"].long_name = Some("South Shore Line – Lakeshore Corridor").to_string();
+
+            gtfs.routes["mo_co"].short_name = Some("SSL Monon").to_string();
+            gtfs.routes["mo_co"].long_name = Some("South Shore Line – Monon Corridor").to_string();
+
+            gtfs
+        }
         "f-sf~bay~area~rg" => {
             let mut gtfs = gtfs;
 
