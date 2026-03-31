@@ -1306,6 +1306,21 @@ pub async fn new_rt_data(
 
                         let mut stop_time_updates_vec = Vec::new();
                         for stu in &trip_update.stop_time_update {
+                            let mut resolved_stop_id: Option<String> = stu.stop_id.clone();
+
+                            if resolved_stop_id.is_none() {
+                                if let Some(seq) = stu.stop_sequence {
+                                    if let Some(rows) = itinerary_rows {
+                                        if let Some(matching_row) =
+                                            rows.iter().find(|r| r.stop_sequence == (seq as i32))
+                                        {
+                                            resolved_stop_id =
+                                                Some(matching_row.stop_id.to_string());
+                                        }
+                                    }
+                                }
+                            }
+
                             let mut platform_resp = None;
 
                             match chateau_id {
@@ -1569,7 +1584,7 @@ pub async fn new_rt_data(
 
                             stop_time_updates_vec.push(AspenisedStopTimeUpdate {
                                 stop_sequence: stu.stop_sequence.map(|x| x as u16),
-                                stop_id: stu.stop_id.as_ref().map(|x| x.into()),
+                                stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
                                 arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
                                     delay: None,
