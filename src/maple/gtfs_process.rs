@@ -610,6 +610,15 @@ pub async fn gtfs_process_feed(
                 true,
             )?;
         }
+        "f-trenitalia~netex" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                true,
+                true,
+            )?;
+        }
         "f-thello" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
@@ -904,12 +913,16 @@ pub async fn gtfs_process_feed(
         "f-northern~indiana~commuter~transportation~district" => {
             let mut gtfs = gtfs;
 
-            gtfs.routes["so_shore"].short_name = Some("SSL Lakeshore").to_string();
-            gtfs.routes["so_shore"].long_name = Some("South Shore Line – Lakeshore Corridor").to_string();
+            if let Some(south_shore) = gtfs.routes.get_mut("so_shore") {
+                south_shore.short_name = Some(String::from("SSL Lakeshore"));
+                south_shore.long_name = Some(String::From("South Shore Line – Lakeshore Corridor"));
+            }
 
-            gtfs.routes["mo_co"].short_name = Some("SSL Monon").to_string();
-            gtfs.routes["mo_co"].long_name = Some("South Shore Line – Monon Corridor").to_string();
-
+            if let Some(south_shore) = gtfs.routes.get_mut("mo_co") {
+                south_shore.short_name = Some(String::from("SSL Monon"));
+                south_shore.long_name = Some(String::From("South Shore Line – Monon Corridor"));
+            }
+            
             gtfs
         }
         "f-sf~bay~area~rg" => {
