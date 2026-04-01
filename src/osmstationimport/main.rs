@@ -258,6 +258,26 @@ fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
     false
 }
 
+/// Explicit list of OSM node IDs that should never be imported as stations
+fn is_excluded_node_id(id: i64) -> bool {
+    matches!(
+        id,
+        // Invalid Muni stops
+        324_946_983 | 1723_633_821 |
+        // California Rollercoasters / theme park stations or other unwanted nodes
+        1_360_105_262 | 1_426_903_510 | 1_446_077_221 | 1_451_383_696
+    )
+}
+
+/// Explicit list of OSM way IDs that should never be imported as stations
+fn is_excluded_way_id(id: i64) -> bool {
+    matches!(
+        id,
+        // California Rollercoasters / theme park way
+        1_085_368_979
+    )
+}
+
 /// Check if a relation is a stop_area relation (groups platforms with their parent station)
 fn is_stop_area_relation(tags: &osmpbfreader::Tags) -> bool {
     tags.get("public_transport")
@@ -528,6 +548,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let id = node.id.0;
                 all_node_coords.insert(id, (node.lat(), node.lon()));
 
+                if is_excluded_node_id(id) {
+                    continue;
+                }
+
                 if !is_railway_station_or_platform(&node.tags) {
                     continue;
                 }
@@ -576,6 +600,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
             }
             OsmObj::Way(way) => {
+                let id = way.id.0;
+
+                if is_excluded_way_id(id) {
+                    continue;
+                }
+
                 if !is_railway_station_or_platform(&way.tags) {
                     continue;
                 }
