@@ -915,12 +915,12 @@ pub async fn gtfs_process_feed(
 
             if let Some(south_shore) = gtfs.routes.get_mut("so_shore") {
                 south_shore.short_name = Some(String::from("SSL Lakeshore"));
-                south_shore.long_name = Some(String::From("South Shore Line – Lakeshore Corridor"));
+                south_shore.long_name = Some(String::from("South Shore Line – Lakeshore Corridor"));
             }
 
             if let Some(south_shore) = gtfs.routes.get_mut("mo_co") {
                 south_shore.short_name = Some(String::from("SSL Monon"));
-                south_shore.long_name = Some(String::From("South Shore Line – Monon Corridor"));
+                south_shore.long_name = Some(String::from("South Shore Line – Monon Corridor"));
             }
             
             gtfs
