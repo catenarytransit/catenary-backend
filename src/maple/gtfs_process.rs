@@ -2371,30 +2371,6 @@ pub async fn gtfs_process_feed(
         ingest_duration.as_secs_f32()
     );
 
-    //cleanup any old objs
-    use crate::cleanup;
-    use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
-
-    let active_attempts = {
-        let mut conn = conn_pool.get().await?;
-
-        ingested_static
-            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(feed_id))
-            .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
-            .select(catenary::schema::gtfs::ingested_static::dsl::attempt_id)
-            .load::<String>(&mut conn)
-            .await?
-    };
-
-    println!("Active attempts for {}: {:?}", feed_id, active_attempts);
-
-    let _ = cleanup::delete_stale_attempts_for_feed(
-        feed_id,
-        &active_attempts,
-        Arc::clone(&arc_conn_pool),
-    )
-    .await;
-
     Ok(gtfs_summary)
 }
 

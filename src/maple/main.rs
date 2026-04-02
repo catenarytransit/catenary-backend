@@ -870,6 +870,37 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 let _ = diesel::delete(in_progress_static_ingests.filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::onestop_feed_id.eq(&feed_id))
                                 .filter(catenary::schema::gtfs::in_progress_static_ingests::dsl::attempt_id.eq(&attempt_id)))
                             .execute(conn).await;
+
+                                       //cleanup any old objs
+                                        use crate::cleanup;
+                                        use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+
+                                        let active_attempts = {
+                                            let mut conn = conn_pool.get().await.unwrap();
+
+                                            ingested_static
+                                                .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(&feed_id))
+                                                .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+                                                .select(catenary::schema::gtfs::ingested_static::dsl::attempt_id)
+                                                .load::<String>(&mut conn)
+                                                .await
+                                        };
+
+
+                                        if let Ok(active_attempts) = active_attempts {
+
+                                        println!("Active attempts for {}: {:?}", &feed_id, active_attempts);
+
+                                        
+                                        let _ = cleanup::delete_stale_attempts_for_feed(
+                                            &feed_id,
+                                            &active_attempts,
+                                            Arc::clone(&arc_conn_pool),
+                                        )
+                                        .await;
+                                        }
+
+
                                     }
 
                                 } else {
