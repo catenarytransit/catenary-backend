@@ -35,6 +35,7 @@ use chrono::NaiveDate;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel_async::RunQueryDsl;
+use diesel::QueryDsl;
 use geo::BoundingRect;
 use gtfs_structures::ContinuousPickupDropOff;
 use gtfs_structures::FeedInfo;
@@ -922,7 +923,7 @@ pub async fn gtfs_process_feed(
                 south_shore.short_name = Some(String::from("SSL Monon"));
                 south_shore.long_name = Some(String::from("South Shore Line – Monon Corridor"));
             }
-            
+
             gtfs
         }
         "f-sf~bay~area~rg" => {
@@ -1503,55 +1504,50 @@ pub async fn gtfs_process_feed(
     }
 
     let conn_pool = arc_conn_pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-    let mut conn = conn_pre?;
 
-    //insert agencies
-    let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
+    // insert agencies
+    {
+        let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
 
-    for agency in &gtfs.agencies {
-        use catenary::schema::gtfs::agencies::dsl::agencies;
+        let mut conn = conn_pool.get().await?;
 
-        if !agency_id_already_done.contains(&agency.id.as_ref()) {
-            let agency_row = catenary::models::Agency {
-                static_onestop_id: feed_id.to_string(),
-                agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
-                attempt_id: attempt_id.to_string(),
-                agency_name: agency.name.clone(),
-                agency_name_translations: None,
-                agency_url_translations: None,
-                agency_url: agency.url.clone(),
-                agency_fare_url: agency.fare_url.clone(),
-                agency_fare_url_translations: None,
-                chateau: chateau_id.to_string(),
-                agency_lang: agency.lang.clone(),
-                agency_phone: agency.phone.clone(),
-                agency_timezone: agency.timezone.clone(),
-            };
+        for agency in &gtfs.agencies {
+            use catenary::schema::gtfs::agencies::dsl::agencies;
 
-            diesel::insert_into(agencies)
-                .values(agency_row)
-                .execute(&mut conn)
-                .await?;
+            if !agency_id_already_done.contains(&agency.id.as_ref()) {
+                let agency_row = catenary::models::Agency {
+                    static_onestop_id: feed_id.to_string(),
+                    agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
+                    attempt_id: attempt_id.to_string(),
+                    agency_name: agency.name.clone(),
+                    agency_name_translations: None,
+                    agency_url_translations: None,
+                    agency_url: agency.url.clone(),
+                    agency_fare_url: agency.fare_url.clone(),
+                    agency_fare_url_translations: None,
+                    chateau: chateau_id.to_string(),
+                    agency_lang: agency.lang.clone(),
+                    agency_phone: agency.phone.clone(),
+                    agency_timezone: agency.timezone.clone(),
+                };
 
-            agency_id_already_done.insert(agency.id.as_ref());
-        } else {
-            eprintln!("Warning! Duplicate agency id found: \n{:?}", agency);
+                diesel::insert_into(agencies)
+                    .values(agency_row)
+                    .execute(&mut conn)
+                    .await?;
+
+                agency_id_already_done.insert(agency.id.as_ref());
+            } else {
+                eprintln!("Warning! Duplicate agency id found: \n{:?}", agency);
+            }
         }
+
+        println!("Agency insertion done for {}", feed_id);
     }
-
-    println!("Agency insertion done for {}", feed_id);
-
-    drop(agency_id_already_done);
 
     println!("Inserting shapes for {}", feed_id);
 
     //shove raw geometry into postgresql
-
-    use catenary::postgres_tools::check_is_active;
-    if !check_is_active(&mut conn).await {
-        conn = conn_pool.get().await?;
-    }
 
     shapes_into_postgres(
         &gtfs,
@@ -1611,7 +1607,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting directions for {}", feed_id);
 
-    for group in &reduction.direction_patterns.iter().chunks(20000) {
+    for group in &reduction.direction_patterns.iter().chunks(5000) {
         let mut d_final: Vec<DirectionPatternMeta> = vec![];
 
         let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
@@ -1776,10 +1772,7 @@ pub async fn gtfs_process_feed(
                 d_rows.push(dir_chunk.to_vec());
             }
         }
-
-        if !check_is_active(&mut conn).await {
-            conn = conn_pool.get().await?;
-        }
+        let mut conn = conn_pool.get().await?;
 
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
@@ -1808,7 +1801,7 @@ pub async fn gtfs_process_feed(
 
     println!("Directions inserted for {}", feed_id);
     println!("Inserting itineraries for {}", feed_id);
-    for group in &reduction.itineraries.iter().chunks(100000) {
+    for group in &reduction.itineraries.iter().chunks(5000) {
         let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
         let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
 
@@ -1887,10 +1880,7 @@ pub async fn gtfs_process_feed(
                 t_rows.push(itinerary_chunk.to_vec());
             }
         }
-
-        if !check_is_active(&mut conn).await {
-            conn = conn_pool.get().await?;
-        }
+        let mut conn = conn_pool.get().await?;
 
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
@@ -1925,7 +1915,7 @@ pub async fn gtfs_process_feed(
 
     println!("Inserting trips for {}", feed_id);
 
-    for group in &reduction.itineraries_to_trips.iter().chunks(30000) {
+    for group in &reduction.itineraries_to_trips.iter().chunks(5000) {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list
@@ -1968,10 +1958,7 @@ pub async fn gtfs_process_feed(
                 t_final.push(trip_chunk.to_vec());
             }
         }
-
-        if !check_is_active(&mut conn).await {
-            conn = conn_pool.get().await?;
-        }
+        let mut conn = conn_pool.get().await?;
 
         conn.build_transaction()
             .run::<(), diesel::result::Error, _>(|conn| {
@@ -2223,23 +2210,23 @@ pub async fn gtfs_process_feed(
         finished_route_chunks_elasticsearch.push(insertable_elastic);
     }
 
-    if !check_is_active(&mut conn).await {
-        conn = conn_pool.get().await?;
-    }
+    {
+        let mut conn = conn_pool.get().await?;
 
-    conn.build_transaction()
-        .run::<(), diesel::result::Error, _>(|conn| {
-            Box::pin(async move {
-                for route_chunk in routes_pg.chunks(50) {
-                    diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
-                        .values(route_chunk)
-                        .execute(conn)
-                        .await?;
-                }
-                Ok(())
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    for route_chunk in routes_pg.chunks(50) {
+                        diesel::insert_into(catenary::schema::gtfs::routes::dsl::routes)
+                            .values(route_chunk)
+                            .execute(conn)
+                            .await?;
+                    }
+                    Ok(())
+                })
             })
-        })
-        .await?;
+            .await?;
+    }
 
     if let Some(elasticclient) = elasticclient {
         for chunk in finished_route_chunks_elasticsearch {
@@ -2274,10 +2261,6 @@ pub async fn gtfs_process_feed(
 
     // insert feed info
     if let Some(feed_info) = &feed_info {
-        if !check_is_active(&mut conn).await {
-            conn = conn_pool.get().await?;
-        }
-
         use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_table;
 
         let feed_info_pg = catenary::models::FeedInfo {
@@ -2294,6 +2277,8 @@ pub async fn gtfs_process_feed(
             default_lang: feed_info.default_lang.clone(),
             chateau: chateau_id.to_string(),
         };
+
+        let mut conn = conn_pool.get().await?;
 
         diesel::insert_into(feed_table)
             .values(feed_info_pg)
@@ -2342,37 +2327,41 @@ pub async fn gtfs_process_feed(
     };
 
     //create the static feed entry
-    if !check_is_active(&mut conn).await {
-        conn = conn_pool.get().await?;
-    }
+    {
+        let mut conn = conn_pool.get().await?;
 
-    let _ = diesel::insert_into(catenary::schema::gtfs::static_feeds::dsl::static_feeds)
-        .values(&static_feed_pg)
-        .on_conflict(catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id)
-        .do_update()
-        .set((
-            catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
-                .eq(languages_avaliable_pg),
-            catenary::schema::gtfs::static_feeds::dsl::hull
-                .eq(hull_pg.map(postgis_diesel::types::GeometryContainer::Polygon)),
-        ))
-        .execute(&mut conn)
-        .await?;
+        let _ = diesel::insert_into(catenary::schema::gtfs::static_feeds::dsl::static_feeds)
+            .values(&static_feed_pg)
+            .on_conflict(catenary::schema::gtfs::static_feeds::dsl::onestop_feed_id)
+            .do_update()
+            .set((
+                catenary::schema::gtfs::static_feeds::dsl::languages_avaliable
+                    .eq(languages_avaliable_pg),
+                catenary::schema::gtfs::static_feeds::dsl::hull
+                    .eq(hull_pg.map(postgis_diesel::types::GeometryContainer::Polygon)),
+            ))
+            .execute(&mut conn)
+            .await?;
+    }
 
     println!("matching stops to osm stations");
 
     // Match stops to OSM stations (for rail/tram/subway routes)
     // This runs after stops are inserted and associates them with imported OSM stations
-    if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
-        &mut conn, feed_id, attempt_id, chateau_id,
-    )
-    .await
     {
-        // Log but don't fail - OSM matching is optional enhancement
-        eprintln!(
-            "Warning: OSM station matching failed for {}: {:?}",
-            feed_id, e
-        );
+        let mut conn = conn_pool.get().await?;
+
+        if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
+            &mut conn, feed_id, attempt_id, chateau_id,
+        )
+        .await
+        {
+            // Log but don't fail - OSM matching is optional enhancement
+            eprintln!(
+                "Warning: OSM station matching failed for {}: {:?}",
+                feed_id, e
+            );
+        }
     }
 
     let ingest_duration = start.elapsed();
@@ -2381,6 +2370,30 @@ pub async fn gtfs_process_feed(
         feed_id,
         ingest_duration.as_secs_f32()
     );
+
+    //cleanup any old objs
+    use crate::cleanup;
+    use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
+
+    let active_attempts = {
+        let mut conn = conn_pool.get().await?;
+
+        ingested_static
+            .filter(catenary::schema::gtfs::ingested_static::dsl::onestop_feed_id.eq(feed_id))
+            .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
+            .select(catenary::schema::gtfs::ingested_static::dsl::attempt_id)
+            .load::<String>(&mut conn)
+            .await?
+    };
+
+    println!("Active attempts for {}: {:?}", feed_id, active_attempts);
+
+    let _ = cleanup::delete_stale_attempts_for_feed(
+        feed_id,
+        &active_attempts,
+        Arc::clone(&arc_conn_pool),
+    )
+    .await;
 
     Ok(gtfs_summary)
 }

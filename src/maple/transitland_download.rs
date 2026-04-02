@@ -1089,8 +1089,6 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
         }
     }
 
-
-
     request.headers(headers)
 }
 
