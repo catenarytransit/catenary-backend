@@ -924,6 +924,10 @@ pub async fn gtfs_process_feed(
                 south_shore.long_name = Some(String::from("South Shore Line – Monon Corridor"));
             }
 
+            for trip in gtfs.trips.values_mut() {
+                trip.trip_short_name = Some(trip.id.clone());
+            }
+
             gtfs
         }
         "f-sf~bay~area~rg" => {
