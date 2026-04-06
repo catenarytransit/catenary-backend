@@ -294,6 +294,16 @@ pub async fn gtfs_process_feed(
 
             std::fs::write(&stops_txt_path, output)?;
         }
+        "f-ktmb" => {
+            let stops_txt_path = format!("{}/{}/stops.txt", gtfs_unzipped_path, feed_id);
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .append(true)
+                .open(stops_txt_path)?;
+            
+            writeln!(file, "37200,Tampoi,1.515891,103.741847");
+        }
         "f-gtfs~de" => {
             // Remove banned agencies (duplicates from other feeds) before processing
             crate::raw_file_agency_remover::remove_banned_agencies(
