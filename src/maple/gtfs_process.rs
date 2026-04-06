@@ -409,7 +409,13 @@ pub async fn gtfs_process_feed(
                 false,
             )?;
         }
-        "f-u8v-kyivpastrans" => {
+        "f-u8v-kyivpastrans"
+        | "f-u8g1-khmelnytskyi~city~council"
+        | "f-u8fx-rivne~city~council"
+        | "f-u89w-ivano~frankivsk~city~council"
+        | "f-u8v7-bila~tserkva~city~council"
+        | "f-u8du-kamianets~podilskyi~city~council"
+        | "f-u8xs-oleksandriia~city~council" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-ukraine-latest.osm.pbf",
