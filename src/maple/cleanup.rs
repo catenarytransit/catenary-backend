@@ -602,11 +602,10 @@ pub async fn wipe_whole_feed(
     {
         let mut conn = conn_pool.get().await?;
 
-        let _ = diesel::delete(
-            agencies_table.filter(agencies::dsl::static_onestop_id.eq(&feed_id)),
-        )
-        .execute(&mut conn)
-        .await?;
+        let _ =
+            diesel::delete(agencies_table.filter(agencies::dsl::static_onestop_id.eq(&feed_id)))
+                .execute(&mut conn)
+                .await?;
     }
 
     use catenary::schema::gtfs::calendar_dates;
@@ -628,11 +627,9 @@ pub async fn wipe_whole_feed(
     {
         let mut conn = conn_pool.get().await?;
 
-        let _ = diesel::delete(
-            calendar_table.filter(calendar::dsl::onestop_feed_id.eq(&feed_id)),
-        )
-        .execute(&mut conn)
-        .await?;
+        let _ = diesel::delete(calendar_table.filter(calendar::dsl::onestop_feed_id.eq(&feed_id)))
+            .execute(&mut conn)
+            .await?;
     }
 
     use catenary::schema::gtfs::routes;
@@ -674,11 +671,10 @@ pub async fn wipe_whole_feed(
     {
         let mut conn = conn_pool.get().await?;
 
-        let _ = diesel::delete(
-            feed_info_table.filter(feed_info::dsl::onestop_feed_id.eq(&feed_id)),
-        )
-        .execute(&mut conn)
-        .await?;
+        let _ =
+            diesel::delete(feed_info_table.filter(feed_info::dsl::onestop_feed_id.eq(&feed_id)))
+                .execute(&mut conn)
+                .await?;
     }
 
     use catenary::schema::gtfs::itinerary_pattern_meta;

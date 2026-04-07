@@ -53,6 +53,7 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -301,8 +302,8 @@ pub async fn gtfs_process_feed(
                 .write(true)
                 .append(true)
                 .open(stops_txt_path)?;
-            
-            writeln!(file, "37200,Tampoi,1.515891,103.741847");
+
+            writeln!(file, "37200,Tampoi,1.515891,103.741847")?;
         }
         "f-gtfs~de" => {
             // Remove banned agencies (duplicates from other feeds) before processing
