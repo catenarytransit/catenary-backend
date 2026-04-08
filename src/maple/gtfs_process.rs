@@ -53,7 +53,9 @@ use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
+use std::fs::File;
 use std::fs::OpenOptions;
+use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -722,8 +724,11 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    println!("starting GTFS read for feed {}", feed_id);
+
     let gtfs = gtfs_structures::GtfsReader::default()
         .read_shapes(false)
+        .read_stop_times(false)
         .read(path.as_str())
         .context("Failed to read GTFS via gtfs_structures")?;
 
@@ -737,6 +742,14 @@ pub async fn gtfs_process_feed(
         }
         false => None,
     };
+
+    let gtfs = faster_stop_time_reader_injection(
+        gtfs,
+        Path::new(&format!(
+            "{}/{}/stop_times.txt",
+            gtfs_unzipped_path, feed_id
+        )),
+    )?;
 
     let gtfs: Gtfs = match feed_id {
         "f-dpz8-ttc" => {
@@ -2481,4 +2494,77 @@ fn compute_shape_envelope(
       "type" : "envelope",
       "coordinates" : [ [min_longitude.unwrap(), max_latitude.unwrap()], [max_longitude.unwrap(), min_latitude.unwrap()] ]
     });
+}
+
+fn faster_stop_time_reader_injection(
+    gtfs: Gtfs,
+    stop_times_path: &Path,
+) -> Result<Gtfs, Box<dyn std::error::Error + Sync + Send>> {
+    // The gtfs_structures library reader uses excess memory
+
+    // This implementation uses less memory because we assume that stop times are typically grouped by trip_id, and when the trip id section ends, we can flush our buffer directly into the GTFS struct so we aren't repeatedly storing the entry.
+
+    // Decoding can happen using gtfs_structures::RawStopTime, and we onvert to gtfs_structures::StopTime ourselves.
+
+    let mut gtfs = gtfs;
+
+    let file = File::open(stop_times_path)
+        .context("Failed to open stop_times.txt in the faster ST reader")?;
+    let buf_reader = BufReader::new(file);
+    let mut rdr = csv::Reader::from_reader(buf_reader);
+
+    let mut current_trip_id: Option<String> = None;
+
+    let mut stop_times_buffer: Vec<gtfs_structures::StopTime> = Vec::new();
+
+    for result in rdr.deserialize() {
+        let stop_time_gtfs_raw: gtfs_structures::RawStopTime = result?;
+
+        //check if we have transitioned to a new trip_id
+
+        if let Some(current_trip_id_value) = &current_trip_id {
+            if &stop_time_gtfs_raw.trip_id != current_trip_id_value {
+                //we have transitioned to a new trip_id, flush the buffer into the GTFS struct trip id
+
+                if let Some(trip) = gtfs.trips.get_mut(current_trip_id_value.as_str()) {
+                    trip.stop_times = stop_times_buffer;
+                    stop_times_buffer = Vec::new();
+                } else {
+                    // This should never happen - if the stop times file is well formed, we should have already encountered the trip id in the trips.txt file and created an entry for it in gtfs.trips
+                    eprintln!(
+                        "Warning: Trip ID {} found in stop_times.txt but not in trips.txt",
+                        current_trip_id_value
+                    );
+                    stop_times_buffer = Vec::new();
+                }
+
+                current_trip_id = Some(stop_time_gtfs_raw.trip_id.clone());
+            }
+        } else {
+            current_trip_id = Some(stop_time_gtfs_raw.trip_id.clone());
+        }
+
+        //convert to StopTime and add to buffer
+
+        if let Some(stop) = gtfs.stops.get(stop_time_gtfs_raw.stop_id.as_str()) {
+            let stop_time = gtfs_structures::StopTime::from(stop_time_gtfs_raw, stop.clone());
+
+            stop_times_buffer.push(stop_time);
+        }
+    }
+
+    //flush final buffer
+
+    if let Some(last_trip_id) = current_trip_id {
+        if let Some(trip) = gtfs.trips.get_mut(last_trip_id.as_str()) {
+            trip.stop_times = stop_times_buffer;
+        } else {
+            eprintln!(
+                "Warning: Trip ID {} found in stop_times.txt but not in trips.txt",
+                last_trip_id
+            );
+        }
+    }
+
+    Ok(gtfs)
 }
