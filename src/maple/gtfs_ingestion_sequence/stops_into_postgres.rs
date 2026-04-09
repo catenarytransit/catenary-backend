@@ -23,16 +23,33 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use titlecase::titlecase;
 
+fn choose_primary_route_type(route_types: &[i16]) -> Option<i16> {
+    if route_types.contains(&2) {
+        Some(2)
+    } else if route_types.contains(&1) {
+        Some(1)
+    } else if route_types.contains(&0) {
+        Some(0)
+    } else {
+        route_types.first().copied()
+    }
+}
+
+fn push_unique_i16(vec: &mut Vec<i16>, value: i16) {
+    if !vec.contains(&value) {
+        vec.push(value);
+    }
+}
+
 pub async fn stops_into_postgres_and_elastic(
     gtfs: &gtfs_structures::Gtfs,
     feed_id: &str,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     chateau_id: &str,
     attempt_id: &str,
-    stop_ids_to_route_types: &HashMap<String, HashSet<i16>>,
-    stop_ids_to_route_ids: &HashMap<String, HashSet<String>>,
-    stop_id_to_children_ids: &HashMap<String, HashSet<String>>,
-    stop_id_to_children_route: &HashMap<String, HashSet<i16>>,
+    stop_ids_to_route_types: &HashMap<String, Vec<i16>>,
+    stop_ids_to_route_ids: &HashMap<String, Vec<String>>,
+    stop_id_to_children_ids: &HashMap<String, Vec<String>>,
     gtfs_translations: Option<&TranslationResult>,
     default_lang: &Option<String>,
     elasticclient: Option<&elasticsearch::Elasticsearch>,
@@ -233,6 +250,23 @@ pub async fn stops_into_postgres_and_elastic(
                 None => {}
             }
 
+            let children_route_types = match stop_id_to_children_ids.get(&stop.id) {
+                Some(children_ids) => {
+                    let mut route_types_for_children: Vec<i16> = Vec::new();
+
+                    for child_stop_id in children_ids {
+                        if let Some(child_route_types) = stop_ids_to_route_types.get(child_stop_id) {
+                            for route_type in child_route_types {
+                                push_unique_i16(&mut route_types_for_children, *route_type);
+                            }
+                        }
+                    }
+
+                    route_types_for_children
+                }
+                None => Vec::new(),
+            };
+
             let stop_pg = catenary::models::Stop {
                 onestop_feed_id: feed_id.to_string(),
                 chateau: chateau_id.to_string(),
@@ -269,20 +303,7 @@ pub async fn stops_into_postgres_and_elastic(
                 station_feature: false,
                 wheelchair_boarding: availability_to_int(&stop.wheelchair_boarding),
                 primary_route_type: match stop_ids_to_route_types.get(&stop.id) {
-                    Some(route_types) => {
-                        let route_types = route_types.iter().copied().collect::<Vec<i16>>();
-
-                        match route_types.contains(&2) {
-                            true => Some(2),
-                            false => match route_types.contains(&1) {
-                                true => Some(1),
-                                false => match route_types.contains(&0) {
-                                    true => Some(0),
-                                    false => Some(route_types[0]),
-                                },
-                            },
-                        }
-                    }
+                    Some(route_types) => choose_primary_route_type(route_types),
                     None => None,
                 },
                 platform_code: stop.platform_code.clone(),
@@ -293,13 +314,10 @@ pub async fn stops_into_postgres_and_elastic(
                         .collect::<Vec<Option<String>>>(),
                     None => vec![],
                 },
-                children_route_types: match stop_id_to_children_route.get(&stop.id) {
-                    Some(route_types) => route_types
-                        .iter()
-                        .map(|x| Some(*x))
-                        .collect::<Vec<Option<i16>>>(),
-                    None => vec![],
-                },
+                children_route_types: children_route_types
+                    .into_iter()
+                    .map(Some)
+                    .collect::<Vec<Option<i16>>>(),
                 tts_name: stop.tts_name.clone(),
                 tts_name_translations: None,
                 platform_code_translations: None,

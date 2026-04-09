@@ -1507,8 +1507,7 @@ pub async fn gtfs_process_feed(
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
 
-    let (stop_id_to_children_ids, stop_ids_to_children_route_types) =
-        make_hashmaps_of_children_stop_info(&gtfs, &stop_ids_to_route_types);
+    let stop_id_to_children_ids = make_hashmaps_of_children_stop_info(&gtfs);
 
     println!(
         "Finished making stop to route type and route id hashmaps in {:?} for {}",
@@ -1628,7 +1627,6 @@ pub async fn gtfs_process_feed(
         &stop_ids_to_route_types,
         &stop_ids_to_route_ids,
         &stop_id_to_children_ids,
-        &stop_ids_to_children_route_types,
         gtfs_translations.as_ref(),
         &default_lang,
         elasticclient,
