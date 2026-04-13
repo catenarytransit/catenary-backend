@@ -141,6 +141,14 @@ pub async fn get_vehicle_data_endpoint(
             )
             .await
         }
+        "bigbluebus" => {
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/santamonica-bigbluebus",
+                &query.label,
+            )
+            .await
+        }
         "san-diego-mts" => {
             generic_number_lookup(
                 conn,
