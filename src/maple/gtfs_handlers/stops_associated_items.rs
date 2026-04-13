@@ -15,12 +15,11 @@ fn push_unique_string(vec: &mut Vec<String>, value: &str) {
 
 pub fn make_hashmap_stops_to_route_types_and_ids(
     gtfs: &gtfs_structures::Gtfs,
-) -> (
-    HashMap<String, Vec<i16>>,
-    HashMap<String, Vec<String>>,
-) {
-    let mut stop_to_route_types: HashMap<String, Vec<i16>> = HashMap::with_capacity(gtfs.stops.len());
-    let mut stop_to_route_ids: HashMap<String, Vec<String>> = HashMap::with_capacity(gtfs.stops.len());
+) -> (HashMap<String, Vec<i16>>, HashMap<String, Vec<String>>) {
+    let mut stop_to_route_types: HashMap<String, Vec<i16>> =
+        HashMap::with_capacity(gtfs.stops.len());
+    let mut stop_to_route_ids: HashMap<String, Vec<String>> =
+        HashMap::with_capacity(gtfs.stops.len());
 
     for trip in gtfs.trips.values() {
         let Ok(route) = gtfs.get_route(&trip.route_id) else {

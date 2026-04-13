@@ -58,9 +58,10 @@ use std::fs::OpenOptions;
 use std::io::BufReader;
 use std::io::{self, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::process::Command;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -76,7 +77,7 @@ const METRA_MINI_IDS: &[&str] = &[
     "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
 ];
 
-fn execute_pfaedle_rs(
+async fn execute_pfaedle_rs(
     gtfs_path: &str,
     osm_path: &str,
     mots: Option<Vec<String>>,
@@ -113,7 +114,7 @@ fn execute_pfaedle_rs(
 
     println!("ran pfaedle for {}", gtfs_path);
 
-    let status = child.wait()?;
+    let status = child.wait().await?;
 
     if !status.success() {
         return Err(format!("pfaedle-rs exited with status: {}", status).into());
@@ -139,7 +140,6 @@ pub async fn gtfs_process_feed(
 
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
-    let conn_pool = arc_conn_pool.as_ref();
 
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
@@ -353,7 +353,8 @@ pub async fn gtfs_process_feed(
                 ]),
                 true,
                 true,
-            )?;
+            )
+            .await?;
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
@@ -365,7 +366,8 @@ pub async fn gtfs_process_feed(
                 ]),
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-u-nl" => {
             let _ = execute_pfaedle_rs(
@@ -374,7 +376,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-u3h-koleje~dolnoslaskie" => {
             let _ = execute_pfaedle_rs(
@@ -383,7 +386,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-münchner~verkehrsgesellschaft~mvg" => {
             let _ = execute_pfaedle_rs(
@@ -392,7 +396,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-sf~bay~area~rg" => {
             let _ = execute_pfaedle_rs(
@@ -401,7 +406,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-seoulmetro" => {
             let _ = execute_pfaedle_rs(
@@ -410,7 +416,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-u8v-kyivpastrans"
         | "f-u8g1-khmelnytskyi~city~council"
@@ -425,7 +432,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-northern~indiana~commuter~transportation~district"
         | "f-dp3-metra"
@@ -438,7 +446,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-amtrak~gold~runner" => {
             let _ = execute_pfaedle_rs(
@@ -447,7 +456,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-dp3-cta" => {
             let _ = execute_pfaedle_rs(
@@ -456,7 +466,8 @@ pub async fn gtfs_process_feed(
                 Some(vec!["metro".to_string()]),
                 true,
                 false,
-            )?;
+            )
+            .await?;
         }
         "f-u05-tcl~systral" => {
             let _ = execute_pfaedle_rs(
@@ -465,7 +476,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-bus~dft~gov~uk~england" | "f-bus~dft~gov~uk~scotland" | "f-bus~dft~gov~uk~wales" => {
             let _ = execute_pfaedle_rs(
@@ -474,7 +486,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-hauts~de~france~du~nord~1"
         | "f-dunkerque~fr"
@@ -492,7 +505,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-hauts~de~france~pas~de~calais" => {
             let _ = execute_pfaedle_rs(
@@ -501,7 +515,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-mobigo~nièvre" => {
             let _ = execute_pfaedle_rs(
@@ -510,7 +525,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-mobigo~yonne" => {
             let _ = execute_pfaedle_rs(
@@ -519,7 +535,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-hauts~de~france~somme" => {
             let _ = execute_pfaedle_rs(
@@ -528,7 +545,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-ametis" => {
             let _ = execute_pfaedle_rs(
@@ -537,7 +555,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-artis~arras" => {
             let _ = execute_pfaedle_rs(
@@ -546,7 +565,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-hauts~de~france~laisne" => {
             let _ = execute_pfaedle_rs(
@@ -555,7 +575,8 @@ pub async fn gtfs_process_feed(
                 None,
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-keolis~dijon~fr" => {
             let _ = execute_pfaedle_rs(
@@ -564,7 +585,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-mobigo~côte~dor" => {
             let _ = execute_pfaedle_rs(
@@ -573,7 +595,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         //japan
         "f-jr~east" => {
@@ -583,7 +606,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-mir~tsukuba" => {
             let _ = execute_pfaedle_rs(
@@ -592,7 +616,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-tobu" => {
             let _ = execute_pfaedle_rs(
@@ -601,7 +626,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-tokyo~metro" => {
             let _ = execute_pfaedle_rs(
@@ -610,7 +636,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-toei~metro" => {
             let _ = execute_pfaedle_rs(
@@ -619,7 +646,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-ouigo" => {
             let _ = execute_pfaedle_rs(
@@ -628,7 +656,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-trenitalia~netex" => {
             let _ = execute_pfaedle_rs(
@@ -637,7 +666,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-thello" => {
             let _ = execute_pfaedle_rs(
@@ -646,7 +676,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-mavcsoport" | "f-u2e-idsjmk" | "f-pol~regio~pl" => {
             let _ = execute_pfaedle_rs(
@@ -655,7 +686,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-u3j-lodzka~kolej~aglomeracyjna" => {
             let _ = execute_pfaedle_rs(
@@ -664,7 +696,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-hzpp" => {
             let _ = execute_pfaedle_rs(
@@ -673,7 +706,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-pkp~intercity~pl" => {
             let _ = execute_pfaedle_rs(
@@ -682,7 +716,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-networkrail"
         | "f-czptt"
@@ -694,7 +729,8 @@ pub async fn gtfs_process_feed(
                 None,
                 true,
                 true,
-            )?;
+            )
+            .await?;
         }
         "f-u0-switzerland" => {
             // 2 passes requried
@@ -704,7 +740,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 false,
                 true,
-            )?;
+            )
+            .await?;
 
             let _ = execute_pfaedle_rs(
                 path.as_str(),
@@ -717,7 +754,8 @@ pub async fn gtfs_process_feed(
                 ),
                 false,
                 true,
-            )?;
+            )
+            .await?;
         }
         _ => {
             //no pfaedle needed

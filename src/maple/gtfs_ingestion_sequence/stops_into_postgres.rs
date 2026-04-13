@@ -255,7 +255,8 @@ pub async fn stops_into_postgres_and_elastic(
                     let mut route_types_for_children: Vec<i16> = Vec::new();
 
                     for child_stop_id in children_ids {
-                        if let Some(child_route_types) = stop_ids_to_route_types.get(child_stop_id) {
+                        if let Some(child_route_types) = stop_ids_to_route_types.get(child_stop_id)
+                        {
                             for route_type in child_route_types {
                                 push_unique_i16(&mut route_types_for_children, *route_type);
                             }
