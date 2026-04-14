@@ -14,6 +14,14 @@ use tokio::task::JoinSet;
 
 use crate::import_alpenrose::new_rt_data;
 
+// This is a somewhat simple function! 
+// Because Aspen adds incoming new gtfs realtime data into the in-memory database, and then adds the notification to do the work
+// All this does is spawn the number of worker threads initially configured by the environmental variables
+// If a worker ever exits, it will spawn a new one!
+// I hope you can improve on this code ! or just appreciate it !
+// scroll down to read how the worker function works
+// Initially written by Kyler
+
 pub async fn alpenrose_process_threads(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
@@ -91,6 +99,13 @@ pub async fn alpenrose_process_threads(
 
     Ok(())
 }
+
+// here's the code which does tasks inside!
+// it takes a task to due from the first in first out double sided queue,
+// then it runs the processing function
+// we then unlock that this chateau because it has finished processing, and can be removed from the queue
+// we do it like this so if a worker crashes, it doesn't prevent the chateau's new data state from not being processed again due to some locks
+// also written by kyler!
 
 pub async fn alpenrose_loop_process_thread(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
