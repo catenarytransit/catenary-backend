@@ -2,6 +2,8 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+// Are you a contributor? Or just an academic researching our algorithms? Please contact kyler@catenarymaps.org
+
 extern crate catenary;
 use super::track_number::metrolinx_platforms::{
     ALL_METROLINX_STATIONS, ALL_UPEXPRESS_STATIONS, fetch_metrolinx_platforms,
@@ -119,6 +121,11 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
     Some(decimal)
 }
 
+//woah! Huge function! Kyler here to explain! Yes HUMAN KYLER! not a robot!
+//There's two data stores, we have one for finished processed data, and one for incoming raw GTFS-realtime
+//we just copy the internal data structs between those two, and calculate and add a few extra fields
+//For example, the delay
+//then we write some indexes, so that way the realtime data can quickly be found by certain IDs
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
@@ -245,6 +252,8 @@ pub async fn new_rt_data(
 
     let conn = &mut conn.unwrap();
 
+    //don't stress about this! We are just making a lot of hashmaps that will become the future authoriative version of the realtime data
+    //you'll also see a lot of indexes here (indicies)
     let mut aspenised_vehicle_positions: AHashMap<String, AspenisedVehiclePosition> =
         AHashMap::new();
     let mut gtfs_vehicle_labels_to_ids: AHashMap<String, String> = AHashMap::new();
@@ -290,9 +299,11 @@ pub async fn new_rt_data(
         ),
     > = AHashMap::new();
 
+    //You may have seen this before, but it's basically importing our postgres schema so we can access our tables!
     use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
+    // let's first query the metadata for the chateau
     let start_chateau_query = Instant::now();
     let this_chateau = chateaus_pg_schema::dsl::chateaus
         .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
@@ -300,6 +311,7 @@ pub async fn new_rt_data(
         .await?;
     let chateau_elapsed = start_chateau_query.elapsed();
 
+    //we want all the routes for this chateau
     let start_routes_query = Instant::now();
     let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
         .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
@@ -308,16 +320,21 @@ pub async fn new_rt_data(
         .await?;
     let routes_query_elapsed = start_routes_query.elapsed();
 
+    //It's stranged to have a good transit agency with no routes! What is this, Irvine?
+    //This is logged just so we know, but perhaps it is not a crash.
+    //Some GTFS files may be considered valid with no data because of agencies without service during off-season!
     if routes.is_empty() {
         println!("No routes found for chateau {}", chateau_id);
     }
 
+    //this is so we can quickly lookup the route information here by id
     let mut route_id_to_route: AHashMap<String, catenary::models::Route> = AHashMap::new();
 
     for route in routes {
         route_id_to_route.insert(route.route_id.clone(), route);
     }
 
+    //lock this table so it can't be edited anymore!
     let route_id_to_route = route_id_to_route;
 
     // Santa Cruz Metro requires supplemental data for better vehicle tracking accuracy
@@ -350,8 +367,8 @@ pub async fn new_rt_data(
         _ => None,
     };
 
-    // Collect all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
-    // to perform a single batch lookup against the cache/DB.
+    // Collects all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
+    // to perform a single batch lookup against the cache/DB!
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
