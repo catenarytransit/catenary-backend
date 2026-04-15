@@ -1300,6 +1300,10 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
         attempt_id_val, chateau_id_val
     );
 
+    let conn_pool = arc_conn_pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre.unwrap();
+
     // 2. Run matching
     println!("Starting matching...");
     if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
@@ -1310,7 +1314,22 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
     )
     .await
     {
-        eprintln!("Error during OSM matching: {:?}", e);
+        eprintln!("Error during OSM matching: {:?}, trying again", e);
+
+        let conn_pool = arc_conn_pool.as_ref();
+        let conn_pre = conn_pool.get().await;
+        let conn = &mut conn_pre.unwrap();
+
+        if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
+            &mut conn,
+            &feed_id,
+            &attempt_id_val,
+            &chateau_id_val,
+        )
+        .await
+        {
+            eprintln!("Error during OSM matching: {:?}", e);
+        }
     } else {
         println!("OSM matching completed successfully.");
     }
