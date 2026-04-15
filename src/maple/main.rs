@@ -1307,7 +1307,7 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
     // 2. Run matching
     println!("Starting matching...");
     if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
-        &mut conn,
+        conn,
         &feed_id,
         &attempt_id_val,
         &chateau_id_val,
@@ -1321,7 +1321,7 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
         let conn = &mut conn_pre.unwrap();
 
         if let Err(e) = crate::osm_station_matching::match_stops_for_feed(
-            &mut conn,
+            conn,
             &feed_id,
             &attempt_id_val,
             &chateau_id_val,
