@@ -3,9 +3,28 @@ use catenary::routing_common::extract::load_osm_pbf;
 use catenary::routing_common::lookup::Lookup;
 use catenary::routing_common::ways::RoutingGraph;
 use clap::{Parser, Subcommand};
+use serde::Deserialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+
+#[derive(Deserialize, Debug)]
+struct Config {
+    global: GlobalConfig,
+    regions: Vec<RegionConfig>,
+}
+
+#[derive(Deserialize, Debug)]
+struct GlobalConfig {
+    tmp_dir: PathBuf,
+    output_dir: PathBuf,
+}
+
+#[derive(Deserialize, Debug)]
+struct RegionConfig {
+    name: String,
+    url: String,
+}
 
 #[derive(Parser)]
 #[command(
@@ -45,6 +64,12 @@ enum Commands {
         /// Directory containing serialized graphs
         #[arg(long)]
         graph_dir: String,
+    },
+    /// Batch process OSM PBFs from a TOML configuration file
+    Batch {
+        /// Path to TOML configuration file
+        #[arg(long, default_value = "regions.toml")]
+        config: PathBuf,
     },
 }
 
@@ -184,6 +209,50 @@ fn main() {
             println!("Loaded in {:.2?}", t0.elapsed());
             println!("Nodes: {}", graph.n_nodes());
             println!("Ways: {:?}", graph.n_ways());
+        }
+        Commands::Batch { config } => {
+            let config_content = fs::read_to_string(config).unwrap_or_else(|e| {
+                eprintln!("Failed to read config file {}: {}", config.display(), e);
+                std::process::exit(1);
+            });
+            let config_data: Config = toml::from_str(&config_content).unwrap_or_else(|e| {
+                eprintln!("Failed to parse config file: {}", e);
+                std::process::exit(1);
+            });
+
+            fs::create_dir_all(&config_data.global.tmp_dir).unwrap_or_else(|e| {
+                eprintln!("Failed to create local tmp_dir: {}", e);
+                std::process::exit(1);
+            });
+            fs::create_dir_all(&config_data.global.output_dir).unwrap_or_else(|e| {
+                eprintln!("Failed to create local output_dir: {}", e);
+                std::process::exit(1);
+            });
+
+            for region in config_data.regions {
+                println!("Processing region: {}", region.name);
+
+                let filename = region.url.split('/').last().unwrap_or("download.osm.pbf");
+                let temp_file = config_data.global.tmp_dir.join(filename);
+
+                println!("Downloading from: {}", region.url);
+                let t0 = Instant::now();
+                let mut response = reqwest::blocking::get(&region.url).unwrap_or_else(|e| {
+                    eprintln!("Failed to download URL for {}: {}", region.name, e);
+                    std::process::exit(1);
+                });
+
+                let mut file = std::fs::File::create(&temp_file)
+                    .unwrap_or_else(|e| panic!("Failed to create temporary file at {}: {}", temp_file.display(), e));
+                response
+                    .copy_to(&mut file)
+                    .unwrap_or_else(|e| panic!("Failed to write to temporary file at {}: {}", temp_file.display(), e));
+                println!("Downloaded in {:.2?}", t0.elapsed());
+
+                let output_dir = config_data.global.output_dir.join(&region.name);
+                extract_to_dir(&temp_file, &output_dir);
+                println!("Finished processing region: {}\n", region.name);
+            }
         }
     }
 }

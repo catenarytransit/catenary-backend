@@ -195,7 +195,30 @@ The routing engine provides point-to-point transit directions using three main m
 
 Avens takes OpenStreetMap PBF files and compiles them into a serialized routing graph format with an R-Tree spatial index.
 
-To pull directly from a URL (e.g., Geofabrik) and compile:
+To compile a batch of regions using a configuration file (recommended for managing multiple regions):
+```bash
+cargo run --bin avens -- batch --config avens_regions.toml
+```
+
+**Example `avens_regions.toml`:**
+```toml
+[global]
+tmp_dir = "/tmp/avens_raw"
+output_dir = "/path/to/graphs"
+
+[[regions]]
+name = "germany"
+url = "https://download.geofabrik.de/europe/germany-latest.osm.pbf"
+
+[[regions]]
+name = "switzerland"
+url = "https://download.geofabrik.de/europe/switzerland-latest.osm.pbf"
+```
+
+**Procedure for Managing and Updating OSM PBFs:** 
+To manage your region endpoints, simply update the `[[regions]]` list in your TOML config file. Re-running the `batch` command will fetch the latest full PBFs from the listed URLs (overwriting old temp files) and regenerate the routing graphs in the `output_dir` seamlessly.
+
+Alternatively, you can pull directly from a URL and compile a single region:
 ```bash
 cargo run --bin avens -- pull --url https://download.geofabrik.de/europe/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
 ```

@@ -211,6 +211,7 @@ wincode = "0.4.4"
 bytemuck = { version = "1.18", features = ["derive", "zeroable_maybe_uninit"] }
 zerocopy = { version = "0.7", features = ["derive"] }
 memmap2 = "0.9"
+toml = "0.8"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = {version = "0.6", features = ["profiling"]}
