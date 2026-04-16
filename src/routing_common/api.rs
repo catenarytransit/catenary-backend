@@ -2,15 +2,69 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoutingRequest {
-    pub start_lat: f64,
-    pub start_lon: f64,
-    pub end_lat: f64,
-    pub end_lon: f64,
+    pub origin: Place,
+    pub destination: Place,
     pub time: u64,               // Unix timestamp
     pub is_departure_time: bool, // true = depart at, false = arrive by
+
+    // Limits
+    #[serde(default)]
+    pub max_transfers: Option<u32>,
+    #[serde(default)]
+    pub max_travel_time: Option<u64>,
+    #[serde(default)]
+    pub min_transfer_time: Option<u64>,
+    #[serde(default)]
+    pub additional_transfer_time: Option<u64>,
+
+    // Modes and params
+    #[serde(default)]
+    pub transit_modes: Option<Vec<TransitMode>>,
+    #[serde(default)]
+    pub pedestrian_profile: Option<String>,
+    #[serde(default)]
+    pub elevation_costs: Option<f64>,
+    #[serde(default)]
+    pub direct_modes: Option<Vec<TravelMode>>,
+    #[serde(default)]
+    pub pre_transit_modes: Option<Vec<TravelMode>>,
+    #[serde(default)]
+    pub post_transit_modes: Option<Vec<TravelMode>>,
+
+    // Results parameters
+    #[serde(default)]
+    pub num_itineraries: Option<u32>,
+    #[serde(default)]
+    pub max_itineraries: Option<u32>,
+    #[serde(default)]
+    pub search_windows: Option<u64>,
+    #[serde(default)]
+    pub timetable_view: Option<bool>,
+
+    // keeping mode for legacy checks until fully transitioned
     pub mode: TravelMode,
     pub speed_mps: f64,
     pub wheelchair_accessible: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum Place {
+    Coordinate { lat: f64, lon: f64 },
+    GtfsStop { chateau_id: String, stop_id: String },
+    OsmStation { id: i64 },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TransitMode {
+    Bus,
+    Tram,
+    Train,
+    Subway,
+    Ferry,
+    CableCar,
+    Gondola,
+    Funicular,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

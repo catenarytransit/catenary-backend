@@ -14,7 +14,7 @@ use tokio::task::JoinSet;
 
 use crate::import_alpenrose::new_rt_data;
 
-// This is a somewhat simple function! 
+// This is a somewhat simple function!
 // Because Aspen adds incoming new gtfs realtime data into the in-memory database, and then adds the notification to do the work
 // All this does is spawn the number of worker threads initially configured by the environmental variables
 // If a worker ever exits, it will spawn a new one!

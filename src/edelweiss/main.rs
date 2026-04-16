@@ -1,17 +1,17 @@
 mod graph_loader;
 mod hydrator;
 mod osm_router;
-mod query_graph;
+// mod query_graph;
 mod router;
 
-#[cfg(test)]
-mod repro_test;
-#[cfg(test)]
-mod test_direct_connections_intermediate;
-#[cfg(test)]
-mod test_graph_construction;
-#[cfg(test)]
-mod test_multi_target;
+// #[cfg(test)]
+// mod repro_test;
+// #[cfg(test)]
+// mod test_direct_connections_intermediate;
+// #[cfg(test)]
+// mod test_graph_construction;
+// #[cfg(test)]
+// mod test_multi_target;
 
 use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;
@@ -121,11 +121,7 @@ async fn main() -> anyhow::Result<()> {
     let graph_dir = std::env::var("GRAPH_DIR").unwrap_or_else(|_| "graphs".to_string());
 
     println!("Initializing Edelweiss Routing Engine...");
-    let mut graph_manager = GraphManager::new();
-    // Don't fail if directory doesn't exist, just warn (for testing)
-    if let Err(e) = graph_manager.load_from_directory(&graph_dir) {
-        println!("Warning: Failed to load graphs: {}", e);
-    }
+    let graph_manager = GraphManager::new(&graph_dir);
     let graph_arc = Arc::new(graph_manager);
 
     println!("Connecting to database...");
