@@ -242,11 +242,20 @@ fn main() {
                     std::process::exit(1);
                 });
 
-                let mut file = std::fs::File::create(&temp_file)
-                    .unwrap_or_else(|e| panic!("Failed to create temporary file at {}: {}", temp_file.display(), e));
-                response
-                    .copy_to(&mut file)
-                    .unwrap_or_else(|e| panic!("Failed to write to temporary file at {}: {}", temp_file.display(), e));
+                let mut file = std::fs::File::create(&temp_file).unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to create temporary file at {}: {}",
+                        temp_file.display(),
+                        e
+                    )
+                });
+                response.copy_to(&mut file).unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to write to temporary file at {}: {}",
+                        temp_file.display(),
+                        e
+                    )
+                });
                 println!("Downloaded in {:.2?}", t0.elapsed());
 
                 let output_dir = config_data.global.output_dir.join(&region.name);

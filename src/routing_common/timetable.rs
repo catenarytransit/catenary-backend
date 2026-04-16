@@ -189,7 +189,8 @@ impl<'a> ZeroCopyTimetable<'a> {
     pub fn stop_footpaths(&self) -> &[StopFootpaths] {
         let header = self.header();
         let start = header.stop_footpaths_offset as usize;
-        let end = start + header.stop_footpaths_count as usize * std::mem::size_of::<StopFootpaths>();
+        let end =
+            start + header.stop_footpaths_count as usize * std::mem::size_of::<StopFootpaths>();
         if start > self.data.len() || end > self.data.len() {
             return &[];
         }

@@ -172,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
     // Map `footpaths_out` into `stop_footpaths` (flattened representation)
     // Note: The Motis implementation uses a pre-calculated conflict graph and route-stop maps.
     // We mock/scaffold this with empty arrays, but they are fully integrated into memory mapping.
-    
+
     // Build the sequential zero-copy raw buffer
     let mut buffer: Vec<u8> = Vec::new();
 
@@ -213,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
     header.route_id_pool_offset = buffer.len() as u32;
     header.route_id_pool_count = route_id_offsets.len() as u32;
     buffer.extend_from_slice(bytemuck::cast_slice(&route_id_offsets));
-    
+
     header.trip_id_pool_offset = buffer.len() as u32;
     header.trip_id_pool_count = trip_id_offsets.len() as u32;
     buffer.extend_from_slice(bytemuck::cast_slice(&trip_id_offsets));

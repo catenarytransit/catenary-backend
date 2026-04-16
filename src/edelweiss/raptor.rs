@@ -1,16 +1,16 @@
+use rayon::prelude::*;
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU32, Ordering};
-use rayon::prelude::*;
 
 use catenary::routing_common::api::{Itinerary, Leg, Place, RoutingRequest, RoutingResult};
 use catenary::routing_common::timetable::{LocationIdx, RouteIdx, ZeroCopyTimetable};
 
 #[derive(Clone, Copy, Default)]
 struct ParentPointer {
-    prev_stop: Option<u32>,        // LocationIdx.0 bounds
-    route: Option<u32>,            // RouteIdx.0
-    trip: Option<u32>,             // trip index inside route
-    boarded_at: Option<u32>,       // stop sequence bounded
+    prev_stop: Option<u32>,  // LocationIdx.0 bounds
+    route: Option<u32>,      // RouteIdx.0
+    trip: Option<u32>,       // trip index inside route
+    boarded_at: Option<u32>, // stop sequence bounded
 }
 
 pub struct RaptorRouter<'a> {
@@ -47,7 +47,8 @@ impl<'a> RaptorRouter<'a> {
             .collect::<Vec<_>>();
 
         let mut marked_stops = vec![false; locations_count];
-        let mut parent_pointers = vec![vec![ParentPointer::default(); locations_count]; max_rounds + 1];
+        let mut parent_pointers =
+            vec![vec![ParentPointer::default(); locations_count]; max_rounds + 1];
 
         // 1. Initialization
         // tau_0(p_s) <- tau
@@ -104,73 +105,76 @@ impl<'a> RaptorRouter<'a> {
                 trip: u32,
                 boarded: usize,
             }
-            
+
             // Map each route to a thread-local update log
             let q_list: Vec<(&u32, &u32)> = q.iter().collect();
-            let thread_updates: Vec<Vec<ParentUpdate>> = q_list.par_iter().map(|&(&r_idx, &p_seq)| {
-                let mut local_log = Vec::new();
-                let route = &routes[r_idx as usize];
-                let stops_start = route.stops_offset as usize;
-                let stops_end = stops_start + route.stops_count as usize;
-                let r_stops = &route_stops[stops_start..stops_end];
+            let thread_updates: Vec<Vec<ParentUpdate>> = q_list
+                .par_iter()
+                .map(|&(&r_idx, &p_seq)| {
+                    let mut local_log = Vec::new();
+                    let route = &routes[r_idx as usize];
+                    let stops_start = route.stops_offset as usize;
+                    let stops_end = stops_start + route.stops_count as usize;
+                    let r_stops = &route_stops[stops_start..stops_end];
 
-                let mut current_trip: Option<u32> = None;
-                let mut boarded_at: Option<usize> = None;
+                    let mut current_trip: Option<u32> = None;
+                    let mut boarded_at: Option<usize> = None;
 
-                for seq in (p_seq as usize)..route.stops_count as usize {
-                    let p_i = r_stops[seq].0 as usize;
+                    for seq in (p_seq as usize)..route.stops_count as usize {
+                        let p_i = r_stops[seq].0 as usize;
 
-                    // Can the label be improved in this round? Includes local and target pruning.
-                    if let Some(t_idx) = current_trip {
-                        // In RAPTOR: arr(t, p_i) < min(tau*(p_i), tau*(p_t))
-                        // We index route_stop_times: [stops][trips * 2 (arr/dep)]
-                        let arr_time_idx = route.times_offset as usize
-                            + (seq * route.trips_count as usize * 2)
-                            + (t_idx as usize * 2);
-                        if arr_time_idx < route_stop_times.len() {
-                            let arrival_time = route_stop_times[arr_time_idx];
+                        // Can the label be improved in this round? Includes local and target pruning.
+                        if let Some(t_idx) = current_trip {
+                            // In RAPTOR: arr(t, p_i) < min(tau*(p_i), tau*(p_t))
+                            // We index route_stop_times: [stops][trips * 2 (arr/dep)]
+                            let arr_time_idx = route.times_offset as usize
+                                + (seq * route.trips_count as usize * 2)
+                                + (t_idx as usize * 2);
+                            if arr_time_idx < route_stop_times.len() {
+                                let arrival_time = route_stop_times[arr_time_idx];
 
-                            let global_star = tau_star[p_i].load(Ordering::Relaxed);
-                            let target_star = tau_star[p_t.0 as usize].load(Ordering::Relaxed);
-                            
-                            if arrival_time < global_star && arrival_time < target_star {
-                                tau_star[p_i].fetch_min(arrival_time, Ordering::Relaxed);
-                                local_log.push(ParentUpdate {
-                                    location: p_i,
-                                    arrival_time,
-                                    route: r_idx,
-                                    trip: t_idx,
-                                    boarded: boarded_at.unwrap_or(p_seq as usize),
-                                });
+                                let global_star = tau_star[p_i].load(Ordering::Relaxed);
+                                let target_star = tau_star[p_t.0 as usize].load(Ordering::Relaxed);
+
+                                if arrival_time < global_star && arrival_time < target_star {
+                                    tau_star[p_i].fetch_min(arrival_time, Ordering::Relaxed);
+                                    local_log.push(ParentUpdate {
+                                        location: p_i,
+                                        arrival_time,
+                                        route: r_idx,
+                                        trip: t_idx,
+                                        boarded: boarded_at.unwrap_or(p_seq as usize),
+                                    });
+                                }
                             }
                         }
-                    }
 
-                    // Can we catch an earlier trip?
-                    if tau_k[k - 1][p_i] != u32::MAX {
-                        // Binary search or scan for the earliest trip t where dep(t, p_i) >= tau_{k-1}(p_i)
-                        for t_cand in 0..route.trips_count {
-                            let dep_time_idx = route.times_offset as usize
-                                + (seq * route.trips_count as usize * 2)
-                                + (t_cand as usize * 2)
-                                + 1;
-                            if dep_time_idx < route_stop_times.len() {
-                                let departure_time = route_stop_times[dep_time_idx];
-                                if departure_time >= tau_k[k - 1][p_i] {
-                                    // Found a trip!
-                                    // If we didn't have a trip, or this trip is earlier (in index usually implies earlier time)
-                                    // we hop on.
-                                    current_trip = Some(t_cand);
-                                    boarded_at = Some(seq);
-                                    break;
+                        // Can we catch an earlier trip?
+                        if tau_k[k - 1][p_i] != u32::MAX {
+                            // Binary search or scan for the earliest trip t where dep(t, p_i) >= tau_{k-1}(p_i)
+                            for t_cand in 0..route.trips_count {
+                                let dep_time_idx = route.times_offset as usize
+                                    + (seq * route.trips_count as usize * 2)
+                                    + (t_cand as usize * 2)
+                                    + 1;
+                                if dep_time_idx < route_stop_times.len() {
+                                    let departure_time = route_stop_times[dep_time_idx];
+                                    if departure_time >= tau_k[k - 1][p_i] {
+                                        // Found a trip!
+                                        // If we didn't have a trip, or this trip is earlier (in index usually implies earlier time)
+                                        // we hop on.
+                                        current_trip = Some(t_cand);
+                                        boarded_at = Some(seq);
+                                        break;
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                
-                local_log
-            }).collect();
+
+                    local_log
+                })
+                .collect();
 
             // Reduce logs serially to restore consistency correctly mapped back to parent pointers
             for update_log in thread_updates {
@@ -178,12 +182,20 @@ impl<'a> RaptorRouter<'a> {
                     if upd.arrival_time < tau_k[k][upd.location] {
                         tau_k[k][upd.location] = upd.arrival_time;
                         marked_stops[upd.location] = true;
-                        
+
                         parent_pointers[k][upd.location] = ParentPointer {
-                            prev_stop: Some(route_stops[routes[upd.route as usize].stops_offset as usize + upd.boarded].0), // Map local sequence onto location
+                            prev_stop: Some(
+                                route_stops[routes[upd.route as usize].stops_offset as usize
+                                    + upd.boarded]
+                                    .0,
+                            ), // Map local sequence onto location
                             route: Some(upd.route),
                             trip: Some(upd.trip),
-                            boarded_at: Some(route_stops[routes[upd.route as usize].stops_offset as usize + upd.boarded].0),
+                            boarded_at: Some(
+                                route_stops[routes[upd.route as usize].stops_offset as usize
+                                    + upd.boarded]
+                                    .0,
+                            ),
                         };
                     }
                 }
@@ -214,7 +226,7 @@ impl<'a> RaptorRouter<'a> {
                             if arrival < tau_k[k][p_target] {
                                 tau_k[k][p_target] = arrival;
                                 marked_stops[p_target] = true;
-                                
+
                                 parent_pointers[k][p_target] = ParentPointer {
                                     prev_stop: Some(p as u32),
                                     route: None,
@@ -237,38 +249,43 @@ impl<'a> RaptorRouter<'a> {
         // Find best arrival time and the corresponding round `k`
         let mut best_k = None;
         let mut best_arrival = u32::MAX;
-        
+
         for k in 1..=max_rounds {
             if tau_k[k][p_t.0 as usize] < best_arrival {
                 best_arrival = tau_k[k][p_t.0 as usize];
                 best_k = Some(k);
             }
         }
-        
+
         if let Some(mut curr_k) = best_k {
             let mut curr_stop = p_t.0 as usize;
             let mut legs = Vec::new();
-            
+
             while curr_k > 0 && curr_stop != p_s.0 as usize {
                 let p = parent_pointers[curr_k][curr_stop];
-                
+
                 if let Some(r_idx) = p.route {
                     // Transit leg
                     let start_stop = p.boarded_at.unwrap();
                     let end_stop = curr_stop as u32;
                     let trip_idx = p.trip.unwrap();
-                    
+
                     // Lookup strings from ZeroCopy bounds
                     let route_id_offsets = self.timetable.route_id_offsets();
                     let route_id = if (r_idx as usize) < route_id_offsets.len() {
-                        self.timetable.get_string(&route_id_offsets[r_idx as usize]).unwrap_or_default().to_string()
+                        self.timetable
+                            .get_string(&route_id_offsets[r_idx as usize])
+                            .unwrap_or_default()
+                            .to_string()
                     } else {
                         r_idx.to_string()
                     };
-                    
+
                     let trip_id_offsets = self.timetable.trip_id_offsets();
                     let trip_id = if (trip_idx as usize) < trip_id_offsets.len() {
-                        self.timetable.get_string(&trip_id_offsets[trip_idx as usize]).map(|s| s.to_string())
+                        self.timetable
+                            .get_string(&trip_id_offsets[trip_idx as usize])
+                            .map(|s| s.to_string())
                     } else {
                         None
                     };
@@ -288,16 +305,18 @@ impl<'a> RaptorRouter<'a> {
                         end_stop_name: None,
                         route_name: None,
                         trip_name: None,
-                        duration_seconds: (tau_k[curr_k][curr_stop] - tau_k[curr_k - 1][start_stop as usize]) as u64,
+                        duration_seconds: (tau_k[curr_k][curr_stop]
+                            - tau_k[curr_k - 1][start_stop as usize])
+                            as u64,
                         geometry: vec![],
                     }));
-                    
+
                     curr_stop = start_stop as usize;
                 } else if let Some(prev) = p.prev_stop {
                     // Footpath leg
                     let start_stop = prev;
                     let end_stop = curr_stop as u32;
-                    
+
                     legs.push(Leg::Osm(catenary::routing_common::api::OsmLeg {
                         start_time: tau_k[curr_k][prev as usize] as u64,
                         end_time: tau_k[curr_k][curr_stop] as u64,
@@ -308,20 +327,21 @@ impl<'a> RaptorRouter<'a> {
                         end_stop_chateau: None,
                         start_stop_name: None,
                         end_stop_name: None,
-                        duration_seconds: (tau_k[curr_k][curr_stop] - tau_k[curr_k][prev as usize]) as u64,
+                        duration_seconds: (tau_k[curr_k][curr_stop] - tau_k[curr_k][prev as usize])
+                            as u64,
                         geometry: vec![],
                     }));
-                    
+
                     curr_stop = prev as usize;
                 } else {
                     break;
                 }
-                
+
                 curr_k -= 1;
             }
-            
+
             legs.reverse();
-            
+
             result.itineraries.push(Itinerary {
                 start_time: departure_time as u64,
                 end_time: best_arrival as u64,
@@ -331,7 +351,7 @@ impl<'a> RaptorRouter<'a> {
                 legs,
             });
         }
-        
+
         result
     }
 }
