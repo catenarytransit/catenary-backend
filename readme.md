@@ -197,7 +197,7 @@ Avens takes OpenStreetMap PBF files and compiles them into a serialized routing 
 
 To compile a batch of regions using a configuration file (recommended for managing multiple regions):
 ```bash
-cargo run --bin avens -- batch --config avens_regions.toml
+cargo run --bin avens --release -- batch --config avens_regions.toml
 ```
 
 **Example `avens_regions.toml`:**
@@ -220,17 +220,17 @@ To manage your region endpoints, simply update the `[[regions]]` list in your TO
 
 Alternatively, you can pull directly from a URL and compile a single region:
 ```bash
-cargo run --bin avens -- pull --url https://download.geofabrik.de/europe/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
+cargo run --bin avens --release -- pull --url https://download.geofabrik.de/europe/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
 ```
 
 To extract a locally downloaded PBF file:
 ```bash
-cargo run --bin avens -- extract --input /path/to/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
+cargo run --bin avens --release -- extract --input /path/to/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
 ```
 
 You can view statistics about a compiled graph directory using:
 ```bash
-cargo run --bin avens -- info --graph-dir /path/to/graphs/germany
+cargo run --bin avens --release -- info --graph-dir /path/to/graphs/germany
 ```
 
 #### Step 2: Compile Timetables with Gentian
@@ -238,7 +238,7 @@ cargo run --bin avens -- info --graph-dir /path/to/graphs/germany
 Gentian builds a RAPTOR-compatible zero-copy transit routing timetable from data imported into PostgreSQL (e.g., via Maple). It integrates with the Avens graphs to accurately compute transfer footpaths.
 
 ```bash
-cargo run --bin gentian -- --output /path/to/timetable.bin --avens-graphs /path/to/graphs
+cargo run --bin gentian --release -- --output /path/to/timetable.bin --avens-graphs /path/to/graphs
 ```
 
 #### Step 3: Run the Edelweiss Routing Engine
@@ -246,5 +246,5 @@ cargo run --bin gentian -- --output /path/to/timetable.bin --avens-graphs /path/
 Edelweiss provides the actual routing service via a Tarpc RPC server (listening on `0.0.0.0:9090`). It uses the Avens graphs for OSM routing and dynamically loads timetables compiled by Gentian.
 
 ```bash
-GRAPH_DIR=/path/to/graphs cargo run --bin edelweiss
+GRAPH_DIR=/path/to/graphs cargo run --bin edelweiss --release
 ```
