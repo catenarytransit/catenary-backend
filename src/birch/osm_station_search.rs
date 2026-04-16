@@ -5,6 +5,7 @@
 
 use crate::text_search::RouteDeserialised;
 use actix_web::{HttpRequest, HttpResponse, Responder, web, web::Query};
+use ahash::AHashMap;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -121,7 +122,7 @@ pub async fn osm_station_search(
         .map(|a| a.to_vec())
         .unwrap_or_default();
 
-    let mut es_scores = HashMap::new();
+    let mut es_scores = AHashMap::new();
     let mut station_ids = Vec::new();
 
     for hit in hits {
@@ -154,8 +155,8 @@ pub async fn osm_station_search(
         .await
         .unwrap_or_default();
 
-    let mut station_to_routes: HashMap<i64, Vec<(String, String)>> = HashMap::new();
-    let mut routes_by_chateau: HashMap<String, Vec<String>> = HashMap::new();
+    let mut station_to_routes: AHashMap<i64, Vec<(String, String)>> = AHashMap::new();
+    let mut routes_by_chateau: AHashMap<String, Vec<String>> = AHashMap::new();
     for stop in stops {
         if let Some(osm_id) = stop.osm_station_id {
             for route_id_opt in stop.routes {
@@ -197,7 +198,7 @@ pub async fn osm_station_search(
         routes.append(&mut chateau_routes);
     }
 
-    let mut route_map = HashMap::new();
+    let mut route_map = AHashMap::new();
     for route in routes {
         route_map.insert((route.chateau.clone(), route.route_id.clone()), route);
     }
