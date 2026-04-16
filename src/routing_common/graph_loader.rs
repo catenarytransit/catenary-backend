@@ -1,5 +1,5 @@
-use catenary::routing_common::lookup::Lookup;
-use catenary::routing_common::ways::RoutingGraph;
+use crate::routing_common::lookup::Lookup;
+use crate::routing_common::ways::RoutingGraph;
 use dashmap::DashMap;
 use rstar::{AABB, RTree, RTreeObject};
 use serde::{Deserialize, Serialize};

@@ -1,10 +1,10 @@
-use crate::graph_loader::LoadedGraph;
-use catenary::routing_common::api::{
+use crate::routing_common::api::{
     Itinerary, Leg, OsmLeg, RoutingRequest, RoutingResult, TravelMode,
 };
-use catenary::routing_common::dijkstra::{self, RoutePath};
-use catenary::routing_common::profiles::{FootProfile, SearchProfile};
-use catenary::routing_common::types::CostT;
+use crate::routing_common::dijkstra::{self, RoutePath};
+use crate::routing_common::graph_loader::LoadedGraph;
+use crate::routing_common::profiles::{FootProfile, SearchProfile};
+use crate::routing_common::types::CostT;
 use std::sync::Arc;
 
 pub struct OsmRouter {
@@ -18,14 +18,14 @@ impl OsmRouter {
 
     pub fn route(&self, req: &RoutingRequest) -> anyhow::Result<RoutingResult> {
         let (start_lat, start_lon) = match &req.origin {
-            catenary::routing_common::api::Place::Coordinate { lat, lon } => (*lat, *lon),
+            crate::routing_common::api::Place::Coordinate { lat, lon } => (*lat, *lon),
             _ => anyhow::bail!(
                 "Non-coordinate origins not supported for intra-region OSM routing fallback yet."
             ),
         };
 
         let (end_lat, end_lon) = match &req.destination {
-            catenary::routing_common::api::Place::Coordinate { lat, lon } => (*lat, *lon),
+            crate::routing_common::api::Place::Coordinate { lat, lon } => (*lat, *lon),
             _ => anyhow::bail!(
                 "Non-coordinate destinations not supported for intra-region OSM routing fallback yet."
             ),

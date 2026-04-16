@@ -1,7 +1,7 @@
-mod graph_loader;
 mod hydrator;
-mod osm_router;
+mod zero_copy_loader;
 // mod query_graph;
+mod raptor;
 mod router;
 
 // #[cfg(test)]
@@ -13,12 +13,12 @@ mod router;
 // #[cfg(test)]
 // mod test_multi_target;
 
-use crate::graph_loader::GraphManager;
 use crate::hydrator::Hydrator;
 use crate::router::Router;
 use catenary::postgres_tools::make_async_pool;
 use catenary::routing_common::api;
 use catenary::routing_common::api::EdelweissService;
+use catenary::routing_common::graph_loader::GraphManager;
 use futures::StreamExt;
 use std::sync::Arc;
 use tarpc::server::{self, Channel};
@@ -35,6 +35,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 struct EdelweissServer {
     graph: Arc<GraphManager>,
     hydrator: Arc<Hydrator>,
+    timetable: Arc<zero_copy_loader::HotSwappableTimetable>,
 }
 
 impl EdelweissService for EdelweissServer {
@@ -43,8 +44,22 @@ impl EdelweissService for EdelweissServer {
         _ctx: tarpc::context::Context,
         req: api::RoutingRequest,
     ) -> api::RoutingResult {
+        // We run OSM router for start/end walking segments and Raptor for transit
         let router = Router::new(&self.graph);
         let mut result = router.route(&req);
+
+        // Run RAPTOR if the timetable is available and loaded
+        if let Some(r_res) = self
+            .timetable
+            .with_timetable(|zc| {
+                let raptor = crate::raptor::RaptorRouter::new(zc);
+                raptor.route(&req)
+            })
+            .await
+        {
+            // Merge raptor results here in the future
+            // result.itineraries.extend(r_res.itineraries);
+        }
 
         // Collect IDs for hydration
         let mut stop_ids = Vec::new();
@@ -132,11 +147,29 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(server_addr).await?;
     println!("Listening on {}", server_addr);
 
+    let timetable = Arc::new(zero_copy_loader::HotSwappableTimetable::new());
+    let timetable_clone = timetable.clone();
+
+    // Spawn hot-reloader daemon
+    tokio::spawn(async move {
+        loop {
+            // E.g., poll S3 or filesystem for newly compiled timetables.
+            // When found, download/extract to a fast local /tmp/timetable_latest.bin
+            // Then hot-swap:
+            // if let Ok(_) = timetable_clone.load_raw_binary("/tmp/timetable_latest.bin").await {
+            //     println!("Hot-swapped new zero-copy timetable successfully.");
+            // }
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+        }
+    });
+
     loop {
         let (stream, _) = listener.accept().await?;
         let server = EdelweissServer {
             graph: graph_arc.clone(),
             hydrator: hydrator_arc.clone(),
+            timetable: timetable.clone(),
         };
         tokio::spawn(async move {
             let transport = tarpc::serde_transport::Transport::from((

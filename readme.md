@@ -4,11 +4,11 @@ Catenary Backend is a distributed system comprised of microservices operating in
 
 - **Maple**: GTFS Downloader and ingestion engine into postgres
 - **Edelweiss**: Routing execution engine (in progress, see also [our routing testbed](https://github.com/catenarytransit/routing)
-- **Avens**: OSM Preprocessor and graph generator for routing
+- **Avens**: OSM Preprocessor and graph generator for routing (in progress)
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes); successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines. Submodule Pando is used for distribution management
 - **Linnaea**: Visualisation of the graphs for debugging and research paper purposes
-- **Gentian**: Transit graph generation task server
+- **Gentian**: Transit graph generation runner (in progress)
 - **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
 - **Birch**: HTTP API server
@@ -182,3 +182,46 @@ cargo run --bin maple -- --transitland /path/to/transitland-atlas
 ```
 
  See the Maple readme for more info
+
+### Routing Engine Setup
+
+The routing engine provides point-to-point transit directions using three main microservices:
+
+1. **Avens**: OSM preprocessor to build walking/biking graphs.
+2. **Gentian**: Timetable compiler to create a zero-copy transit timetable.
+3. **Edelweiss**: The routing execution engine.
+
+#### Step 1: Preprocess OSM Graphs with Avens
+
+Avens takes OpenStreetMap PBF files and compiles them into a serialized routing graph format with an R-Tree spatial index.
+
+To pull directly from a URL (e.g., Geofabrik) and compile:
+```bash
+cargo run --bin avens -- pull --url https://download.geofabrik.de/europe/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
+```
+
+To extract a locally downloaded PBF file:
+```bash
+cargo run --bin avens -- extract --input /path/to/germany-latest.osm.pbf --output-dir /path/to/graphs/germany
+```
+
+You can view statistics about a compiled graph directory using:
+```bash
+cargo run --bin avens -- info --graph-dir /path/to/graphs/germany
+```
+
+#### Step 2: Compile Timetables with Gentian
+
+Gentian builds a RAPTOR-compatible zero-copy transit routing timetable from data imported into PostgreSQL (e.g., via Maple). It integrates with the Avens graphs to accurately compute transfer footpaths.
+
+```bash
+cargo run --bin gentian -- --output /path/to/timetable.bin --avens-graphs /path/to/graphs
+```
+
+#### Step 3: Run the Edelweiss Routing Engine
+
+Edelweiss provides the actual routing service via a Tarpc RPC server (listening on `0.0.0.0:9090`). It uses the Avens graphs for OSM routing and dynamically loads timetables compiled by Gentian.
+
+```bash
+GRAPH_DIR=/path/to/graphs cargo run --bin edelweiss
+```

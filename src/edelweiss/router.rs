@@ -1,6 +1,6 @@
-use crate::graph_loader::GraphManager;
-use crate::osm_router::OsmRouter;
 use catenary::routing_common::api::{Place, RoutingRequest, RoutingResult};
+use catenary::routing_common::graph_loader::GraphManager;
+use catenary::routing_common::osm_router::OsmRouter;
 use std::sync::Arc;
 
 pub struct Router<'a> {
