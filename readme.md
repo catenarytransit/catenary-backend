@@ -18,9 +18,21 @@ The kubernetes configuration is generated using Helm templates. See Helm's docum
 
 The code is heavily commented, go to each folder in src for more information.
 
+## Citations
+
+This project is built off the work of researchers in Germany and many other places, vielen dank!
+
+- Round-Based Public Transit Routing, Karlsruhe Institute of Technology, Delling, Daniel; Pajor Thomas, Werneck Renato. https://www.microsoft.com/en-us/research/wp-content/uploads/2012/01/raptor_alenex.pdf
+- Motis Project https://github.com/motis-project Felix Gündling, innovation in in-memory data stores for graphs
+- Hannah Bast, PhD at Freiburg Universitat: Transfer Patterns and Scalable Transfer Patterns
+- Patrick Brosi: Pfaedle and Line optimised shapes
+
 ### Submodules maintained 
 - **DMFR dataset reader**: reads data from transitland-atlas into raw structs https://docs.rs/dmfr-dataset-reader/latest/dmfr_dataset_reader/
 - **[Château](https://github.com/catenarytransit/chateau)**: Associates feeds with operators and vise versa using depth first search in knowledge graph
+
+### Dependent binaries maintained
+- **[Pfaedle-rs](https://github.com/catenarytransit/pfaedle-rs)**: Shape matching in rust using low memory.
 
 #### Agency specific submodules
 - **[Amtrak GTFS rt](https://github.com/catenarytransit/amtrak-gtfs-rt)**: Conversion of proprietary realtime data from amtrak's website into gtfs-rt.
