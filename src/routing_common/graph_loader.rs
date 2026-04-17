@@ -105,11 +105,10 @@ impl GraphManager {
         let routing_path = region_dir.join("routing.bin");
         let lookup_path = region_dir.join("lookup.bin");
 
-        let routing_bytes = fs::read(&routing_path)?;
+        let mmap = Arc::new(unsafe { memmap2::Mmap::map(&std::fs::File::open(&routing_path)?)? });
+        let routing = RoutingGraph::load(mmap);
         let lookup_bytes = fs::read(&lookup_path)?;
 
-        let (routing, _): (RoutingGraph, usize) =
-            bincode::serde::decode_from_slice(&routing_bytes, bincode::config::standard())?;
         let (lookup, _): (Lookup, usize) =
             bincode::serde::decode_from_slice(&lookup_bytes, bincode::config::standard())?;
 

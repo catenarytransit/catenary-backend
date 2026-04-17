@@ -1,5 +1,4 @@
-use bincode;
-use catenary::routing_common::extract::load_osm_pbf;
+use catenary::routing_common::extract::extract_osm_graph;
 use catenary::routing_common::lookup::Lookup;
 use catenary::routing_common::ways::RoutingGraph;
 use clap::{Parser, Subcommand};
@@ -82,8 +81,19 @@ fn extract_to_dir(input: &Path, output_dir: &Path) {
         std::process::exit(1);
     }
 
-    // 1. Load PBF and build RoutingGraph
-    let graph = load_osm_pbf(input.to_string_lossy().as_ref());
+    let routing_path = output_dir.join("routing.bin");
+    extract_osm_graph(input.to_string_lossy().as_ref(), &routing_path);
+
+    let mmap = std::sync::Arc::new(
+        unsafe {
+            memmap2::Mmap::map(
+                &std::fs::File::open(&routing_path).expect("Failed to open graph map"),
+            )
+        }
+        .unwrap(),
+    );
+    let graph = RoutingGraph::load(mmap);
+
     println!(
         "Graph built in {:.2?} ({} nodes, {} ways)",
         t0.elapsed(),
@@ -96,7 +106,7 @@ fn extract_to_dir(input: &Path, output_dir: &Path) {
     let mut min_lon = f64::MAX;
     let mut max_lon = f64::MIN;
 
-    for pos in &graph.node_positions {
+    for pos in graph.node_positions() {
         min_lat = f64::min(min_lat, pos.lat());
         max_lat = f64::max(max_lat, pos.lat());
         min_lon = f64::min(min_lon, pos.lng());
@@ -126,15 +136,10 @@ fn extract_to_dir(input: &Path, output_dir: &Path) {
     });
 
     let t2 = Instant::now();
-    let routing_path = output_dir.join("routing.bin");
     let lookup_path = output_dir.join("lookup.bin");
     let manifest_path = output_dir.join("manifest.json");
 
     let config = bincode::config::standard();
-    let routing_bytes =
-        bincode::serde::encode_to_vec(&graph, config).expect("Failed to serialize RoutingGraph");
-    fs::write(&routing_path, routing_bytes).expect("Failed to write routing.bin");
-
     let lookup_bytes =
         bincode::serde::encode_to_vec(&lookup, config).expect("Failed to serialize Lookup");
     fs::write(&lookup_path, lookup_bytes).expect("Failed to write lookup.bin");
@@ -200,15 +205,19 @@ fn main() {
             println!("Graph Dir: {}", graph_dir);
 
             let t0 = Instant::now();
-            let routing_bytes = fs::read(&routing_path).expect("Failed to read routing.bin");
-            let config = bincode::config::standard();
-            let (graph, _len): (RoutingGraph, usize) =
-                bincode::serde::decode_from_slice(&routing_bytes, config)
-                    .expect("Failed to deserialize RoutingGraph");
+            let mmap = std::sync::Arc::new(
+                unsafe {
+                    memmap2::Mmap::map(
+                        &std::fs::File::open(&routing_path).expect("Failed to open graph map"),
+                    )
+                }
+                .unwrap(),
+            );
+            let graph = RoutingGraph::load(mmap);
 
             println!("Loaded in {:.2?}", t0.elapsed());
             println!("Nodes: {}", graph.n_nodes());
-            println!("Ways: {:?}", graph.n_ways());
+            println!("Ways: {}", graph.n_ways());
         }
         Commands::Batch { config } => {
             let config_content = fs::read_to_string(config).unwrap_or_else(|e| {

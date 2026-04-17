@@ -412,57 +412,125 @@ pub fn get_node_properties(t: &OsmTags) -> NodeProperties {
     builder.build()
 }
 
-/// Load an OSM PBF file and build a complete `RoutingGraph` from it.
-pub fn load_osm_pbf(path: &str) -> RoutingGraph {
+use memmap2::MmapMut;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+
+/// Extract an OSM PBF file and build a complete disk-backed `RoutingGraph`.
+pub fn extract_osm_graph(path: &str, out_path: &std::path::Path) {
     let file = std::fs::File::open(path).expect("failed to open pbf file");
+
+    let num_max_nodes = 12_000_000_000usize;
+    let map_size = num_max_nodes * 4;
+
+    let temp_dir = std::env::temp_dir();
+    let pid = std::process::id();
+    let map_path = temp_dir.join(format!("avens_node_map_{}.bin", pid));
+    let temp_ways_path = temp_dir.join(format!("avens_ways_{}.bin", pid));
+
+    let map_file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&map_path)
+        .expect("Failed to create node map sparse file");
+
+    map_file.set_len(map_size as u64).unwrap();
+    let mut node_idx_map = unsafe { MmapMut::map_mut(&map_file).unwrap() };
+
+    let mut ways_file = std::io::BufWriter::new(File::create(&temp_ways_path).unwrap());
+    let mut tmp_ways_count = 0;
+
     let mut reader = osmpbfreader::OsmPbfReader::new(file);
 
-    // 1. First pass: Collect all routable ways and the nodes they reference.
-    let mut way_objs = Vec::new();
-    let mut referenced_nodes = std::collections::HashSet::new();
-
+    println!("Pass 1: Ways Collection...");
     for obj in reader.iter().filter_map(|o| o.ok()) {
         if let osmpbfreader::OsmObj::Way(way) = obj {
             let t = OsmTags::from_pbf(&way.tags);
             let p = get_way_properties(&t);
-            // We only keep accessible ways, or ferry routes, etc.
+
+            // Pre-filtering optimization like motis
+            if !t.is_elevator
+                && !t.is_parking
+                && (t.highway.is_none()
+                    && t.railway.is_none()
+                    && !t.is_ferry_route
+                    && !t.is_platform)
+            {
+                continue;
+            }
+
             if p.is_accessible() || t.is_ferry_route || t.is_route {
+                let map_u32 = bytemuck::cast_slice_mut::<u8, u32>(&mut node_idx_map);
                 for node_id in &way.nodes {
-                    referenced_nodes.insert(*node_id);
+                    let id = node_id.0 as usize;
+                    if id < num_max_nodes {
+                        map_u32[id] = u32::MAX - 1;
+                    }
                 }
-                way_objs.push(way);
+
+                let wp_bytes = bytemuck::bytes_of(&p);
+                ways_file.write_all(wp_bytes).unwrap();
+                let nodes_len = way.nodes.len() as u32;
+                ways_file.write_all(bytemuck::bytes_of(&nodes_len)).unwrap();
+                for n in &way.nodes {
+                    ways_file.write_all(bytemuck::bytes_of(&n.0)).unwrap();
+                }
+                tmp_ways_count += 1;
             }
         }
     }
+    ways_file.flush().unwrap();
 
-    // 2. Second pass: Collect nodes and properties.
-    reader.rewind().unwrap();
-    let mut graph_builder = RoutingGraphBuilder::new();
-    let mut node_id_to_idx = HashMap::new();
-    let mut node_id_to_pos = HashMap::new();
+    let file = std::fs::File::open(path).expect("failed to open pbf file");
+    let mut reader = osmpbfreader::OsmPbfReader::new(file);
+    let mut graph_builder = RoutingGraphBuilder::new(out_path);
 
+    println!("Pass 2: Node Positions & Indexing...");
     for obj in reader.iter().filter_map(|o| o.ok()) {
         if let osmpbfreader::OsmObj::Node(node) = obj {
-            if referenced_nodes.contains(&node.id) {
-                let t = OsmTags::from_pbf(&node.tags);
-                let np = get_node_properties(&t);
-                let pos = Point::from_latlng(node.lat(), node.lon());
-                let idx = graph_builder.add_node(pos, np);
-                node_id_to_idx.insert(node.id, idx);
-                node_id_to_pos.insert(node.id, pos);
+            let id = node.id.0 as usize;
+            if id < num_max_nodes {
+                let map_u32 = bytemuck::cast_slice_mut::<u8, u32>(&mut node_idx_map);
+                if map_u32[id] == u32::MAX - 1 {
+                    let t = OsmTags::from_pbf(&node.tags);
+                    let np = get_node_properties(&t);
+                    let pos = Point::from_latlng(node.lat(), node.lon());
+                    let idx = graph_builder.add_node(pos, np);
+                    // store (NodeIdx + 1) to avoid colliding with default unmapped 0
+                    map_u32[id] = idx.0 + 1;
+                }
             }
         }
     }
 
-    // 3. Add ways to the graph builder.
-    for way in way_objs {
-        let t = OsmTags::from_pbf(&way.tags);
-        let wp = get_way_properties(&t);
+    println!("Pass 3: Finalizing Ways...");
+    use std::io::BufReader;
+    let mut ways_buf = BufReader::new(File::open(&temp_ways_path).unwrap());
+
+    // Immutable view of map
+    let map_u32 = bytemuck::cast_slice::<u8, u32>(&node_idx_map);
+
+    for _ in 0..tmp_ways_count {
+        let mut wp_bytes = [0u8; std::mem::size_of::<WayProperties>()];
+        ways_buf.read_exact(&mut wp_bytes).unwrap();
+        let p: WayProperties = *bytemuck::from_bytes(&wp_bytes);
+
+        let mut len_bytes = [0u8; 4];
+        ways_buf.read_exact(&mut len_bytes).unwrap();
+        let nodes_len = u32::from_ne_bytes(len_bytes);
 
         let mut final_nodes = Vec::new();
-        for node_id in &way.nodes {
-            if let Some(&idx) = node_id_to_idx.get(node_id) {
-                final_nodes.push(idx);
+        for _ in 0..nodes_len {
+            let mut id_bytes = [0u8; 8];
+            ways_buf.read_exact(&mut id_bytes).unwrap();
+            let id = i64::from_ne_bytes(id_bytes) as usize;
+
+            if id < num_max_nodes {
+                let nidx_val = map_u32[id];
+                if nidx_val > 0 && nidx_val < u32::MAX - 1 {
+                    final_nodes.push(NodeIdx(nidx_val - 1));
+                }
             }
         }
 
@@ -472,17 +540,21 @@ pub fn load_osm_pbf(path: &str) -> RoutingGraph {
 
         let mut final_dists = Vec::with_capacity(final_nodes.len() - 1);
         for i in 0..final_nodes.len() - 1 {
-            let n1_id = way.nodes[i];
-            let n2_id = way.nodes[i + 1];
-            let p1 = node_id_to_pos.get(&n1_id).unwrap();
-            let p2 = node_id_to_pos.get(&n2_id).unwrap();
-
-            let dist = p1.haversine_distance(p2).round() as u16;
+            let n1 = final_nodes[i];
+            let n2 = final_nodes[i + 1];
+            let p1 = graph_builder.get_node_pos(n1);
+            let p2 = graph_builder.get_node_pos(n2);
+            let dist = p1.haversine_distance(&p2).round() as u16;
             final_dists.push(dist);
         }
 
-        graph_builder.add_way(wp, final_nodes, final_dists);
+        graph_builder.add_way(p, final_nodes, final_dists);
     }
 
-    graph_builder.build()
+    println!("Writing Graph arrays to routing.bin...");
+    graph_builder.build();
+
+    // cleanup
+    std::fs::remove_file(&map_path).ok();
+    std::fs::remove_file(&temp_ways_path).ok();
 }

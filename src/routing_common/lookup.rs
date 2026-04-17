@@ -48,7 +48,7 @@ impl Lookup {
     pub fn build(graph: &RoutingGraph) -> Self {
         let mut envelopes = Vec::with_capacity(graph.n_ways());
         for w in 0..graph.n_ways() {
-            let nodes = &graph.way_nodes[w];
+            let nodes = &graph.way_nodes()[w];
             if nodes.is_empty() {
                 continue;
             }
@@ -59,7 +59,7 @@ impl Lookup {
             let mut max_lng = f64::MIN;
 
             for node in nodes {
-                let pos = graph.node_positions[node.idx()];
+                let pos = graph.node_positions()[node.idx()];
                 let lat = pos.lat();
                 let lng = pos.lng();
                 min_lat = min_lat.min(lat);
@@ -101,7 +101,7 @@ impl Lookup {
 
         for envelope in self.rtree.locate_in_envelope(&search_box) {
             let way = envelope.way;
-            let way_nodes = &graph.way_nodes[way.idx()];
+            let way_nodes = &graph.way_nodes()[way.idx()];
             if way_nodes.is_empty() {
                 continue;
             }
@@ -111,8 +111,8 @@ impl Lookup {
 
             // Find closest segment
             for seg in 0..way_nodes.len().saturating_sub(1) {
-                let p1 = graph.node_positions[way_nodes[seg].idx()];
-                let p2 = graph.node_positions[way_nodes[seg + 1].idx()];
+                let p1 = graph.node_positions()[way_nodes[seg].idx()];
+                let p2 = graph.node_positions()[way_nodes[seg + 1].idx()];
                 let d = point_to_segment_dist(&query_point, &p1, &p2);
                 if d < best_dist {
                     best_dist = d;
@@ -126,13 +126,14 @@ impl Lookup {
 
             // Left candidate: node at best_seg
             let left_node = way_nodes[best_seg];
-            let left_dist = query_point.haversine_distance(&graph.node_positions[left_node.idx()]);
+            let left_dist =
+                query_point.haversine_distance(&graph.node_positions()[left_node.idx()]);
 
             // Right candidate: node at best_seg + 1
             let right = if best_seg + 1 < way_nodes.len() {
                 let right_node = way_nodes[best_seg + 1];
                 let right_dist =
-                    query_point.haversine_distance(&graph.node_positions[right_node.idx()]);
+                    query_point.haversine_distance(&graph.node_positions()[right_node.idx()]);
                 Some(NodeCandidate {
                     node: right_node,
                     level: Level::NO_LEVEL,

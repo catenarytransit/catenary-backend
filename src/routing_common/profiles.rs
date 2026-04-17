@@ -228,11 +228,11 @@ fn expand_adjacent<P: RoutingProfile>(
     search_dir: Direction,
     out: &mut Vec<Neighbor>,
 ) {
-    let ways = &graph.node_ways[node.idx()];
-    let positions_in_way = &graph.node_in_way_idx[node.idx()];
+    let ways = &graph.node_ways()[node.idx()];
+    let positions_in_way = &graph.node_in_way_idx()[node.idx()];
 
     for (way, &pos_in_way) in ways.iter().zip(positions_in_way.iter()) {
-        let way_nodes = &graph.way_nodes[way.idx()];
+        let way_nodes = &graph.way_nodes()[way.idx()];
         let i = pos_in_way as usize;
 
         // Expand backward edge (to node at i-1)
@@ -258,15 +258,15 @@ fn expand_edge<P: RoutingProfile>(
     _search_dir: Direction,
     out: &mut Vec<Neighbor>,
 ) {
-    let way_nodes = &graph.way_nodes[way.idx()];
+    let way_nodes = &graph.way_nodes()[way.idx()];
     let target_node = way_nodes[to];
 
-    let target_node_props = graph.node_properties[target_node.idx()];
+    let target_node_props = graph.node_properties()[target_node.idx()];
     if P::node_cost(params, &target_node_props) == INFEASIBLE {
         return;
     }
 
-    let way_props = graph.way_properties[way.idx()];
+    let way_props = graph.way_properties()[way.idx()];
     let seg = from.min(to);
     let dist = graph.get_way_node_distance(way, seg);
 

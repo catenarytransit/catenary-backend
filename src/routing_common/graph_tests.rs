@@ -248,11 +248,11 @@ fn test_graph_construction() {
     assert_eq!(graph.n_ways(), 3);
 
     // Node B (idx 1) should be in 2 ways
-    let b_ways = &graph.node_ways[1];
+    let b_ways = &graph.node_ways()[1];
     assert_eq!(b_ways.len(), 2);
 
     // Way 0 should have nodes [A, B]
-    let way0_nodes = &graph.way_nodes[0];
+    let way0_nodes = &graph.way_nodes()[0];
     assert_eq!(way0_nodes.len(), 2);
     assert_eq!(way0_nodes[0], NodeIdx(0));
     assert_eq!(way0_nodes[1], NodeIdx(1));

@@ -4,6 +4,7 @@ use std::ops::{Index, Range};
 
 macro_rules! strong_index {
     ($name:ident, $inner:ty) => {
+        #[repr(transparent)]
         #[derive(
             Debug,
             Clone,
@@ -16,6 +17,8 @@ macro_rules! strong_index {
             Default,
             Serialize,
             Deserialize,
+            bytemuck::Pod,
+            bytemuck::Zeroable,
         )]
         pub struct $name(pub $inner);
 
@@ -241,6 +244,40 @@ impl<V: Clone> Index<usize> for VecVec<V> {
     }
 }
 
+pub struct MappedVecVec<'a, T> {
+    pub bucket_starts: &'a [u64],
+    pub data: &'a [T],
+}
+
+impl<'a, T> MappedVecVec<'a, T> {
+    pub fn len(&self) -> usize {
+        self.bucket_starts.len().saturating_sub(1)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn get(&self, key: usize) -> &'a [T] {
+        let start = self.bucket_starts[key] as usize;
+        let end = self.bucket_starts[key + 1] as usize;
+        &self.data[start..end]
+    }
+
+    pub fn get_range(&self, key: usize) -> Range<usize> {
+        let start = self.bucket_starts[key] as usize;
+        let end = self.bucket_starts[key + 1] as usize;
+        start..end
+    }
+}
+
+impl<'a, T> std::ops::Index<usize> for MappedVecVec<'a, T> {
+    type Output = [T];
+    fn index(&self, key: usize) -> &Self::Output {
+        self.get(key)
+    }
+}
+
 /// Builder for constructing a VecVec from unsorted data.
 pub struct VecVecBuilder<V: Clone> {
     buckets: Vec<Vec<V>>,
@@ -279,7 +316,18 @@ impl<V: Clone> VecVecBuilder<V> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Default,
+    Serialize,
+    Deserialize,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
 pub struct Point {
     pub lat_e7: i32,
     pub lng_e7: i32,

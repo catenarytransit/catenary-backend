@@ -1,8 +1,15 @@
 use crate::routing_common::types::*;
+use bytemuck::{Pod, Zeroable, cast_slice};
+use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
+use std::sync::Arc;
 
 /// Way properties packed into 5 bytes, mirroring OSR's way_properties bitfield layout.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Pod, Zeroable)]
 pub struct WayProperties {
     /// byte 0: foot, bike, car, destination, oneway_car, oneway_bike, elevator, steps
     b0: u8,
@@ -256,7 +263,8 @@ impl WayPropertiesBuilder {
 }
 
 /// Node properties packed into 3 bytes.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Pod, Zeroable)]
 pub struct NodeProperties {
     /// byte 0: from_level(6), foot(1), bike(1)
     b0: u8,
@@ -374,63 +382,171 @@ impl NodePropertiesBuilder {
     }
 }
 
-/// A turn restriction representing "no" or "only" access patterns.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Restriction {
-    pub is_only: bool,
+    pub is_only: u8,
+    pub applies_to_bus: u8,
+    pub _padding1: [u8; 6],
     pub from: OsmWayIdx,
     pub to: OsmWayIdx,
     pub via: NodeIdx,
-    pub applies_to_bus: bool,
+    pub _padding2: [u8; 4],
 }
 
-/// The core routing graph, mirroring OSR's ways::routing struct.
-///
-/// All data is stored in contiguous arrays indexed by strong types.
-/// The way_nodes/node_ways VecVecs form a bidirectional adjacency structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
+pub struct GraphHeader {
+    pub magic: u32,
+    pub version: u32,
+    pub n_nodes: u64,
+    pub n_ways: u64,
+    pub offset_node_properties: u64,
+    pub offset_way_properties: u64,
+    pub offset_way_nodes_bucket: u64,
+    pub offset_way_nodes_data: u64,
+    pub offset_way_node_dist_bucket: u64,
+    pub offset_way_node_dist_data: u64,
+    pub offset_node_ways_bucket: u64,
+    pub offset_node_ways_data: u64,
+    pub offset_node_in_way_idx_bucket: u64,
+    pub offset_node_in_way_idx_data: u64,
+    pub offset_node_is_restricted: u64,
+    pub offset_node_restrictions_bucket: u64,
+    pub offset_node_restrictions_data: u64,
+    pub offset_node_positions: u64,
+    pub offset_way_component: u64,
+}
+
 pub struct RoutingGraph {
-    pub node_properties: Vec<NodeProperties>,
-    pub way_properties: Vec<WayProperties>,
-
-    pub way_nodes: VecVec<NodeIdx>,
-    pub way_node_dist: VecVec<u16>,
-
-    pub node_ways: VecVec<WayIdx>,
-    pub node_in_way_idx: VecVec<u16>,
-
-    pub node_is_restricted: Vec<bool>,
-    pub node_restrictions: VecVec<Restriction>,
-
-    pub node_positions: Vec<Point>,
-    pub way_component: Vec<ComponentIdx>,
+    pub mmap: Arc<Mmap>,
+    pub header: GraphHeader,
 }
 
 impl RoutingGraph {
+    pub fn load(mmap: Arc<Mmap>) -> Self {
+        let header: GraphHeader =
+            *bytemuck::from_bytes(&mmap[0..std::mem::size_of::<GraphHeader>()]);
+        assert_eq!(header.magic, 0x4F535247); // 'OSRG'
+        Self { mmap, header }
+    }
+
+    fn slice<T: Pod>(&self, offset: u64, len: u64) -> &[T] {
+        if len == 0 {
+            return &[];
+        }
+        let start = offset as usize;
+        let end = start + (len as usize * std::mem::size_of::<T>());
+        cast_slice(&self.mmap[start..end])
+    }
+
+    pub fn node_properties(&self) -> &[NodeProperties] {
+        self.slice(self.header.offset_node_properties, self.header.n_nodes)
+    }
+
+    pub fn way_properties(&self) -> &[WayProperties] {
+        self.slice(self.header.offset_way_properties, self.header.n_ways)
+    }
+
+    pub fn node_positions(&self) -> &[Point] {
+        self.slice(self.header.offset_node_positions, self.header.n_nodes)
+    }
+
+    pub fn way_component(&self) -> &[ComponentIdx] {
+        self.slice(self.header.offset_way_component, self.header.n_ways)
+    }
+
+    pub fn node_is_restricted(&self) -> &[u8] {
+        self.slice(self.header.offset_node_is_restricted, self.header.n_nodes)
+    }
+
+    pub fn way_nodes(&self) -> MappedVecVec<'_, NodeIdx> {
+        let bucket_starts = self.slice(self.header.offset_way_nodes_bucket, self.header.n_ways + 1);
+        let len = bucket_starts.last().copied().unwrap_or(0);
+        let data = self.slice(self.header.offset_way_nodes_data, len);
+        MappedVecVec {
+            bucket_starts,
+            data,
+        }
+    }
+
+    pub fn way_node_dist(&self) -> MappedVecVec<'_, u16> {
+        let bucket_starts = self.slice(
+            self.header.offset_way_node_dist_bucket,
+            self.header.n_ways + 1,
+        );
+        let len = bucket_starts.last().copied().unwrap_or(0);
+        let data = self.slice(self.header.offset_way_node_dist_data, len);
+        MappedVecVec {
+            bucket_starts,
+            data,
+        }
+    }
+
+    pub fn node_ways(&self) -> MappedVecVec<'_, WayIdx> {
+        let bucket_starts =
+            self.slice(self.header.offset_node_ways_bucket, self.header.n_nodes + 1);
+        let len = bucket_starts.last().copied().unwrap_or(0);
+        let data = self.slice(self.header.offset_node_ways_data, len);
+        MappedVecVec {
+            bucket_starts,
+            data,
+        }
+    }
+
+    pub fn node_in_way_idx(&self) -> MappedVecVec<'_, u16> {
+        let bucket_starts = self.slice(
+            self.header.offset_node_in_way_idx_bucket,
+            self.header.n_nodes + 1,
+        );
+        let len = bucket_starts.last().copied().unwrap_or(0);
+        let data = self.slice(self.header.offset_node_in_way_idx_data, len);
+        MappedVecVec {
+            bucket_starts,
+            data,
+        }
+    }
+
+    pub fn node_restrictions(&self) -> MappedVecVec<'_, Restriction> {
+        let bucket_starts = self.slice(
+            self.header.offset_node_restrictions_bucket,
+            self.header.n_nodes + 1,
+        );
+        let len = bucket_starts.last().copied().unwrap_or(0);
+        let data = self.slice(self.header.offset_node_restrictions_data, len);
+        MappedVecVec {
+            bucket_starts,
+            data,
+        }
+    }
+
     pub fn n_ways(&self) -> usize {
-        self.way_properties.len()
+        self.header.n_ways as usize
     }
 
     pub fn n_nodes(&self) -> usize {
-        self.node_properties.len()
+        self.header.n_nodes as usize
     }
 
     pub fn get_way_node_distance(&self, way: WayIdx, segment: usize) -> DistanceT {
-        let dists = &self.way_node_dist[way.idx()];
-        if segment < dists.len() {
-            dists[segment] as DistanceT
+        let dists = self.way_node_dist();
+        let slice = dists.get(way.idx());
+        if segment < slice.len() {
+            slice[segment] as DistanceT
         } else {
             0
         }
     }
 
     pub fn get_node_pos(&self, node: NodeIdx) -> Point {
-        self.node_positions[node.idx()]
+        self.node_positions()[node.idx()]
     }
 }
 
 /// Builder for constructing a RoutingGraph from extracted OSM data.
+/// Writes directly to disk to prevent RAM usage spikes!
 pub struct RoutingGraphBuilder {
+    out_path: std::path::PathBuf,
     node_props: Vec<NodeProperties>,
     way_props: Vec<WayProperties>,
     node_positions: Vec<Point>,
@@ -440,8 +556,9 @@ pub struct RoutingGraphBuilder {
 }
 
 impl RoutingGraphBuilder {
-    pub fn new() -> Self {
+    pub fn new(path: &Path) -> Self {
         Self {
+            out_path: path.to_path_buf(),
             node_props: Vec::new(),
             way_props: Vec::new(),
             node_positions: Vec::new(),
@@ -457,6 +574,10 @@ impl RoutingGraphBuilder {
         idx
     }
 
+    pub fn get_node_pos(&self, idx: NodeIdx) -> Point {
+        self.node_positions[idx.0 as usize]
+    }
+
     pub fn add_way(
         &mut self,
         props: WayProperties,
@@ -470,11 +591,11 @@ impl RoutingGraphBuilder {
         idx
     }
 
-    pub fn build(self) -> RoutingGraph {
+    pub fn build(mut self) {
+        let mut file = File::create(&self.out_path).unwrap();
         let n_ways = self.way_props.len();
         let n_nodes = self.node_props.len();
 
-        // Build way_nodes and way_node_dist VecVecs
         let mut way_nodes_builder = VecVecBuilder::new(n_ways);
         let mut way_dist_builder = VecVecBuilder::new(n_ways);
         for (w, (nodes, dists)) in self
@@ -487,7 +608,6 @@ impl RoutingGraphBuilder {
             way_dist_builder.extend(w, dists.iter().copied());
         }
 
-        // Build the reverse index: node_ways and node_in_way_idx
         let mut node_ways_builder = VecVecBuilder::new(n_nodes);
         let mut node_in_way_builder = VecVecBuilder::new(n_nodes);
         for (w, nodes) in self.way_node_lists.iter().enumerate() {
@@ -497,17 +617,75 @@ impl RoutingGraphBuilder {
             }
         }
 
-        RoutingGraph {
-            node_properties: self.node_props,
-            way_properties: self.way_props,
-            way_nodes: way_nodes_builder.build(),
-            way_node_dist: way_dist_builder.build(),
-            node_ways: node_ways_builder.build(),
-            node_in_way_idx: node_in_way_builder.build(),
-            node_is_restricted: vec![false; n_nodes],
-            node_restrictions: VecVecBuilder::<Restriction>::new(n_nodes).build(),
-            node_positions: self.node_positions,
-            way_component: vec![ComponentIdx(0); n_ways],
+        let way_nodes = way_nodes_builder.build();
+        let way_node_dist = way_dist_builder.build();
+        let node_ways = node_ways_builder.build();
+        let node_in_way_idx = node_in_way_builder.build();
+        let node_is_restricted = vec![0u8; n_nodes];
+        let node_restrictions = VecVecBuilder::<Restriction>::new(n_nodes).build();
+        let way_component = vec![ComponentIdx(0); n_ways];
+
+        let mut offset = std::mem::size_of::<GraphHeader>() as u64;
+        let mut header = GraphHeader {
+            magic: 0x4F535247,
+            version: 1,
+            n_nodes: n_nodes as u64,
+            n_ways: n_ways as u64,
+            offset_node_properties: 0,
+            offset_way_properties: 0,
+            offset_way_nodes_bucket: 0,
+            offset_way_nodes_data: 0,
+            offset_way_node_dist_bucket: 0,
+            offset_way_node_dist_data: 0,
+            offset_node_ways_bucket: 0,
+            offset_node_ways_data: 0,
+            offset_node_in_way_idx_bucket: 0,
+            offset_node_in_way_idx_data: 0,
+            offset_node_is_restricted: 0,
+            offset_node_restrictions_bucket: 0,
+            offset_node_restrictions_data: 0,
+            offset_node_positions: 0,
+            offset_way_component: 0,
+        };
+
+        // Write header placeholder
+        file.write_all(bytemuck::bytes_of(&header)).unwrap();
+
+        macro_rules! write_slice {
+            ($field:ident, $slice:expr) => {
+                header.$field = offset;
+                let bytes = bytemuck::cast_slice($slice);
+                file.write_all(bytes).unwrap();
+                offset += bytes.len() as u64;
+            };
         }
+
+        write_slice!(offset_node_properties, &self.node_props);
+        write_slice!(offset_way_properties, &self.way_props);
+        write_slice!(offset_way_nodes_bucket, &way_nodes.bucket_starts);
+        write_slice!(offset_way_nodes_data, &way_nodes.data);
+        write_slice!(offset_way_node_dist_bucket, &way_node_dist.bucket_starts);
+        write_slice!(offset_way_node_dist_data, &way_node_dist.data);
+        write_slice!(offset_node_ways_bucket, &node_ways.bucket_starts);
+        write_slice!(offset_node_ways_data, &node_ways.data);
+        write_slice!(
+            offset_node_in_way_idx_bucket,
+            &node_in_way_idx.bucket_starts
+        );
+        write_slice!(offset_node_in_way_idx_data, &node_in_way_idx.data);
+        write_slice!(offset_node_is_restricted, &node_is_restricted);
+        write_slice!(
+            offset_node_restrictions_bucket,
+            &node_restrictions.bucket_starts
+        );
+        write_slice!(offset_node_restrictions_data, &node_restrictions.data);
+        write_slice!(offset_node_positions, &self.node_positions);
+        write_slice!(offset_way_component, &way_component);
+
+        // Rewrite header
+        file.sync_all().unwrap();
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::Start(0)).unwrap();
+        file.write_all(bytemuck::bytes_of(&header)).unwrap();
     }
 }
