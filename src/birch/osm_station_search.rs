@@ -52,25 +52,88 @@ pub async fn osm_station_search(
     let focus_lat = query.focus_lat;
     let focus_lon = query.focus_lon;
 
+    let original_query = query.text.clone();
+    let mut cleaned_query = format!(" {} ", original_query.to_lowercase());
+    let stop_words = [
+        "station",
+        "tube",
+        "metro",
+        "subway",
+        "train",
+        "railway",
+        "transit",
+        "center",
+        "centre",
+        "bus",
+        "stop",
+        "hbf",
+        "hauptbahnhof",
+        "bahnhof",
+        "gare",
+        "estación",
+        "estacion",
+        "estação",
+        "stazione",
+        "terminal",
+        "interchange",
+    ];
+    for word in &stop_words {
+        let padded = format!(" {} ", word);
+        while cleaned_query.contains(&padded) {
+            cleaned_query = cleaned_query.replace(&padded, " ");
+        }
+    }
+    let cjk_stop_words = ["駅", "站", "역"];
+    for word in &cjk_stop_words {
+        cleaned_query = cleaned_query.replace(word, "");
+    }
+    cleaned_query = cleaned_query.trim().to_string();
+
+    if cleaned_query.is_empty() {
+        cleaned_query = original_query.clone();
+    }
+
+    let mut queries_to_search = vec![original_query.clone(), cleaned_query.clone()];
+
+    let lower_orig = original_query.to_lowercase();
+    if lower_orig.contains("hbf") {
+        queries_to_search.push(lower_orig.replace("hbf", "hauptbahnhof"));
+    }
+    if lower_orig.contains("hauptbahnhof") {
+        queries_to_search.push(lower_orig.replace("hauptbahnhof", "hbf"));
+    }
+
+    queries_to_search.sort();
+    queries_to_search.dedup();
+
+    let fields = [
+        "station_name_search^5",
+        "parent.country.name",
+        "parent.macro_region.name",
+        "parent.region.name",
+        "parent.macro_county.name",
+        "parent.county.name",
+        "parent.local_admin.name",
+        "parent.locality.name",
+        "parent.borough.name",
+        "parent.neighbourhood.name",
+    ];
+
     let mut es_query = json!({
         "function_score": {
             "query": {
-                "multi_match": {
-                    "query": query.text.clone(),
-                    "fields": [
-                        "station_name_search^5",
-                        "parent.country.name",
-                        "parent.macro_region.name",
-                        "parent.region.name",
-                        "parent.macro_county.name",
-                        "parent.county.name",
-                        "parent.local_admin.name",
-                        "parent.locality.name",
-                        "parent.borough.name",
-                        "parent.neighbourhood.name"
-                    ],
-                    "type": "cross_fields",
-                    "operator": "and"
+                "bool": {
+                    "should": queries_to_search.iter().map(|q| {
+                        json!({
+                            "multi_match": {
+                                "query": q,
+                                "fields": fields,
+                                "type": "cross_fields",
+                                "operator": "and"
+                            }
+                        })
+                    }).collect::<Vec<_>>(),
+                    "minimum_should_match": 1
                 }
             },
             "functions": [
