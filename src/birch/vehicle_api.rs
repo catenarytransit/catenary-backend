@@ -182,6 +182,14 @@ pub async fn get_vehicle_data_endpoint(
             )
             .await
         }
+        "omnitrans" => {
+            generic_number_lookup(
+                conn,
+                "north_america/united_states/california/omnitrans",
+                &query.label,
+            )
+            .await
+        }
         "vancouver-british-columbia-canada" => {
             generic_number_lookup(
                 conn,
