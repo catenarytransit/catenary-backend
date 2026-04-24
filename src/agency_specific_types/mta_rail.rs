@@ -76,6 +76,8 @@ pub struct TrainDetails {
     pub bike_rule: String,
 }
 
+// the root is a vec of MtaTrain
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct MtaTrain {
     pub train_id: String,

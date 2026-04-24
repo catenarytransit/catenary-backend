@@ -3,6 +3,8 @@ use scc::HashMap as SccHashMap;
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
 
+use std::collections::HashMap;
+
 use catenary::agency_specific_types::mta_rail::MtaTrain;
 use catenary::agency_specific_types::mta_subway::{MtaSubwayTrips, Trip};
 use catenary::consist_v1::{
@@ -10,6 +12,7 @@ use catenary::consist_v1::{
     PassengerClass, SiriOccupancy, UnifiedConsist, VehicleElement,
 };
 use ecow::EcoString;
+use catenary::agency_specific_types::mta_subway;
 use reqwest::Client;
 
 /// Maps an NYCT Subway Trip to a UnifiedConsist structure.
@@ -33,21 +36,25 @@ pub fn map_nyct_trip_to_consist(trip: &Trip) -> UnifiedConsist {
     }
 
     let group = ConsistGroup {
-        group_name: Some(EcoString::from(trip.trip_id.as_str())),
+        group_name: Some(EcoString::from(trip.nyct_train_id.as_str())),
         destination: Some(EcoString::from(trip.headsign.as_str())),
         vehicles,
         group_orientation: Some(Orientation::Unknown),
     };
 
     UnifiedConsist {
-        global_journey_id: EcoString::from(trip.trip_id.as_str()),
+        global_journey_id: EcoString::from(trip.nyct_train_id.as_str()),
         groups: vec![group],
         formation_status: FormationStatus::MatchesSchedule,
     }
 }
 
 /// Background task to fetch subway consists from the Helium API.
-pub async fn bg_fetch_nyct_consists(data_store: Arc<SccHashMap<String, AspenisedData>>) {
+pub async fn bg_fetch_nyct_consists(
+    data_store: Arc<
+        tokio::sync::RwLock<Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>>,
+    >,
+) {
     let client = Client::new();
 
     loop {
@@ -58,20 +65,19 @@ pub async fn bg_fetch_nyct_consists(data_store: Arc<SccHashMap<String, Aspenised
         {
             Ok(res) => {
                 if let Ok(data) = res.json::<MtaSubwayTrips>().await {
-                    if let Some(mut aspenised_data) = data_store.get_async("nyct").await {
-                        let mut nyct_data = aspenised_data.get_mut();
+                    println!("Fetched {} subway trips for Consist data", data.trips.len());
 
-                        for trip in data.trips {
-                            let consist = map_nyct_trip_to_consist(&trip);
-
-                            // In NYCT, AspenisedTripUpdate is mapped via trip_id in `gtfs-realtime`.
-                            if let Some(mut trip_update) =
-                                nyct_data.trip_updates.get_mut(trip.trip_id.as_str())
-                            {
-                                trip_update.consist = Some(consist);
-                            }
-                        }
+                    let mut trip_map = HashMap::new();
+                    for trip in data.trips {
+                        trip_map.insert(trip.nyct_train_id.clone(), trip);
                     }
+
+                    let mut write_guard = data_store.write().await;
+                    *write_guard = Some(trip_map);
+                    println!(
+                        "Updated authoritative NYCT subway data cache with {} trips",
+                        write_guard.as_ref().unwrap().len()
+                    );
                 }
             }
             Err(e) => {
@@ -132,50 +138,5 @@ pub fn map_mta_rail_train_to_consist(train: &MtaTrain) -> UnifiedConsist {
         global_journey_id: EcoString::from(train.train_id.as_str()),
         groups: vec![group],
         formation_status: FormationStatus::MatchesSchedule,
-    }
-}
-
-/// Background task to fetch LIRR and MNR rail consists from the Helium API.
-pub async fn bg_fetch_mta_rail_consists(data_store: Arc<SccHashMap<String, AspenisedData>>) {
-    let client = Client::new();
-
-    loop {
-        match client
-            .get("https://helium-prod.mylirr.org/v1/rail/trains")
-            .send()
-            .await
-        {
-            Ok(res) => {
-                if let Ok(trains) = res.json::<Vec<MtaTrain>>().await {
-                    for train in trains {
-                        let chateau_id = match train.railroad.as_str() {
-                            "LIRR" => "longislandrailroad",
-                            "MNR" => "metro~northrailroad",
-                            _ => continue,
-                        };
-
-                        if let Some(mut aspenised_data) = data_store.get_async(chateau_id).await {
-                            let mut rail_data = aspenised_data.get_mut();
-                            let consist = map_mta_rail_train_to_consist(&train);
-
-                            // Rail uses train_id to correlate with trip updates
-                            if let Some(mut trip_update) =
-                                rail_data.trip_updates.get_mut(train.train_id.as_str())
-                            {
-                                trip_update.consist = Some(consist);
-                            }
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!(
-                    "Failed to fetch MTA rail generic locations for Consist data: {}",
-                    e
-                );
-            }
-        }
-
-        sleep(Duration::from_secs(10)).await;
     }
 }

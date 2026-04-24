@@ -55,12 +55,13 @@ use tarpc::{
 use tokio::sync::Mutex;
 
 use uuid::Uuid;
+mod consist_cache_and_conversion;
 mod delay_calculation;
-mod hydrate_consists;
 mod import_alpenrose;
 mod route_type_overrides;
 mod stop_time_logic;
 use ahash::AHashMap;
+use catenary::agency_specific_types::mta_subway;
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -1724,9 +1725,13 @@ async fn main() -> anyhow::Result<()> {
         redis_client.clone(),
     ));
 
-    tokio::task::spawn(hydrate_consists::bg_fetch_nyct_consists(Arc::clone(
-        &authoritative_data_store,
-    )));
+    let authoritative_nyct_subway_data_cache: Arc<
+        tokio::sync::RwLock<Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>>,
+    > = Arc::new(tokio::sync::RwLock::new(None));
+
+    tokio::task::spawn(consist_cache_and_conversion::bg_fetch_nyct_consists(
+        Arc::clone(&authoritative_nyct_subway_data_cache),
+    ));
 
     let this_worker_id_copy = this_worker_id.clone();
 

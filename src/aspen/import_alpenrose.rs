@@ -1641,7 +1641,10 @@ pub async fn new_rt_data(
                                                         }
 
                                                         if let Some(platform) = &mut platform {
-                                                            if let (Some(aimed), Some(expected)) = (&platform.aimed, &platform.expected) {
+                                                            if let (Some(aimed), Some(expected)) = (
+                                                                &platform.aimed,
+                                                                &platform.expected,
+                                                            ) {
                                                                 if aimed != expected {
                                                                     platform.is_changed = true;
                                                                 }

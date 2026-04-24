@@ -14,7 +14,8 @@ pub struct MtaSubwayTrips {
 pub struct Trip {
     pub route_id: String,
     pub direction: String,
-    pub trip_id: String,
+    #[serde(rename = "tripId")]
+    pub nyct_train_id: String,
     pub shape_segment_ids: Vec<String>,
     pub estimated_latitude: Option<f64>,
     pub estimated_longitude: Option<f64>,
