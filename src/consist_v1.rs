@@ -91,6 +91,7 @@ pub enum AmenityType {
     FamilyZone,
     InfoPoint,
     DiningCar,
+    Toilet,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

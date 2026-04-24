@@ -918,9 +918,9 @@ pub async fn new_rt_data(
 
                         let mut position = vehicle_pos.position.as_ref().map(|position| {
                             let bearing = match realtime_feed_id.as_str() {
-                                "f-mta~nyc~rt~bustime" => position
-                                    .bearing
-                                    .map(|b| (90.0 - b).rem_euclid(360.0)),
+                                "f-mta~nyc~rt~bustime" => {
+                                    position.bearing.map(|b| (90.0 - b).rem_euclid(360.0))
+                                }
                                 _ => position.bearing,
                             };
 
@@ -1606,25 +1606,26 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
-                                }
                                 "nyct" => {
                                     if let TrackData::NyctSubway(Some(nyct_data)) =
                                         &fetched_track_data
                                     {
                                         if let Some(trip_id) = &trip_id {
                                             if let Some(stop_id) = &stu.stop_id {
-                                                if let Some(train_data) = nyct_data
-                                                    .track_lookup
-                                                    .get(trip_id.as_str())
+                                                if let Some(train_data) =
+                                                    nyct_data.track_lookup.get(trip_id.as_str())
                                                 {
                                                     if let Some(track) =
                                                         train_data.get(stop_id.as_str())
                                                     {
                                                         if let Some(act) = &track.actual_track {
-                                                            actual_track_resp = Some(act.clone().into());
+                                                            actual_track_resp =
+                                                                Some(act.clone().into());
                                                         }
-                                                        if let Some(sched) = &track.scheduled_track {
-                                                            scheduled_track_resp = Some(sched.clone().into());
+                                                        if let Some(sched) = &track.scheduled_track
+                                                        {
+                                                            scheduled_track_resp =
+                                                                Some(sched.clone().into());
                                                         }
                                                     }
                                                 }
@@ -1789,17 +1790,19 @@ pub async fn new_rt_data(
                         );
 
                         let mut consist = None;
-                        
+
                         let lirr_data_opt = match &fetched_track_data {
                             TrackData::LongIslandRailroad(Some(d)) => Some(d),
                             TrackData::MetroNorthRailroad(Some(d)) => Some(d),
-                            _ => None
+                            _ => None,
                         };
 
                         if let Some(lirr_data) = lirr_data_opt {
                             if let Some(trip) = compressed_trip {
                                 if let Some(trip_short_name) = &trip.trip_short_name {
-                                    if let Some(unified_consist) = lirr_data.consist_lookup.get(trip_short_name.as_str()) {
+                                    if let Some(unified_consist) =
+                                        lirr_data.consist_lookup.get(trip_short_name.as_str())
+                                    {
                                         consist = Some(unified_consist.clone());
                                     }
                                 }

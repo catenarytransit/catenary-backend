@@ -56,10 +56,10 @@ use tokio::sync::Mutex;
 
 use uuid::Uuid;
 mod delay_calculation;
+mod hydrate_consists;
 mod import_alpenrose;
 mod route_type_overrides;
 mod stop_time_logic;
-mod hydrate_consists;
 use ahash::AHashMap;
 use catenary::aspen_dataset::GtfsRtType;
 use catenary::aspen_dataset::*;
@@ -1724,10 +1724,9 @@ async fn main() -> anyhow::Result<()> {
         redis_client.clone(),
     ));
 
-    tokio::task::spawn(hydrate_consists::bg_fetch_nyct_consists(
-        Arc::clone(&authoritative_data_store),
-    ));
-
+    tokio::task::spawn(hydrate_consists::bg_fetch_nyct_consists(Arc::clone(
+        &authoritative_data_store,
+    )));
 
     let this_worker_id_copy = this_worker_id.clone();
 

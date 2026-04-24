@@ -92,7 +92,7 @@ pub fn map_mta_rail_consist(train: &MtaTrain) -> UnifiedConsist {
 pub struct LirrMnrTrackData {
     /// train_num (trip short name) -> gtfs stop_id -> track string
     pub track_lookup: HashMap<String, HashMap<String, String>>,
-    /// train_num -> consist 
+    /// train_num -> consist
     pub consist_lookup: HashMap<String, UnifiedConsist>,
 }
 
@@ -224,7 +224,7 @@ pub async fn fetch_lirr_mnr_track_data(
                 }
             }
         }
-        
+
         let consist = map_mta_rail_consist(train);
         consist_lookup.insert(train.train_num.clone(), consist);
     }
@@ -287,5 +287,8 @@ pub async fn fetch_lirr_mnr_track_data(
         }
     }
 
-    Some(LirrMnrTrackData { track_lookup, consist_lookup })
+    Some(LirrMnrTrackData {
+        track_lookup,
+        consist_lookup,
+    })
 }
