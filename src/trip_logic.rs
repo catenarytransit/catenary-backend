@@ -71,6 +71,7 @@ pub struct StopTimeRefresh {
     pub gtfs_stop_sequence: Option<u16>,
     pub rt_platform_string: Option<EcoString>,
     pub departure_occupancy_status: Option<u8>,
+    pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -107,6 +108,7 @@ pub struct TripIntroductionInformation {
     pub connections_per_stop: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>, // stop_id -> chateau -> route_ids
     pub trip_id: Option<String>,
     pub chateau: Option<String>,
+    pub consist: Option<crate::consist_v1::UnifiedConsist>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -130,6 +132,7 @@ pub struct StopTimeIntroduction {
     pub timepoint: Option<bool>,
     pub replaced_stop: bool,
     pub osm_station_id: Option<i64>,
+    pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Hash, Eq, PartialEq)]
@@ -452,6 +455,7 @@ pub async fn fetch_trip_rt_update(
                                                 .map(|x| {
                                                     crate::aspen_dataset::occupancy_status_to_u8(&x)
                                                 }),
+                                            platform_info: stop_time_update.platform_info.clone(),
                                         })
                                         .collect();
 
@@ -599,6 +603,8 @@ pub async fn fetch_trip_information(
         t.add("connect_to_etcd");
     }
 
+    let mut consist: Option<_> = None;
+
     let etcd =
         crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await;
 
@@ -738,6 +744,10 @@ pub async fn fetch_trip_information(
                         eprintln!("Error fetching alerts from aspen");
                     }
 
+                    if let Some(consist_rt) = &trip.consist {
+                        consist = Some(consist_rt.clone());
+                    }
+
                     let stop_times: Vec<StopTimeIntroduction> = trip
                         .stop_time_update
                         .iter()
@@ -755,6 +765,7 @@ pub async fn fetch_trip_information(
                                 name: stop.map(|x| x.name.clone()).flatten(),
                                 translations: None,
                                 rt_platform_string: None,
+                                platform_info: None,
                                 platform_code: None,
                                 code: stop.as_ref().map(|x| x.code.clone()).flatten(),
                                 gtfs_stop_sequence: stu.stop_sequence.map(|x| x as u16),
@@ -857,6 +868,7 @@ pub async fn fetch_trip_information(
                         color: route.color.clone(),
                         text_color: route.text_color.clone(),
                         vehicle: None,
+                        consist: consist,
                         route_type: route.route_type as i16,
                         stop_id_to_alert_ids: stop_id_to_alert_ids,
                         alert_id_to_alert: alert_id_to_alert,
@@ -1244,6 +1256,7 @@ pub async fn fetch_trip_information(
             name: stop.name.clone(),
             translations: None,
             platform_code: stop.platform_code.clone(),
+            platform_info: None,
             osm_station_id: stop.osm_station_id,
             timezone: match stop.timezone.as_ref() {
                 Some(tz) => match chrono_tz::Tz::from_str_insensitive(tz) {
@@ -1750,6 +1763,7 @@ pub async fn fetch_trip_information(
                                                                     timepoint: Some(false),
                                                                     replaced_stop: true,
                                                                     osm_station_id: None,
+                                                                    platform_info: None,
                                                                 });
                                                                 }
                                                                }
@@ -1900,6 +1914,13 @@ pub async fn fetch_trip_information(
                                             {
                                                 stop_time.rt_platform_string =
                                                     Some(rt_platform_string.to_string());
+                                            }
+
+                                            if let Some(platform_info) =
+                                                &stop_time_update.platform_info
+                                            {
+                                                stop_time.platform_info =
+                                                    Some(platform_info.clone());
                                             }
                                         }
                                     }
@@ -2170,6 +2191,7 @@ pub async fn fetch_trip_information(
         },
         trip_id: Some(query.trip_id.clone()),
         chateau: Some(chateau.clone()),
+        consist: None,
     };
 
     Ok(response)
