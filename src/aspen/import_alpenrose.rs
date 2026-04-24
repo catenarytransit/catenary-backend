@@ -917,10 +917,17 @@ pub async fn new_rt_data(
                         };
 
                         let mut position = vehicle_pos.position.as_ref().map(|position| {
+                            let bearing = match realtime_feed_id.as_str() {
+                                "f-mta~nyc~rt~bustime" => {
+                                    position.bearing.map(|b| (b + 90.0) % 360.0)
+                                }
+                                _ => position.bearing,
+                            };
+
                             CatenaryRtVehiclePosition {
                                 latitude: position.latitude,
                                 longitude: position.longitude,
-                                bearing: position.bearing,
+                                bearing: bearing,
                                 odometer: position.odometer,
                                 speed: match chateau_id {
                                     "vy~yhtymä~oyj" => position.speed.map(|x| x / 3.6),
