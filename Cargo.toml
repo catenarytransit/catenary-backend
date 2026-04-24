@@ -127,7 +127,7 @@ argon2 = "0.5.3"
 tzf-rs = "1.0"
 lazy_static = "1.4.0"
 serde_bytes = "0.11"
-bincode = { version = "2.0", features = ["serde"] }
+bincode = { version = "3.0", features = ["serde"] }
 evmap = "11.0.0"
 dashmap = "6.0"
 ipnetwork = "0.21.1"
