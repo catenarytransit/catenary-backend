@@ -1632,11 +1632,6 @@ pub async fn new_rt_data(
                                                             .track_lookup
                                                             .get(trip_short_name.as_str())
                                                         {
-                                                            println!(
-                                                                "Track data found for Amtrak train {}: {:#?}",
-                                                                trip_short_name, train_data
-                                                            );
-
                                                             if let Some(track) =
                                                                 train_data.get(stop_id.as_str())
                                                             {
