@@ -449,7 +449,7 @@ pub async fn new_rt_data(
             && matches!(
                 realtime_feed_id.as_str(),
                 "f-mta~nyc~rt~subway~1~2~3~4~5~6~7"
-                    | "f-mta~nyc~rt~subway~ace"
+                    | "f-mta~nyc~rt~subway~a~c~e"
                     | "f-mta~nyc~rt~subway~b~d~f~m"
                     | "f-mta~nyc~rt~subway~g"
                     | "f-mta~nyc~rt~subway~j~z"
