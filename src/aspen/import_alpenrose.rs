@@ -920,7 +920,7 @@ pub async fn new_rt_data(
                             let bearing = match realtime_feed_id.as_str() {
                                 "f-mta~nyc~rt~bustime" => position
                                     .bearing
-                                    .map(|b| (90.0 - position.bearing).rem_euclid(360.0)),
+                                    .map(|b| (90.0 - b).rem_euclid(360.0)),
                                 _ => position.bearing,
                             };
 
