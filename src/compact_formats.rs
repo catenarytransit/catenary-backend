@@ -54,6 +54,9 @@ pub struct CompactStopTimeUpdate {
     pub departure_occupancy_status: Option<i32>,
     pub schedule_relationship: Option<i32>,
     pub stop_time_properties: Option<Box<StopTimeProperties>>,
+    // NYCT extensions
+    pub actual_track: Option<String>,
+    pub scheduled_track: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,6 +200,8 @@ impl CompactStopTimeUpdate {
             departure_occupancy_status: stu.departure_occupancy_status,
             schedule_relationship: stu.schedule_relationship,
             stop_time_properties: stu.stop_time_properties.map(Box::new),
+            actual_track: None, // Need custom logic to extract from NYCT extension
+            scheduled_track: None,
         }
     }
 

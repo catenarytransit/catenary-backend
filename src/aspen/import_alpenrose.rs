@@ -1152,6 +1152,7 @@ pub async fn new_rt_data(
                             occupancy_status: vehicle_pos.occupancy_status,
                             occupancy_percentage: vehicle_pos.occupancy_percentage,
                             congestion_level: vehicle_pos.congestion_level,
+                            consist: None,
                         };
 
                         apply_route_type_overrides(
@@ -1346,6 +1347,8 @@ pub async fn new_rt_data(
                             }
 
                             let mut platform_resp = None;
+                            let mut actual_track_resp = None;
+                            let mut scheduled_track_resp = None;
 
                             match chateau_id {
                                 "metrolinktrains" => {
@@ -1603,6 +1606,32 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
+                                }
+                                "nyct" => {
+                                    if let TrackData::NyctSubway(Some(nyct_data)) =
+                                        &fetched_track_data
+                                    {
+                                        if let Some(trip_id) = &trip_id {
+                                            if let Some(stop_id) = &stu.stop_id {
+                                                if let Some(train_data) = nyct_data
+                                                    .track_lookup
+                                                    .get(trip_id.as_str())
+                                                {
+                                                    if let Some(track) =
+                                                        train_data.get(stop_id.as_str())
+                                                    {
+                                                        if let Some(act) = &track.actual_track {
+                                                            actual_track_resp = Some(act.clone().into());
+                                                        }
+                                                        if let Some(sched) = &track.scheduled_track {
+                                                            scheduled_track_resp = Some(sched.clone().into());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 _ => {}
                             }
 
@@ -1610,6 +1639,9 @@ pub async fn new_rt_data(
                                 stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
+                                actual_track: actual_track_resp,
+                                scheduled_track: scheduled_track_resp,
+                                platform_info: None,
                                 arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
                                     delay: None,
                                     time: match arrival.time {
@@ -1756,6 +1788,24 @@ pub async fn new_rt_data(
                             timezone,
                         );
 
+                        let mut consist = None;
+                        
+                        let lirr_data_opt = match &fetched_track_data {
+                            TrackData::LongIslandRailroad(Some(d)) => Some(d),
+                            TrackData::MetroNorthRailroad(Some(d)) => Some(d),
+                            _ => None
+                        };
+
+                        if let Some(lirr_data) = lirr_data_opt {
+                            if let Some(trip) = compressed_trip {
+                                if let Some(trip_short_name) = &trip.trip_short_name {
+                                    if let Some(unified_consist) = lirr_data.consist_lookup.get(trip_short_name.as_str()) {
+                                        consist = Some(unified_consist.clone());
+                                    }
+                                }
+                            }
+                        }
+
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_descriptor,
                             vehicle: trip_update.vehicle.clone().map(|x| x.into()),
@@ -1766,6 +1816,7 @@ pub async fn new_rt_data(
                             delay: delay,
                             trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
                             last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
+                            consist,
                         };
 
                         let trip_update = match REALTIME_FEEDS_TO_USE_VEHICLE_IDS

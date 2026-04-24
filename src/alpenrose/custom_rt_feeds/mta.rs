@@ -148,96 +148,10 @@ async fn get_mta_trips(
     Ok(decoded)
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainStatus {
-    otp: Option<i32>,
-    otp_location: Option<String>,
-    held: bool,
-    canceled: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainCar {
-    #[serde(rename = "type")]
-    traintype: String,
-    number: Option<i32>,
-    loading: String,
-    restroom: Option<bool>,
-    revenue: Option<bool>,
-    bikes: Option<i32>,
-    locomotive: bool,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainConsist {
-    cars: Vec<TrainCar>,
-    fleet: Option<String>,
-    actual_len: Option<i32>,
-    sched_len: Option<i32>,
-    occupancy: Option<String>,
-    occupancy_timestamp: Option<i32>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainLocation {
-    longitude: f32,
-    latitude: f32,
-    //recieved in miles per hour, needs conversion to meters per second
-    speed: Option<f32>,
-    heading: Option<f32>,
-    source: String,
-    timestamp: i32,
-    extra_info: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainTurf {
-    length: f32,
-    location_mp: f32,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainStop {
-    code: String,
-    sched_time: i32,
-    sign_track: Option<String>,
-    avps_track_id: Option<String>,
-    posted: bool,
-    t2s_track: String,
-    stop_status: Option<String>,
-    stop_type: String,
-    track_change: Option<bool>,
-    local_cancel: Option<bool>,
-    bus: bool,
-    occupancy: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct TrainDetails {
-    headsign: String,
-    summary: String,
-    peak_code: String,
-    branch: Option<String>,
-    stops: Vec<TrainStop>,
-    direction: String,
-    turf: Option<TrainTurf>,
-    //"PERMITTED" or "PROHIBITED"
-    bike_rule: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct MtaTrain {
-    train_id: String,
-    //MNR or LIRR
-    railroad: String,
-    run_date: String,
-    train_num: String,
-    realtime: bool,
-    details: TrainDetails,
-    consist: TrainConsist,
-    location: TrainLocation,
-    status: TrainStatus,
-}
+use catenary::agency_specific_types::mta_rail::{
+    MtaTrain, TrainCar, TrainConsist, TrainDetails, TrainLocation, TrainStatus, TrainStop,
+    TrainTurf,
+};
 
 struct MetroNorthLookupTables {}
 

@@ -36,6 +36,8 @@
 
 #[macro_use]
 extern crate diesel_derive_newtype;
+
+pub mod consist_v1;
 #[macro_use]
 extern crate serde;
 
@@ -95,6 +97,7 @@ use std::io::Cursor;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{fs::File, io::BufReader, io::BufWriter};
+pub mod agency_specific_types;
 pub mod aspen_dataset;
 pub mod compact_formats;
 pub mod connections_lookup;

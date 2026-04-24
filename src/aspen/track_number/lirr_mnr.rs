@@ -16,38 +16,84 @@ const AMTRAK_TO_MTA: &[(&str, &str)] = &[
     ("YNY", "0YK"), // Yonkers
 ];
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnifiedTrain {
-    #[serde(rename = "train_id")]
-    pub train_id: String,
-    pub railroad: String,
-    #[serde(rename = "train_num")]
-    pub train_num: String,
-    pub details: UnifiedTrainDetails,
-}
+use catenary::agency_specific_types::mta_rail::MtaTrain;
+use catenary::consist_v1::{
+    Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
+    PassengerClass, SiriOccupancy, UnifiedConsist, VehicleElement,
+};
+use ecow::EcoString;
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnifiedTrainDetails {
-    pub branch: Option<String>,
-    pub stops: Vec<UnifiedStop>,
-}
+pub fn map_mta_rail_consist(train: &MtaTrain) -> UnifiedConsist {
+    let mut vehicles = Vec::new();
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UnifiedStop {
-    pub code: String,
-    #[serde(rename = "sign_track")]
-    pub sign_track: Option<String>,
-    #[serde(rename = "t2s_track")]
-    pub t2s_track: String,
+    for (idx, car) in train.consist.cars.iter().enumerate() {
+        let occupancy = match car.loading.as_str() {
+            "EMPTY" => SiriOccupancy::Empty,
+            "LOW" => SiriOccupancy::Low,
+            "MEDIUM" => SiriOccupancy::Medium,
+            "HIGH" => SiriOccupancy::High,
+            _ => SiriOccupancy::Unknown,
+        };
+
+        let mut facilities = Vec::new();
+        if let Some(bikes) = car.bikes {
+            if bikes > 0 {
+                facilities.push(Amenity {
+                    amenity_type: AmenityType::BikeSpace,
+                    status: AmenityStatus::Available,
+                    count: Some(bikes as u16),
+                });
+            }
+        }
+        if let Some(restroom) = car.restroom {
+            if restroom {
+                facilities.push(Amenity {
+                    amenity_type: AmenityType::Toilet,
+                    status: AmenityStatus::Available,
+                    count: None,
+                });
+            }
+        }
+
+        vehicles.push(VehicleElement {
+            uic_number: EcoString::from(
+                car.number
+                    .map(|n: i32| n.to_string())
+                    .unwrap_or_default()
+                    .as_str(),
+            ),
+            label: car.number.map(|n: i32| EcoString::from(n.to_string())),
+            order: idx as u8,
+            position_on_platform: None,
+            facilities,
+            occupancy: Some(occupancy),
+            passenger_count: car.passengers,
+            passenger_class: Some(PassengerClass::Unknown),
+            is_locomotive: Some(car.locomotive),
+            is_revenue: car.revenue,
+        });
+    }
+
+    let group = ConsistGroup {
+        group_name: Some(EcoString::from(train.train_id.as_str())),
+        destination: Some(EcoString::from(train.details.headsign.as_str())),
+        vehicles,
+        group_orientation: Some(Orientation::Unknown),
+    };
+
+    UnifiedConsist {
+        global_journey_id: EcoString::from(train.train_id.as_str()),
+        groups: vec![group],
+        formation_status: FormationStatus::MatchesSchedule,
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct LirrMnrTrackData {
     /// train_num (trip short name) -> gtfs stop_id -> track string
     pub track_lookup: HashMap<String, HashMap<String, String>>,
+    /// train_num -> consist 
+    pub consist_lookup: HashMap<String, UnifiedConsist>,
 }
 
 pub async fn fetch_lirr_mnr_track_data(
@@ -128,7 +174,7 @@ pub async fn fetch_lirr_mnr_track_data(
         }
     };
 
-    let trains: Vec<UnifiedTrain> = match resp.json::<Vec<UnifiedTrain>>().await {
+    let trains: Vec<MtaTrain> = match resp.json::<Vec<MtaTrain>>().await {
         Ok(data) => data,
         Err(e) => {
             eprintln!("Error parsing unified locations response: {}", e);
@@ -137,6 +183,7 @@ pub async fn fetch_lirr_mnr_track_data(
     };
 
     let mut track_lookup: HashMap<String, HashMap<String, String>> = HashMap::new();
+    let mut consist_lookup: HashMap<String, UnifiedConsist> = HashMap::new();
 
     for train in &trains {
         let branch = train.details.branch.as_deref().unwrap_or("");
@@ -177,6 +224,9 @@ pub async fn fetch_lirr_mnr_track_data(
                 }
             }
         }
+        
+        let consist = map_mta_rail_consist(train);
+        consist_lookup.insert(train.train_num.clone(), consist);
     }
 
     let gtfs_rt_url = if is_mnr {
@@ -191,7 +241,8 @@ pub async fn fetch_lirr_mnr_track_data(
         if let Ok(resp) = direct_client.get(url).send().await {
             if let Ok(bytes) = resp.bytes().await {
                 use prost::Message;
-                if let Ok(feed) = catenary::mta_gtfs_rt::FeedMessage::decode(bytes.as_ref()) {
+                if let Ok(feed) = catenary::mta_gtfs_rt::mtarr::FeedMessage::decode(bytes.as_ref())
+                {
                     for entity in feed.entity {
                         if let Some(trip_update) = entity.trip_update {
                             let trip_id = trip_update.trip.trip_id.unwrap_or_default();
@@ -236,5 +287,5 @@ pub async fn fetch_lirr_mnr_track_data(
         }
     }
 
-    Some(LirrMnrTrackData { track_lookup })
+    Some(LirrMnrTrackData { track_lookup, consist_lookup })
 }

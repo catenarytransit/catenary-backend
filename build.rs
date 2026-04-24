@@ -15,11 +15,19 @@ fn main() {
             "#[derive(Deserialize,Serialize)] #[serde(rename_all = \"snake_case\")]",
         )
         .compile_protos(
-            &[
-                "src/gtfs_realtime_extensions/gtfs-realtime.proto",
-                "src/gtfs_realtime_extensions/gtfs-realtime-MTARR.proto",
-            ],
-            &["src/gtfs_realtime_extensions/"],
+            &["src/gtfs_realtime_extensions/gtfs-realtime-MTARR.proto"],
+            &["src/"],
+        )
+        .unwrap();
+
+    Config::new()
+        .type_attribute(
+            ".",
+            "#[derive(Deserialize,Serialize)] #[serde(rename_all = \"snake_case\")]",
+        )
+        .compile_protos(
+            &["src/gtfs_realtime_extensions/gtfs-realtime-NYCT.proto"],
+            &["src/"],
         )
         .unwrap();
 }

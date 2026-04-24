@@ -1,0 +1,60 @@
+syntax = "proto2";
+
+import "com/google/transit/realtime/gtfs-realtime.proto";
+
+option java_package = "com.google.transit.realtime";
+package transit_realtime;
+
+message MtaRailroadStopTimeUpdate {
+    optional string track = 1;
+    optional string trainStatus = 2;
+}
+
+extend transit_realtime.TripUpdate.StopTimeUpdate {
+   optional MtaRailroadStopTimeUpdate mta_railroad_stop_time_update = 1005;
+}
+
+message MtaRailroadCarriageDetails {
+    //Indicates the number of bikes permitted per carriage.
+    //0=bikes prohibited, -1=No limit.
+    optional int32 bicycles_allowed = 1 [default = 0];
+    
+    //A description of the carriage type/model.
+    optional string carriage_class = 2;
+    
+    // Whether the carriage has toilet facilities onboard.
+    enum QuietCarriage {
+
+      // It is unknown if the carriage is designated as a quiet carriage.
+      //  This is the default case.
+      UNKNOWN_QUIET_CARRIAGE = 0;
+
+      // The carriage is designated a quiet carriage.
+      QUIET_CARRIAGE = 1;
+
+      // The carriage is not designated as a quiet carriage.
+      NOT_QUIET_CARRIAGE = 2;
+    }
+    
+    optional QuietCarriage quiet_carriage = 3 [default = UNKNOWN_QUIET_CARRIAGE];
+    
+    // Whether the carriage has toilet facilities onboard.
+    enum ToiletFacilities {
+
+      // It is unknown if the carriage has toilet facilities. This is the
+      // default case.
+      UNKNOWN_TOILET_FACILITIES = 0;
+
+      // The carriage has toilet facilities onboard.
+      TOILET_ONBOARD = 1;
+
+      // The carriage does not have toilet facilities onboard.
+      NO_TOILET_ONBOARD = 2;
+    }
+    
+    optional ToiletFacilities toilet_facilities = 4 [default = UNKNOWN_TOILET_FACILITIES];
+}
+
+extend transit_realtime.VehiclePosition.CarriageDetails {
+    optional MtaRailroadCarriageDetails mta_railroad_carriage_details = 1005;
+}

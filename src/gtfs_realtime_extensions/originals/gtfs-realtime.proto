@@ -24,7 +24,7 @@
 
 syntax = "proto2";
 option java_package = "com.google.transit.realtime";
-package transit_realtime_mtarr;
+package transit_realtime;
 
 // The contents of a feed message.
 // A feed is a continuous stream of feed messages. Each message in the stream is
@@ -323,7 +323,13 @@ message TripUpdate {
     // NOTE: This field is still experimental, and subject to change. It may be formally adopted in the future.
     optional StopTimeProperties stop_time_properties = 6;
 
-    optional MtaRailroadStopTimeUpdate mta_railroad_stop_time_update = 1005;
+    // The extensions namespace allows 3rd-party developers to extend the
+    // GTFS Realtime Specification in order to add and evaluate new features
+    // and modifications to the spec.
+    extensions 1000 to 1999;
+
+    // The following extension IDs are reserved for private use by any organization.
+    extensions 9000 to 9999;
   }
 
   // Updates to StopTimes for the trip (both future, i.e., predictions, and in
@@ -585,7 +591,13 @@ message VehiclePosition {
     // This message/field is still experimental, and subject to change. It may be formally adopted in the future.
     optional uint32 carriage_sequence = 5;
 
-    optional MtaRailroadCarriageDetails mta_railroad_carriage_details = 1005;
+    // The extensions namespace allows 3rd-party developers to extend the
+    // GTFS Realtime Specification in order to add and evaluate new features and
+    // modifications to the spec.
+    extensions 1000 to 1999;
+
+    // The following extension IDs are reserved for private use by any organization.
+    extensions 9000 to 9999;
   }
 
   // Details of the multiple carriages of this given vehicle.
@@ -1244,50 +1256,4 @@ message ReplacementStop {
 
   // The following extension IDs are reserved for private use by any organization.
   extensions 9000 to 9999;
-}
-
-message MtaRailroadStopTimeUpdate {
-    optional string track = 1;
-    optional string trainStatus = 2;
-}
-
-message MtaRailroadCarriageDetails {
-    //Indicates the number of bikes permitted per carriage.
-    //0=bikes prohibited, -1=No limit.
-    optional int32 bicycles_allowed = 1 [default = 0];
-    
-    //A description of the carriage type/model.
-    optional string carriage_class = 2;
-    
-    // Whether the carriage has toilet facilities onboard.
-    enum QuietCarriage {
-
-      // It is unknown if the carriage is designated as a quiet carriage.
-      //  This is the default case.
-      UNKNOWN_QUIET_CARRIAGE = 0;
-
-      // The carriage is designated a quiet carriage.
-      QUIET_CARRIAGE = 1;
-
-      // The carriage is not designated as a quiet carriage.
-      NOT_QUIET_CARRIAGE = 2;
-    }
-    
-    optional QuietCarriage quiet_carriage = 3 [default = UNKNOWN_QUIET_CARRIAGE];
-    
-    // Whether the carriage has toilet facilities onboard.
-    enum ToiletFacilities {
-
-      // It is unknown if the carriage has toilet facilities. This is the
-      // default case.
-      UNKNOWN_TOILET_FACILITIES = 0;
-
-      // The carriage has toilet facilities onboard.
-      TOILET_ONBOARD = 1;
-
-      // The carriage does not have toilet facilities onboard.
-      NO_TOILET_ONBOARD = 2;
-    }
-    
-    optional ToiletFacilities toilet_facilities = 4 [default = UNKNOWN_TOILET_FACILITIES];
 }

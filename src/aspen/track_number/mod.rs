@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub mod lirr_mnr;
 pub mod metrolinx_platforms;
 pub mod viarail;
+pub mod nyct_subway;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlatformInfo {
@@ -22,6 +23,7 @@ pub enum TrackData {
     ViaRail(Option<viarail::ViaRailTrackData>),
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
+    NyctSubway(Option<nyct_subway::NyctSubwayTrackData>),
     None,
 }
 
@@ -285,6 +287,9 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
         ),
         "longislandrailroad" => TrackData::LongIslandRailroad(
             lirr_mnr::fetch_lirr_mnr_track_data(chateau_id, pool).await,
+        ),
+        "nyct" => TrackData::NyctSubway(
+            nyct_subway::fetch_nyct_subway_track_data().await,
         ),
         _ => TrackData::None,
     }

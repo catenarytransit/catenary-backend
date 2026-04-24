@@ -1,3 +1,8 @@
-// Generated from local gtfs-realtime.proto which is injected with MTARR extensions
+// Generated from local protobufs
+pub mod mtarr {
+    include!(concat!(env!("OUT_DIR"), "/transit_realtime_mtarr.rs"));
+}
 
-include!(concat!(env!("OUT_DIR"), "/transit_realtime.rs"));
+pub mod nyct {
+    include!(concat!(env!("OUT_DIR"), "/transit_realtime_nyct.rs"));
+}
