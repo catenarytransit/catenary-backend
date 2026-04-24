@@ -1712,6 +1712,12 @@ async fn main() -> anyhow::Result<()> {
     }
     println!("Finished loading persisted data.");
 
+    let authoritative_nyct_subway_data_cache: Arc<
+        tokio::sync::RwLock<
+            Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>,
+        >,
+    > = Arc::new(tokio::sync::RwLock::new(None));
+
     let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
     > = tokio::task::spawn(async_threads_alpenrose::alpenrose_process_threads(
@@ -1723,13 +1729,12 @@ async fn main() -> anyhow::Result<()> {
         Arc::clone(&alpenrose_to_process_queue_chateaux),
         etcd_lease_id_for_this_worker,
         redis_client.clone(),
+        Arc::clone(&authoritative_nyct_subway_data_cache),
     ));
 
-    let authoritative_nyct_subway_data_cache: Arc<
-        tokio::sync::RwLock<Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>>,
-    > = Arc::new(tokio::sync::RwLock::new(None));
-
-    tokio::task::spawn(consist_cache_and_conversion::bg_fetch_nyct_consists(
+    let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
+        Result<(), Box<dyn Error + Sync + Send>>,
+    > = tokio::task::spawn(consist_cache_and_conversion::bg_fetch_nyct_consists(
         Arc::clone(&authoritative_nyct_subway_data_cache),
     ));
 
@@ -1889,6 +1894,7 @@ async fn main() -> anyhow::Result<()> {
         //flatten_stopping_is_err(async_from_alpenrose_processor_handler),
         flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer),
+        flatten_stopping_is_err(nyct_subway_fetch_join_handle)
     )
     .unwrap();
 

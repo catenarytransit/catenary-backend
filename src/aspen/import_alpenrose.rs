@@ -22,7 +22,6 @@ use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
 use chrono::TimeZone;
-
 use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
@@ -33,13 +32,13 @@ use catenary::compact_formats::{
 };
 use lazy_static::lazy_static;
 
+use prost::Message;
 use scc::HashIndex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
-
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -139,6 +138,16 @@ pub async fn new_rt_data(
     alerts_response_code: Option<u16>,
     pool: Arc<CatenaryPostgresPool>,
     redis_client: &redis::Client,
+    authoritative_nyct_subway_data_cache: Arc<
+        tokio::sync::RwLock<
+            Option<
+                std::collections::HashMap<
+                    String,
+                    catenary::agency_specific_types::mta_subway::Trip,
+                >,
+            >,
+        >,
+    >,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     println!(
         "Started processing for chateau {} and feed {}",
@@ -424,6 +433,86 @@ pub async fn new_rt_data(
                                 trip_ids_to_lookup.insert(trip_id.clone());
                             }
                         }
+                    }
+                }
+            }
+        }
+
+        let mut is_subway_feed_nyc = false;
+        //let mut second_decode_nyc_subway: Option<catenary::mta_gtfs_rt::nyct::FeedMessage> = None;
+        let mut second_decode_nyc_subway_sorted_by_trip_update_id: Option<
+            std::collections::HashMap<String, catenary::mta_gtfs_rt::nyct::FeedEntity>,
+        > = None;
+
+        //New York City Subway specific, identify is it a subway feed?
+        if chateau_id == "nyct"
+            && matches!(
+                realtime_feed_id.as_str(),
+                "f-mta~nyc~rt~subway~1~2~3~4~5~6~7"
+                    | "f-mta~nyc~rt~subway~ace"
+                    | "f-mta~nyc~rt~subway~b~d~f~m"
+                    | "f-mta~nyc~rt~subway~g"
+                    | "f-mta~nyc~rt~subway~j~z"
+                    | "f-mta~nyc~rt~subway~l"
+                    | "f-mta~nyc~rt~subway~n~q~r~w"
+                    | "f-mta~nyc~rt~subway~sir"
+            )
+        {
+            is_subway_feed_nyc = true;
+
+            // A second decoder is used to extract the special track numbers and train ids
+
+            let client = reqwest::Client::new();
+
+            let url_to_fetch = catenary::mta_gtfs_rt::URLS_LOOKUP
+                .iter()
+                .find(|(id, _)| *id == realtime_feed_id.as_str())
+                .map(|(_, url)| *url);
+
+            if let Some(url) = url_to_fetch {
+                let response = client.get(url).send().await;
+                println!("Fetching NYCT subway for second decoder from url: {}", url);
+
+                match response {
+                    Ok(response) => {
+                        if response.status().is_success() {
+                            if let Ok(bytes) = response.bytes().await {
+                                match catenary::mta_gtfs_rt::nyct::FeedMessage::decode(
+                                    bytes.as_ref(),
+                                ) {
+                                    Ok(feed) => {
+                                        // second_decode_nyc_subway = Some(feed);
+
+                                        let mut table = std::collections::HashMap::new();
+
+                                        for entity in feed.entity {
+                                            table.insert(entity.id.clone(), entity.clone());
+                                        }
+
+                                        second_decode_nyc_subway_sorted_by_trip_update_id =
+                                            Some(table);
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "Error decoding NYCT subway feed for second decoder: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            } else {
+                                println!(
+                                    "Error getting bytes from NYCT subway feed response for second decoder"
+                                );
+                            }
+                        } else {
+                            println!(
+                                "Non-success status code {} when fetching NYCT subway feed for second decoder",
+                                response.status()
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        println!("Error fetching NYCT subway feed for second decoder: {}", e);
                     }
                 }
             }
@@ -1329,6 +1418,68 @@ pub async fn new_rt_data(
                             trip_descriptor.start_date = None;
                         }
 
+                        let mut consist = None;
+
+                        let mut nyct_stus_copied: Option<
+                            Vec<catenary::mta_gtfs_rt::nyct::trip_update::StopTimeUpdate>,
+                        > = None;
+
+                        //NYC subway consist analysis
+                        if is_subway_feed_nyc {
+                            let read_guard = authoritative_nyct_subway_data_cache.read().await;
+
+                            if let Some(ref nyc_subway_data_cache) = *read_guard {
+                                if let Some(second_decode_nyc_subway_sorted_by_trip_update_id) =
+                                    &second_decode_nyc_subway_sorted_by_trip_update_id
+                                {
+                                    let nyc_protobuf_version_trip_update =
+                                        second_decode_nyc_subway_sorted_by_trip_update_id
+                                            .get(&trip_update_entity.id);
+
+                                    if let Some(nyc_protobuf_version_trip_update) =
+                                        &nyc_protobuf_version_trip_update
+                                    {
+                                        //extract the train id
+
+                                        if let Some(nyc_protobuf_trip_update_section) =
+                                            &nyc_protobuf_version_trip_update.trip_update
+                                        {
+                                            nyct_stus_copied = Some(
+                                                nyc_protobuf_trip_update_section
+                                                    .stop_time_update
+                                                    .clone(),
+                                            );
+
+                                            if let Some(nyct_train_descriptor) =
+                                                &nyc_protobuf_trip_update_section
+                                                    .trip
+                                                    .nyct_trip_descriptor
+                                            {
+                                                let nyct_train_id =
+                                                    nyct_train_descriptor.train_id.clone();
+
+                                                if let Some(nyct_train_id) = nyct_train_id {
+                                                    match nyc_subway_data_cache.get(&nyct_train_id)
+                                                    {
+                                                        None => {
+                                                            println!(
+                                                                "This train not found in helium"
+                                                            );
+                                                        }
+                                                        Some(associated_helium_data) => {
+                                                            consist = Some(crate::consist_cache_and_conversion::map_nyct_trip_to_consist(&associated_helium_data));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                println!("No NYCT subway data found!");
+                            }
+                        }
+
                         let mut stop_time_updates_vec = Vec::new();
                         for stu in &trip_update.stop_time_update {
                             let mut resolved_stop_id: Option<String> = stu.stop_id.clone();
@@ -1607,48 +1758,52 @@ pub async fn new_rt_data(
                                     }
                                 }
                                 "nyct" => {
-                                    if let TrackData::NyctSubway(Some(nyct_data)) =
-                                        &fetched_track_data
-                                    {
-                                        if let Some(trip_id) = &trip_id {
-                                            if let Some(stop_id) = &stu.stop_id {
-                                                if let Some(train_data) =
-                                                    nyct_data.track_lookup.get(trip_id.as_str())
+                                    if let Some(nyct_stus_copied) = &nyct_stus_copied {
+                                        platform =
+                                            Some(catenary::consist_v1::AspenisedPlatformInfo {
+                                                aimed: None,
+                                                expected: None,
+                                                platform_sectors: None,
+                                                is_changed: false,
+                                            });
+
+                                        let matching_nyct_protobuf_stu =
+                                            nyct_stus_copied.iter().find(|x| {
+                                                x.stop_id.as_ref().map(|x| x.as_str())
+                                                    == stu.stop_id.as_ref().map(|x| x.as_str())
+                                                    && stu.stop_id.is_some()
+                                            });
+
+                                        if let Some(matching_nyct_protobuf_stu) =
+                                            &matching_nyct_protobuf_stu
+                                        {
+                                            if let Some(nyct_stop_time_update) =
+                                                &matching_nyct_protobuf_stu.nyct_stop_time_update
+                                            {
+                                                if let Some(sched) =
+                                                    &nyct_stop_time_update.scheduled_track
                                                 {
-                                                    if let Some(track) =
-                                                        train_data.get(stop_id.as_str())
+                                                    if let Some(platform) = &mut platform {
+                                                        platform.expected =
+                                                            Some(sched.clone().into());
+                                                    }
+                                                }
+
+                                                if let Some(act) =
+                                                    &nyct_stop_time_update.actual_track
+                                                {
+                                                    if let Some(platform) = &mut platform {
+                                                        platform.aimed = Some(act.clone().into());
+                                                        platform_resp = Some(act.clone().into());
+                                                    }
+                                                }
+
+                                                if let Some(platform) = &mut platform {
+                                                    if let (Some(aimed), Some(expected)) =
+                                                        (&platform.aimed, &platform.expected)
                                                     {
-                                                        platform = Some(catenary::consist_v1::AspenisedPlatformInfo {
-                                                            aimed: None,
-                                                            expected: None,
-                                                            platform_sectors: None,
-                                                            is_changed: false
-                                                        });
-
-                                                        if let Some(sched) = &track.scheduled_track
-                                                        {
-                                                            if let Some(platform) = &mut platform {
-                                                                platform.expected =
-                                                                    Some(sched.clone().into());
-                                                            }
-                                                        }
-
-                                                        if let Some(act) = &track.actual_track {
-                                                            if let Some(platform) = &mut platform {
-                                                                platform.aimed =
-                                                                    Some(act.clone().into());
-                                                            }
-                                                        }
-
-                                                        if let Some(platform) = &mut platform {
-                                                            if let (Some(aimed), Some(expected)) = (
-                                                                &platform.aimed,
-                                                                &platform.expected,
-                                                            ) {
-                                                                if aimed != expected {
-                                                                    platform.is_changed = true;
-                                                                }
-                                                            }
+                                                        if aimed != expected {
+                                                            platform.is_changed = true;
                                                         }
                                                     }
                                                 }
@@ -1809,8 +1964,6 @@ pub async fn new_rt_data(
                             &calendar_structure,
                             timezone,
                         );
-
-                        let mut consist = None;
 
                         let lirr_data_opt = match &fetched_track_data {
                             TrackData::LongIslandRailroad(Some(d)) => Some(d),

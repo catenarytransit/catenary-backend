@@ -6,13 +6,13 @@ use tokio::time::{Duration, sleep};
 use std::collections::HashMap;
 
 use catenary::agency_specific_types::mta_rail::MtaTrain;
+use catenary::agency_specific_types::mta_subway;
 use catenary::agency_specific_types::mta_subway::{MtaSubwayTrips, Trip};
 use catenary::consist_v1::{
     Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
     PassengerClass, SiriOccupancy, UnifiedConsist, VehicleElement,
 };
 use ecow::EcoString;
-use catenary::agency_specific_types::mta_subway;
 use reqwest::Client;
 
 /// Maps an NYCT Subway Trip to a UnifiedConsist structure.
@@ -52,9 +52,11 @@ pub fn map_nyct_trip_to_consist(trip: &Trip) -> UnifiedConsist {
 /// Background task to fetch subway consists from the Helium API.
 pub async fn bg_fetch_nyct_consists(
     data_store: Arc<
-        tokio::sync::RwLock<Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>>,
+        tokio::sync::RwLock<
+            Option<HashMap<String, catenary::agency_specific_types::mta_subway::Trip>>,
+        >,
     >,
-) {
+) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
     let client = Client::new();
 
     loop {
@@ -87,6 +89,11 @@ pub async fn bg_fetch_nyct_consists(
 
         sleep(Duration::from_secs(10)).await;
     }
+
+    Err(Box::new(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        "bg_fetch_nyct_consists task terminated unexpectedly",
+    )))
 }
 
 /// Maps an MTA Rail (LIRR/MNR) Train to a UnifiedConsist structure.
