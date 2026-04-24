@@ -455,8 +455,6 @@ pub struct AspenisedStopTimeUpdate {
     pub stop_time_properties: Option<AspenisedStopTimeProperties>,
     pub platform_string: Option<ecow::EcoString>,
     pub old_rt_data: bool,
-    pub actual_track: Option<ecow::EcoString>,
-    pub scheduled_track: Option<ecow::EcoString>,
     pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
 }
 

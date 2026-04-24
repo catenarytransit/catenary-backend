@@ -104,7 +104,7 @@ pub struct AspenisedPlatformInfo {
 
     /// Full sector map of the platform (DB: platform.sectors)
     /// Used to draw the platform in the UI independently of the train.
-    pub platform_sectors: Vec<PlatformSectorDefinition>,
+    pub platform_sectors: Option<Vec<PlatformSectorDefinition>>,
 
     pub is_changed: bool,
 }

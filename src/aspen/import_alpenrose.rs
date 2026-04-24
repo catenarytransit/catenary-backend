@@ -1347,8 +1347,8 @@ pub async fn new_rt_data(
                             }
 
                             let mut platform_resp = None;
-                            let mut actual_track_resp = None;
-                            let mut scheduled_track_resp = None;
+                            let mut platform: Option<catenary::consist_v1::AspenisedPlatformInfo> =
+                                None;
 
                             match chateau_id {
                                 "metrolinktrains" => {
@@ -1618,14 +1618,34 @@ pub async fn new_rt_data(
                                                     if let Some(track) =
                                                         train_data.get(stop_id.as_str())
                                                     {
-                                                        if let Some(act) = &track.actual_track {
-                                                            actual_track_resp =
-                                                                Some(act.clone().into());
-                                                        }
+                                                        platform = Some(catenary::consist_v1::AspenisedPlatformInfo {
+                                                            aimed: None,
+                                                            expected: None,
+                                                            platform_sectors: None,
+                                                            is_changed: false
+                                                        });
+
                                                         if let Some(sched) = &track.scheduled_track
                                                         {
-                                                            scheduled_track_resp =
-                                                                Some(sched.clone().into());
+                                                            if let Some(platform) = &mut platform {
+                                                                platform.expected =
+                                                                    Some(sched.clone().into());
+                                                            }
+                                                        }
+
+                                                        if let Some(act) = &track.actual_track {
+                                                            if let Some(platform) = &mut platform {
+                                                                platform.aimed =
+                                                                    Some(act.clone().into());
+                                                            }
+                                                        }
+
+                                                        if let Some(platform) = &mut platform {
+                                                            if let (Some(aimed), Some(expected)) = (&platform.aimed, &platform.expected) {
+                                                                if aimed != expected {
+                                                                    platform.is_changed = true;
+                                                                }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -1640,9 +1660,7 @@ pub async fn new_rt_data(
                                 stop_sequence: stu.stop_sequence.map(|x| x as u16),
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
-                                actual_track: actual_track_resp,
-                                scheduled_track: scheduled_track_resp,
-                                platform_info: None,
+                                platform_info: platform,
                                 arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
                                     delay: None,
                                     time: match arrival.time {
