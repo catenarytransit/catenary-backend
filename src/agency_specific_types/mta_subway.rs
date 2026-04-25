@@ -59,6 +59,49 @@ pub struct Stop {
     pub attributes: Vec<String>,
 }
 
+impl Trip {
+    /// Generates a condensed summary string of the consist car numbers.
+    /// Groups consecutive car numbers into ranges (e.g., "6645-6641").
+    pub fn get_consist_summary(&self) -> String {
+        let cars = match &self.consist_cars {
+            Some(c) if !c.is_empty() => c,
+            _ => return String::new(),
+        };
+
+        // Parse numbers into integers, ignoring any that fail to parse
+        let nums: Vec<i32> = cars
+            .iter()
+            .filter_map(|car| car.number.parse::<i32>().ok())
+            .collect();
+
+        if nums.is_empty() {
+            return String::new();
+        }
+
+        let mut ranges = Vec::new();
+        let mut start_idx = 0;
+
+        for i in 1..=nums.len() {
+            // Check if we have reached the end or if the sequence is broken
+            // A sequence is broken if the absolute difference is not 1
+            if i == nums.len() || (nums[i] - nums[i - 1]).abs() != 1 {
+                let range_str = if start_idx == i - 1 {
+                    // Single car, no range
+                    nums[start_idx].to_string()
+                } else {
+                    // Range found
+                    format!("{}-{}", nums[start_idx], nums[i - 1])
+                };
+
+                ranges.push(range_str);
+                start_idx = i;
+            }
+        }
+
+        ranges.join(",")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

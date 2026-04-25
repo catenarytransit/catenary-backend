@@ -1419,6 +1419,7 @@ pub async fn new_rt_data(
                         }
 
                         let mut consist = None;
+                        let mut helium_vehicle_summary_string: Option<String> = None;
 
                         let mut nyct_stus_copied: Option<
                             Vec<catenary::mta_gtfs_rt::nyct::trip_update::StopTimeUpdate>,
@@ -1468,10 +1469,25 @@ pub async fn new_rt_data(
                                                         }
                                                         Some(associated_helium_data) => {
                                                             consist = Some(crate::consist_cache_and_conversion::map_nyct_trip_to_consist(&associated_helium_data));
-                                                            
-                                                            if let (Some(lat), Some(lon)) = (associated_helium_data.estimated_latitude, associated_helium_data.estimated_longitude) {
-                                                                let vehicle_id = trip_update_entity.id.clone();
-                                                                
+
+                                                            if let (Some(lat), Some(lon)) = (
+                                                                associated_helium_data
+                                                                    .estimated_latitude,
+                                                                associated_helium_data
+                                                                    .estimated_longitude,
+                                                            ) {
+                                                                let vehicle_id =
+                                                                    trip_update_entity.id.clone();
+
+                                                                let vehicle_summary_string =
+                                                                    associated_helium_data
+                                                                        .get_consist_summary();
+                                                                helium_vehicle_summary_string =
+                                                                    Some(
+                                                                        vehicle_summary_string
+                                                                            .clone(),
+                                                                    );
+
                                                                 let pos_aspenised = AspenisedVehiclePosition {
                                                                     trip: Some(AspenisedVehicleTripInfo {
                                                                         trip_id: trip_descriptor.trip_id.clone(),
@@ -1497,7 +1513,7 @@ pub async fn new_rt_data(
                                                                     timestamp: Some(associated_helium_data.updated_at.map(|x| x as u64).unwrap_or_else(|| trip_update.timestamp.unwrap_or(0))),
                                                                     vehicle: Some(AspenisedVehicleDescriptor {
                                                                         id: Some(vehicle_id.clone()),
-                                                                        label: Some(nyct_train_id.clone()),
+                                                                        label: Some(vehicle_summary_string.clone()),
                                                                         license_plate: None,
                                                                         wheelchair_accessible: None,
                                                                     }),
@@ -1509,18 +1525,32 @@ pub async fn new_rt_data(
                                                                     congestion_level: None,
                                                                     consist: consist.clone(),
                                                                 };
-                                                    
-                                                                aspenised_vehicle_positions.insert(vehicle_id.clone(), pos_aspenised);
-                                                    
-                                                                if let Some(t_id) = &trip_descriptor.trip_id {
+
+                                                                aspenised_vehicle_positions.insert(
+                                                                    vehicle_id.clone(),
+                                                                    pos_aspenised,
+                                                                );
+
+                                                                if let Some(t_id) =
+                                                                    &trip_descriptor.trip_id
+                                                                {
                                                                     trip_id_to_vehicle_gtfs_rt_id
                                                                         .entry(t_id.clone())
-                                                                        .and_modify(|x| x.push(vehicle_id.clone()))
-                                                                        .or_insert(vec![vehicle_id.clone()]);
+                                                                        .and_modify(|x| {
+                                                                            x.push(
+                                                                                vehicle_id.clone(),
+                                                                            )
+                                                                        })
+                                                                        .or_insert(vec![
+                                                                            vehicle_id.clone(),
+                                                                        ]);
                                                                 }
-                                                                
-                                                                if let Some(route_id) = &trip_descriptor.route_id {
-                                                                    route_ids_to_insert.insert(route_id.clone());
+
+                                                                if let Some(route_id) =
+                                                                    &trip_descriptor.route_id
+                                                                {
+                                                                    route_ids_to_insert
+                                                                        .insert(route_id.clone());
                                                                 }
                                                             }
                                                         }
@@ -2033,9 +2063,29 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        let mut trip_update_vehicle: Option<AspenisedVehicleDescriptor> =
+                            trip_update.vehicle.clone().map(|x| x.into());
+
+                        if let Some(vehicle_summary_string) = helium_vehicle_summary_string.clone()
+                        {
+                            match trip_update_vehicle.as_mut() {
+                                Some(vehicle) => {
+                                    vehicle.label = Some(vehicle_summary_string);
+                                }
+                                None => {
+                                    trip_update_vehicle = Some(AspenisedVehicleDescriptor {
+                                        id: Some(trip_update_entity.id.clone()),
+                                        label: Some(vehicle_summary_string),
+                                        license_plate: None,
+                                        wheelchair_accessible: None,
+                                    });
+                                }
+                            }
+                        }
+
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_descriptor,
-                            vehicle: trip_update.vehicle.clone().map(|x| x.into()),
+                            vehicle: trip_update_vehicle,
                             trip_headsign: trip_headsign.clone(),
                             found_schedule_trip_id: compressed_trip.is_some(),
                             stop_time_update: stop_time_update,
