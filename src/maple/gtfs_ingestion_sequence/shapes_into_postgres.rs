@@ -27,7 +27,7 @@ pub async fn shapes_into_postgres(
     chateau_id: &str,
     attempt_id: &str,
     shape_id_to_route_ids_lookup: &HashMap<String, HashSet<String>>,
-    gtfs_shapes_minimised: &Option<AHashMap<String, Vec<ShapePoint>>>,
+    gtfs_shapes_minimised: &Option<crate::shapes_reader::MmapShapeReader>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     //establish a connection to the database
     let conn_pool = arc_conn_pool.as_ref();
@@ -35,13 +35,21 @@ pub async fn shapes_into_postgres(
     let conn = &mut conn_pre?;
 
     if let Some(gtfs_shapes_minimised) = &gtfs_shapes_minimised {
-        for group in &gtfs_shapes_minimised.iter().chunks(100) {
+        let keys: Vec<String> = gtfs_shapes_minimised.index.keys().cloned().collect();
+
+        for group in &keys.into_iter().chunks(100) {
             let mut batch_of_shapes: Vec<catenary::models::Shape> = vec![];
 
-            for (shape_id, shape) in group {
+            // Now shape_id will correctly be inferred as a String
+            for shape_id in group {
+                let shape = match gtfs_shapes_minimised.get_shape(&shape_id) {
+                    Some(s) => s,
+                    None => continue,
+                };
+
                 let mut route_type_number = 3;
 
-                let route_ids = shape_id_to_route_ids_lookup.get(shape_id);
+                let route_ids = shape_id_to_route_ids_lookup.get(&shape_id);
 
                 if let Some(route_ids) = route_ids {
                     let route = gtfs.routes.get(route_ids.iter().next().unwrap());
@@ -60,7 +68,7 @@ pub async fn shapes_into_postgres(
                     None => None,
                 };
 
-                let bg_color = match shape_to_color_lookup.get(shape_id) {
+                let bg_color = match shape_to_color_lookup.get(&shape_id) {
                     Some(color) => match route {
                         Some(route) => colour_correction::fix_background_colour_rgb_feed_route(
                             feed_id,
@@ -137,7 +145,7 @@ pub async fn shapes_into_postgres(
                                 .collect(),
                         };
 
-                        let text_color = match shape_to_text_color_lookup.get(shape_id) {
+                        let text_color = match shape_to_text_color_lookup.get(&shape_id) {
                             Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
                             None => String::from("000000"),
                         };

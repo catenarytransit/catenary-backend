@@ -773,9 +773,8 @@ pub async fn gtfs_process_feed(
 
     let gtfs_shapes_minimised = match std::path::Path::new(&shapes_txt_path).exists() {
         true => {
-            let shapes_read = faster_shape_reader(Path::new(&shapes_txt_path).to_path_buf());
-
-            shapes_read.ok()
+            let reader = MmapShapeReader::new(Path::new(&shapes_txt_path).to_path_buf());
+            reader.ok()
         }
         false => None,
     };
@@ -2116,13 +2115,9 @@ pub async fn gtfs_process_feed(
                                 .filter_map(|shape_id| {
                                     gtfs_shapes_minimised
                                         .as_ref()
-                                        .map(|gtfs_shapes_minimised| {
-                                            gtfs_shapes_minimised.get(shape_id.as_str())
-                                        })
-                                        .flatten()
+                                        .and_then(|reader| reader.get_shape(shape_id.as_str()))
                                 })
-                                .cloned()
-                                .flatten()
+                                .flatten() // Flattens Vec<Vec<ShapePoint>> into Vec<ShapePoint>
                                 .collect::<Vec<_>>(),
                         )
                     });
