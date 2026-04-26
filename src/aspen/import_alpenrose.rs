@@ -1496,7 +1496,7 @@ pub async fn new_rt_data(
                                                                         start_time: trip_update.trip.start_time.clone(),
                                                                         schedule_relationship: option_i32_to_schedule_relationship(&trip_update.trip.schedule_relationship),
                                                                         route_id: trip_descriptor.route_id.clone(),
-                                                                        trip_headsign: trip_headsign.clone().map(|x| x.to_string()),
+                                                                        trip_headsign: Some(associated_helium_data.headsign.clone()),
                                                                         trip_short_name: match &trip_id {
                                                                             Some(t_id) => trip_id_to_trip.get(t_id).and_then(|t| t.trip_short_name.as_ref().map(|x| x.to_string())),
                                                                             None => None,
@@ -1510,7 +1510,7 @@ pub async fn new_rt_data(
                                                                         odometer: None,
                                                                         speed: None,
                                                                     }),
-                                                                    timestamp: Some(associated_helium_data.updated_at.map(|x| x as u64).unwrap_or_else(|| trip_update.timestamp.unwrap_or(0))),
+                                                                    timestamp: associated_helium_data.updated_at.map(|x| x as u64),
                                                                     vehicle: Some(AspenisedVehicleDescriptor {
                                                                         id: Some(vehicle_id.clone()),
                                                                         label: Some(vehicle_summary_string.clone()),
