@@ -1543,6 +1543,23 @@ pub async fn gtfs_process_feed(
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
 
+    let original_gtfs_nyc_file: Option<Gtfs> = match feed_id {
+        "f-dr5r-mtasubway" => {
+            Gtfs::from_url("https://rrgtfsfeeds.s3.amazonaws.com/gtfs_subway.zip").ok()
+        }
+        _ => None,
+    };
+
+    let stop_ids_to_route_ids = match &original_gtfs_nyc_file {
+        Some(gtfs) => {
+            let (stop_ids_to_route_types, stop_ids_to_route_ids) =
+                make_hashmap_stops_to_route_types_and_ids(&gtfs);
+
+            stop_ids_to_route_ids
+        }
+        None => stop_ids_to_route_ids,
+    };
+
     let stop_id_to_children_ids = make_hashmaps_of_children_stop_info(&gtfs);
 
     println!(
