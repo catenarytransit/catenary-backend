@@ -86,8 +86,7 @@ pub async fn shapes_into_postgres(
                 // Metro Los Angeles often has geometry that includes sections that are part of the railyard or are currently in construction
                 let preshape: Vec<ShapePoint> = match feed_id {
                     "f-9q5-metro~losangeles~rail" => shape
-                        .clone()
-                        .into_iter()
+                        .into_iter() // Consumes shape directly instead of cloning
                         .filter(|point| match bg_color_string.as_str() {
                             //remove points from Metro Los Angeles B/D that are east of Los Angeles Union Station
                             "eb131b" => point.geometry.x() < -118.2335698,
@@ -95,7 +94,7 @@ pub async fn shapes_into_postgres(
                             _ => true,
                         })
                         .collect::<Vec<ShapePoint>>(),
-                    _ => shape.clone(),
+                    _ => shape, // Passed without allocating a new clone
                 };
 
                 let mut is_line_too_stupidly_broken = false;

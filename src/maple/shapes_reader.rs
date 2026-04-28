@@ -71,28 +71,31 @@ impl MmapShapeReader {
         let col_idx_dist = headers.iter().position(|h| h == "shape_dist_traveled");
 
         let mut index = AHashMap::with_capacity(100_000);
-        let mut current_shape_id: Option<String> = None;
+        let mut current_shape_id: Vec<u8> = Vec::new();
         let mut current_start: u64 = rdr.position().byte();
 
         let mut record = csv::ByteRecord::new();
         while rdr.read_byte_record(&mut record)? {
-            let shape_id = String::from_utf8_lossy(&record[col_idx_id]).into_owned();
+            let shape_id_bytes = &record[col_idx_id];
 
-            if let Some(ref curr_id) = current_shape_id {
-                if *curr_id != shape_id {
+            if !current_shape_id.is_empty() {
+                if current_shape_id != shape_id_bytes {
                     let pos = record.position().unwrap().byte();
-                    index.insert(curr_id.clone(), (current_start, pos));
+                    let shape_id_str = String::from_utf8_lossy(&current_shape_id).into_owned();
+                    index.insert(shape_id_str, (current_start, pos));
                     current_start = pos;
-                    current_shape_id = Some(shape_id);
+                    current_shape_id.clear();
+                    current_shape_id.extend_from_slice(shape_id_bytes);
                 }
             } else {
-                current_shape_id = Some(shape_id);
+                current_shape_id.extend_from_slice(shape_id_bytes);
                 current_start = record.position().unwrap().byte();
             }
         }
 
-        if let Some(last_id) = current_shape_id {
-            index.insert(last_id, (current_start, mmap.len() as u64));
+        if !current_shape_id.is_empty() {
+            let shape_id_str = String::from_utf8_lossy(&current_shape_id).into_owned();
+            index.insert(shape_id_str, (current_start, mmap.len() as u64));
         }
 
         Ok(Self {
