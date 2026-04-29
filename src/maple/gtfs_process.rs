@@ -768,6 +768,8 @@ pub async fn gtfs_process_feed(
         .read_stop_times(false)
         .read(path.as_str())
         .context("Failed to read GTFS via gtfs_structures")?;
+    
+    println("reading shapes for feed {}", feed_id);
 
     let shapes_txt_path = format!("{}/{}/shapes.txt", gtfs_unzipped_path, feed_id);
 
@@ -778,6 +780,8 @@ pub async fn gtfs_process_feed(
         }
         false => None,
     };
+
+    println!("injecting stop times for feed {}", feed_id);
 
     let gtfs = faster_stop_time_reader_injection(
         gtfs,
