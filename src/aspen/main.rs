@@ -856,39 +856,33 @@ impl AspenRpc for AspenServer {
                 || chateau_id.as_str() == "fortworthtransportationauthority"
             {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-                    self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
-                        .await
-                        .and_modify(|gtfs_data| {
-                            *gtfs_data =
-                                CompactFeedMessage::from_feed_message(vehicles_gtfs_rt.clone())
-                        })
-                        .or_insert(CompactFeedMessage::from_feed_message(
-                            vehicles_gtfs_rt.clone(),
-                        ));
+                    upsert_compact_feed(
+                        &self.authoritative_gtfs_rt_store,
+                        &realtime_feed_id,
+                        GtfsRtType::VehiclePositions,
+                        vehicles_gtfs_rt,
+                    )
+                    .await;
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                    self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
-                        .await
-                        .and_modify(|gtfs_data| {
-                            *gtfs_data = CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone())
-                        })
-                        .or_insert(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
+                    upsert_compact_feed(
+                        &self.authoritative_gtfs_rt_store,
+                        &realtime_feed_id,
+                        GtfsRtType::TripUpdates,
+                        trip_gtfs_rt,
+                    )
+                    .await;
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-                    self.authoritative_gtfs_rt_store
-                        .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts))
-                        .await
-                        .and_modify(|gtfs_data| {
-                            *gtfs_data =
-                                CompactFeedMessage::from_feed_message(alerts_gtfs_rt.clone())
-                        })
-                        .or_insert(CompactFeedMessage::from_feed_message(
-                            alerts_gtfs_rt.clone(),
-                        ));
+                    upsert_compact_feed(
+                        &self.authoritative_gtfs_rt_store,
+                        &realtime_feed_id,
+                        GtfsRtType::Alerts,
+                        alerts_gtfs_rt,
+                    )
+                    .await;
                 }
             }
 
@@ -1984,4 +1978,19 @@ fn contains_new_data(
     }
 
     new_data
+}
+
+async fn upsert_compact_feed(
+    store: &SccHashMap<(String, GtfsRtType), CompactFeedMessage>,
+    realtime_feed_id: &str,
+    feed_type: GtfsRtType,
+    feed: FeedMessage,
+) {
+    let compact = CompactFeedMessage::from_feed_message(feed);
+
+    store
+        .entry_async((realtime_feed_id.to_string(), feed_type))
+        .await
+        .and_modify(|existing| *existing = compact.clone())
+        .or_insert(compact);
 }
