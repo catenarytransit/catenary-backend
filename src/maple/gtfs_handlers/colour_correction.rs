@@ -64,6 +64,15 @@ pub fn fix_background_colour_rgb_feed_route(
             "MTR-AEL" => RGB::new(0, 136, 142),   // 00888E
             _ => fix_background_colour_rgb(background),
         },
+        "f-dpwz-grandrivertransit~bus" => match route.id.as_str() {
+            "1" => RGB::new(122, 46, 135),
+            "2" => RGB::new(135, 216, 231),
+            "78" => RGB::new(16, 98, 50),
+            "91" => RGB::new(20, 208, 170),
+            "201" | "202" | "203" | "204" | "205" | "206" => RGB::new(169, 214, 34),
+            "302" => RGB::new(0, 65, 160),
+            _ => fix_background_colour_rgb(background),
+        },
         "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
             match &route.short_name {
                 Some(short_name) => match &route.desc.as_deref() {
