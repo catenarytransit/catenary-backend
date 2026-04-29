@@ -209,7 +209,7 @@ opentelemetry = "0.31.0"
 opentelemetry_sdk = { version = "0.31.0", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.32.1"
-wincode = "0.4.4"
+wincode = "0.5.3"
 bytemuck = { version = "1.18", features = ["derive", "zeroable_maybe_uninit"] }
 zerocopy = { version = "0.7", features = ["derive"] }
 memmap2 = "0.9"
