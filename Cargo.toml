@@ -211,7 +211,7 @@ opentelemetry-otlp = { version = "0.31.0", features = ["grpc-tonic"] }
 tracing-opentelemetry = "0.32.1"
 wincode = "0.4.4"
 bytemuck = { version = "1.18", features = ["derive", "zeroable_maybe_uninit"] }
-zerocopy = { version = "0.7", features = ["derive"] }
+zerocopy = { version = "0.8", features = ["derive"] }
 memmap2 = "0.9"
 toml = "0.8"
 
