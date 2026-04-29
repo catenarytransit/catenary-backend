@@ -934,6 +934,20 @@ pub async fn make_index_and_mappings(
                                     "copy_to": "station_name_search"
                                 }
                             }
+                        },
+                        {
+                            "admin_translations": {
+                                "path_match": "parent.*.*",
+                                "mapping": {
+                                    "type": "text",
+                                    "fields": {
+                                        "keyword": {
+                                            "type": "keyword",
+                                            "ignore_above": 256
+                                        }
+                                    }
+                                }
+                            }
                         }
                     ],
                     "properties": {
@@ -952,154 +966,16 @@ pub async fn make_index_and_mappings(
                             "properties": generate_language_properties()
                         },
                         "parent": {
-                          "type": "object",
-                          "properties": {
-                              "country": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "macro_region": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "region": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "macro_county": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "county": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "local_admin": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "locality": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "borough": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              },
-                              "neighbourhood": {
-                              "type": "object",
-                              "properties": {
-                                  "name": {
-                                  "type": "text",
-                                  "analyzer": "peliasAdmin",
-                                  "search_analyzer": "peliasQuery"
-                                  },
-                                  "abbr": {
-                                  "type": "keyword"
-                                  },
-                                  "id": {
-                                  "type": "long"
-                                  }
-                              }
-                              }
-                          }
-                      }
+                    "properties": {
+                        "country": { "type": "object" },
+                        "region": { "type": "object" },
+                        "county": { "type": "object" },
+                        "locality": { "type": "object" },
+                        "borough": { "type": "object" },
+                        "neighbourhood": { "type": "object" }
+                        // These objects now allow dynamic keys thanks to the template
+                    }
+                }
                   }
                 }
             }),
