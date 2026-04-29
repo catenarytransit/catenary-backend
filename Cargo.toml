@@ -22,15 +22,17 @@ crossbeam-utils = "0.8.21"
 memoffset = "0.9.1"
 time = "0.3"
 rouille = "3.0"
-reqwest = { version = "0.12", features = [
+reqwest = { version = "0.13.3", features = [
     "gzip",
     "brotli",
-    "rustls-tls",
+    "rustls",
     "deflate",
     "cookies",
     "multipart",
     "blocking",
     "socks",
+    "query",
+    "form",
 ] }
 protobuf = "3.7.2"
 csv = "1.4"
@@ -83,7 +85,7 @@ seahash = "4.1.0"
 dmfr = "0.2"
 chateau = { git = "https://github.com/catenarytransit/chateau" }
 unwire-gtfs-rt = { git = "https://github.com/catenarytransit/unwire-gtfs-rt" }
-rtc-quebec-gtfs-rt = "0.4.2"
+rtc-quebec-gtfs-rt = "0.5.0"
 dmfr-dataset-reader = "0.2.5"
 uuid = { version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"] }
 zip = "6.0"
@@ -142,11 +144,11 @@ fasthash = "0.4.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 rgb = "0.8.37"
 zotgtfs = "0.3.7"
-amtrak-gtfs-rt = "0.8.10"
+amtrak-gtfs-rt = "0.9.0"
 chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
 ping = "0.7.0"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
-chicago-gtfs-rt = "0.4.0"
+chicago-gtfs-rt = "0.5.0"
 etcd-client = "0.17.0"
 ipnet = { version = "2.9.0", features = ["serde"] }
 tar = "0.4.41"
@@ -188,7 +190,7 @@ bytefmt = "0.1.7"
 redis = { version = "0.32.7" }
 hex = { version = "0.4.3", features = ["serde"] }
 sha2 = "0.10.9"
-nictd-gtfs-rt = "0.3.3"
+nictd-gtfs-rt = "0.4.0"
 geohash = "0.13"
 spade = "2.15.0"
 delaunator = "1.0.2"
