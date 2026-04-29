@@ -966,15 +966,18 @@ pub async fn make_index_and_mappings(
                             "properties": generate_language_properties()
                         },
                         "parent": {
-                    "properties": {
-                        "country": { "type": "object" },
-                        "region": { "type": "object" },
-                        "county": { "type": "object" },
-                        "locality": { "type": "object" },
-                        "borough": { "type": "object" },
-                        "neighbourhood": { "type": "object" }
-                        // These objects now allow dynamic keys thanks to the template
-                    }
+                    "dynamic": true,
+                        "properties": {
+                           "country": { "type": "object", "dynamic": true },
+                           "macro_region": { "type": "object", "dynamic": true },
+                            "region": { "type": "object", "dynamic": true },
+                          "macro_county": { "type": "object", "dynamic": true },
+                           "county": { "type": "object", "dynamic": true },
+                            "local_admin": { "type": "object", "dynamic": true },
+                           "locality": { "type": "object", "dynamic": true },
+                            "borough": { "type": "object", "dynamic": true },
+                            "neighbourhood": { "type": "object", "dynamic": true }
+                        }
                 }
                   }
                 }
