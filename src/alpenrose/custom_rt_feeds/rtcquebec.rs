@@ -10,34 +10,6 @@ pub async fn fetch_rtc_data(
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
-    let proxy_pool = catenary::proxy_pool::global_proxy_pool().await;
-    let proxy_urls = proxy_pool.proxy_urls();
-
-    if proxy_urls.is_empty() {
-        eprintln!("No proxies available for RTC Quebec");
-        return;
-    }
-
-    // Strip protocol prefixes for HTTP-only proxies expected by rtc_quebec_gtfs_rt
-    let http_proxies: Vec<String> = proxy_urls
-        .iter()
-        .filter(|u| u.starts_with("http://"))
-        .map(|u| u.strip_prefix("http://").unwrap_or(u).to_string())
-        .collect();
-
-    if http_proxies.is_empty() {
-        eprintln!("No HTTP proxies available for RTC Quebec");
-        return;
-    }
-
-    let client_proxy = match proxy_pool.random_proxy_client() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Failed to build proxy client for RTC Quebec: {}", e);
-            return;
-        }
-    };
-
     let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
 
     if let Some(data) = fetch_assigned_node_meta {
@@ -45,12 +17,8 @@ pub async fn fetch_rtc_data(
 
         let proxy_addresses_vec: Vec<String> = http_proxies.clone();
 
-        let rtc_gtfs_rt_res = rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(
-            gtfs,
-            client_proxy.clone(),
-            Some(&proxy_addresses_vec),
-        )
-        .await;
+        let rtc_gtfs_rt_res =
+            rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client.clone(), None).await;
 
         match rtc_gtfs_rt_res {
             Ok(rtc_gtfs_rt_res) => {
