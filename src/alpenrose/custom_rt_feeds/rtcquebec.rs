@@ -15,8 +15,6 @@ pub async fn fetch_rtc_data(
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;
 
-        let proxy_addresses_vec: Vec<String> = http_proxies.clone();
-
         let rtc_gtfs_rt_res =
             rtc_quebec_gtfs_rt::faire_les_donnees_gtfs_rt(gtfs, client.clone(), None).await;
 
