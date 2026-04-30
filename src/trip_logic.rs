@@ -490,12 +490,6 @@ pub async fn fetch_trip_information(
     mut timer: Option<&mut simple_server_timing_header::Timer>,
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 ) -> Result<TripIntroductionInformation, String> {
-    if chateau == "irvine~ca~us" {
-        println!(
-            "DEBUG: fetch_trip_information called for trip {}",
-            query.trip_id
-        );
-    }
     if let Some(t) = &mut timer {
         t.add("open_pg_connection");
     }
@@ -588,11 +582,6 @@ pub async fn fetch_trip_information(
 
     // RT ONLY TRIP LOGIC
     if trip_compressed.is_empty() {
-        if chateau == "irvine~ca~us" {
-            println!(
-                "DEBUG: fetch_trip_information: Trip compressed empty, attempting RT ONLY TRIP LOGIC"
-            );
-        }
         let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
             .as_ref()
             .ok()
@@ -871,6 +860,8 @@ pub async fn fetch_trip_information(
     }
 
     // STATIC DB FETCHING
+
+    let mut consist: Option<_> = None;
 
     if chateau == "irvine~ca~us" {
         println!("DEBUG: fetch_trip_information: Proceeding with STATIC DB FETCHING");
@@ -1314,22 +1305,11 @@ pub async fn fetch_trip_information(
                     if let Ok(get_trip) = get_trip {
                         match get_trip {
                             Some(get_trip) => {
-                                if chateau == "irvine~ca~us" {
-                                    println!(
-                                        "DEBUG: fetch_trip_information: Static Path - Received {} trip updates from aspen",
-                                        get_trip.len()
-                                    );
-                                }
                                 println!("recieved {} trip options from aspen", get_trip.len());
                                 if !get_trip.is_empty() {
                                     let rt_trip_update = match get_trip.len() {
                                         1 => &get_trip[0],
                                         _ => {
-                                            if chateau == "irvine~ca~us" {
-                                                println!(
-                                                    "DEBUG: fetch_trip_information: Static Path - Multiple updates found, filtering"
-                                                );
-                                            }
                                             println!(
                                                 "Multiple trip updates found for trip id {} {}",
                                                 chateau, query.trip_id
@@ -1374,6 +1354,10 @@ pub async fn fetch_trip_information(
                                     let mut modifications_for_this_trip: Option<
                                         AspenisedTripModification,
                                     > = None;
+
+                                    if let Some(consist_rt) = &rt_trip_update.consist {
+                                        consist = Some(consist_rt.clone());
+                                    }
 
                                     if rt_trip_update.trip.schedule_relationship == Some(crate::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {
                                             is_cancelled = true;
@@ -2151,7 +2135,7 @@ pub async fn fetch_trip_information(
         },
         trip_id: Some(query.trip_id.clone()),
         chateau: Some(chateau.clone()),
-        consist: None,
+        consist: consist,
     };
 
     Ok(response)
