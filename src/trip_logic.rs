@@ -469,54 +469,25 @@ pub async fn fetch_trip_rt_update(
                                         }),
                                     })
                                 } else {
-                                    if chateau == "irvine~ca~us" {
-                                        println!(
-                                            "DEBUG: fetch_trip_rt_update: get_trip response was empty list"
-                                        );
-                                    }
                                     Ok(ResponseForGtfsRtRefresh {
                                         found_data: false,
                                         data: None,
                                     })
                                 }
                             }
-                            _ => {
-                                if chateau == "irvine~ca~us" {
-                                    println!(
-                                        "DEBUG: fetch_trip_rt_update: get_trip failed or returned None. Is Error: {}, Is None: {}",
-                                        get_trip.is_err(),
-                                        get_trip.as_ref().map(|x| x.is_none()).unwrap_or(false)
-                                    );
-                                }
-                                Ok(ResponseForGtfsRtRefresh {
-                                    found_data: false,
-                                    data: None,
-                                })
-                            }
+                            _ => Ok(ResponseForGtfsRtRefresh {
+                                found_data: false,
+                                data: None,
+                            }),
                         }
                     }
-                    _ => {
-                        if chateau == "irvine~ca~us" {
-                            println!(
-                                "DEBUG: fetch_trip_rt_update: Failed to connect to realtime server (aspen_client error)"
-                            );
-                        }
-                        Err("Could not connect to realtime data server".to_string())
-                    }
+                    _ => Err("Could not connect to realtime data server".to_string()),
                 }
             } else {
-                if chateau == "irvine~ca~us" {
-                    println!("DEBUG: fetch_trip_rt_update: No assigned chateau data found in etcd");
-                }
                 Err("Could not connect to realtime data server".to_string())
             }
         }
-        _ => {
-            if chateau == "irvine~ca~us" {
-                println!("DEBUG: fetch_trip_rt_update: Failed to fetch assigned node from etcd");
-            }
-            Err("Could not connect to etcd".to_string())
-        }
+        _ => Err("Could not connect to etcd".to_string()),
     }
 }
 
