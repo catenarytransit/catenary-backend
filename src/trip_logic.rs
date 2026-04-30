@@ -361,22 +361,11 @@ pub async fn fetch_trip_rt_update(
 
                         match get_trip {
                             Ok(Some(get_trip)) => {
-                                if chateau == "irvine~ca~us" {
-                                    println!(
-                                        "DEBUG: fetch_trip_rt_update: received {} trip options from aspen",
-                                        get_trip.len()
-                                    );
-                                }
-                                println!("recieved {} trip options from aspen", get_trip.len());
+                                //println!("recieved {} trip options from aspen", get_trip.len());
                                 if !get_trip.is_empty() {
                                     let rt_trip_update = match get_trip.len() {
                                         1 => &get_trip[0],
                                         _ => {
-                                            if chateau == "irvine~ca~us" {
-                                                println!(
-                                                    "DEBUG: fetch_trip_rt_update: Multiple trip updates found, filtering..."
-                                                );
-                                            }
                                             println!(
                                                 "Multiple trip updates found for trip id {} {}",
                                                 chateau, query.trip_id
