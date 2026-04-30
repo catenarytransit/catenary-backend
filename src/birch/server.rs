@@ -993,6 +993,7 @@ async fn main() -> std::io::Result<()> {
             .service(osm_stations_meta)
             .service(unmatched_rail_stops)
             .service(unmatched_rail_stops_meta)
+            .service(aspenised_data_over_https::fetch_full_trip_updates_dataset)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(

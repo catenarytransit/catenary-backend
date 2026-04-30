@@ -13,6 +13,7 @@ use connection_manager::AspenClientManager;
 use crate::aspen_dataset::*;
 use ahash::AHashMap;
 use ahash::AHashSet;
+use compact_str::CompactString;
 use ecow::EcoString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -59,6 +60,10 @@ pub trait AspenRpc {
         chateau_id: String,
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>>;
+
+    async fn full_trip_updates_dataset_dump(
+        chateau_id: String,
+    ) -> Option<AHashMap<CompactString, AspenisedTripUpdate>>;
 
     async fn trip_mod_lookup_for_trip_id_service_day(
         chateau_id: String,

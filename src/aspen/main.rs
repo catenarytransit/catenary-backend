@@ -67,7 +67,6 @@ use catenary::aspen_dataset::*;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::Injector;
 use gtfs_realtime::FeedMessage;
-
 use scc::HashMap as SccHashMap;
 use std::error::Error;
 mod async_threads_alpenrose;
@@ -76,7 +75,6 @@ use crate::id_cleanup::gtfs_rt_correct_route_id_string;
 use catenary::compact_formats::CompactFeedMessage;
 use catenary::parse_gtfs_rt_message;
 use rand::Rng;
-
 use std::collections::{HashMap, HashSet};
 mod alerts_responder;
 mod aspen_assignment;
@@ -158,6 +156,17 @@ impl AspenRpc for AspenServer {
 
                 Some(stops)
             }
+            None => None,
+        }
+    }
+
+    async fn full_trip_updates_dataset_dump(
+        self,
+        _context: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<AHashMap<CompactString, AspenisedTripUpdate>> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(aspenised_data) => Some(aspenised_data.trip_updates.clone()),
             None => None,
         }
     }

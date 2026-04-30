@@ -1081,3 +1081,75 @@ pub async fn get_rt_of_route(
 
     return HttpResponse::Ok().json(returned_data);
 }
+
+#[derive(Deserialize)]
+pub struct ChateauQueryOnly {
+    chateau: String,
+}
+
+#[actix_web::get("/fetch_full_trip_updates_dataset")]
+async fn fetch_full_trip_updates_dataset(
+    req: HttpRequest,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    query: web::Query<ChateauQueryOnly>,
+) -> impl Responder {
+    let chateau_id = query.into_inner().chateau;
+
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
+
+    if etcd.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_realtime_feed = etcd
+        .get(
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+            None,
+        )
+        .await;
+
+    let fetch_assigned_node_for_this_realtime_feed =
+        fetch_assigned_node_for_this_realtime_feed.unwrap();
+
+    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
+        fetch_assigned_node_for_this_realtime_feed
+            .kvs()
+            .first()
+            .unwrap()
+            .value(),
+    )
+    .unwrap();
+
+    let aspen_client =
+        catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+    if aspen_client.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Error connecting to assigned node. Failed to connect to tarpc");
+    }
+
+    let aspen_client = aspen_client.unwrap();
+
+    let full_aspen_dataset = aspen_client
+        .full_aspen_dataset(tarpc::context::current(), chateau_id)
+        .await;
+
+    match full_aspen_dataset {
+        Ok(full_aspen_dataset) => {
+            HttpResponse::Ok().body(ron::to_string(&full_aspen_dataset).unwrap())
+        }
+        Err(e) => {
+            eprintln!("Error fetching from aspen: {e}");
+            HttpResponse::InternalServerError().body("Error fetching from Aspen")
+        }
+    }
+}
