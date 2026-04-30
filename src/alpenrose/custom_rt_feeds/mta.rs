@@ -179,6 +179,9 @@ fn mnr_trip_id_fixer(gtfs: &Gtfs, input: gtfs_realtime::FeedMessage) -> gtfs_rea
 
     for entity in input.entity.iter_mut() {
         if let Some(trip_update) = &mut entity.trip_update {
+            //start times are broken, let Catenary find the correct start time instead.
+            trip_update.trip.start_time = None;
+
             if let Some(original_trip_id) = &mut trip_update.trip.trip_id {
                 //checks if the trip id given by Metro North is actually invalid
                 if !gtfs.trips.contains_key(original_trip_id) {

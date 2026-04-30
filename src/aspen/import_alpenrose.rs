@@ -251,6 +251,30 @@ pub async fn new_rt_data(
 
     let fetched_track_data: TrackData = fetch_track_data(&chateau_id, &pool).await;
 
+    match &fetched_track_data {
+        TrackData::MetroNorthRailroad(x) => {
+            match &x {
+                Some(x) => {
+                    println!("Metro North Consist data debug: {:#?}", &x.consist_lookup);
+                }
+                _ => {
+                    println!("")
+                }
+            };
+        }
+        TrackData::LongIslandRailroad(x) => {
+            match &x {
+                Some(x) => {
+                    println!("LIRR Consist data debug: {:#?}", &x.consist_lookup);
+                }
+                _ => {
+                    println!("No track data found for LIRR");
+                }
+            };
+        }
+        _ => {}
+    };
+
     let mut conn = conn_pre;
 
     if let Err(e) = &conn {
