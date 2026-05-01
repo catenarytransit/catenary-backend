@@ -191,6 +191,7 @@ pub struct BulkFetchCoordinator {
     // chateau_id -> (last_response, last_success_time)
     cache: HashMap<String, (Arc<GetVehicleLocationsResponse>, Instant)>,
     active_chateaus: Arc<RwLock<HashSet<String>>>,
+    aspen_endpoint_cache: Arc<RwLock<HashMap<String, (std::net::SocketAddr, Instant)>>>,
     etcd_connection_ips: Arc<EtcdConnectionIps>,
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
@@ -245,6 +246,7 @@ impl BulkFetchCoordinator {
             subscribers: HashMap::new(),
             cache: HashMap::new(),
             active_chateaus: Arc::new(RwLock::new(HashSet::new())),
+            aspen_endpoint_cache: Arc::new(RwLock::new(HashMap::new())),
             etcd_connection_ips,
             etcd_connection_options,
             aspen_client_manager,
@@ -271,6 +273,7 @@ impl BulkFetchCoordinator {
             .collect();
 
         let active_chateaus = self.active_chateaus.clone();
+        let aspen_endpoint_cache = self.aspen_endpoint_cache.clone();
         let etcd_reuser = self.etcd_reuser.clone();
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
@@ -294,28 +297,64 @@ impl BulkFetchCoordinator {
                 let aspen_manager = aspen_manager.clone();
                 let etcd_reuser = etcd_reuser.clone();
                 let active_chateaus = active_chateaus.clone();
+                let aspen_endpoint_cache = aspen_endpoint_cache.clone();
 
                 async move {
                     if !is_chateau_active(&active_chateaus, &chateau_id) {
                         return None;
                     }
 
-                    let fetch_assigned_node = etcd
-                        .get(
-                            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-                            None,
-                        )
-                        .await;
+                    let mut cached_socket: Option<std::net::SocketAddr> = None;
+                    if let Ok(cache_read) = aspen_endpoint_cache.read() {
+                        if let Some((socket, time)) = cache_read.get(&chateau_id) {
+                            if time.elapsed() < Duration::from_secs(300) {
+                                cached_socket = Some(socket.clone());
+                            }
+                        }
+                    }
 
-                    if let Ok(resp) = fetch_assigned_node {
-                        if !resp.kvs().is_empty() {
-                            if let Ok(assigned_chateau_data) =
-                                bincode_deserialize::<ChateauMetadataEtcd>(
-                                    resp.kvs().first().unwrap().value(),
-                                )
-                            {
+                    let socket_to_use = if let Some(socket) = cached_socket.clone() {
+                        socket
+                    } else {
+                        let fetch_assigned_node = etcd
+                            .get(
+                                format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+                                None,
+                            )
+                            .await;
+
+                        if let Ok(resp) = fetch_assigned_node {
+                            if !resp.kvs().is_empty() {
+                                if let Ok(assigned_chateau_data) =
+                                    bincode_deserialize::<ChateauMetadataEtcd>(
+                                        resp.kvs().first().unwrap().value(),
+                                    )
+                                {
+                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                        cache_write.insert(chateau_id.clone(), (assigned_chateau_data.socket.clone(), Instant::now()));
+                                    }
+                                    assigned_chateau_data.socket
+                                } else {
+                                    return None;
+                                }
+                            } else {
+                                println!("DEBUG: No assigned node for {}", chateau_id);
+                                return None;
+                            }
+                        } else {
+                            println!("DEBUG: Etcd fetch failed for {}", chateau_id);
+                            catenary::invalidate_etcd_client(&etcd_reuser).await;
+                            println!(
+                                "DEBUG: Flushed Etcd reuser due to failure for {}",
+                                chateau_id
+                            );
+                            return None;
+                        }
+                    };
+
+
                                 let mut aspen_client =
-                                    aspen_manager.get_client(assigned_chateau_data.socket).await;
+                                    aspen_manager.get_client(socket_to_use.clone()).await;
 
                                 if aspen_client.is_none() {
                                     println!(
@@ -325,13 +364,13 @@ impl BulkFetchCoordinator {
 
                                     if let Ok(new_client) =
                                         catenary::aspen::lib::spawn_aspen_client_from_ip(
-                                            &assigned_chateau_data.socket,
+                                            &socket_to_use,
                                         )
                                         .await
                                     {
                                         aspen_manager
                                             .insert_client(
-                                                assigned_chateau_data.socket,
+                                                socket_to_use.clone(),
                                                 new_client.clone(),
                                             )
                                             .await;
@@ -342,6 +381,9 @@ impl BulkFetchCoordinator {
                                             "DEBUG: Failed to spawn aspen client for {}",
                                             chateau_id
                                         );
+                                        if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                            cache_write.remove(&chateau_id);
+                                        }
                                     }
                                 }
 
@@ -371,7 +413,7 @@ impl BulkFetchCoordinator {
 
                                             let Ok(new_client) =
                                                 catenary::aspen::lib::spawn_aspen_client_from_ip(
-                                                    &assigned_chateau_data.socket,
+                                                    &socket_to_use,
                                                 )
                                                 .await
                                             else {
@@ -379,12 +421,15 @@ impl BulkFetchCoordinator {
                                                     "DEBUG: Failed to reconnect before last_updated_time_ms_for_chateau retry for {}",
                                                     chateau_id
                                                 );
+                                                if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                    cache_write.remove(&chateau_id);
+                                                }
                                                 return None;
                                             };
 
                                             aspen_manager
                                                 .insert_client(
-                                                    assigned_chateau_data.socket,
+                                                    socket_to_use.clone(),
                                                     new_client.clone(),
                                                 )
                                                 .await;
@@ -411,6 +456,9 @@ impl BulkFetchCoordinator {
                                                         "DEBUG: last_updated_time_ms_for_chateau retry RPC failed for {}: {:?}",
                                                         chateau_id, e
                                                     );
+                                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                        cache_write.remove(&chateau_id);
+                                                    }
                                                     return None;
                                                 }
                                                 Err(_) => {
@@ -418,6 +466,9 @@ impl BulkFetchCoordinator {
                                                         "DEBUG: Timeout retrying last_updated_time_ms_for_chateau for {}",
                                                         chateau_id
                                                     );
+                                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                        cache_write.remove(&chateau_id);
+                                                    }
                                                     return None;
                                                 }
                                             }
@@ -427,6 +478,9 @@ impl BulkFetchCoordinator {
                                                 "DEBUG: Timeout getting last_updated_time_ms_for_chateau for {}",
                                                 chateau_id
                                             );
+                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                cache_write.remove(&chateau_id);
+                                            }
                                             return None;
                                         }
                                     };
@@ -478,6 +532,9 @@ impl BulkFetchCoordinator {
                                                 "DEBUG: RPC failed for {}: {:?}",
                                                 chateau_id, e
                                             );
+                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                cache_write.remove(&chateau_id);
+                                            }
                                         }
                                         Err(_) => {
                                             println!(
@@ -493,13 +550,13 @@ impl BulkFetchCoordinator {
 
                                     if let Ok(new_client) =
                                         catenary::aspen::lib::spawn_aspen_client_from_ip(
-                                            &assigned_chateau_data.socket,
+                                            &socket_to_use,
                                         )
                                         .await
                                     {
                                         aspen_manager
                                             .insert_client(
-                                                assigned_chateau_data.socket,
+                                                socket_to_use.clone(),
                                                 new_client.clone(),
                                             )
                                             .await;
@@ -525,21 +582,13 @@ impl BulkFetchCoordinator {
                                             return Some((chateau_id, data));
                                         } else {
                                             println!("DEBUG: Retry failed for {}", chateau_id);
+                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                                cache_write.remove(&chateau_id);
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        } else {
-                            println!("DEBUG: No assigned node for {}", chateau_id);
-                        }
-                    } else {
-                        println!("DEBUG: Etcd fetch failed for {}", chateau_id);
-                        catenary::invalidate_etcd_client(&etcd_reuser).await;
-                        println!(
-                            "DEBUG: Flushed Etcd reuser due to failure for {}",
-                            chateau_id
-                        );
-                    }
+
 
                     None
                 }

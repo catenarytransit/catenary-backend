@@ -283,200 +283,202 @@ pub async fn fetch_trip_rt_update(
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
-) -> Result<ResponseForGtfsRtRefresh, String> {
+    cached_aspen_ip: Option<std::net::SocketAddr>,
+) -> Result<(ResponseForGtfsRtRefresh, Option<std::net::SocketAddr>), String> {
     if chateau == "irvine~ca~us" {
         println!(
             "DEBUG: fetch_trip_rt_update called for trip {}",
             query.trip_id
         );
     }
-    let etcd =
-        crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await;
+    let socket = if let Some(cached_ip) = cached_aspen_ip {
+        cached_ip
+    } else {
+        let etcd =
+            crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+                .await;
 
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-        return Err("Could not connect to etcd".to_string());
-    }
+        if let Err(etcd_err) = &etcd {
+            eprintln!("{:#?}", etcd_err);
+            return Err("Could not connect to etcd".to_string());
+        }
 
-    let mut etcd = etcd.unwrap();
+        let mut etcd = etcd.unwrap();
 
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
-            None,
-        )
-        .await;
+        let fetch_assigned_node_for_this_chateau = etcd
+            .get(
+                format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
+                None,
+            )
+            .await;
 
-    match fetch_assigned_node_for_this_chateau {
-        Ok(fetch_assigned_node_for_this_chateau) => {
-            let fetch_assigned_node_for_this_chateau_kv_first =
-                fetch_assigned_node_for_this_chateau.kvs().first();
+        match fetch_assigned_node_for_this_chateau {
+            Ok(fetch_assigned_node_for_this_chateau) => {
+                let fetch_assigned_node_for_this_chateau_kv_first =
+                    fetch_assigned_node_for_this_chateau.kvs().first();
 
-            if let Some(fetch_assigned_node_for_this_chateau_data) =
-                fetch_assigned_node_for_this_chateau_kv_first
-            {
-                if chateau == "irvine~ca~us" {
-                    println!("DEBUG: fetch_trip_rt_update: Found assigned chateau node via etcd");
-                }
-                let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
-                    fetch_assigned_node_for_this_chateau_data.value(),
-                )
-                .unwrap();
-
-                let socket = assigned_chateau_data.socket;
-                if chateau == "irvine~ca~us" {
-                    println!(
-                        "DEBUG: fetch_trip_rt_update: Connecting to aspen at {}",
-                        socket
-                    );
-                }
-                let aspen_client = if let Some(client) =
-                    aspen_client_manager.get_client(socket).await
+                if let Some(fetch_assigned_node_for_this_chateau_data) =
+                    fetch_assigned_node_for_this_chateau_kv_first
                 {
-                    Ok(client)
-                } else {
-                    let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
-                    if let Ok(client) = &client_res {
-                        aspen_client_manager
-                            .insert_client(socket, client.clone())
-                            .await;
+                    if chateau == "irvine~ca~us" {
+                        println!(
+                            "DEBUG: fetch_trip_rt_update: Found assigned chateau node via etcd"
+                        );
                     }
-                    client_res
-                };
+                    let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
+                        fetch_assigned_node_for_this_chateau_data.value(),
+                    )
+                    .unwrap();
 
-                match aspen_client {
-                    Ok(aspen_client) => {
-                        if chateau == "irvine~ca~us" {
-                            println!(
-                                "DEBUG: fetch_trip_rt_update: Got aspen client, fetching trip updates"
-                            );
-                        }
-                        let get_trip = aspen_client
-                            .get_trip_updates_from_trip_id(
-                                context::current(),
-                                chateau.clone(),
-                                query.trip_id.clone(),
-                            )
-                            .await;
+                    assigned_chateau_data.socket
+                } else {
+                    return Err("Could not connect to realtime data server".to_string());
+                }
+            }
+            _ => return Err("Could not connect to etcd".to_string()),
+        }
+    };
 
-                        match get_trip {
-                            Ok(Some(get_trip)) => {
-                                //println!("recieved {} trip options from aspen", get_trip.len());
-                                if !get_trip.is_empty() {
-                                    let rt_trip_update = match get_trip.len() {
-                                        1 => &get_trip[0],
-                                        _ => {
-                                            println!(
-                                                "Multiple trip updates found for trip id {} {}",
-                                                chateau, query.trip_id
-                                            );
-                                            let query_start_date_parsed =
-                                                query.start_date.as_ref().and_then(|date_str| {
-                                                    chrono::NaiveDate::parse_from_str(
-                                                        date_str, "%Y%m%d",
-                                                    )
-                                                    .or_else(|_| {
-                                                        chrono::NaiveDate::parse_from_str(
-                                                            date_str, "%Y-%m-%d",
-                                                        )
-                                                    })
-                                                    .ok()
-                                                });
+    if chateau == "irvine~ca~us" {
+        println!(
+            "DEBUG: fetch_trip_rt_update: Connecting to aspen at {}",
+            socket
+        );
+    }
+    let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket.clone()).await {
+        Ok(client)
+    } else {
+        let client_res = crate::aspen::lib::spawn_aspen_client_from_ip(&socket).await;
+        if let Ok(client) = &client_res {
+            aspen_client_manager
+                .insert_client(socket.clone(), client.clone())
+                .await;
+        }
+        client_res
+    };
 
-                                            let find_trip = get_trip.iter().find(|each_update| {
-                                                let start_time_matches = match (
-                                                    &query.start_time,
-                                                    &each_update.trip.start_time,
-                                                ) {
-                                                    (Some(q_time), Some(u_time)) => {
-                                                        q_time == u_time
-                                                    }
-                                                    (None, _) => true,
-                                                    (Some(_), None) => false,
-                                                };
+    match aspen_client {
+        Ok(aspen_client) => {
+            if chateau == "irvine~ca~us" {
+                println!("DEBUG: fetch_trip_rt_update: Got aspen client, fetching trip updates");
+            }
+            let get_trip = aspen_client
+                .get_trip_updates_from_trip_id(
+                    context::current(),
+                    chateau.clone(),
+                    query.trip_id.clone(),
+                )
+                .await;
 
-                                                let start_date_matches = match (
-                                                    &query_start_date_parsed,
-                                                    &each_update.trip.start_date,
-                                                ) {
-                                                    (Some(q_date), Some(u_date)) => {
-                                                        q_date == u_date
-                                                    }
-                                                    (None, _) => true,
-                                                    (Some(_), None) => false,
-                                                };
+            match get_trip {
+                Ok(Some(get_trip)) => {
+                    //println!("recieved {} trip options from aspen", get_trip.len());
+                    if !get_trip.is_empty() {
+                        let rt_trip_update = match get_trip.len() {
+                            1 => &get_trip[0],
+                            _ => {
+                                println!(
+                                    "Multiple trip updates found for trip id {} {}",
+                                    chateau, query.trip_id
+                                );
+                                let query_start_date_parsed =
+                                    query.start_date.as_ref().and_then(|date_str| {
+                                        chrono::NaiveDate::parse_from_str(date_str, "%Y%m%d")
+                                            .or_else(|_| {
+                                                chrono::NaiveDate::parse_from_str(
+                                                    date_str, "%Y-%m-%d",
+                                                )
+                                            })
+                                            .ok()
+                                    });
 
-                                                start_time_matches && start_date_matches
-                                            });
+                                let find_trip = get_trip.iter().find(|each_update| {
+                                    let start_time_matches =
+                                        match (&query.start_time, &each_update.trip.start_time) {
+                                            (Some(q_time), Some(u_time)) => q_time == u_time,
+                                            (None, _) => true,
+                                            (Some(_), None) => false,
+                                        };
 
-                                            match find_trip {
-                                                Some(find_trip) => find_trip,
-                                                None => &get_trip[0],
-                                            }
-                                        }
+                                    let start_date_matches = match (
+                                        &query_start_date_parsed,
+                                        &each_update.trip.start_date,
+                                    ) {
+                                        (Some(q_date), Some(u_date)) => q_date == u_date,
+                                        (None, _) => true,
+                                        (Some(_), None) => false,
                                     };
 
-                                    println!(
-                                        "rt data contains {} stop updates",
-                                        rt_trip_update.stop_time_update.len()
-                                    );
+                                    start_time_matches && start_date_matches
+                                });
 
-                                    let stop_data: Vec<StopTimeRefresh> = rt_trip_update
-                                        .stop_time_update
-                                        .iter()
-                                        .map(|stop_time_update| StopTimeRefresh {
-                                            stop_id: stop_time_update.stop_id.clone(),
-                                            rt_arrival: stop_time_update.arrival.clone(),
-                                            rt_departure: stop_time_update.departure.clone(),
-                                            schedule_relationship: stop_time_update
-                                                .schedule_relationship
-                                                .as_ref()
-                                                .map(|x| x.clone().into()),
-                                            gtfs_stop_sequence: stop_time_update
-                                                .stop_sequence
-                                                .map(|x| x as u16),
-                                            rt_platform_string: stop_time_update
-                                                .platform_string
-                                                .clone(),
-                                            departure_occupancy_status: stop_time_update
-                                                .departure_occupancy_status
-                                                .as_ref()
-                                                .map(|x| {
-                                                    crate::aspen_dataset::occupancy_status_to_u8(&x)
-                                                }),
-                                            platform_info: stop_time_update.platform_info.clone(),
-                                        })
-                                        .collect();
-
-                                    Ok(ResponseForGtfsRtRefresh {
-                                        found_data: true,
-                                        data: Some(GtfsRtRefreshData {
-                                            stoptimes: stop_data,
-                                            timestamp: rt_trip_update.timestamp,
-                                            trip_id: Some(query.trip_id.clone()),
-                                            chateau: Some(chateau.clone()),
-                                        }),
-                                    })
-                                } else {
-                                    Ok(ResponseForGtfsRtRefresh {
-                                        found_data: false,
-                                        data: None,
-                                    })
+                                match find_trip {
+                                    Some(find_trip) => find_trip,
+                                    None => &get_trip[0],
                                 }
                             }
-                            _ => Ok(ResponseForGtfsRtRefresh {
+                        };
+
+                        println!(
+                            "rt data contains {} stop updates",
+                            rt_trip_update.stop_time_update.len()
+                        );
+
+                        let stop_data: Vec<StopTimeRefresh> = rt_trip_update
+                            .stop_time_update
+                            .iter()
+                            .map(|stop_time_update| StopTimeRefresh {
+                                stop_id: stop_time_update.stop_id.clone(),
+                                rt_arrival: stop_time_update.arrival.clone(),
+                                rt_departure: stop_time_update.departure.clone(),
+                                schedule_relationship: stop_time_update
+                                    .schedule_relationship
+                                    .as_ref()
+                                    .map(|x| x.clone().into()),
+                                gtfs_stop_sequence: stop_time_update
+                                    .stop_sequence
+                                    .map(|x| x as u16),
+                                rt_platform_string: stop_time_update.platform_string.clone(),
+                                departure_occupancy_status: stop_time_update
+                                    .departure_occupancy_status
+                                    .as_ref()
+                                    .map(|x| crate::aspen_dataset::occupancy_status_to_u8(&x)),
+                                platform_info: stop_time_update.platform_info.clone(),
+                            })
+                            .collect();
+
+                        Ok((
+                            ResponseForGtfsRtRefresh {
+                                found_data: true,
+                                data: Some(GtfsRtRefreshData {
+                                    stoptimes: stop_data,
+                                    timestamp: rt_trip_update.timestamp,
+                                    trip_id: Some(query.trip_id.clone()),
+                                    chateau: Some(chateau.clone()),
+                                }),
+                            },
+                            Some(socket),
+                        ))
+                    } else {
+                        Ok((
+                            ResponseForGtfsRtRefresh {
                                 found_data: false,
                                 data: None,
-                            }),
-                        }
+                            },
+                            Some(socket),
+                        ))
                     }
-                    _ => Err("Could not connect to realtime data server".to_string()),
                 }
-            } else {
-                Err("Could not connect to realtime data server".to_string())
+                _ => Ok((
+                    ResponseForGtfsRtRefresh {
+                        found_data: false,
+                        data: None,
+                    },
+                    Some(socket),
+                )),
             }
         }
-        _ => Err("Could not connect to etcd".to_string()),
+        _ => Err("Could not connect to realtime data server".to_string()),
     }
 }
 

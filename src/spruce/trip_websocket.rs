@@ -48,6 +48,7 @@ pub struct TripWebSocket {
     pub map_update_generation: u64,
 
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+    pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
 }
 
 impl TripWebSocket {
@@ -72,6 +73,7 @@ impl TripWebSocket {
             sent_state: HashMap::new(),
             map_update_generation: 0,
             etcd_reuser,
+            aspen_endpoint_cache: HashMap::new(),
         }
     }
 
@@ -88,6 +90,17 @@ impl TripWebSocket {
     fn start_periodic_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.run_interval(UPDATE_INTERVAL, |act, ctx| {
             for ((chateau, params), _) in act.subscriptions.iter_mut() {
+                let cached_socket =
+                    act.aspen_endpoint_cache
+                        .get(chateau)
+                        .and_then(|(socket, time)| {
+                            if time.elapsed() < Duration::from_secs(300) {
+                                Some(socket.clone())
+                            } else {
+                                None
+                            }
+                        });
+
                 let fs = fetch_trip_rt_update(
                     chateau.clone(),
                     params.clone(),
@@ -95,6 +108,7 @@ impl TripWebSocket {
                     act.etcd_connection_options.clone(),
                     act.aspen_client_manager.clone(),
                     act.etcd_reuser.clone(),
+                    cached_socket,
                 );
 
                 let params_clone = params.clone();
@@ -105,7 +119,12 @@ impl TripWebSocket {
                 let fut = actix::fut::wrap_future(fut).map(
                     move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
                         match result {
-                            Ok(response) => {
+                            Ok((response, used_socket)) => {
+                                if let Some(socket) = used_socket {
+                                    act.aspen_endpoint_cache
+                                        .insert(chateau_clone.clone(), (socket, Instant::now()));
+                                }
+
                                 if response.found_data {
                                     if let Some(data) = response.data {
                                         if let Some(ts) = data.timestamp {
@@ -129,7 +148,7 @@ impl TripWebSocket {
                                 }
                             }
                             Err(e) => {
-                                // Optionally send error
+                                act.aspen_endpoint_cache.remove(&chateau_clone);
                             }
                         }
                     },

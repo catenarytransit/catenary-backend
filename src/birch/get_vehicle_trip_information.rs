@@ -245,10 +245,11 @@ pub async fn get_trip_rt_update(
         etcd_connection_options.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
         etcd_reuser.as_ref().clone(),
+        None,
     )
     .await
     {
-        Ok(response) => HttpResponse::Ok().json(response),
+        Ok((response, _)) => HttpResponse::Ok().json(response),
         Err(e) => HttpResponse::InternalServerError().body(e),
     }
 }
