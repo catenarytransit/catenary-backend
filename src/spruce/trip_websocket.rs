@@ -1,5 +1,5 @@
 use crate::map_coordinator::{
-    AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinator, BulkFetchParamsV3,
+    AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchParamsV3,
     BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
     EachChateauResponseV2, PositionDataCategoryV2, Subscribe, Unsubscribe,
     category_to_allowed_route_ids, convert_to_output,
@@ -24,6 +24,8 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
 
+type SentMapState = (u64, BoundsInputV3, HashSet<String>);
+
 use crate::{ClientMessage, MapViewportUpdate, ServerMessage, nearby_departures};
 use futures::StreamExt;
 
@@ -38,11 +40,12 @@ pub struct TripWebSocket {
     pub hb: Instant,
 
     // Map related fields
-    pub coordinator: Addr<BulkFetchCoordinator>,
+    pub coordinator_pool: Arc<BulkFetchCoordinatorPool>,
     pub client_viewport: Option<MapViewportUpdate>,
     pub subscribed_chateaus: HashSet<String>,
     // ChateauID -> (LastTime, LastBounds, LastCategories)
-    pub sent_state: HashMap<String, (u64, BoundsInputV3, HashSet<String>)>,
+    pub sent_state: HashMap<String, SentMapState>,
+    pub map_update_generation: u64,
 
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 }
@@ -53,7 +56,7 @@ impl TripWebSocket {
         etcd_connection_ips: Arc<EtcdConnectionIps>,
         etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
         aspen_client_manager: Arc<AspenClientManager>,
-        coordinator: Addr<BulkFetchCoordinator>,
+        coordinator_pool: Arc<BulkFetchCoordinatorPool>,
         etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     ) -> Self {
         Self {
@@ -63,10 +66,11 @@ impl TripWebSocket {
             aspen_client_manager,
             subscriptions: HashMap::new(),
             hb: Instant::now(),
-            coordinator,
+            coordinator_pool,
             client_viewport: None,
             subscribed_chateaus: HashSet::new(),
             sent_state: HashMap::new(),
+            map_update_generation: 0,
             etcd_reuser,
         }
     }
@@ -152,14 +156,17 @@ impl TripWebSocket {
             .collect();
 
         for ch in to_unsubscribe {
-            self.coordinator.do_send(Unsubscribe {
-                chateau_id: ch,
+            let coordinator = self.coordinator_pool.for_chateau(&ch);
+            coordinator.do_send(Unsubscribe {
+                chateau_id: ch.clone(),
                 recipient: ctx.address().recipient(),
             });
+            self.sent_state.remove(&ch);
         }
 
         for ch in to_subscribe {
-            self.coordinator.do_send(Subscribe {
+            let coordinator = self.coordinator_pool.for_chateau(&ch);
+            coordinator.do_send(Subscribe {
                 chateau_id: ch,
                 recipient: ctx.address().recipient(),
             });
@@ -168,256 +175,285 @@ impl TripWebSocket {
         self.subscribed_chateaus = new_chateaus;
     }
 
+    fn build_map_update_message(
+        chateau_id: String,
+        response: Arc<GetVehicleLocationsResponse>,
+        params: MapViewportUpdate,
+        sent_state_entry: Option<SentMapState>,
+    ) -> Option<(String, String, SentMapState)> {
+        if !params.chateaus.contains(&chateau_id) {
+            return None;
+        }
+
+        let categories_requested = params
+            .categories
+            .iter()
+            .filter_map(|category| match category.as_str() {
+                "metro" => Some(CategoryOfRealtimeVehicleData::Metro),
+                "bus" => Some(CategoryOfRealtimeVehicleData::Bus),
+                "rail" => Some(CategoryOfRealtimeVehicleData::Rail),
+                "other" => Some(CategoryOfRealtimeVehicleData::Other),
+                _ => None,
+            })
+            .collect::<Vec<CategoryOfRealtimeVehicleData>>();
+
+        let mut each_chateau_response = EachChateauResponseV2 {
+            categories: Some(PositionDataCategoryV2::default()),
+        };
+
+        let (last_sent_time, last_sent_bounds, last_sent_categories) = match &sent_state_entry {
+            Some((t, b, c)) => (*t, Some(b), Some(c)),
+            None => (0, None, None),
+        };
+
+        let is_new_feed = response.last_updated_time_ms != last_sent_time;
+        let mut has_any_updates = false;
+
+        for category in &categories_requested {
+            let category_str = match category {
+                CategoryOfRealtimeVehicleData::Metro => "metro",
+                CategoryOfRealtimeVehicleData::Bus => "bus",
+                CategoryOfRealtimeVehicleData::Rail => "rail",
+                CategoryOfRealtimeVehicleData::Other => "other",
+            };
+
+            let category_is_new = last_sent_categories
+                .as_ref()
+                .map_or(true, |c| !c.contains(category_str));
+
+            let zoom = match category {
+                CategoryOfRealtimeVehicleData::Metro => 8,
+                CategoryOfRealtimeVehicleData::Rail => 7,
+                CategoryOfRealtimeVehicleData::Bus => 12,
+                CategoryOfRealtimeVehicleData::Other => 5,
+            };
+
+            let bounds = match category {
+                CategoryOfRealtimeVehicleData::Metro => &params.bounds_input.level8,
+                CategoryOfRealtimeVehicleData::Rail => &params.bounds_input.level7,
+                CategoryOfRealtimeVehicleData::Bus => &params.bounds_input.level12,
+                CategoryOfRealtimeVehicleData::Other => &params.bounds_input.level5,
+            };
+
+            let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match category {
+                CategoryOfRealtimeVehicleData::Metro => &b.level8,
+                CategoryOfRealtimeVehicleData::Rail => &b.level7,
+                CategoryOfRealtimeVehicleData::Bus => &b.level12,
+                CategoryOfRealtimeVehicleData::Other => &b.level5,
+            });
+
+            let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
+
+            let bounds_changed = if let Some(pb) = prev_bounds_for_level {
+                pb.min_x != bounds.min_x
+                    || pb.max_x != bounds.max_x
+                    || pb.min_y != bounds.min_y
+                    || pb.max_y != bounds.max_y
+            } else {
+                true
+            };
+
+            if !replace_all && !bounds_changed {
+                continue;
+            }
+
+            has_any_updates = true;
+
+            let route_types_allowed = category_to_allowed_route_ids(category);
+
+            let filtered_vehicle_positions = response
+                .vehicle_positions
+                .iter()
+                .filter(|vehicle_position| {
+                    route_types_allowed.contains(&vehicle_position.1.route_type)
+                })
+                .map(|(a, b)| (a.clone(), convert_to_output(b)))
+                .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
+
+            let mut vehicles_by_tile: BTreeMap<
+                u32,
+                BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
+            > = BTreeMap::new();
+
+            if replace_all {
+                for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                    if let Some(pos) = &vehicle_position.position {
+                        if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                            let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                pos.latitude,
+                                pos.longitude,
+                                zoom,
+                            );
+
+                            let in_current_bounds = x >= bounds.min_x
+                                && x <= bounds.max_x
+                                && y >= bounds.min_y
+                                && y <= bounds.max_y;
+
+                            if in_current_bounds {
+                                vehicles_by_tile
+                                    .entry(x)
+                                    .or_default()
+                                    .entry(y)
+                                    .or_default()
+                                    .insert(vehicle_id, vehicle_position);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(prev_bounds) = prev_bounds_for_level {
+                for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
+                    if let Some(pos) = &vehicle_position.position {
+                        if pos.latitude != 0.0 && pos.longitude != 0.0 {
+                            let (x, y) = slippy_map_tiles::lat_lon_to_tile(
+                                pos.latitude,
+                                pos.longitude,
+                                zoom,
+                            );
+
+                            let in_current_bounds = x >= bounds.min_x
+                                && x <= bounds.max_x
+                                && y >= bounds.min_y
+                                && y <= bounds.max_y;
+
+                            let in_prev_bounds = x >= prev_bounds.min_x
+                                && x <= prev_bounds.max_x
+                                && y >= prev_bounds.min_y
+                                && y <= prev_bounds.max_y;
+
+                            if in_current_bounds && !in_prev_bounds {
+                                vehicles_by_tile
+                                    .entry(x)
+                                    .or_default()
+                                    .entry(y)
+                                    .or_default()
+                                    .insert(vehicle_id, vehicle_position);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
+                cache
+                    .values()
+                    .filter_map(|route_cache| {
+                        if route_types_allowed.contains(&route_cache.route_type) {
+                            route_cache.agency_id.clone()
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<BTreeSet<String>>()
+                    .into_iter()
+                    .collect::<Vec<String>>()
+            });
+
+            let payload = EachCategoryPayloadV2 {
+                vehicle_positions: match vehicles_by_tile.is_empty() {
+                    false => Some(vehicles_by_tile),
+                    true => None,
+                },
+                last_updated_time_ms: response.last_updated_time_ms,
+                replaces_all: replace_all,
+                z_level: zoom,
+                list_of_agency_ids,
+            };
+
+            match category {
+                CategoryOfRealtimeVehicleData::Metro => {
+                    each_chateau_response.categories.as_mut().unwrap().metro = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Rail => {
+                    each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Other => {
+                    each_chateau_response.categories.as_mut().unwrap().other = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Bus => {
+                    each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
+                }
+            }
+        }
+
+        if !has_any_updates {
+            return None;
+        }
+
+        let mut bulk_fetch_response = BulkFetchResponseV2 {
+            chateaus: BTreeMap::new(),
+        };
+        bulk_fetch_response
+            .chateaus
+            .insert(chateau_id.clone(), each_chateau_response);
+
+        let msg = ServerMessage::MapUpdate(bulk_fetch_response);
+        let text = serde_json::to_string(&msg).ok()?;
+
+        let categories_sent: HashSet<String> = params.categories.iter().cloned().collect();
+        let new_state = (
+            response.last_updated_time_ms,
+            params.bounds_input.clone(),
+            categories_sent,
+        );
+
+        Some((chateau_id, text, new_state))
+    }
+
     fn process_map_update(
         &mut self,
         chateau_id: &String,
         response: &Arc<GetVehicleLocationsResponse>,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        if let Some(params) = &self.client_viewport {
-            // Check if this chateau is still relevant? (It should be if we are subscribed)
-            // But verify it's in the current params list to be safe
-            if !params.chateaus.contains(chateau_id) {
-                return;
-            }
+        let Some(params) = self.client_viewport.clone() else {
+            return;
+        };
 
-            let categories_requested = params
-                .categories
-                .iter()
-                .map(|category| match category.as_str() {
-                    "metro" => Some(CategoryOfRealtimeVehicleData::Metro),
-                    "bus" => Some(CategoryOfRealtimeVehicleData::Bus),
-                    "rail" => Some(CategoryOfRealtimeVehicleData::Rail),
-                    "other" => Some(CategoryOfRealtimeVehicleData::Other),
-                    _ => None,
-                })
-                .flatten()
-                .collect::<Vec<CategoryOfRealtimeVehicleData>>();
-
-            let mut each_chateau_response = EachChateauResponseV2 {
-                categories: Some(PositionDataCategoryV2::default()),
-            };
-
-            let sent_state_entry = self.sent_state.get(chateau_id).cloned();
-            let (last_sent_time, last_sent_bounds, last_sent_categories) = match &sent_state_entry {
-                Some((t, b, c)) => (*t, Some(b), Some(c)),
-                None => (0, None, None),
-            };
-
-            // If time mismatch, we have a new feed.
-            // If time match, we might have a viewport change (Delta).
-            let is_new_feed = response.last_updated_time_ms != last_sent_time;
-
-            // Logic:
-            // 1. If is_new_feed: Send ALL vehicles in current bounds. replaces_all = true.
-            // 2. If !is_new_feed:
-            //    Check delta between current params.bounds and last_sent_bounds.
-            //    Send ONLY vehicles in (current - last). replaces_all = false.
-
-            // Note: If !is_new_feed and last_sent_bounds == current_bounds, we send nothing.
-
-            let mut has_any_updates = false;
-
-            for category in &categories_requested {
-                let category_str = match category {
-                    CategoryOfRealtimeVehicleData::Metro => "metro",
-                    CategoryOfRealtimeVehicleData::Bus => "bus",
-                    CategoryOfRealtimeVehicleData::Rail => "rail",
-                    CategoryOfRealtimeVehicleData::Other => "other",
-                };
-
-                // If this specific category was not sent last time, we must send full state for it
-                let category_is_new = last_sent_categories
-                    .as_ref()
-                    .map_or(true, |c| !c.contains(category_str));
-
-                let zoom = match category {
-                    CategoryOfRealtimeVehicleData::Metro => 8,
-                    CategoryOfRealtimeVehicleData::Rail => 7,
-                    CategoryOfRealtimeVehicleData::Bus => 12,
-                    CategoryOfRealtimeVehicleData::Other => 5,
-                };
-
-                let bounds = match category {
-                    CategoryOfRealtimeVehicleData::Metro => &params.bounds_input.level8,
-                    CategoryOfRealtimeVehicleData::Rail => &params.bounds_input.level7,
-                    CategoryOfRealtimeVehicleData::Bus => &params.bounds_input.level12,
-                    CategoryOfRealtimeVehicleData::Other => &params.bounds_input.level5,
-                };
-
-                let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match category {
-                    CategoryOfRealtimeVehicleData::Metro => &b.level8,
-                    CategoryOfRealtimeVehicleData::Rail => &b.level7,
-                    CategoryOfRealtimeVehicleData::Bus => &b.level12,
-                    CategoryOfRealtimeVehicleData::Other => &b.level5,
-                });
-
-                // Determine if we need to send anything for this category
-                let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
-
-                // If not replacing all, check if bounds changed
-                let bounds_changed = if let Some(pb) = prev_bounds_for_level {
-                    pb.min_x != bounds.min_x
-                        || pb.max_x != bounds.max_x
-                        || pb.min_y != bounds.min_y
-                        || pb.max_y != bounds.max_y
-                } else {
-                    true
-                };
-
-                if !replace_all && !bounds_changed {
-                    continue;
-                }
-
-                has_any_updates = true;
-
-                let route_types_allowed = category_to_allowed_route_ids(category);
-
-                let filtered_vehicle_positions = response
-                    .vehicle_positions
-                    .iter()
-                    .filter(|vehicle_position| {
-                        route_types_allowed.contains(&vehicle_position.1.route_type)
-                    })
-                    .map(|(a, b)| (a.clone(), convert_to_output(&b)))
-                    .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
-
-                let mut vehicles_by_tile: BTreeMap<
-                    u32,
-                    BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
-                > = BTreeMap::new();
-
-                if replace_all {
-                    // Send everything in current bounds
-                    for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
-                        if let Some(pos) = &vehicle_position.position {
-                            if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                    pos.latitude,
-                                    pos.longitude,
-                                    zoom,
-                                );
-
-                                let in_current_bounds = x >= bounds.min_x
-                                    && x <= bounds.max_x
-                                    && y >= bounds.min_y
-                                    && y <= bounds.max_y;
-
-                                if in_current_bounds {
-                                    vehicles_by_tile
-                                        .entry(x)
-                                        .or_default()
-                                        .entry(y)
-                                        .or_default()
-                                        .insert(vehicle_id, vehicle_position);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Delta send
-                    if let Some(prev_bounds) = prev_bounds_for_level {
-                        for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
-                            if let Some(pos) = &vehicle_position.position {
-                                if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                                    let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                        pos.latitude,
-                                        pos.longitude,
-                                        zoom,
-                                    );
-
-                                    let in_current_bounds = x >= bounds.min_x
-                                        && x <= bounds.max_x
-                                        && y >= bounds.min_y
-                                        && y <= bounds.max_y;
-
-                                    // Check if it was in previous bounds
-                                    let in_prev_bounds = x >= prev_bounds.min_x
-                                        && x <= prev_bounds.max_x
-                                        && y >= prev_bounds.min_y
-                                        && y <= prev_bounds.max_y;
-
-                                    if in_current_bounds && !in_prev_bounds {
-                                        vehicles_by_tile
-                                            .entry(x)
-                                            .or_default()
-                                            .entry(y)
-                                            .or_default()
-                                            .insert(vehicle_id, vehicle_position);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
-                    cache
-                        .values()
-                        .filter_map(|route_cache| {
-                            if route_types_allowed.contains(&route_cache.route_type) {
-                                route_cache.agency_id.clone()
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<BTreeSet<String>>()
-                        .into_iter()
-                        .collect::<Vec<String>>()
-                });
-
-                let payload = EachCategoryPayloadV2 {
-                    vehicle_positions: match vehicles_by_tile.is_empty() {
-                        false => Some(vehicles_by_tile),
-                        true => None,
-                    },
-                    last_updated_time_ms: response.last_updated_time_ms,
-                    replaces_all: replace_all,
-                    z_level: zoom,
-                    list_of_agency_ids,
-                };
-
-                match category {
-                    CategoryOfRealtimeVehicleData::Metro => {
-                        each_chateau_response.categories.as_mut().unwrap().metro = Some(payload);
-                    }
-                    CategoryOfRealtimeVehicleData::Rail => {
-                        each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
-                    }
-                    CategoryOfRealtimeVehicleData::Other => {
-                        each_chateau_response.categories.as_mut().unwrap().other = Some(payload);
-                    }
-                    CategoryOfRealtimeVehicleData::Bus => {
-                        each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
-                    }
-                }
-            } // for category
-
-            if has_any_updates {
-                let mut bulk_fetch_response = BulkFetchResponseV2 {
-                    chateaus: BTreeMap::new(),
-                };
-                bulk_fetch_response
-                    .chateaus
-                    .insert(chateau_id.clone(), each_chateau_response);
-
-                let msg = ServerMessage::MapUpdate(bulk_fetch_response);
-                if let Ok(text) = serde_json::to_string(&msg) {
-                    ctx.text(text);
-                }
-
-                // Update state
-                let categories_sent: HashSet<String> = params.categories.iter().cloned().collect();
-                self.sent_state.insert(
-                    chateau_id.clone(),
-                    (
-                        response.last_updated_time_ms,
-                        params.bounds_input.clone(),
-                        categories_sent,
-                    ),
-                );
-            }
+        if !params.chateaus.contains(chateau_id) {
+            return;
         }
+
+        let chateau_id = chateau_id.clone();
+        let response = response.clone();
+        let sent_state_entry = self.sent_state.get(&chateau_id).cloned();
+        let map_update_generation = self.map_update_generation;
+
+        let fut = async move {
+            match tokio::task::spawn_blocking(move || {
+                Self::build_map_update_message(chateau_id, response, params, sent_state_entry)
+            })
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    eprintln!("Failed to build map_update websocket message: {:?}", e);
+                    None
+                }
+            }
+        };
+
+        ctx.spawn(actix::fut::wrap_future(fut).map(
+            move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                let Some((chateau_id, text, new_state)) = result else {
+                    return;
+                };
+
+                if act.map_update_generation != map_update_generation {
+                    return;
+                }
+
+                if let Some((current_last_updated_time_ms, _, _)) = act.sent_state.get(&chateau_id)
+                {
+                    if *current_last_updated_time_ms > new_state.0 {
+                        return;
+                    }
+                }
+
+                ctx.text(text);
+                act.sent_state.insert(chateau_id, new_state);
+            },
+        ));
     }
 }
 
@@ -431,7 +467,8 @@ impl Actor for TripWebSocket {
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> actix::Running {
         for ch in &self.subscribed_chateaus {
-            self.coordinator.do_send(Unsubscribe {
+            let coordinator = self.coordinator_pool.for_chateau(ch);
+            coordinator.do_send(Unsubscribe {
                 chateau_id: ch.clone(),
                 recipient: ctx.address().recipient(),
             });
@@ -500,12 +537,15 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         );
                         let new_chateaus: HashSet<String> =
                             params.chateaus.iter().cloned().collect();
+                        self.map_update_generation = self.map_update_generation.wrapping_add(1);
                         self.update_map_subscriptions(ctx, new_chateaus);
                         self.client_viewport = Some(params);
 
-                        // Request updates for all subscribed chateaus (cached ones will come back instantly)
+                        // Request updates for all subscribed chateaus (cached ones will come back instantly).
+                        // Each chateau is routed to a stable coordinator shard.
                         for ch in &self.subscribed_chateaus {
-                            self.coordinator.do_send(Subscribe {
+                            let coordinator = self.coordinator_pool.for_chateau(ch);
+                            coordinator.do_send(Subscribe {
                                 chateau_id: ch.clone(),
                                 recipient: ctx.address().recipient(),
                             });

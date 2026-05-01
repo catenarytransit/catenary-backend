@@ -9,7 +9,8 @@ use catenary::aspen_dataset::{AspenisedVehiclePosition, AspenisedVehicleRouteCac
 use catenary::bincode_deserialize;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tarpc::context;
@@ -194,6 +195,36 @@ pub struct BulkFetchCoordinator {
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+}
+
+#[derive(Clone)]
+pub struct BulkFetchCoordinatorPool {
+    shards: Arc<Vec<Addr<BulkFetchCoordinator>>>,
+}
+
+impl BulkFetchCoordinatorPool {
+    pub fn new(shards: Vec<Addr<BulkFetchCoordinator>>) -> Self {
+        assert!(
+            !shards.is_empty(),
+            "BulkFetchCoordinatorPool must have at least one shard"
+        );
+
+        Self {
+            shards: Arc::new(shards),
+        }
+    }
+
+    pub fn for_chateau(&self, chateau_id: &str) -> Addr<BulkFetchCoordinator> {
+        let mut hasher = DefaultHasher::new();
+        chateau_id.hash(&mut hasher);
+        let shard_index = (hasher.finish() as usize) % self.shards.len();
+
+        self.shards[shard_index].clone()
+    }
+
+    pub fn len(&self) -> usize {
+        self.shards.len()
+    }
 }
 
 fn is_chateau_active(active_chateaus: &Arc<RwLock<HashSet<String>>>, chateau_id: &str) -> bool {
