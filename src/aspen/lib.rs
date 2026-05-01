@@ -177,6 +177,8 @@ pub trait AspenRpc {
     async fn insert_backup_aspen_dataset(chateau_id: String, data: AspenisedData) -> ();
 
     async fn full_aspen_dataset_backup(chateau_id: String) -> Option<AspenisedData>;
+
+    async fn last_updated_time_ms_for_chateau(chateau_id: String) -> Option<u64>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1525,6 +1525,26 @@ impl AspenRpc for AspenServer {
 
         ()
     }
+
+    async fn last_updated_time_ms_for_chateau(
+        self,
+        _context: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<u64> {
+        match self
+            .authoritative_data_store
+            .as_ref()
+            .get_async(&chateau_id)
+            .await
+        {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+
+                Some(aspenised_data.last_updated_time_ms)
+            }
+            None => None,
+        }
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {

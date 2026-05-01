@@ -10,7 +10,7 @@ use catenary::bincode_deserialize;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 use tarpc::context;
 
@@ -185,15 +185,22 @@ pub struct Unsubscribe {
 }
 
 // Coordinator Actor
-
 pub struct BulkFetchCoordinator {
     subscribers: HashMap<String, HashSet<Recipient<ChateauUpdate>>>,
     // chateau_id -> (last_response, last_success_time)
     cache: HashMap<String, (Arc<GetVehicleLocationsResponse>, Instant)>,
+    active_chateaus: Arc<RwLock<HashSet<String>>>,
     etcd_connection_ips: Arc<EtcdConnectionIps>,
     etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     aspen_client_manager: Arc<AspenClientManager>,
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+}
+
+fn is_chateau_active(active_chateaus: &Arc<RwLock<HashSet<String>>>, chateau_id: &str) -> bool {
+    active_chateaus
+        .read()
+        .map(|active| active.contains(chateau_id))
+        .unwrap_or(false)
 }
 
 impl BulkFetchCoordinator {
@@ -206,6 +213,7 @@ impl BulkFetchCoordinator {
         Self {
             subscribers: HashMap::new(),
             cache: HashMap::new(),
+            active_chateaus: Arc::new(RwLock::new(HashSet::new())),
             etcd_connection_ips,
             etcd_connection_options,
             aspen_client_manager,
@@ -218,7 +226,20 @@ impl BulkFetchCoordinator {
             return;
         }
 
-        let chateaus_to_fetch: Vec<String> = self.subscribers.keys().cloned().collect();
+        let chateaus_to_fetch: Vec<(String, Option<u64>)> = self
+            .subscribers
+            .keys()
+            .map(|chateau_id| {
+                let cached_last_updated_time_ms = self
+                    .cache
+                    .get(chateau_id)
+                    .map(|(data, _)| data.last_updated_time_ms);
+
+                (chateau_id.clone(), cached_last_updated_time_ms)
+            })
+            .collect();
+
+        let active_chateaus = self.active_chateaus.clone();
         let etcd_reuser = self.etcd_reuser.clone();
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
@@ -232,14 +253,22 @@ impl BulkFetchCoordinator {
             if etcd.is_none() {
                 return Vec::new();
             }
+
             let etcd = etcd.unwrap();
 
-            let tasks = chateaus_to_fetch.into_iter().map(|chateau_id| {
+            let tasks = chateaus_to_fetch
+            .into_iter()
+            .map(|(chateau_id, cached_last_updated_time_ms)| {
                 let mut etcd = etcd.clone();
                 let aspen_manager = aspen_manager.clone();
                 let etcd_reuser = etcd_reuser.clone();
+                let active_chateaus = active_chateaus.clone();
 
                 async move {
+                    if !is_chateau_active(&active_chateaus, &chateau_id) {
+                        return None;
+                    }
+
                     let fetch_assigned_node = etcd
                         .get(
                             format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
@@ -262,6 +291,7 @@ impl BulkFetchCoordinator {
                                         "DEBUG: Aspen client missing for {}, connecting...",
                                         chateau_id
                                     );
+
                                     if let Ok(new_client) =
                                         catenary::aspen::lib::spawn_aspen_client_from_ip(
                                             &assigned_chateau_data.socket,
@@ -274,6 +304,7 @@ impl BulkFetchCoordinator {
                                                 new_client.clone(),
                                             )
                                             .await;
+
                                         aspen_client = Some(new_client);
                                     } else {
                                         println!(
@@ -283,10 +314,114 @@ impl BulkFetchCoordinator {
                                     }
                                 }
 
-                                if let Some(client) = aspen_client {
+                                if let Some(mut client) = aspen_client {
+                                    let timeout_duration = Duration::from_secs(2);
+
+                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                        return None;
+                                    }
+
+                                    let last_updated_response = tokio::time::timeout(
+                                        timeout_duration,
+                                        client.last_updated_time_ms_for_chateau(
+                                            context::current(),
+                                            chateau_id.clone(),
+                                        ),
+                                    )
+                                    .await;
+
+                                    let remote_last_updated_time_ms = match last_updated_response {
+                                        Ok(Ok(value)) => value,
+                                        Ok(Err(e)) => {
+                                            println!(
+                                                "DEBUG: last_updated_time_ms_for_chateau RPC failed for {}: {:?}",
+                                                chateau_id, e
+                                            );
+
+                                            let Ok(new_client) =
+                                                catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                                    &assigned_chateau_data.socket,
+                                                )
+                                                .await
+                                            else {
+                                                println!(
+                                                    "DEBUG: Failed to reconnect before last_updated_time_ms_for_chateau retry for {}",
+                                                    chateau_id
+                                                );
+                                                return None;
+                                            };
+
+                                            aspen_manager
+                                                .insert_client(
+                                                    assigned_chateau_data.socket,
+                                                    new_client.clone(),
+                                                )
+                                                .await;
+
+                                            client = new_client;
+
+                                            println!(
+                                                "DEBUG: Reconnected to {}, retrying last_updated_time_ms_for_chateau...",
+                                                chateau_id
+                                            );
+
+                                            match tokio::time::timeout(
+                                                timeout_duration,
+                                                client.last_updated_time_ms_for_chateau(
+                                                    context::current(),
+                                                    chateau_id.clone(),
+                                                ),
+                                            )
+                                            .await
+                                            {
+                                                Ok(Ok(value)) => value,
+                                                Ok(Err(e)) => {
+                                                    println!(
+                                                        "DEBUG: last_updated_time_ms_for_chateau retry RPC failed for {}: {:?}",
+                                                        chateau_id, e
+                                                    );
+                                                    return None;
+                                                }
+                                                Err(_) => {
+                                                    println!(
+                                                        "DEBUG: Timeout retrying last_updated_time_ms_for_chateau for {}",
+                                                        chateau_id
+                                                    );
+                                                    return None;
+                                                }
+                                            }
+                                        }
+                                        Err(_) => {
+                                            println!(
+                                                "DEBUG: Timeout getting last_updated_time_ms_for_chateau for {}",
+                                                chateau_id
+                                            );
+                                            return None;
+                                        }
+                                    };
+
+                                    let Some(remote_last_updated_time_ms) =
+                                        remote_last_updated_time_ms
+                                    else {
+                                        println!(
+                                            "DEBUG: last_updated_time_ms_for_chateau returned None for {}",
+                                            chateau_id
+                                        );
+                                        return None;
+                                    };
+
+                                    if cached_last_updated_time_ms
+                                        == Some(remote_last_updated_time_ms)
+                                    {
+                                        return None;
+                                    }
+
+                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                        return None;
+                                    }
+
                                     let route_types: Vec<i16> =
                                         vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
-                                    let timeout_duration = Duration::from_secs(2);
 
                                     let response = tokio::time::timeout(
                                         timeout_duration,
@@ -301,29 +436,30 @@ impl BulkFetchCoordinator {
 
                                     match response {
                                         Ok(Ok(Some(data))) => {
-                                            // println!("DEBUG: Got data for {}", chateau_id);
                                             return Some((chateau_id, data));
                                         }
                                         Ok(Ok(None)) => {
                                             println!("DEBUG: Response Ok(None) for {}", chateau_id);
+                                            return None;
                                         }
                                         Ok(Err(e)) => {
                                             println!(
                                                 "DEBUG: RPC failed for {}: {:?}",
                                                 chateau_id, e
                                             );
-                                            // Retry logic proceeds below
                                         }
                                         Err(_) => {
                                             println!(
                                                 "DEBUG: Timeout fetching data for {}",
                                                 chateau_id
                                             );
-                                            // Retry logic proceeds below
                                         }
                                     }
 
-                                    // Retry logic
+                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                        return None;
+                                    }
+
                                     if let Ok(new_client) =
                                         catenary::aspen::lib::spawn_aspen_client_from_ip(
                                             &assigned_chateau_data.socket,
@@ -341,6 +477,7 @@ impl BulkFetchCoordinator {
                                             "DEBUG: Reconnected to {}, retrying...",
                                             chateau_id
                                         );
+
                                         let response_retry = tokio::time::timeout(
                                             timeout_duration,
                                             new_client.get_vehicle_locations(
@@ -372,6 +509,7 @@ impl BulkFetchCoordinator {
                             chateau_id
                         );
                     }
+
                     None
                 }
             });
@@ -382,6 +520,10 @@ impl BulkFetchCoordinator {
         ctx.spawn(actix::fut::wrap_future(fut).map(
             |results, actor: &mut BulkFetchCoordinator, _| {
                 for (chateau_id, data) in results {
+                    if !actor.subscribers.contains_key(&chateau_id) {
+                        continue;
+                    }
+
                     let data_arc = Arc::new(data);
 
                     let is_new = if let Some((old_data, _)) = actor.cache.get(&chateau_id) {
@@ -394,6 +536,7 @@ impl BulkFetchCoordinator {
                         actor
                             .cache
                             .insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
+
                         if let Some(subs) = actor.subscribers.get(&chateau_id) {
                             for recipient in subs {
                                 recipient.do_send(ChateauUpdate {
@@ -426,6 +569,10 @@ impl Handler<Subscribe> for BulkFetchCoordinator {
         let subs = self.subscribers.entry(msg.chateau_id.clone()).or_default();
         subs.insert(msg.recipient.clone());
 
+        if let Ok(mut active) = self.active_chateaus.write() {
+            active.insert(msg.chateau_id.clone());
+        }
+
         if let Some((data, _)) = self.cache.get(&msg.chateau_id) {
             msg.recipient.do_send(ChateauUpdate {
                 chateau_id: msg.chateau_id,
@@ -441,8 +588,13 @@ impl Handler<Unsubscribe> for BulkFetchCoordinator {
     fn handle(&mut self, msg: Unsubscribe, _: &mut Self::Context) {
         if let Some(subs) = self.subscribers.get_mut(&msg.chateau_id) {
             subs.remove(&msg.recipient);
+
             if subs.is_empty() {
                 self.subscribers.remove(&msg.chateau_id);
+
+                if let Ok(mut active) = self.active_chateaus.write() {
+                    active.remove(&msg.chateau_id);
+                }
             }
         }
     }
