@@ -22,7 +22,7 @@ pub struct Trip {
     pub is_assigned: bool,
     pub is_delayed: bool,
     pub headsign: String,
-    pub consist: Consist,
+    pub consist: Option<Consist>,
     pub consist_cars: Option<Vec<ConsistCar>>,
     pub stops: Vec<Stop>,
     pub source: String,
