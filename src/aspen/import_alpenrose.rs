@@ -246,6 +246,48 @@ pub async fn new_rt_data(
             _ => None,
         };
 
+    let mut darwin_trip_id_to_formation: AHashMap<
+        String,
+        crate::consist_cache_and_conversion::DarwinScheduleFormations,
+    > = AHashMap::new();
+
+    if chateau_id == "nationalrailuk" {
+        let darwin_url =
+            std::env::var("DARWIN_RT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+        let client = reqwest::Client::new();
+
+        let rid_res = client
+            .get(format!("{}/rid-to-trip-id", darwin_url))
+            .send()
+            .await;
+        let form_res = client
+            .get(format!("{}/formations", darwin_url))
+            .send()
+            .await;
+
+        if let (Ok(r_resp), Ok(f_resp)) = (rid_res, form_res) {
+            if let (Ok(r_data), Ok(f_data)) =
+                (
+                    r_resp.json::<AHashMap<String, String>>().await,
+                    f_resp
+                        .json::<AHashMap<
+                            String,
+                            crate::consist_cache_and_conversion::DarwinScheduleFormations,
+                        >>()
+                        .await,
+                )
+            {
+                for (rid, trip_id) in r_data {
+                    if let Some(formation) = f_data.get(&rid) {
+                        darwin_trip_id_to_formation.insert(trip_id, formation.clone());
+                    }
+                }
+            }
+        } else {
+            println!("Failed to fetch Darwin formation data endpoints.");
+        }
+    }
+
     let conn_pool = pool.as_ref();
     let mut conn_pre = conn_pool.get().await;
 
@@ -2083,6 +2125,20 @@ pub async fn new_rt_data(
                                     {
                                         consist = Some(unified_consist.clone());
                                     }
+                                }
+                            }
+                        }
+
+                        // Apply the Darwin consist mapping
+                        if chateau_id == "nationalrailuk" {
+                            if let Some(trip_id_str) = &trip_id {
+                                if let Some(formation) =
+                                    darwin_trip_id_to_formation.get(trip_id_str)
+                                {
+                                    consist = Some(crate::consist_cache_and_conversion::map_darwin_formation_to_consist(
+                                        trip_id_str,
+                                        formation
+                                    ));
                                 }
                             }
                         }

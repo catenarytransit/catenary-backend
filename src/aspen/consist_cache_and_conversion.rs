@@ -147,3 +147,112 @@ pub fn map_mta_rail_train_to_consist(train: &MtaTrain) -> UnifiedConsist {
         formation_status: FormationStatus::MatchesSchedule,
     }
 }
+
+use compact_str::CompactString;
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinScheduleFormations {
+    #[serde(rename = "@rid")]
+    pub rid: CompactString,
+    #[serde(rename = "formation", default)]
+    pub formations: Vec<DarwinFormation>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinFormation {
+    #[serde(rename = "@fid")]
+    pub fid: CompactString,
+    #[serde(rename = "coaches")]
+    pub coaches: DarwinCoachList,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinCoachList {
+    #[serde(rename = "coach", default)]
+    pub coaches: Vec<DarwinCoachData>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinCoachData {
+    #[serde(rename = "@coachNumber")]
+    pub coach_number: CompactString,
+    #[serde(rename = "@coachClass")]
+    pub coach_class: Option<CompactString>,
+    #[serde(rename = "toilet", default)]
+    pub toilet: Option<DarwinToiletAvailabilityType>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinToiletAvailabilityType {
+    #[serde(rename = "$value", default)]
+    pub status: Option<CompactString>,
+    #[serde(rename = "@status", default)]
+    pub status_attr: Option<CompactString>,
+}
+
+/// Maps a Darwin formation to a UnifiedConsist structure.
+pub fn map_darwin_formation_to_consist(
+    trip_id: &str,
+    schedule_formation: &DarwinScheduleFormations,
+) -> UnifiedConsist {
+    let mut groups = Vec::new();
+
+    for formation in &schedule_formation.formations {
+        let mut vehicles = Vec::new();
+        for (idx, coach) in formation.coaches.coaches.iter().enumerate() {
+            let mut facilities = Vec::new();
+
+            if let Some(toilet) = &coach.toilet {
+                let status_str = toilet
+                    .status
+                    .as_deref()
+                    .or(toilet.status_attr.as_deref())
+                    .unwrap_or("Unknown");
+                let status = match status_str {
+                    "InService" => AmenityStatus::Available,
+                    "NotInService" => AmenityStatus::NotAvailable,
+                    _ => AmenityStatus::Unknown,
+                };
+
+                facilities.push(Amenity {
+                    amenity_type: AmenityType::Toilet,
+                    status,
+                    count: None,
+                });
+            }
+
+            let pass_class = match coach.coach_class.as_deref() {
+                Some("First") => PassengerClass::First,
+                Some("Standard") => PassengerClass::Second,
+                Some("Mixed") => PassengerClass::Unknown,
+                _ => PassengerClass::Unknown,
+            };
+
+            vehicles.push(VehicleElement {
+                uic_number: EcoString::from(coach.coach_number.as_str()),
+                label: Some(EcoString::from(coach.coach_number.as_str())),
+                order: idx as u8,
+                position_on_platform: None,
+                facilities,
+                occupancy: None,
+                passenger_count: None,
+                passenger_class: Some(pass_class),
+                is_locomotive: None,
+                is_revenue: Some(true),
+            });
+        }
+
+        groups.push(ConsistGroup {
+            group_name: Some(EcoString::from(formation.fid.as_str())),
+            destination: None, // Darwin payload does not directly provide segment destination at coach level
+            vehicles,
+            group_orientation: Some(Orientation::Unknown),
+        });
+    }
+
+    UnifiedConsist {
+        global_journey_id: EcoString::from(trip_id),
+        groups,
+        formation_status: FormationStatus::MatchesSchedule,
+    }
+}
