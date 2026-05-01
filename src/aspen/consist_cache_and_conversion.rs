@@ -66,21 +66,26 @@ pub async fn bg_fetch_nyct_consists(
             .await
         {
             Ok(res) => {
-                if let Ok(data) = res.json::<MtaSubwayTrips>().await {
-                    println!("Fetched {} subway trips for Consist data", data.trips.len());
+                match res.json::<MtaSubwayTrips>().await {
+                    Ok(data) => {
+                        println!("Fetched {} subway trips for Consist data", data.trips.len());
 
-                    let mut trip_map = HashMap::new();
-                    for trip in data.trips {
-                        trip_map.insert(trip.nyct_train_id.clone(), trip);
+                        let mut trip_map = HashMap::new();
+                        for trip in data.trips {
+                            trip_map.insert(trip.nyct_train_id.clone(), trip);
+                        }
+
+                        let mut write_guard = data_store.write().await;
+                        *write_guard = Some(trip_map);
+                        println!(
+                            "Updated authoritative NYCT subway data cache with {} trips",
+                            write_guard.as_ref().unwrap().len()
+                        );
                     }
-
-                    let mut write_guard = data_store.write().await;
-                    *write_guard = Some(trip_map);
-                    println!(
-                        "Updated authoritative NYCT subway data cache with {} trips",
-                        write_guard.as_ref().unwrap().len()
-                    );
-                }
+                    Err(e) => {
+                        eprintln!("Failed to fetch NYCT subway trips for Consist data: {}", e);
+                    }
+                };
             }
             Err(e) => {
                 eprintln!("Failed to fetch NYCT subway trips for Consist data: {}", e);
