@@ -256,8 +256,6 @@ pub async fn new_rt_data(
         crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
     > = AHashMap::new();
 
-
-
     if chateau_id == "nationalrailuk" {
         let darwin_url =
             std::env::var("DARWIN_RT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -277,21 +275,23 @@ pub async fn new_rt_data(
             .await;
 
         if let (Ok(r_resp), Ok(f_resp), Ok(fv1_resp)) = (rid_res, form_res, form_v1_res) {
-            if let (Ok(r_data), Ok(f_data), Ok(fv1_data)) = (
-                r_resp.json::<AHashMap<String, String>>().await,
-                f_resp
-                    .json::<AHashMap<
-                        String,
-                        crate::consist_cache_and_conversion::DarwinScheduleFormations,
-                    >>()
-                    .await,
-                fv1_resp
-                    .json::<AHashMap<
-                        String,
-                        crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
-                    >>()
-                    .await,
-            ) {
+            if let (Ok(r_data), Ok(f_data), Ok(fv1_data)) =
+                (
+                    r_resp.json::<AHashMap<String, String>>().await,
+                    f_resp
+                        .json::<AHashMap<
+                            String,
+                            crate::consist_cache_and_conversion::DarwinScheduleFormations,
+                        >>()
+                        .await,
+                    fv1_resp
+                        .json::<AHashMap<
+                            String,
+                            crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
+                        >>()
+                        .await,
+                )
+            {
                 for (rid, trip_id) in r_data {
                     if let Some(formation) = f_data.get(&rid) {
                         darwin_trip_id_to_formation.insert(trip_id.clone(), formation.clone());

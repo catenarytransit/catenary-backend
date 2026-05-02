@@ -227,15 +227,30 @@ pub async fn route_info(
             .collect();
 
         let direction_rows_hashmap: HashMap<String, Vec<catenary::models::DirectionPatternRow>> = {
-            let mut temp: HashMap<String, Vec<DirectionPatternRow>> = HashMap::new();
+            let mut temp: HashMap<
+                String,
+                HashMap<(String, String), Vec<catenary::models::DirectionPatternRow>>,
+            > = HashMap::new();
 
             for row in &direction_rows {
                 temp.entry(row.direction_pattern_id.clone())
-                    .and_modify(|x| x.push(row.clone()))
-                    .or_insert(vec![row.clone()]);
+                    .or_default()
+                    .entry((row.onestop_feed_id.clone(), row.attempt_id.clone()))
+                    .or_default()
+                    .push(row.clone());
             }
 
-            temp
+            let mut final_temp: HashMap<String, Vec<catenary::models::DirectionPatternRow>> =
+                HashMap::new();
+
+            for (direction_id, feeds) in temp {
+                if let Some((_, mut rows)) = feeds.into_iter().next() {
+                    rows.sort_by_key(|r| r.stop_sequence);
+                    final_temp.insert(direction_id, rows);
+                }
+            }
+
+            final_temp
         };
 
         let mut combined_hashmap: BTreeMap<String, DirectionsSummary> = BTreeMap::new();
@@ -761,15 +776,30 @@ pub async fn route_info_v2(
             .collect();
 
         let direction_rows_hashmap: HashMap<String, Vec<catenary::models::DirectionPatternRow>> = {
-            let mut temp: HashMap<String, Vec<DirectionPatternRow>> = HashMap::new();
+            let mut temp: HashMap<
+                String,
+                HashMap<(String, String), Vec<catenary::models::DirectionPatternRow>>,
+            > = HashMap::new();
 
             for row in &direction_rows {
                 temp.entry(row.direction_pattern_id.clone())
-                    .and_modify(|x| x.push(row.clone()))
-                    .or_insert(vec![row.clone()]);
+                    .or_default()
+                    .entry((row.onestop_feed_id.clone(), row.attempt_id.clone()))
+                    .or_default()
+                    .push(row.clone());
             }
 
-            temp
+            let mut final_temp: HashMap<String, Vec<catenary::models::DirectionPatternRow>> =
+                HashMap::new();
+
+            for (direction_id, feeds) in temp {
+                if let Some((_, mut rows)) = feeds.into_iter().next() {
+                    rows.sort_by_key(|r| r.stop_sequence);
+                    final_temp.insert(direction_id, rows);
+                }
+            }
+
+            final_temp
         };
 
         let mut combined_hashmap: BTreeMap<String, DirectionsSummary> = BTreeMap::new();
