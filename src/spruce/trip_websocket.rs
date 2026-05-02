@@ -1,4 +1,5 @@
 use crate::map_coordinator::{
+    PrecomputedChateauMap,
     AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchParamsV3,
     BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
     EachChateauResponseV2, PositionDataCategoryV2, Subscribe, Unsubscribe,
@@ -8,7 +9,6 @@ use actix::prelude::*;
 use actix_web_actors::ws;
 use ahash::AHashMap;
 use catenary::EtcdConnectionIps;
-use catenary::aspen::lib::GetVehicleLocationsResponse;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::trip_logic::{
@@ -46,9 +46,11 @@ pub struct TripWebSocket {
     // ChateauID -> (LastTime, LastBounds, LastCategories)
     pub sent_state: HashMap<String, SentMapState>,
     pub map_update_generation: u64,
+    pub pending_map_updates: HashMap<String, Arc<PrecomputedChateauMap>>,
 
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
+    pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 }
 
 impl TripWebSocket {
@@ -72,8 +74,10 @@ impl TripWebSocket {
             subscribed_chateaus: HashSet::new(),
             sent_state: HashMap::new(),
             map_update_generation: 0,
+            pending_map_updates: HashMap::new(),
             etcd_reuser,
             aspen_endpoint_cache: HashMap::new(),
+            in_progress_trip_fetches: HashMap::new(),
         }
     }
 
@@ -87,12 +91,77 @@ impl TripWebSocket {
         });
     }
 
+    
+    fn start_map_update_coalescer(&self, ctx: &mut ws::WebsocketContext<Self>) {
+        ctx.run_interval(Duration::from_millis(200), |act, ctx| {
+            if act.pending_map_updates.is_empty() { return; }
+            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> = act.pending_map_updates.drain().collect();
+            let Some(params) = act.client_viewport.clone() else { return; };
+            let sent_state = act.sent_state.clone();
+            let map_update_generation = act.map_update_generation;
+            
+            let fut = async move {
+                let mut results = Vec::new();
+                for (chateau_id, response) in updates {
+                    let state_entry = sent_state.get(&chateau_id).cloned();
+                    let params_clone = params.clone();
+                    let res = match tokio::task::spawn_blocking(move || {
+                        Self::build_map_update_message(chateau_id, response, params_clone, state_entry)
+                    }).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            eprintln!("Failed to build map_update websocket message: {:?}", e);
+                            None
+                        }
+                    };
+                    if let Some(r) = res {
+                        results.push(r);
+                    }
+                }
+                results
+            };
+            
+            ctx.spawn(actix::fut::wrap_future(fut).map(
+                move |results, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                    if act.map_update_generation != map_update_generation {
+                        return;
+                    }
+                    for (chateau_id, text, new_state) in results {
+                        if let Some((current_last_updated_time_ms, _, _)) = act.sent_state.get(&chateau_id) {
+                            if *current_last_updated_time_ms > new_state.0 {
+                                continue;
+                            }
+                        }
+                        ctx.text(text);
+                        act.sent_state.insert(chateau_id, new_state);
+                    }
+                }
+            ));
+        });
+    }
+
     fn start_periodic_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.run_interval(UPDATE_INTERVAL, |act, ctx| {
-            for ((chateau, params), _) in act.subscriptions.iter_mut() {
+            let now = Instant::now();
+            let mut keys_to_fetch = Vec::new();
+
+            for ((chateau, params), _) in act.subscriptions.iter() {
+                let key = (chateau.clone(), params.clone());
+                if let Some(started) = act.in_progress_trip_fetches.get(&key) {
+                    if started.elapsed() < Duration::from_secs(5) {
+                        continue;
+                    }
+                }
+                keys_to_fetch.push(key);
+            }
+
+            for key in keys_to_fetch {
+                act.in_progress_trip_fetches.insert(key.clone(), now);
+                let (chateau_clone, params_clone) = key.clone();
+
                 let cached_socket =
                     act.aspen_endpoint_cache
-                        .get(chateau)
+                        .get(&chateau_clone)
                         .and_then(|(socket, time)| {
                             if time.elapsed() < Duration::from_secs(300) {
                                 Some(socket.clone())
@@ -102,8 +171,8 @@ impl TripWebSocket {
                         });
 
                 let fs = fetch_trip_rt_update(
-                    chateau.clone(),
-                    params.clone(),
+                    chateau_clone.clone(),
+                    params_clone.clone(),
                     act.etcd_connection_ips.clone(),
                     act.etcd_connection_options.clone(),
                     act.aspen_client_manager.clone(),
@@ -111,13 +180,11 @@ impl TripWebSocket {
                     cached_socket,
                 );
 
-                let params_clone = params.clone();
-                let chateau_clone = chateau.clone();
-
                 let fut = async move { fs.await };
 
                 let fut = actix::fut::wrap_future(fut).map(
                     move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                        act.in_progress_trip_fetches.remove(&key);
                         match result {
                             Ok((response, used_socket)) => {
                                 if let Some(socket) = used_socket {
@@ -196,7 +263,7 @@ impl TripWebSocket {
 
     fn build_map_update_message(
         chateau_id: String,
-        response: Arc<GetVehicleLocationsResponse>,
+        response: Arc<PrecomputedChateauMap>,
         params: MapViewportUpdate,
         sent_state_entry: Option<SentMapState>,
     ) -> Option<(String, String, SentMapState)> {
@@ -278,16 +345,12 @@ impl TripWebSocket {
 
             has_any_updates = true;
 
-            let route_types_allowed = category_to_allowed_route_ids(category);
-
-            let filtered_vehicle_positions = response
-                .vehicle_positions
-                .iter()
-                .filter(|vehicle_position| {
-                    route_types_allowed.contains(&vehicle_position.1.route_type)
-                })
-                .map(|(a, b)| (a.clone(), convert_to_output(b)))
-                .collect::<AHashMap<String, AspenisedVehiclePositionOutput>>();
+            let precomputed_category = match category {
+                CategoryOfRealtimeVehicleData::Metro => &response.metro,
+                CategoryOfRealtimeVehicleData::Bus => &response.bus,
+                CategoryOfRealtimeVehicleData::Rail => &response.rail,
+                CategoryOfRealtimeVehicleData::Other => &response.other,
+            };
 
             let mut vehicles_by_tile: BTreeMap<
                 u32,
@@ -295,78 +358,28 @@ impl TripWebSocket {
             > = BTreeMap::new();
 
             if replace_all {
-                for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
-                    if let Some(pos) = &vehicle_position.position {
-                        if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                            let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                pos.latitude,
-                                pos.longitude,
-                                zoom,
-                            );
-
-                            let in_current_bounds = x >= bounds.min_x
-                                && x <= bounds.max_x
-                                && y >= bounds.min_y
-                                && y <= bounds.max_y;
-
-                            if in_current_bounds {
-                                vehicles_by_tile
-                                    .entry(x)
-                                    .or_default()
-                                    .entry(y)
-                                    .or_default()
-                                    .insert(vehicle_id, vehicle_position);
-                            }
-                        }
+                for (&x, y_map) in precomputed_category.tiles.range(bounds.min_x..=bounds.max_x) {
+                    let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
+                    for (&y, vehicles) in in_bounds_y {
+                        vehicles_by_tile.entry(x).or_default().insert(y, vehicles.clone());
                     }
                 }
             } else if let Some(prev_bounds) = prev_bounds_for_level {
-                for (vehicle_id, vehicle_position) in filtered_vehicle_positions {
-                    if let Some(pos) = &vehicle_position.position {
-                        if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                            let (x, y) = slippy_map_tiles::lat_lon_to_tile(
-                                pos.latitude,
-                                pos.longitude,
-                                zoom,
-                            );
-
-                            let in_current_bounds = x >= bounds.min_x
-                                && x <= bounds.max_x
-                                && y >= bounds.min_y
-                                && y <= bounds.max_y;
-
-                            let in_prev_bounds = x >= prev_bounds.min_x
-                                && x <= prev_bounds.max_x
-                                && y >= prev_bounds.min_y
-                                && y <= prev_bounds.max_y;
-
-                            if in_current_bounds && !in_prev_bounds {
-                                vehicles_by_tile
-                                    .entry(x)
-                                    .or_default()
-                                    .entry(y)
-                                    .or_default()
-                                    .insert(vehicle_id, vehicle_position);
-                            }
+                for (&x, y_map) in precomputed_category.tiles.range(bounds.min_x..=bounds.max_x) {
+                    let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
+                    for (&y, vehicles) in in_bounds_y {
+                        let in_prev_bounds = x >= prev_bounds.min_x
+                            && x <= prev_bounds.max_x
+                            && y >= prev_bounds.min_y
+                            && y <= prev_bounds.max_y;
+                        if !in_prev_bounds {
+                            vehicles_by_tile.entry(x).or_default().insert(y, vehicles.clone());
                         }
                     }
                 }
             }
 
-            let list_of_agency_ids = response.vehicle_route_cache.as_ref().map(|cache| {
-                cache
-                    .values()
-                    .filter_map(|route_cache| {
-                        if route_types_allowed.contains(&route_cache.route_type) {
-                            route_cache.agency_id.clone()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<BTreeSet<String>>()
-                    .into_iter()
-                    .collect::<Vec<String>>()
-            });
+            let list_of_agency_ids = precomputed_category.agency_ids.clone();
 
             let payload = EachCategoryPayloadV2 {
                 vehicle_positions: match vehicles_by_tile.is_empty() {
@@ -422,7 +435,7 @@ impl TripWebSocket {
     fn process_map_update(
         &mut self,
         chateau_id: &String,
-        response: &Arc<GetVehicleLocationsResponse>,
+        response: &Arc<PrecomputedChateauMap>,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         let Some(params) = self.client_viewport.clone() else {
@@ -433,46 +446,7 @@ impl TripWebSocket {
             return;
         }
 
-        let chateau_id = chateau_id.clone();
-        let response = response.clone();
-        let sent_state_entry = self.sent_state.get(&chateau_id).cloned();
-        let map_update_generation = self.map_update_generation;
-
-        let fut = async move {
-            match tokio::task::spawn_blocking(move || {
-                Self::build_map_update_message(chateau_id, response, params, sent_state_entry)
-            })
-            .await
-            {
-                Ok(result) => result,
-                Err(e) => {
-                    eprintln!("Failed to build map_update websocket message: {:?}", e);
-                    None
-                }
-            }
-        };
-
-        ctx.spawn(actix::fut::wrap_future(fut).map(
-            move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
-                let Some((chateau_id, text, new_state)) = result else {
-                    return;
-                };
-
-                if act.map_update_generation != map_update_generation {
-                    return;
-                }
-
-                if let Some((current_last_updated_time_ms, _, _)) = act.sent_state.get(&chateau_id)
-                {
-                    if *current_last_updated_time_ms > new_state.0 {
-                        return;
-                    }
-                }
-
-                ctx.text(text);
-                act.sent_state.insert(chateau_id, new_state);
-            },
-        ));
+        self.pending_map_updates.insert(chateau_id.clone(), response.clone());
     }
 }
 
@@ -482,6 +456,7 @@ impl Actor for TripWebSocket {
     fn started(&mut self, ctx: &mut Self::Context) {
         self.hb(ctx);
         self.start_periodic_updates(ctx);
+        self.start_map_update_coalescer(ctx);
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> actix::Running {
