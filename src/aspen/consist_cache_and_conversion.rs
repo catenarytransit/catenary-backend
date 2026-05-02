@@ -195,6 +195,36 @@ pub struct DarwinToiletAvailabilityType {
     pub status_attr: Option<CompactString>,
 }
 
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinScheduleFormationsV1 {
+    #[serde(rename = "@rid")]
+    pub rid: CompactString,
+    #[serde(rename = "formation", default)]
+    pub formations: Vec<DarwinFormationV1>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinFormationV1 {
+    #[serde(rename = "@fid")]
+    pub fid: CompactString,
+    #[serde(rename = "coaches")]
+    pub coaches: DarwinCoachListV1,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinCoachListV1 {
+    #[serde(rename = "coach", default)]
+    pub coaches: Vec<DarwinCoachDataV1>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+pub struct DarwinCoachDataV1 {
+    #[serde(rename = "@coachNumber")]
+    pub coach_number: CompactString,
+    #[serde(rename = "@coachClass")]
+    pub coach_class: Option<CompactString>,
+}
+
 /// Maps a Darwin formation to a UnifiedConsist structure.
 pub fn map_darwin_formation_to_consist(
     trip_id: &str,
@@ -250,6 +280,52 @@ pub fn map_darwin_formation_to_consist(
         groups.push(ConsistGroup {
             group_name: Some(EcoString::from(formation.fid.as_str())),
             destination: None, // Darwin payload does not directly provide segment destination at coach level
+            vehicles,
+            group_orientation: Some(Orientation::Unknown),
+        });
+    }
+
+    UnifiedConsist {
+        global_journey_id: EcoString::from(trip_id),
+        groups,
+        formation_status: FormationStatus::MatchesSchedule,
+    }
+}
+
+/// Maps a Darwin formation v1 to a UnifiedConsist structure.
+pub fn map_darwin_v1_formation_to_consist(
+    trip_id: &str,
+    schedule_formation: &DarwinScheduleFormationsV1,
+) -> UnifiedConsist {
+    let mut groups = Vec::new();
+
+    for formation in &schedule_formation.formations {
+        let mut vehicles = Vec::new();
+        for (idx, coach) in formation.coaches.coaches.iter().enumerate() {
+            let pass_class = match coach.coach_class.as_deref() {
+                Some("First") => PassengerClass::First,
+                Some("Standard") => PassengerClass::Second,
+                Some("Mixed") => PassengerClass::Unknown,
+                _ => PassengerClass::Unknown,
+            };
+
+            vehicles.push(VehicleElement {
+                uic_number: EcoString::from(coach.coach_number.as_str()),
+                label: Some(EcoString::from(coach.coach_number.as_str())),
+                order: idx as u8,
+                position_on_platform: None,
+                facilities: vec![], // No toilet data in v1
+                occupancy: None,
+                passenger_count: None,
+                passenger_class: Some(pass_class),
+                is_locomotive: None,
+                is_revenue: Some(true),
+            });
+        }
+
+        groups.push(ConsistGroup {
+            group_name: Some(EcoString::from(formation.fid.as_str())),
+            destination: None,
             vehicles,
             group_orientation: Some(Orientation::Unknown),
         });
