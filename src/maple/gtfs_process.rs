@@ -2574,35 +2574,37 @@ fn faster_stop_time_reader_injection(
     let buf_reader = BufReader::new(file);
     let mut rdr = csv::Reader::from_reader(buf_reader);
 
-    let mut current_trip_id: Option<String> = None;
+    let mut current_trip_id: String = String::new();
 
-    let mut stop_times_buffer: Vec<gtfs_structures::StopTime> = Vec::new();
+    let mut stop_times_buffer: Vec<gtfs_structures::StopTime> = Vec::with_capacity(1024);
 
     for result in rdr.deserialize() {
         let stop_time_gtfs_raw: gtfs_structures::RawStopTime = result?;
 
         //check if we have transitioned to a new trip_id
 
-        if let Some(current_trip_id_value) = &current_trip_id {
-            if &stop_time_gtfs_raw.trip_id != current_trip_id_value {
+        if !current_trip_id.is_empty() {
+            if stop_time_gtfs_raw.trip_id != current_trip_id {
                 //we have transitioned to a new trip_id, flush the buffer into the GTFS struct trip id
 
-                if let Some(trip) = gtfs.trips.get_mut(current_trip_id_value.as_str()) {
-                    trip.stop_times = stop_times_buffer;
-                    stop_times_buffer = Vec::new();
+                if let Some(trip) = gtfs.trips.get_mut(current_trip_id.as_str()) {
+                    trip.stop_times.reserve_exact(stop_times_buffer.len());
+                    for st in stop_times_buffer.drain(..) {
+                        trip.stop_times.push(st);
+                    }
                 } else {
                     // This should never happen - if the stop times file is well formed, we should have already encountered the trip id in the trips.txt file and created an entry for it in gtfs.trips
                     eprintln!(
                         "Warning: Trip ID {} found in stop_times.txt but not in trips.txt",
-                        current_trip_id_value
+                        current_trip_id
                     );
-                    stop_times_buffer = Vec::new();
+                    stop_times_buffer.clear();
                 }
 
-                current_trip_id = Some(stop_time_gtfs_raw.trip_id.clone());
+                current_trip_id.clone_from(&stop_time_gtfs_raw.trip_id);
             }
         } else {
-            current_trip_id = Some(stop_time_gtfs_raw.trip_id.clone());
+            current_trip_id.clone_from(&stop_time_gtfs_raw.trip_id);
         }
 
         //convert to StopTime and add to buffer
@@ -2616,13 +2618,16 @@ fn faster_stop_time_reader_injection(
 
     //flush final buffer
 
-    if let Some(last_trip_id) = current_trip_id {
-        if let Some(trip) = gtfs.trips.get_mut(last_trip_id.as_str()) {
-            trip.stop_times = stop_times_buffer;
+    if !current_trip_id.is_empty() {
+        if let Some(trip) = gtfs.trips.get_mut(current_trip_id.as_str()) {
+            trip.stop_times.reserve_exact(stop_times_buffer.len());
+            for st in stop_times_buffer.drain(..) {
+                trip.stop_times.push(st);
+            }
         } else {
             eprintln!(
                 "Warning: Trip ID {} found in stop_times.txt but not in trips.txt",
-                last_trip_id
+                current_trip_id
             );
         }
     }
