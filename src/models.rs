@@ -121,7 +121,7 @@ pub struct Shape {
     pub stop_to_stop_generated: Option<bool>,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::static_download_attempts)]
 pub struct StaticDownloadAttempt {
     pub onestop_feed_id: String,
@@ -203,7 +203,7 @@ pub struct StopsForRoute {
     pub chateau: String,
 }
 
-#[derive(Queryable, Selectable, Insertable, Debug, Clone)]
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::ingested_static)]
 pub struct IngestedStatic {
     pub onestop_feed_id: String,

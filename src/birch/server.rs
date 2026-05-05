@@ -90,6 +90,7 @@ mod terrain_tiles_proxy;
 use terrain_tiles_proxy::*;
 mod block_api;
 mod connections_lookup;
+mod feed_metadata;
 mod openrailwaymap_proxy;
 mod osm_station_preview;
 mod shapes;
@@ -981,6 +982,7 @@ async fn main() -> std::io::Result<()> {
             .service(proxy_for_maptiler_coutours_tiles)
             .service(proxy_for_mapbox_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
+            .service(feed_metadata::feed_metadata_endpoint)
             .service(block_api::block_api)
             .service(size_bbox_zoom_birch)
             .service(stop_preview::query_stops_preview)
