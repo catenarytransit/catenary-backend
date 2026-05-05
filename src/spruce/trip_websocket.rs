@@ -1,8 +1,7 @@
 use crate::map_coordinator::{
-    PrecomputedChateauMap,
     AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchParamsV3,
     BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
-    EachChateauResponseV2, PositionDataCategoryV2, Subscribe, Unsubscribe,
+    EachChateauResponseV2, PositionDataCategoryV2, PrecomputedChateauMap, Subscribe, Unsubscribe,
     category_to_allowed_route_ids, convert_to_output,
 };
 use actix::prelude::*;
@@ -91,23 +90,34 @@ impl TripWebSocket {
         });
     }
 
-    
     fn start_map_update_coalescer(&self, ctx: &mut ws::WebsocketContext<Self>) {
         ctx.run_interval(Duration::from_millis(200), |act, ctx| {
-            if act.pending_map_updates.is_empty() { return; }
-            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> = act.pending_map_updates.drain().collect();
-            let Some(params) = act.client_viewport.clone() else { return; };
+            if act.pending_map_updates.is_empty() {
+                return;
+            }
+            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> =
+                act.pending_map_updates.drain().collect();
+            let Some(params) = act.client_viewport.clone() else {
+                return;
+            };
             let sent_state = act.sent_state.clone();
             let map_update_generation = act.map_update_generation;
-            
+
             let fut = async move {
                 let mut results = Vec::new();
                 for (chateau_id, response) in updates {
                     let state_entry = sent_state.get(&chateau_id).cloned();
                     let params_clone = params.clone();
                     let res = match tokio::task::spawn_blocking(move || {
-                        Self::build_map_update_message(chateau_id, response, params_clone, state_entry)
-                    }).await {
+                        Self::build_map_update_message(
+                            chateau_id,
+                            response,
+                            params_clone,
+                            state_entry,
+                        )
+                    })
+                    .await
+                    {
                         Ok(r) => r,
                         Err(e) => {
                             eprintln!("Failed to build map_update websocket message: {:?}", e);
@@ -120,14 +130,16 @@ impl TripWebSocket {
                 }
                 results
             };
-            
+
             ctx.spawn(actix::fut::wrap_future(fut).map(
                 move |results, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
                     if act.map_update_generation != map_update_generation {
                         return;
                     }
                     for (chateau_id, text, new_state) in results {
-                        if let Some((current_last_updated_time_ms, _, _)) = act.sent_state.get(&chateau_id) {
+                        if let Some((current_last_updated_time_ms, _, _)) =
+                            act.sent_state.get(&chateau_id)
+                        {
                             if *current_last_updated_time_ms > new_state.0 {
                                 continue;
                             }
@@ -135,7 +147,7 @@ impl TripWebSocket {
                         ctx.text(text);
                         act.sent_state.insert(chateau_id, new_state);
                     }
-                }
+                },
             ));
         });
     }
@@ -358,14 +370,23 @@ impl TripWebSocket {
             > = BTreeMap::new();
 
             if replace_all {
-                for (&x, y_map) in precomputed_category.tiles.range(bounds.min_x..=bounds.max_x) {
+                for (&x, y_map) in precomputed_category
+                    .tiles
+                    .range(bounds.min_x..=bounds.max_x)
+                {
                     let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
                     for (&y, vehicles) in in_bounds_y {
-                        vehicles_by_tile.entry(x).or_default().insert(y, vehicles.clone());
+                        vehicles_by_tile
+                            .entry(x)
+                            .or_default()
+                            .insert(y, vehicles.clone());
                     }
                 }
             } else if let Some(prev_bounds) = prev_bounds_for_level {
-                for (&x, y_map) in precomputed_category.tiles.range(bounds.min_x..=bounds.max_x) {
+                for (&x, y_map) in precomputed_category
+                    .tiles
+                    .range(bounds.min_x..=bounds.max_x)
+                {
                     let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
                     for (&y, vehicles) in in_bounds_y {
                         let in_prev_bounds = x >= prev_bounds.min_x
@@ -373,7 +394,10 @@ impl TripWebSocket {
                             && y >= prev_bounds.min_y
                             && y <= prev_bounds.max_y;
                         if !in_prev_bounds {
-                            vehicles_by_tile.entry(x).or_default().insert(y, vehicles.clone());
+                            vehicles_by_tile
+                                .entry(x)
+                                .or_default()
+                                .insert(y, vehicles.clone());
                         }
                     }
                 }
@@ -446,7 +470,8 @@ impl TripWebSocket {
             return;
         }
 
-        self.pending_map_updates.insert(chateau_id.clone(), response.clone());
+        self.pending_map_updates
+            .insert(chateau_id.clone(), response.clone());
     }
 }
 

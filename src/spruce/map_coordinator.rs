@@ -8,13 +8,13 @@ use catenary::aspen_dataset::CatenaryRtVehiclePosition;
 use catenary::aspen_dataset::{AspenisedVehiclePosition, AspenisedVehicleRouteCache};
 use catenary::bincode_deserialize;
 use futures::future::join_all;
+use futures::stream::{self, StreamExt};
 use serde::{Deserialize, Serialize};
+use slippy_map_tiles;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use futures::stream::{self, StreamExt};
-use slippy_map_tiles;
 
 use tarpc::context;
 
@@ -165,7 +165,6 @@ pub struct EachCategoryPayloadV2 {
     pub list_of_agency_ids: Option<Vec<String>>,
 }
 
-
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PrecomputedCategoryTiles {
     pub tiles: BTreeMap<u32, BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>>,
@@ -216,14 +215,43 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
 
             if let Some(pos) = &vehicle_position.position {
                 if pos.latitude != 0.0 && pos.longitude != 0.0 {
-                    let (x, y) = slippy_map_tiles::lat_lon_to_tile(pos.latitude, pos.longitude, zoom);
+                    let (x, y) =
+                        slippy_map_tiles::lat_lon_to_tile(pos.latitude, pos.longitude, zoom);
                     let output = convert_to_output(vehicle_position);
-                    
+
                     match cat {
-                        CategoryOfRealtimeVehicleData::Metro => { metro_tiles.entry(x).or_insert_with(BTreeMap::new).entry(y).or_insert_with(BTreeMap::new).insert(vehicle_id.clone(), output); },
-                        CategoryOfRealtimeVehicleData::Bus => { bus_tiles.entry(x).or_insert_with(BTreeMap::new).entry(y).or_insert_with(BTreeMap::new).insert(vehicle_id.clone(), output); },
-                        CategoryOfRealtimeVehicleData::Rail => { rail_tiles.entry(x).or_insert_with(BTreeMap::new).entry(y).or_insert_with(BTreeMap::new).insert(vehicle_id.clone(), output); },
-                        CategoryOfRealtimeVehicleData::Other => { other_tiles.entry(x).or_insert_with(BTreeMap::new).entry(y).or_insert_with(BTreeMap::new).insert(vehicle_id.clone(), output); },
+                        CategoryOfRealtimeVehicleData::Metro => {
+                            metro_tiles
+                                .entry(x)
+                                .or_insert_with(BTreeMap::new)
+                                .entry(y)
+                                .or_insert_with(BTreeMap::new)
+                                .insert(vehicle_id.clone(), output);
+                        }
+                        CategoryOfRealtimeVehicleData::Bus => {
+                            bus_tiles
+                                .entry(x)
+                                .or_insert_with(BTreeMap::new)
+                                .entry(y)
+                                .or_insert_with(BTreeMap::new)
+                                .insert(vehicle_id.clone(), output);
+                        }
+                        CategoryOfRealtimeVehicleData::Rail => {
+                            rail_tiles
+                                .entry(x)
+                                .or_insert_with(BTreeMap::new)
+                                .entry(y)
+                                .or_insert_with(BTreeMap::new)
+                                .insert(vehicle_id.clone(), output);
+                        }
+                        CategoryOfRealtimeVehicleData::Other => {
+                            other_tiles
+                                .entry(x)
+                                .or_insert_with(BTreeMap::new)
+                                .entry(y)
+                                .or_insert_with(BTreeMap::new)
+                                .insert(vehicle_id.clone(), output);
+                        }
                     };
                 }
             }
@@ -232,22 +260,39 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
 
     let get_agencies = |route_types: &[i16]| -> Option<Vec<String>> {
         response.vehicle_route_cache.as_ref().map(|cache| {
-            cache.values().filter_map(|route_cache| {
-                if route_types.contains(&route_cache.route_type) {
-                    route_cache.agency_id.clone()
-                } else {
-                    None
-                }
-            }).collect::<BTreeSet<String>>().into_iter().collect()
+            cache
+                .values()
+                .filter_map(|route_cache| {
+                    if route_types.contains(&route_cache.route_type) {
+                        route_cache.agency_id.clone()
+                    } else {
+                        None
+                    }
+                })
+                .collect::<BTreeSet<String>>()
+                .into_iter()
+                .collect()
         })
     };
 
     PrecomputedChateauMap {
         last_updated_time_ms: response.last_updated_time_ms,
-        metro: PrecomputedCategoryTiles { tiles: metro_tiles, agency_ids: get_agencies(&route_types_metro) },
-        bus: PrecomputedCategoryTiles { tiles: bus_tiles, agency_ids: get_agencies(&route_types_bus) },
-        rail: PrecomputedCategoryTiles { tiles: rail_tiles, agency_ids: get_agencies(&route_types_rail) },
-        other: PrecomputedCategoryTiles { tiles: other_tiles, agency_ids: get_agencies(&route_types_other) },
+        metro: PrecomputedCategoryTiles {
+            tiles: metro_tiles,
+            agency_ids: get_agencies(&route_types_metro),
+        },
+        bus: PrecomputedCategoryTiles {
+            tiles: bus_tiles,
+            agency_ids: get_agencies(&route_types_bus),
+        },
+        rail: PrecomputedCategoryTiles {
+            tiles: rail_tiles,
+            agency_ids: get_agencies(&route_types_rail),
+        },
+        other: PrecomputedCategoryTiles {
+            tiles: other_tiles,
+            agency_ids: get_agencies(&route_types_other),
+        },
     }
 }
 
@@ -273,7 +318,6 @@ pub struct Unsubscribe {
     pub chateau_id: String,
     pub recipient: Recipient<ChateauUpdate>,
 }
-
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -395,264 +439,287 @@ impl BulkFetchCoordinator {
 
             let etcd = etcd_result.ok();
             if etcd.is_none() {
-                return futures::stream::iter(chateaus_to_fetch.into_iter().map(|(id, _)| FetchResultMsg(id, None))).left_stream();
+                return futures::stream::iter(
+                    chateaus_to_fetch
+                        .into_iter()
+                        .map(|(id, _)| FetchResultMsg(id, None)),
+                )
+                .left_stream();
             }
             let etcd = etcd.unwrap();
 
-            let tasks = chateaus_to_fetch
-            .into_iter()
-            .map(move |(chateau_id, cached_last_updated_time_ms)| {
-                let mut etcd = etcd.clone();
-                let aspen_manager = aspen_manager.clone();
-                let etcd_reuser = etcd_reuser.clone();
-                let active_chateaus = active_chateaus.clone();
-                let aspen_endpoint_cache = aspen_endpoint_cache.clone();
+            let tasks = chateaus_to_fetch.into_iter().map(
+                move |(chateau_id, cached_last_updated_time_ms)| {
+                    let mut etcd = etcd.clone();
+                    let aspen_manager = aspen_manager.clone();
+                    let etcd_reuser = etcd_reuser.clone();
+                    let active_chateaus = active_chateaus.clone();
+                    let aspen_endpoint_cache = aspen_endpoint_cache.clone();
 
-                async move {
-                    if !is_chateau_active(&active_chateaus, &chateau_id) {
-                        return FetchResultMsg(chateau_id, None);
-                    }
+                    async move {
+                        if !is_chateau_active(&active_chateaus, &chateau_id) {
+                            return FetchResultMsg(chateau_id, None);
+                        }
 
-                    let mut cached_socket: Option<std::net::SocketAddr> = None;
-                    if let Ok(cache_read) = aspen_endpoint_cache.read() {
-                        if let Some((socket, time)) = cache_read.get(&chateau_id) {
-                            if time.elapsed() < Duration::from_secs(300) {
-                                cached_socket = Some(socket.clone());
+                        let mut cached_socket: Option<std::net::SocketAddr> = None;
+                        if let Ok(cache_read) = aspen_endpoint_cache.read() {
+                            if let Some((socket, time)) = cache_read.get(&chateau_id) {
+                                if time.elapsed() < Duration::from_secs(300) {
+                                    cached_socket = Some(socket.clone());
+                                }
                             }
                         }
-                    }
 
-                    let socket_to_use = if let Some(socket) = cached_socket.clone() {
-                        socket
-                    } else {
-                        let fetch_assigned_node = etcd
-                            .get(
-                                format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-                                None,
-                            )
-                            .await;
+                        let socket_to_use = if let Some(socket) = cached_socket.clone() {
+                            socket
+                        } else {
+                            let fetch_assigned_node = etcd
+                                .get(
+                                    format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+                                    None,
+                                )
+                                .await;
 
-                        if let Ok(resp) = fetch_assigned_node {
-                            if !resp.kvs().is_empty() {
-                                if let Ok(assigned_chateau_data) =
-                                    bincode_deserialize::<ChateauMetadataEtcd>(
-                                        resp.kvs().first().unwrap().value(),
-                                    )
-                                {
-                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                        cache_write.insert(chateau_id.clone(), (assigned_chateau_data.socket.clone(), Instant::now()));
+                            if let Ok(resp) = fetch_assigned_node {
+                                if !resp.kvs().is_empty() {
+                                    if let Ok(assigned_chateau_data) =
+                                        bincode_deserialize::<ChateauMetadataEtcd>(
+                                            resp.kvs().first().unwrap().value(),
+                                        )
+                                    {
+                                        if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                            cache_write.insert(
+                                                chateau_id.clone(),
+                                                (
+                                                    assigned_chateau_data.socket.clone(),
+                                                    Instant::now(),
+                                                ),
+                                            );
+                                        }
+                                        assigned_chateau_data.socket
+                                    } else {
+                                        return FetchResultMsg(chateau_id, None);
                                     }
-                                    assigned_chateau_data.socket
                                 } else {
+                                    println!("DEBUG: No assigned node for {}", chateau_id);
                                     return FetchResultMsg(chateau_id, None);
                                 }
                             } else {
-                                println!("DEBUG: No assigned node for {}", chateau_id);
+                                println!("DEBUG: Etcd fetch failed for {}", chateau_id);
+                                catenary::invalidate_etcd_client(&etcd_reuser).await;
+                                println!(
+                                    "DEBUG: Flushed Etcd reuser due to failure for {}",
+                                    chateau_id
+                                );
                                 return FetchResultMsg(chateau_id, None);
                             }
-                        } else {
-                            println!("DEBUG: Etcd fetch failed for {}", chateau_id);
-                            catenary::invalidate_etcd_client(&etcd_reuser).await;
+                        };
+
+                        let mut aspen_client =
+                            aspen_manager.get_client(socket_to_use.clone()).await;
+
+                        if aspen_client.is_none() {
                             println!(
-                                "DEBUG: Flushed Etcd reuser due to failure for {}",
+                                "DEBUG: Aspen client missing for {}, connecting...",
                                 chateau_id
                             );
-                            return FetchResultMsg(chateau_id, None);
-                        }
-                    };
 
-
-                                let mut aspen_client =
-                                    aspen_manager.get_client(socket_to_use.clone()).await;
-
-                                if aspen_client.is_none() {
-                                    println!(
-                                        "DEBUG: Aspen client missing for {}, connecting...",
-                                        chateau_id
-                                    );
-
-                                    if let Ok(new_client) =
-                                        catenary::aspen::lib::spawn_aspen_client_from_ip(
-                                            &socket_to_use,
-                                        )
-                                        .await
-                                    {
-                                        aspen_manager
-                                            .insert_client(
-                                                socket_to_use.clone(),
-                                                new_client.clone(),
-                                            )
-                                            .await;
-
-                                        aspen_client = Some(new_client);
-                                    } else {
-                                        println!(
-                                            "DEBUG: Failed to spawn aspen client for {}",
-                                            chateau_id
-                                        );
-                                        if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                            cache_write.remove(&chateau_id);
-                                        }
-                                    }
-                                }
-
-                                if let Some(mut client) = aspen_client {
-                                    let timeout_duration = Duration::from_secs(2);
-
-                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
-                                        return FetchResultMsg(chateau_id, None);
-                                    }
-
-                                    
-                                    let mut skipped_preflight = false;
-                                    let mut remote_last_updated_time_ms = None;
-                                    if cached_last_updated_time_ms.is_none() {
-                                        skipped_preflight = true;
-                                    } else {
-                                        let last_updated_response = tokio::time::timeout(
-                                        timeout_duration,
-                                        client.last_updated_time_ms_for_chateau(
-                                            context::current(),
-                                            chateau_id.clone(),
-                                        ),
-                                    )
+                            if let Ok(new_client) =
+                                catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_to_use)
+                                    .await
+                            {
+                                aspen_manager
+                                    .insert_client(socket_to_use.clone(), new_client.clone())
                                     .await;
 
-                                    let remote_val = match last_updated_response {
-                                            Ok(Ok(value)) => value,
-                                            Ok(Err(e)) => {
-                                                if let Ok(new_client) = catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_to_use).await {
-                                                    aspen_manager.insert_client(socket_to_use.clone(), new_client.clone()).await;
-                                                    client = new_client;
-                                                    match tokio::time::timeout(timeout_duration, client.last_updated_time_ms_for_chateau(tarpc::context::current(), chateau_id.clone())).await {
-                                                        Ok(Ok(value)) => value,
-                                                        _ => {
-                                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() { cache_write.remove(&chateau_id); }
-                                                            return FetchResultMsg(chateau_id, None);
-                                                        }
+                                aspen_client = Some(new_client);
+                            } else {
+                                println!("DEBUG: Failed to spawn aspen client for {}", chateau_id);
+                                if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                    cache_write.remove(&chateau_id);
+                                }
+                            }
+                        }
+
+                        if let Some(mut client) = aspen_client {
+                            let timeout_duration = Duration::from_secs(2);
+
+                            if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                return FetchResultMsg(chateau_id, None);
+                            }
+
+                            let mut skipped_preflight = false;
+                            let mut remote_last_updated_time_ms = None;
+                            if cached_last_updated_time_ms.is_none() {
+                                skipped_preflight = true;
+                            } else {
+                                let last_updated_response = tokio::time::timeout(
+                                    timeout_duration,
+                                    client.last_updated_time_ms_for_chateau(
+                                        context::current(),
+                                        chateau_id.clone(),
+                                    ),
+                                )
+                                .await;
+
+                                let remote_val = match last_updated_response {
+                                    Ok(Ok(value)) => value,
+                                    Ok(Err(e)) => {
+                                        if let Ok(new_client) =
+                                            catenary::aspen::lib::spawn_aspen_client_from_ip(
+                                                &socket_to_use,
+                                            )
+                                            .await
+                                        {
+                                            aspen_manager
+                                                .insert_client(
+                                                    socket_to_use.clone(),
+                                                    new_client.clone(),
+                                                )
+                                                .await;
+                                            client = new_client;
+                                            match tokio::time::timeout(
+                                                timeout_duration,
+                                                client.last_updated_time_ms_for_chateau(
+                                                    tarpc::context::current(),
+                                                    chateau_id.clone(),
+                                                ),
+                                            )
+                                            .await
+                                            {
+                                                Ok(Ok(value)) => value,
+                                                _ => {
+                                                    if let Ok(mut cache_write) =
+                                                        aspen_endpoint_cache.write()
+                                                    {
+                                                        cache_write.remove(&chateau_id);
                                                     }
-                                                } else {
-                                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() { cache_write.remove(&chateau_id); }
                                                     return FetchResultMsg(chateau_id, None);
                                                 }
                                             }
-                                            Err(_) => {
-                                                if let Ok(mut cache_write) = aspen_endpoint_cache.write() { cache_write.remove(&chateau_id); }
-                                                return FetchResultMsg(chateau_id, None);
-                                            }
-                                        };
-                                        remote_last_updated_time_ms = remote_val;
-                                    }
-                                    
-                                    if !skipped_preflight {
-                                        let Some(remote_last_updated_time_ms) = remote_last_updated_time_ms else {
-                                            return FetchResultMsg(chateau_id, None);
-                                        };
-                                        if cached_last_updated_time_ms == Some(remote_last_updated_time_ms) {
-                                            return FetchResultMsg(chateau_id, None);
-                                        }
-                                    }
-
-                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
-                                        return FetchResultMsg(chateau_id, None);
-                                    }
-
-                                    let route_types: Vec<i16> =
-                                        vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
-
-                                    let response = tokio::time::timeout(
-                                        timeout_duration,
-                                        client.get_vehicle_locations(
-                                            context::current(),
-                                            chateau_id.clone(),
-                                            None,
-                                            Some(route_types.clone()),
-                                        ),
-                                    )
-                                    .await;
-
-                                    match response {
-                                        Ok(Ok(Some(data))) => {
-                                            return FetchResultMsg(chateau_id, Some(Arc::new(precompute_chateau_map(&data))));
-                                        }
-                                        Ok(Ok(None)) => {
-                                            println!("DEBUG: Response Ok(None) for {}", chateau_id);
-                                            return FetchResultMsg(chateau_id, None);
-                                        }
-                                        Ok(Err(e)) => {
-                                            println!(
-                                                "DEBUG: RPC failed for {}: {:?}",
-                                                chateau_id, e
-                                            );
-                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                                cache_write.remove(&chateau_id);
-                                            }
-                                        }
-                                        Err(_) => {
-                                            println!(
-                                                "DEBUG: Timeout fetching data for {}",
-                                                chateau_id
-                                            );
-                                        }
-                                    }
-
-                                    if !is_chateau_active(&active_chateaus, &chateau_id) {
-                                        return FetchResultMsg(chateau_id, None);
-                                    }
-
-                                    if let Ok(new_client) =
-                                        catenary::aspen::lib::spawn_aspen_client_from_ip(
-                                            &socket_to_use,
-                                        )
-                                        .await
-                                    {
-                                        aspen_manager
-                                            .insert_client(
-                                                socket_to_use.clone(),
-                                                new_client.clone(),
-                                            )
-                                            .await;
-
-                                        println!(
-                                            "DEBUG: Reconnected to {}, retrying...",
-                                            chateau_id
-                                        );
-
-                                        let response_retry = tokio::time::timeout(
-                                            timeout_duration,
-                                            new_client.get_vehicle_locations(
-                                                context::current(),
-                                                chateau_id.clone(),
-                                                None,
-                                                Some(route_types),
-                                            ),
-                                        )
-                                        .await;
-
-                                        if let Ok(Ok(Some(data))) = response_retry {
-                                            println!("DEBUG: Retry success for {}", chateau_id);
-                                            return FetchResultMsg(chateau_id, Some(Arc::new(precompute_chateau_map(&data))));
                                         } else {
-                                            println!("DEBUG: Retry failed for {}", chateau_id);
-                                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                            if let Ok(mut cache_write) =
+                                                aspen_endpoint_cache.write()
+                                            {
                                                 cache_write.remove(&chateau_id);
                                             }
+                                            return FetchResultMsg(chateau_id, None);
                                         }
+                                    }
+                                    Err(_) => {
+                                        if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                            cache_write.remove(&chateau_id);
+                                        }
+                                        return FetchResultMsg(chateau_id, None);
+                                    }
+                                };
+                                remote_last_updated_time_ms = remote_val;
+                            }
+
+                            if !skipped_preflight {
+                                let Some(remote_last_updated_time_ms) = remote_last_updated_time_ms
+                                else {
+                                    return FetchResultMsg(chateau_id, None);
+                                };
+                                if cached_last_updated_time_ms == Some(remote_last_updated_time_ms)
+                                {
+                                    return FetchResultMsg(chateau_id, None);
+                                }
+                            }
+
+                            if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                return FetchResultMsg(chateau_id, None);
+                            }
+
+                            let route_types: Vec<i16> = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+
+                            let response = tokio::time::timeout(
+                                timeout_duration,
+                                client.get_vehicle_locations(
+                                    context::current(),
+                                    chateau_id.clone(),
+                                    None,
+                                    Some(route_types.clone()),
+                                ),
+                            )
+                            .await;
+
+                            match response {
+                                Ok(Ok(Some(data))) => {
+                                    return FetchResultMsg(
+                                        chateau_id,
+                                        Some(Arc::new(precompute_chateau_map(&data))),
+                                    );
+                                }
+                                Ok(Ok(None)) => {
+                                    println!("DEBUG: Response Ok(None) for {}", chateau_id);
+                                    return FetchResultMsg(chateau_id, None);
+                                }
+                                Ok(Err(e)) => {
+                                    println!("DEBUG: RPC failed for {}: {:?}", chateau_id, e);
+                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                        cache_write.remove(&chateau_id);
                                     }
                                 }
+                                Err(_) => {
+                                    println!("DEBUG: Timeout fetching data for {}", chateau_id);
+                                }
+                            }
 
+                            if !is_chateau_active(&active_chateaus, &chateau_id) {
+                                return FetchResultMsg(chateau_id, None);
+                            }
 
-                    FetchResultMsg(chateau_id, None)
-                }
-            });
+                            if let Ok(new_client) =
+                                catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_to_use)
+                                    .await
+                            {
+                                aspen_manager
+                                    .insert_client(socket_to_use.clone(), new_client.clone())
+                                    .await;
+
+                                println!("DEBUG: Reconnected to {}, retrying...", chateau_id);
+
+                                let response_retry = tokio::time::timeout(
+                                    timeout_duration,
+                                    new_client.get_vehicle_locations(
+                                        context::current(),
+                                        chateau_id.clone(),
+                                        None,
+                                        Some(route_types),
+                                    ),
+                                )
+                                .await;
+
+                                if let Ok(Ok(Some(data))) = response_retry {
+                                    println!("DEBUG: Retry success for {}", chateau_id);
+                                    return FetchResultMsg(
+                                        chateau_id,
+                                        Some(Arc::new(precompute_chateau_map(&data))),
+                                    );
+                                } else {
+                                    println!("DEBUG: Retry failed for {}", chateau_id);
+                                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                        cache_write.remove(&chateau_id);
+                                    }
+                                }
+                            }
+                        }
+
+                        FetchResultMsg(chateau_id, None)
+                    }
+                },
+            );
 
             let stream = futures::stream::iter(tasks).buffer_unordered(10);
             stream.right_stream()
         };
 
-        ctx.spawn(actix::fut::wrap_future(fut).map(|stream, _actor: &mut BulkFetchCoordinator, ctx: &mut Context<Self>| {
-            ctx.add_message_stream(stream);
-        }));
+        ctx.spawn(actix::fut::wrap_future(fut).map(
+            |stream, _actor: &mut BulkFetchCoordinator, ctx: &mut Context<Self>| {
+                ctx.add_message_stream(stream);
+            },
+        ));
     }
 }
 
@@ -701,13 +768,12 @@ impl Handler<Unsubscribe> for BulkFetchCoordinator {
                 if let Ok(mut active) = self.active_chateaus.write() {
                     active.remove(&msg.chateau_id);
                 }
-                
+
                 self.cache.remove(&msg.chateau_id);
             }
         }
     }
 }
-
 
 impl Handler<FetchResultMsg> for BulkFetchCoordinator {
     type Result = ();
@@ -728,7 +794,8 @@ impl Handler<FetchResultMsg> for BulkFetchCoordinator {
             };
 
             if is_new {
-                self.cache.insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
+                self.cache
+                    .insert(chateau_id.clone(), (data_arc.clone(), Instant::now()));
 
                 if let Some(subs) = self.subscribers.get(&chateau_id) {
                     for recipient in subs {
@@ -743,7 +810,6 @@ impl Handler<FetchResultMsg> for BulkFetchCoordinator {
     }
 }
 
-
 impl Handler<FetchChateauNow> for BulkFetchCoordinator {
     type Result = ();
 
@@ -753,15 +819,16 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
             return;
         }
 
-        self.in_progress_fetches.insert(chateau_id.clone(), Instant::now());
-        
+        self.in_progress_fetches
+            .insert(chateau_id.clone(), Instant::now());
+
         let active_chateaus = self.active_chateaus.clone();
         let aspen_endpoint_cache = self.aspen_endpoint_cache.clone();
         let etcd_reuser = self.etcd_reuser.clone();
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
         let aspen_manager = self.aspen_client_manager.clone();
-        
+
         let fut = async move {
             let etcd_result = catenary::get_etcd_client(&etcd_ips, &etcd_opts, &etcd_reuser).await;
             let etcd = etcd_result.ok();
@@ -796,13 +863,14 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
 
                 if let Ok(resp) = fetch_assigned_node {
                     if !resp.kvs().is_empty() {
-                        if let Ok(assigned_chateau_data) =
-                            bincode_deserialize::<ChateauMetadataEtcd>(
-                                resp.kvs().first().unwrap().value(),
-                            )
-                        {
+                        if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
+                            resp.kvs().first().unwrap().value(),
+                        ) {
                             if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                cache_write.insert(chateau_id.clone(), (assigned_chateau_data.socket.clone(), Instant::now()));
+                                cache_write.insert(
+                                    chateau_id.clone(),
+                                    (assigned_chateau_data.socket.clone(), Instant::now()),
+                                );
                             }
                             assigned_chateau_data.socket
                         } else {
@@ -823,7 +891,9 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
                 if let Ok(new_client) =
                     catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_to_use).await
                 {
-                    aspen_manager.insert_client(socket_to_use.clone(), new_client.clone()).await;
+                    aspen_manager
+                        .insert_client(socket_to_use.clone(), new_client.clone())
+                        .await;
                     aspen_client = Some(new_client);
                 } else {
                     if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
@@ -855,7 +925,10 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
 
                 match response {
                     Ok(Ok(Some(data))) => {
-                        return FetchResultMsg(chateau_id, Some(Arc::new(precompute_chateau_map(&data))));
+                        return FetchResultMsg(
+                            chateau_id,
+                            Some(Arc::new(precompute_chateau_map(&data))),
+                        );
                     }
                     Ok(Ok(None)) => {
                         return FetchResultMsg(chateau_id, None);
@@ -875,7 +948,9 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
                 if let Ok(new_client) =
                     catenary::aspen::lib::spawn_aspen_client_from_ip(&socket_to_use).await
                 {
-                    aspen_manager.insert_client(socket_to_use.clone(), new_client.clone()).await;
+                    aspen_manager
+                        .insert_client(socket_to_use.clone(), new_client.clone())
+                        .await;
 
                     let response_retry = tokio::time::timeout(
                         timeout_duration,
@@ -889,7 +964,10 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
                     .await;
 
                     if let Ok(Ok(Some(data))) = response_retry {
-                        return FetchResultMsg(chateau_id, Some(Arc::new(precompute_chateau_map(&data))));
+                        return FetchResultMsg(
+                            chateau_id,
+                            Some(Arc::new(precompute_chateau_map(&data))),
+                        );
                     } else {
                         if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
                             cache_write.remove(&chateau_id);
@@ -899,9 +977,11 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
             }
             FetchResultMsg(chateau_id, None)
         };
-        
-        ctx.spawn(actix::fut::wrap_future(fut).map(|res, actor: &mut BulkFetchCoordinator, ctx| {
-            actor.handle(res, ctx);
-        }));
+
+        ctx.spawn(actix::fut::wrap_future(fut).map(
+            |res, actor: &mut BulkFetchCoordinator, ctx| {
+                actor.handle(res, ctx);
+            },
+        ));
     }
 }
