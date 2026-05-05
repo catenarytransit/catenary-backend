@@ -12,7 +12,6 @@ use std::sync::Arc;
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::rename_route_labels::*;
 use crate::shapes_reader::ShapePoint;
-use ahash::AHashMap;
 use catenary::enum_to_int::route_type_to_int;
 use catenary::postgres_tools::CatenaryPostgresPool;
 
@@ -34,22 +33,19 @@ pub async fn shapes_into_postgres(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
-    if let Some(gtfs_shapes_minimised) = &gtfs_shapes_minimised {
-        let keys: Vec<String> = gtfs_shapes_minimised.index.keys().cloned().collect();
-
-        for group in &keys.into_iter().chunks(100) {
+    if let Some(gtfs_shapes_minimised) = gtfs_shapes_minimised.as_ref() {
+        for group in &gtfs_shapes_minimised.shape_ids().chunks(100) {
             let mut batch_of_shapes: Vec<catenary::models::Shape> = vec![];
 
-            // Now shape_id will correctly be inferred as a String
             for shape_id in group {
-                let shape = match gtfs_shapes_minimised.get_shape(&shape_id) {
+                let shape = match gtfs_shapes_minimised.get_shape(shape_id) {
                     Some(s) => s,
                     None => continue,
                 };
 
                 let mut route_type_number = 3;
 
-                let route_ids = shape_id_to_route_ids_lookup.get(&shape_id);
+                let route_ids = shape_id_to_route_ids_lookup.get(shape_id);
 
                 if let Some(route_ids) = route_ids {
                     let route = gtfs.routes.get(route_ids.iter().next().unwrap());
@@ -68,7 +64,7 @@ pub async fn shapes_into_postgres(
                     None => None,
                 };
 
-                let bg_color = match shape_to_color_lookup.get(&shape_id) {
+                let bg_color = match shape_to_color_lookup.get(shape_id) {
                     Some(color) => match route {
                         Some(route) => colour_correction::fix_background_colour_rgb_feed_route(
                             feed_id,
@@ -122,7 +118,7 @@ pub async fn shapes_into_postgres(
                     if is_line_too_stupidly_broken {
                         println!(
                             "Deleted feed id {} shape id {} for being too long",
-                            &feed_id, &shape_id
+                            feed_id, shape_id
                         );
                     }
 
@@ -144,7 +140,7 @@ pub async fn shapes_into_postgres(
                                 .collect(),
                         };
 
-                        let text_color = match shape_to_text_color_lookup.get(&shape_id) {
+                        let text_color = match shape_to_text_color_lookup.get(shape_id) {
                             Some(color) => format!("{:02x}{:02x}{:02x}", color.r, color.g, color.b),
                             None => String::from("000000"),
                         };
@@ -183,7 +179,7 @@ pub async fn shapes_into_postgres(
                         let shape_value: catenary::models::Shape = catenary::models::Shape {
                             onestop_feed_id: feed_id.to_string(),
                             attempt_id: attempt_id.to_string(),
-                            shape_id: shape_id.clone(),
+                            shape_id: shape_id.to_string(),
                             chateau: chateau_id.to_string(),
                             linestring,
                             color: Some(bg_color_string),
@@ -209,10 +205,12 @@ pub async fn shapes_into_postgres(
             {
                 use catenary::schema::gtfs::shapes::dsl::*;
 
-                diesel::insert_into(shapes)
-                    .values(batch_of_shapes)
-                    .execute(conn)
-                    .await?;
+                if !batch_of_shapes.is_empty() {
+                    diesel::insert_into(shapes)
+                        .values(batch_of_shapes)
+                        .execute(conn)
+                        .await?;
+                }
             }
         }
     }

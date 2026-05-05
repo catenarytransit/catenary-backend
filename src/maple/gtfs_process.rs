@@ -2136,30 +2136,13 @@ pub async fn gtfs_process_feed(
     for route_chunk in &gtfs.routes.iter().chunks(256) {
         let mut insertable_elastic: Vec<elasticsearch::http::request::JsonBody<_>> = Vec::new();
         for (route_id, route) in route_chunk {
-            let shape_points_combined =
+            // Keep RSS low: do not flatten every shape for this route into one large Vec.
+            // Read one disk-backed shape range at a time and fold its points into the bbox.
+            let envelope = gtfs_shapes_minimised.as_ref().and_then(|reader| {
                 route_ids_to_shape_ids
-                    .get(&route_id.clone())
-                    .and_then(|shape_ids| {
-                        Some(
-                            shape_ids
-                                .iter()
-                                .filter_map(|shape_id| {
-                                    gtfs_shapes_minimised
-                                        .as_ref()
-                                        .and_then(|reader| reader.get_shape(shape_id.as_str()))
-                                })
-                                .flatten() // Flattens Vec<Vec<ShapePoint>> into Vec<ShapePoint>
-                                .collect::<Vec<_>>(),
-                        )
-                    });
-
-            let envelope = match shape_points_combined {
-                Some(shape_points) => match shape_points.len() {
-                    0 => None,
-                    _ => Some(compute_shape_envelope(route, &shape_points)),
-                },
-                None => None,
-            };
+                    .get(route_id)
+                    .and_then(|shape_ids| compute_shape_envelope(reader, shape_ids.iter()))
+            });
 
             let mut short_name_translations_shortened_locales_elastic: HashMap<String, String> =
                 HashMap::new();
@@ -2502,59 +2485,44 @@ fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     R * c
 }
 
-fn compute_shape_envelope(
-    route: &gtfs_structures::Route,
-    shapes: &Vec<ShapePoint>,
-) -> serde_json::Value {
+fn compute_shape_envelope<'a, I>(
+    reader: &MmapShapeReader,
+    shape_ids: I,
+) -> Option<serde_json::Value>
+where
+    I: IntoIterator<Item = &'a String>,
+{
     let mut min_latitude: Option<f64> = None;
     let mut max_latitude: Option<f64> = None;
-
     let mut min_longitude: Option<f64> = None;
     let mut max_longitude: Option<f64> = None;
 
-    for shape in shapes {
-        match min_latitude {
-            None => min_latitude = Some(shape.geometry.y()),
-            Some(current_min) => {
-                if shape.geometry.y() < current_min {
-                    min_latitude = Some(shape.geometry.y());
-                }
-            }
-        }
+    for shape_id in shape_ids {
+        let Some(shape_points) = reader.get_shape(shape_id.as_str()) else {
+            continue;
+        };
 
-        match max_latitude {
-            None => max_latitude = Some(shape.geometry.y()),
-            Some(current_max) => {
-                if shape.geometry.y() > current_max {
-                    max_latitude = Some(shape.geometry.y());
-                }
-            }
-        }
+        for shape in shape_points {
+            let lat = shape.geometry.y();
+            let lon = shape.geometry.x();
 
-        match min_longitude {
-            None => min_longitude = Some(shape.geometry.x()),
-            Some(current_min) => {
-                if shape.geometry.x() < current_min {
-                    min_longitude = Some(shape.geometry.x());
-                }
-            }
-        }
-
-        match max_longitude {
-            None => max_longitude = Some(shape.geometry.x()),
-            Some(current_max) => {
-                if shape.geometry.x() > current_max {
-                    max_longitude = Some(shape.geometry.x());
-                }
-            }
+            min_latitude = Some(min_latitude.map_or(lat, |current| current.min(lat)));
+            max_latitude = Some(max_latitude.map_or(lat, |current| current.max(lat)));
+            min_longitude = Some(min_longitude.map_or(lon, |current| current.min(lon)));
+            max_longitude = Some(max_longitude.map_or(lon, |current| current.max(lon)));
         }
     }
 
-    //[[minLon, maxLat], [maxLon, minLat]] as defined in https://www.elastic.co/docs/reference/elasticsearch/mapping-reference/geo-shape
-    return json! ({
-      "type" : "envelope",
-      "coordinates" : [ [min_longitude.unwrap(), max_latitude.unwrap()], [max_longitude.unwrap(), min_latitude.unwrap()] ]
-    });
+    match (min_longitude, max_latitude, max_longitude, min_latitude) {
+        (Some(min_lon), Some(max_lat), Some(max_lon), Some(min_lat)) => {
+            // [[minLon, maxLat], [maxLon, minLat]] as defined by Elasticsearch geo_shape envelopes.
+            Some(json!({
+                "type": "envelope",
+                "coordinates": [[min_lon, max_lat], [max_lon, min_lat]]
+            }))
+        }
+        _ => None,
+    }
 }
 
 fn faster_stop_time_reader_injection(
