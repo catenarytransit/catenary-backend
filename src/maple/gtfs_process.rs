@@ -907,6 +907,95 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "uc~irvine~anteater~express" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                if let Some(route) = gtfs.routes.get(trip.route_id.as_str()) {
+                    if let Some(route_long_name) = &route.long_name {
+                        match route_long_name.as_str() {
+                            "E Line" => {
+                                for (i, stoptime) in trip.stop_times.iter_mut().enumerate() {
+                                    if i < 2 {
+                                        stoptime.stop_headsign = Some(String::from("Plaza Verde"));
+                                    } else {
+                                        stoptime.stop_headsign =
+                                            Some(String::from("University Centre South"));
+                                    }
+                                }
+                            }
+                            "M Line" => {
+                                for (i, stoptime) in trip.stop_times.iter_mut().enumerate() {
+                                    match i {
+                                        0..=2 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("East Housing -> Petalson"));
+                                        }
+                                        3..=6 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("Petalson -> University Centre"));
+                                        }
+                                        _ => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("University Centre"));
+                                        }
+                                    }
+                                }
+                            }
+                            "N Line" => {
+                                for (i, stoptime) in trip.stop_times.iter_mut().enumerate() {
+                                    match i {
+                                        0 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("Vista del Campo Norte"));
+                                        }
+                                        _ => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("University Centre"));
+                                        }
+                                    }
+                                }
+                            }
+                            "A Line" => {
+                                for (i, stoptime) in trip.stop_times.iter_mut().enumerate() {
+                                    match i {
+                                        0 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("AV & CDS & VDC"));
+                                        }
+                                        _ => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("University Centre"));
+                                        }
+                                    }
+                                }
+                            }
+                            "H Line" => {
+                                for (i, stoptime) in trip.stop_times.iter_mut().enumerate() {
+                                    match i {
+                                        0..=2 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("AV & CDS & VDC"));
+                                        }
+                                        3..=7 => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("VDC -> University Centre"));
+                                        }
+                                        _ => {
+                                            stoptime.stop_headsign =
+                                                Some(String::from("University Centre"));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+
+            gtfs
+        }
         "f-dpz-gotransit" | "f-dpz2-upexpress" => {
             let mut gtfs = gtfs;
 
