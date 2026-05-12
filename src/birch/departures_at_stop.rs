@@ -1176,7 +1176,7 @@ pub async fn departures_at_stop(
                     let mut trip_start_times: Vec<u32> = frequencies
                         .iter()
                         .flat_map(|frequency| {
-                            (frequency.start_time..=frequency.end_time)
+                            (frequency.start_time..frequency.end_time)
                                 .step_by(frequency.headway_secs as usize)
                                 .collect::<Vec<u32>>()
                         })
