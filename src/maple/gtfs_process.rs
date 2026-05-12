@@ -907,7 +907,7 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
-        "uc~irvine~anteater~express" => {
+        "f-uc~irvine~anteater~express" => {
             let mut gtfs = gtfs;
 
             for trip in gtfs.trips.values_mut() {
