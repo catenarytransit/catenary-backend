@@ -171,6 +171,9 @@ pub fn redo_anteater_express_gtfs(gtfs: Gtfs) -> Gtfs {
             let mut current_start = window.start_sec;
             while current_start <= window.end_sec {
                 let mut trip = template.clone();
+
+                trip.frequencies = vec![];
+
                 // Constant Trip ID format: {route_id}-{service_id}-{start_seconds}
                 let trip_id = format!("{}-{}-{}", route_id, window.service_id, current_start);
 
