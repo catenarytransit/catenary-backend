@@ -1430,73 +1430,29 @@ pub async fn departures_at_stop(
                                     realtime_arrival: arrival_time_rt,
                                     realtime_departure: departure_time_rt,
                                     platform_code: None,
-                                    headsign: match &direction_meta.stop_headsigns_unique_list {
-                                        Some(headsign_list) => {
-                                            let matching_direction_rows =
-                                                direction_to_rows_by_chateau
-                                                    .get(chateau_id.as_str())
-                                                    .unwrap()
-                                                    .get(&valid_trip.direction_pattern_id)
-                                                    .unwrap()
-                                                    .iter()
-                                                    .filter(|x| x.stop_id == itin_option.stop_id)
-                                                    .collect::<Vec<_>>();
-
-                                            let matching_direction_row =
-                                                match matching_direction_rows.len() {
-                                                    0 => None,
-                                                    1 => Some(matching_direction_rows[0]),
-                                                    _ => {
-                                                        let matching_direction_rows =
-                                                            matching_direction_rows
-                                                                .iter()
-                                                                .filter(|x| {
-                                                                    x.stop_sequence
-                                                                        == itin_option
-                                                                            .gtfs_stop_sequence
-                                                                })
-                                                                .map(|x| *x)
-                                                                .collect::<Vec<_>>();
-
-                                                        match matching_direction_rows.len() {
-                                                            0 => None,
-                                                            1 => Some(matching_direction_rows[0]),
-                                                            _ => None,
-                                                        }
-                                                    }
-                                                };
-
-                                            match matching_direction_row {
-                                                Some(matching_direction_row) => {
-                                                    match &matching_direction_row.stop_headsign_idx
-                                                    {
-                                                        Some(stop_headsign_idx) => {
-                                                            match headsign_list
-                                                                .get(*stop_headsign_idx as usize)
-                                                            {
-                                                                Some(x) => x.clone(),
-                                                                None => None,
-                                                            }
-                                                        }
-                                                        None => None,
-                                                    }
-                                                }
-                                                None => None,
-                                            }
-                                        }
-                                        None => match &itin_option.trip_headsign {
-                                            Some(headsign) => Some(headsign.to_string()),
-                                            None => Some(
-                                                direction_meta_btreemap_by_chateau
-                                                    .get(chateau_id.as_str())
-                                                    .unwrap()
-                                                    .get(&valid_trip.direction_pattern_id)
-                                                    .unwrap()
-                                                    .headsign_or_destination
-                                                    .clone(),
-                                            ),
-                                        },
-                                    },
+                                    headsign: direction_to_rows_by_chateau
+                                        .get(chateau_id.as_str())
+                                        .and_then(|m| m.get(&valid_trip.direction_pattern_id))
+                                        .and_then(|rows| {
+                                            rows.iter().find(|r| {
+                                                r.stop_sequence
+                                                    == itin_option.gtfs_stop_sequence as u32
+                                            })
+                                        })
+                                        .and_then(|row| {
+                                            row.stop_headsign_idx.and_then(|idx| {
+                                                direction_meta
+                                                    .stop_headsigns_unique_list
+                                                    .as_ref()?
+                                                    .get(idx as usize)
+                                                    .cloned()
+                                                    .flatten()
+                                            })
+                                        })
+                                        .or_else(|| itin_option.trip_headsign.clone())
+                                        .or_else(|| {
+                                            Some(direction_meta.headsign_or_destination.clone())
+                                        }),
                                     route_id: valid_trip.route_id.clone().to_string(),
                                     vehicle_number: vehicle_num,
                                     level_id: None,
