@@ -936,7 +936,7 @@ pub async fn gtfs_process_feed(
                     }
                 }
 
-                trip.frequencies = vec![];
+                //trip.frequencies = vec![];
 
                 if let Some(route) = gtfs.routes.get(trip.route_id.as_str()) {
                     if let Some(route_long_name) = &route.long_name {
