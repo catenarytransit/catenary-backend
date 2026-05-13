@@ -62,17 +62,14 @@ pub fn redo_anteater_express_gtfs(gtfs: Gtfs) -> Gtfs {
                             st.arrival_time = Some(time_offset);
                             st.departure_time = Some(time_offset);
                             st.stop = stop.clone();
-                            st.stop_sequence = (i + 1) as u16;
+                            st.stop_sequence = (i + 1) as u32;
                             st.stop_headsign = None;
                             template.stop_times.push(st);
                         }
                     }
                 }
 
-                templates.insert(
-                    line_name,
-                    (route.id.clone(), template, primary_stop_id),
-                );
+                templates.insert(line_name, (route.id.clone(), template, primary_stop_id));
             }
         }
     }
