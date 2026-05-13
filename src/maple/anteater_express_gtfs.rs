@@ -29,15 +29,49 @@ pub fn redo_anteater_express_gtfs(gtfs: Gtfs) -> Gtfs {
                 .unwrap_or("")
                 .eq_ignore_ascii_case(line_name)
         }) {
-            if let Some(template) = gtfs
+            if let Some(mut template) = gtfs
                 .trips
                 .values()
                 .filter(|t| t.route_id == route.id)
                 .max_by_key(|t| t.stop_times.len())
+                .cloned()
             {
+                if line_name == "H Line" {
+                    let default_stop_time = template.stop_times.first().cloned().unwrap();
+                    template.stop_times.clear();
+                    let h_line_stops = vec![
+                        ("TL-10", 0),
+                        ("TL-16", 240),
+                        ("TL-17", 270),
+                        ("TL-1", 300),
+                        ("TL-2", 600),
+                        ("TL-3", 630),
+                        ("TL-4", 660),
+                        ("TL-5", 840),
+                        ("TL-6", 870),
+                        ("TL-12", 960),
+                        ("TL-13", 990),
+                        ("TL-14", 1020),
+                        ("TL-18", 1320),
+                        ("TL-7", 1440),
+                        ("TL-10", 1740),
+                    ];
+                    for (i, (stop_id, time_offset)) in h_line_stops.into_iter().enumerate() {
+                        if let Some(stop) = gtfs.stops.get(stop_id) {
+                            let mut st = default_stop_time.clone();
+                            st.arrival_time = Some(time_offset);
+                            st.departure_time = Some(time_offset);
+                            st.stop = stop.clone();
+                            st.stop_sequence = (i + 1) as u16;
+                            st.stop_headsign = None;
+                            template.stop_times.push(st);
+                        }
+                    }
+                }
+
                 templates.insert(
                     line_name,
-                    (route.id.clone(), template.clone(), primary_stop_id),
+                    (route.id.clone(), template, primary_stop_id),
                 );
             }
         }
