@@ -1093,7 +1093,7 @@ pub async fn departures_at_stop(
                                 .and_then(|m| m.get(&valid_trip.direction_pattern_id))
                                 .and_then(|rows| {
                                     rows.iter().find(|r| {
-                                        r.stop_sequence == itin_option.gtfs_stop_sequence as i32
+                                        r.stop_sequence == itin_option.gtfs_stop_sequence as u32
                                     })
                                 })
                                 .and_then(|row| {
