@@ -46,7 +46,7 @@ pub fn redo_anteater_express_gtfs(gtfs: Gtfs) -> Gtfs {
 
     // 2. Now it is safe to clear the existing trips
     gtfs.trips.clear();
-    let mut new_trips = BTreeMap::new();
+    let mut new_trips = HashMap::new();
 
     for (line_name, (route_id, template, primary_stop_id)) in templates {
         // Calculate the internal time offset of the University Centre anchor in the template
