@@ -69,6 +69,27 @@ pub fn redo_anteater_express_gtfs(gtfs: Gtfs) -> Gtfs {
                     }
                 }
 
+                let stop_count = template.stop_times.len();
+                if stop_count >= 2 {
+                    let offset = match line_name {
+                        "M Line" => Some(120),
+                        "E Line" => Some(420),
+                        "A Line" | "N Line" => Some(120),
+                        _ => None,
+                    };
+
+                    if let Some(offset_secs) = offset {
+                        let second_to_last = &template.stop_times[stop_count - 2];
+                        let base_time = second_to_last.departure_time.or(second_to_last.arrival_time);
+
+                        if let Some(base_time) = base_time {
+                            let last_st = &mut template.stop_times[stop_count - 1];
+                            last_st.arrival_time = Some(base_time + offset_secs);
+                            last_st.departure_time = None;
+                        }
+                    }
+                }
+
                 templates.insert(line_name, (route.id.clone(), template, primary_stop_id));
             }
         }
