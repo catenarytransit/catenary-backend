@@ -10,14 +10,24 @@ struct ServiceWindow {
 }
 
 pub fn redo_anteater_express_gtfs(mut gtfs: Gtfs) -> Gtfs {
-    // 1. Identify and extract templates BEFORE clearing gtfs.trips
+    // Helper to find a stop by ID or Stop Code (UCI GTFS can be inconsistent)
+    let find_stop = |gtfs: &Gtfs, identifier: &str| {
+        gtfs.stops.get(identifier).cloned().or_else(|| {
+            gtfs.stops
+                .values()
+                .find(|s| s.code.as_deref() == Some(identifier))
+                .cloned()
+        })
+    };
+
+    // 1. Identify and extract templates
     let mut templates = HashMap::new();
     let route_configs = [
-        ("A Line", "TL-8"),  // stop_code 107
-        ("E Line", "TL-10"), // stop_code 100
-        ("H Line", "TL-10"), // stop_code 100
-        ("M Line", "TL-10"), // stop_code 100
-        ("N Line", "TL-8"),  // stop_code 107
+        ("A Line", "107"), // Using codes/IDs common in UCI GTFS
+        ("E Line", "100"),
+        ("H Line", "100"),
+        ("M Line", "100"),
+        ("N Line", "107"),
     ];
 
     for (line_name, primary_stop_id) in route_configs {
@@ -27,93 +37,78 @@ pub fn redo_anteater_express_gtfs(mut gtfs: Gtfs) -> Gtfs {
                 .unwrap_or("")
                 .eq_ignore_ascii_case(line_name)
         }) {
+            // Pick a template trip that actually HAS stop times
             if let Some(mut template) = gtfs
                 .trips
                 .values()
-                .filter(|t| t.route_id == route.id)
+                .filter(|t| t.route_id == route.id && !t.stop_times.is_empty())
                 .max_by_key(|t| t.stop_times.len())
                 .cloned()
             {
-                // Manual override for H Line stop sequence
+                // Overwrite H-Line sequence
                 if line_name == "H Line" {
-                    if let Some(default_stop_time) = template.stop_times.first().cloned() {
+                    if let Some(default_st) = template.stop_times.first().cloned() {
                         template.stop_times.clear();
-                        let h_line_stops = vec![
-                            ("TL-10", 0),
-                            ("TL-16", 240),
-                            ("TL-17", 270),
-                            ("TL-1", 300),
-                            ("TL-2", 600),
-                            ("TL-3", 630),
-                            ("TL-4", 660),
-                            ("TL-5", 840),
-                            ("TL-6", 870),
-                            ("TL-12", 960),
-                            ("TL-13", 990),
-                            ("TL-14", 1020),
-                            ("TL-18", 1320),
-                            ("TL-7", 1440),
-                            ("TL-10", 1740),
+                        let h_stops = vec![
+                            ("100", 0),
+                            ("116", 240),
+                            ("117", 270),
+                            ("101", 300),
+                            ("102", 600),
+                            ("103", 630),
+                            ("104", 660),
+                            ("105", 840),
+                            ("106", 870),
+                            ("112", 960),
+                            ("113", 990),
+                            ("114", 1020),
+                            ("118", 1320),
+                            ("107", 1440),
+                            ("100", 1740),
                         ];
-                        for (i, (stop_id, time_offset)) in h_line_stops.into_iter().enumerate() {
-                            if let Some(stop) = gtfs.stops.get(stop_id) {
-                                let mut st = default_stop_time.clone();
-                                st.arrival_time = Some(time_offset);
-                                st.departure_time = Some(time_offset);
-                                st.stop = stop.clone();
-                                st.stop_sequence = (i + 1) as u32;
-                                st.stop_headsign = None;
+                        for (i, (sid, offset)) in h_stops.into_iter().enumerate() {
+                            if let Some(stop) = find_stop(&gtfs, sid) {
+                                let mut st = default_st.clone();
+                                st.stop = stop;
+                                st.arrival_time = Some(offset);
+                                st.departure_time = Some(offset);
+                                st.stop_sequence = i as u32;
                                 template.stop_times.push(st);
                             }
                         }
                     }
                 }
 
-                // Apply arrival offsets for the final stop
-                let stop_count = template.stop_times.len();
-                if stop_count >= 2 {
-                    let offset = match line_name {
-                        "M Line" => Some(120),
-                        "E Line" => Some(420),
-                        "A Line" | "N Line" => Some(120),
-                        _ => None,
-                    };
-
-                    if let Some(offset_secs) = offset {
-                        let second_to_last = &template.stop_times[stop_count - 2];
-                        let base_time = second_to_last
-                            .departure_time
-                            .or(second_to_last.arrival_time);
-
-                        if let Some(base_time) = base_time {
-                            let last_st = &mut template.stop_times[stop_count - 1];
-                            last_st.arrival_time = Some(base_time + offset_secs);
-                            last_st.departure_time = None;
-                        }
+                // Final safety: ensure every stop time has an arrival/departure
+                // if it was missing in the template, we'll use 0 as a base.
+                for st in template.stop_times.iter_mut() {
+                    if st.arrival_time.is_none() {
+                        st.arrival_time = Some(0);
+                    }
+                    if st.departure_time.is_none() {
+                        st.departure_time = st.arrival_time;
                     }
                 }
 
-                // FIXED: Insert is now outside the offset-conditional logic
                 templates.insert(line_name, (route.id.clone(), template, primary_stop_id));
             }
         }
     }
 
-    // 2. Clear existing trips and generate new ones based on the service windows
+    // 2. Clear and Rebuild
     gtfs.trips.clear();
     let mut new_trips = HashMap::new();
 
     for (line_name, (route_id, template, primary_stop_id)) in templates {
-        // Safe anchor lookup: skip the line if the primary stop isn't in the template
-        let anchor_offset = match template
+        // Find the anchor offset in the template trip
+        let anchor_offset = template
             .stop_times
             .iter()
-            .find(|st| st.stop.id == primary_stop_id)
-            .and_then(|st| st.arrival_time.or(st.departure_time))
-        {
-            Some(time) => time,
-            None => continue,
-        };
+            .find(|st| {
+                st.stop.id == primary_stop_id || st.stop.code.as_deref() == Some(primary_stop_id)
+            })
+            .and_then(|st| st.arrival_time)
+            .unwrap_or(0);
 
         let windows = match line_name {
             "A Line" => vec![
@@ -229,42 +224,22 @@ pub fn redo_anteater_express_gtfs(mut gtfs: Gtfs) -> Gtfs {
             let mut current_start = window.start_sec;
             while current_start <= window.end_sec {
                 let mut trip = template.clone();
-                trip.frequencies = vec![];
-
                 let trip_id = format!("{}-{}-{}", route_id, window.service_id, current_start);
+
                 trip.id = trip_id.clone();
                 trip.service_id = window.service_id.to_string();
+                trip.frequencies.clear();
 
                 let time_shift = current_start as i32 - anchor_offset as i32;
 
-                for (idx, st) in trip.stop_times.iter_mut().enumerate() {
-                    st.arrival_time = st.arrival_time.map(|t| (t as i32 + time_shift) as u32);
-                    st.departure_time = st.departure_time.map(|t| (t as i32 + time_shift) as u32);
-
-                    st.stop_headsign = match line_name {
-                        "E Line" => Some(String::from(if idx < 2 {
-                            "Plaza Verde"
-                        } else {
-                            "University Centre South"
-                        })),
-                        "M Line" => Some(String::from(match idx {
-                            0..=2 => "East Housing -> Petalson",
-                            3..=6 => "Petalson -> University Centre",
-                            _ => "University Centre",
-                        })),
-                        "N Line" => Some(String::from(if idx == 0 {
-                            "Vista del Campo Norte"
-                        } else {
-                            "University Centre"
-                        })),
-                        "A Line" | "H Line" => Some(String::from(match idx {
-                            0..=2 => "AV & CDS & VDC",
-                            3..=7 if line_name == "H Line" => "VDC -> University Centre",
-                            _ => "University Centre",
-                        })),
-                        _ => None,
-                    };
+                for st in trip.stop_times.iter_mut() {
+                    // Shift arrival and departure, ensuring they are never negative
+                    st.arrival_time = st
+                        .arrival_time
+                        .map(|t| (t as i32 + time_shift).max(0) as u32);
+                    st.departure_time = st.arrival_time;
                 }
+
                 new_trips.insert(trip_id, trip);
                 current_start += window.headway_sec;
             }
