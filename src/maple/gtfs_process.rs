@@ -342,6 +342,8 @@ pub async fn gtfs_process_feed(
                     "Nachtverkehr Ausstieg",
                     // VBB
                     "S-Bahn Berlin GmbH",
+                    //f-u3-günterangergüterverkehrsgmbh~coomnibusvermietungkg~fritzbeh
+                    "Barnimer Busgesellschaft mbH",
                 ],
             )?;
 
