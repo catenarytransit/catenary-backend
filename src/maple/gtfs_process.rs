@@ -783,18 +783,6 @@ pub async fn gtfs_process_feed(
         .read(path.as_str())
         .context("Failed to read GTFS via gtfs_structures")?;
 
-    println!("reading shapes for feed {}", feed_id);
-
-    let shapes_txt_path = format!("{}/{}/shapes.txt", gtfs_unzipped_path, feed_id);
-
-    let gtfs_shapes_minimised = match std::path::Path::new(&shapes_txt_path).exists() {
-        true => {
-            let reader = MmapShapeReader::new(Path::new(&shapes_txt_path).to_path_buf());
-            reader.ok()
-        }
-        false => None,
-    };
-
     println!("injecting stop times for feed {}", feed_id);
 
     let gtfs = faster_stop_time_reader_injection(
@@ -1655,6 +1643,18 @@ pub async fn gtfs_process_feed(
 
         println!("Agency insertion done for {}", feed_id);
     }
+
+    println!("reading shapes for feed {}", feed_id);
+
+    let shapes_txt_path = format!("{}/{}/shapes.txt", gtfs_unzipped_path, feed_id);
+
+    let gtfs_shapes_minimised = match std::path::Path::new(&shapes_txt_path).exists() {
+        true => {
+            let reader = MmapShapeReader::new(Path::new(&shapes_txt_path).to_path_buf());
+            reader.ok()
+        }
+        false => None,
+    };
 
     println!("Inserting shapes for {}", feed_id);
 
