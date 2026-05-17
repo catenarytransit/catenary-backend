@@ -27,6 +27,53 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 
+use diesel::dsl::sql;
+use diesel::sql_types::Text;
+
+#[derive(Clone, Debug)]
+struct NyctRtTripContext {
+    route_id: Option<String>,
+    direction_id: Option<u32>,
+    start_date: Option<chrono::NaiveDate>,
+}
+
+fn is_nyct_subway_feed(chateau_id: &str, realtime_feed_id: &str) -> bool {
+    chateau_id == "nyct"
+        && matches!(
+            realtime_feed_id,
+            "f-mta~nyc~rt~subway~1~2~3~4~5~6~7"
+                | "f-mta~nyc~rt~subway~a~c~e"
+                | "f-mta~nyc~rt~subway~b~d~f~m"
+                | "f-mta~nyc~rt~subway~g"
+                | "f-mta~nyc~rt~subway~j~z"
+                | "f-mta~nyc~rt~subway~l"
+                | "f-mta~nyc~rt~subway~n~q~r~w"
+                | "f-mta~nyc~rt~subway~sir"
+        )
+}
+
+fn parse_gtfs_rt_date(date: &Option<String>) -> Option<chrono::NaiveDate> {
+    date.as_ref()
+        .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok())
+}
+
+fn index_trip_update_id(
+    lookup: &mut AHashMap<CompactString, Vec<CompactString>>,
+    trip_id: &str,
+    entity_id: &str,
+) {
+    let entity_id = CompactString::new(entity_id);
+
+    lookup
+        .entry(CompactString::new(trip_id))
+        .and_modify(|ids| {
+            if !ids.iter().any(|id| id.as_str() == entity_id.as_str()) {
+                ids.push(entity_id.clone());
+            }
+        })
+        .or_insert(vec![entity_id]);
+}
+
 use catenary::compact_formats::{
     CompactFeedMessage, CompactItineraryPatternRow, CompactStopTimeUpdate,
 };
@@ -463,6 +510,7 @@ pub async fn new_rt_data(
     // Collects all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
     // to perform a single batch lookup against the cache/DB!
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
+    let mut nyct_rt_trip_contexts: AHashMap<String, NyctRtTripContext> = AHashMap::new();
 
     for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
         if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
@@ -492,6 +540,17 @@ pub async fn new_rt_data(
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
                         trip_ids_to_lookup.insert(trip_id.clone());
+                    }
+                    if is_nyct_subway_feed(chateau_id, realtime_feed_id.as_str()) {
+                        if let Some(trip_id) = &trip_update.trip.trip_id {
+                            nyct_rt_trip_contexts
+                                .entry(trip_id.clone())
+                                .or_insert_with(|| NyctRtTripContext {
+                                    route_id: trip_update.trip.route_id.clone(),
+                                    direction_id: trip_update.trip.direction_id,
+                                    start_date: parse_gtfs_rt_date(&trip_update.trip.start_date),
+                                });
+                        }
                     }
 
                     if let Some(trip_property) = &trip_update.trip_properties {
@@ -694,6 +753,181 @@ pub async fn new_rt_data(
 
                 println!(
                     "Fixed {} foothill transit trip ids via pattern matching",
+                    fixed_id_count
+                );
+            }
+        }
+
+        let mut nyct_rt_trip_id_to_static_trip_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+
+        if chateau_id == "nyct" {
+            let missing_nyct_trip_ids = trip_ids_to_lookup
+                .iter()
+                .filter(|id| {
+                    !trip_id_to_trip.contains_key(id.as_str())
+                        && nyct_rt_trip_contexts.contains_key(id.as_str())
+                })
+                .cloned()
+                .collect::<Vec<String>>();
+
+            if !missing_nyct_trip_ids.is_empty() {
+                let route_ids_to_match = missing_nyct_trip_ids
+                    .iter()
+                    .filter_map(|id| nyct_rt_trip_contexts.get(id))
+                    .filter_map(|ctx| ctx.route_id.clone())
+                    .collect::<AHashSet<String>>()
+                    .into_iter()
+                    .collect::<Vec<String>>();
+
+                let mut query =
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed.into_boxed();
+
+                query = query
+                    .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
+                    .filter(
+                        sql::<Text>("substr(trip_id, strpos(trip_id, '_') + 1)")
+                            .eq_any(&missing_nyct_trip_ids),
+                    );
+
+                if !route_ids_to_match.is_empty() {
+                    query = query.filter(
+                        catenary::schema::gtfs::trips_compressed::dsl::route_id
+                            .eq_any(&route_ids_to_match),
+                    );
+                }
+
+                let nyct_candidate_trips =
+                    query.load::<catenary::models::CompressedTrip>(conn).await?;
+
+                let candidate_service_ids = nyct_candidate_trips
+                    .iter()
+                    .map(|trip| trip.service_id.to_string())
+                    .collect::<AHashSet<String>>()
+                    .into_iter()
+                    .collect::<Vec<String>>();
+
+                let nyct_candidate_calendars = catenary::schema::gtfs::calendar::dsl::calendar
+                    .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau_id))
+                    .filter(
+                        catenary::schema::gtfs::calendar::dsl::service_id
+                            .eq_any(&candidate_service_ids),
+                    )
+                    .load::<catenary::models::Calendar>(conn)
+                    .await?;
+
+                let nyct_candidate_calendar_dates =
+                    catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                        .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                .eq_any(&candidate_service_ids),
+                        )
+                        .load::<catenary::models::CalendarDate>(conn)
+                        .await?;
+
+                let nyct_calendar_structure =
+                    catenary::make_calendar_structure_from_pg_single_chateau(
+                        nyct_candidate_calendars,
+                        nyct_candidate_calendar_dates,
+                    );
+
+                let mut candidates_by_rt_id: AHashMap<
+                    String,
+                    Vec<catenary::models::CompressedTrip>,
+                > = AHashMap::new();
+
+                for candidate in nyct_candidate_trips {
+                    let suffix = candidate
+                        .trip_id
+                        .split_once('_')
+                        .map(|(_, suffix)| suffix)
+                        .unwrap_or(candidate.trip_id.as_str());
+
+                    candidates_by_rt_id
+                        .entry(suffix.to_string())
+                        .or_default()
+                        .push(candidate);
+                }
+
+                let mut fixed_id_count = 0usize;
+
+                for rt_trip_id in missing_nyct_trip_ids {
+                    let Some(candidates) = candidates_by_rt_id.get(&rt_trip_id) else {
+                        continue;
+                    };
+
+                    let Some(ctx) = nyct_rt_trip_contexts.get(&rt_trip_id) else {
+                        continue;
+                    };
+
+                    let mut narrowed = candidates
+                        .iter()
+                        .filter(|candidate| {
+                            ctx.route_id
+                                .as_ref()
+                                .map(|route_id| candidate.route_id == *route_id)
+                                .unwrap_or(true)
+                        })
+                        .filter(
+                            |candidate| match (ctx.direction_id, candidate.direction_id) {
+                                // Catenary stores static direction_id as Option<bool>.
+                                // false -> 0, true -> 1.
+                                (Some(rt_direction_id), Some(static_direction_id)) => {
+                                    static_direction_id == (rt_direction_id != 0)
+                                }
+                                _ => true,
+                            },
+                        )
+                        .collect::<Vec<_>>();
+
+                    if let Some(start_date) = ctx.start_date {
+                        let active = narrowed
+                            .iter()
+                            .copied()
+                            .filter(|candidate| {
+                                nyct_calendar_structure
+                                    .get(candidate.service_id.as_str())
+                                    .map(|service| {
+                                        catenary::datetime_in_service(service, start_date)
+                                    })
+                                    .unwrap_or(false)
+                            })
+                            .collect::<Vec<_>>();
+
+                        if !active.is_empty() {
+                            narrowed = active;
+                        }
+                    }
+
+                    narrowed.sort_by(|a, b| a.trip_id.cmp(&b.trip_id));
+                    narrowed.dedup_by(|a, b| a.trip_id == b.trip_id);
+
+                    if narrowed.len() == 1 {
+                        let static_trip = (*narrowed[0]).clone();
+
+                        nyct_rt_trip_id_to_static_trip_ids
+                            .entry(rt_trip_id.clone())
+                            .or_default()
+                            .push(static_trip.trip_id.clone());
+
+                        // Critical alias:
+                        // RT key "093950_1..S03R" now resolves to static trip metadata
+                        // "ASP26GEN-1039-Saturday-00_093950_1..S03R" or whichever
+                        // service_id is active for start_date.
+                        trip_id_to_trip.insert(rt_trip_id.clone(), static_trip);
+
+                        fixed_id_count += 1;
+                    } else {
+                        println!(
+                            "NYCT trip id suffix {} resolved to {} active static candidates; leaving unresolved",
+                            rt_trip_id,
+                            narrowed.len()
+                        );
+                    }
+                }
+
+                println!(
+                    "Fixed {} NYCT subway realtime trip ids via trip_id suffix + service-date matching",
                     fixed_id_count
                 );
             }
@@ -2230,11 +2464,37 @@ pub async fn new_rt_data(
                             }
                         }
 
-                        if trip_id.is_some() {
-                            trip_updates_lookup_by_trip_id_to_trip_update_ids
-                                .entry(trip_id.as_ref().unwrap().into())
-                                .and_modify(|x| x.push(CompactString::new(&trip_update_entity.id)))
-                                .or_insert(vec![CompactString::new(&trip_update_entity.id)]);
+                        if let Some(original_rt_trip_id) = &trip_id {
+                            // 1. Keep the realtime suffix lookup.
+                            index_trip_update_id(
+                                &mut trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                                original_rt_trip_id,
+                                &trip_update_entity.id,
+                            );
+
+                            // 2. Also index the canonical static trip_id after normalization.
+                            if let Some(canonical_trip_id) = &trip_update.trip.trip_id {
+                                if canonical_trip_id != original_rt_trip_id {
+                                    index_trip_update_id(
+                                        &mut trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                                        canonical_trip_id,
+                                        &trip_update_entity.id,
+                                    );
+                                }
+                            }
+
+                            // 3. Explicit NYCT aliases, useful if there are multiple future consumers.
+                            if let Some(static_aliases) =
+                                nyct_rt_trip_id_to_static_trip_ids.get(original_rt_trip_id)
+                            {
+                                for static_alias in static_aliases {
+                                    index_trip_update_id(
+                                        &mut trip_updates_lookup_by_trip_id_to_trip_update_ids,
+                                        static_alias,
+                                        &trip_update_entity.id,
+                                    );
+                                }
+                            }
 
                             if let Some(route_id) = &trip_update.trip.route_id {
                                 trip_updates_lookup_by_route_id_to_trip_update_ids
