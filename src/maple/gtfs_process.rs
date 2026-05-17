@@ -2551,7 +2551,9 @@ fn faster_stop_time_reader_injection(
     let file = File::open(stop_times_path)
         .context("Failed to open stop_times.txt in the faster ST reader")?;
     let buf_reader = BufReader::new(file);
-    let mut rdr = csv::Reader::from_reader(buf_reader);
+    let mut rdr = csv::ReaderBuilder::new()
+        .trim(csv::Trim::All)
+        .from_reader(buf_reader);
 
     let mut current_trip_id: String = String::new();
 

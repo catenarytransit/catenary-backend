@@ -79,6 +79,23 @@ pub fn redo_anteater_express_gtfs(mut gtfs: Gtfs) -> Gtfs {
                     }
                 }
 
+                if line_name == "E Line" {
+                    if let Some(default_st) = template.stop_times.first().cloned() {
+                        template.stop_times.clear();
+                        let e_stops = vec![("100", 0), ("116", 240), ("117", 270), ("101", 300)];
+                        for (i, (sid, offset)) in e_stops.into_iter().enumerate() {
+                            if let Some(stop) = find_stop(&gtfs, sid) {
+                                let mut st = default_st.clone();
+                                st.stop = stop;
+                                st.arrival_time = Some(offset);
+                                st.departure_time = Some(offset);
+                                st.stop_sequence = i as u32;
+                                template.stop_times.push(st);
+                            }
+                        }
+                    }
+                }
+
                 // Final safety: ensure every stop time has an arrival/departure
                 // if it was missing in the template, we'll use 0 as a base.
                 for st in template.stop_times.iter_mut() {
