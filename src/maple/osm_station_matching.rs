@@ -426,8 +426,11 @@ fn match_stop_with_rtree(
         candidates.into_iter().partition(|s| s.is_primary_station());
 
     // Step 1: Find best matching primary station
-    // Prioritize exact mode matches over compatible mode matches
-    let mut best_station: Option<(i64, f64, u8)> = None; // (osm_id, score, mode_priority)
+    // Prioritize exact mode matches over compatible mode matches.
+    // If there is no exact match anywhere nearby, match with other types.
+    let mut best_exact: Option<(i64, f64)> = None;
+    let mut best_comp: Option<(i64, f64)> = None;
+    let mut best_other: Option<(i64, f64)> = None;
 
     for station in &stations {
         let (score, _) = score_candidate(
@@ -441,34 +444,25 @@ fn match_stop_with_rtree(
 
         if score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &station.mode_type);
-
-            // Compare by (mode_priority, score) - prefer exact mode, then higher score
-            let dominated = best_station
-                .as_ref()
-                .map_or(false, |(_, best_score, best_prio)| {
-                    if mode_priority < *best_prio {
-                        // Current has lower priority, skip unless much closer
-                        score <= *best_score + 0.15
-                    } else if mode_priority > *best_prio {
-                        // Current has higher priority, always prefer
-                        false
-                    } else {
-                        // Same priority, compare by score
-                        score <= *best_score
-                    }
-                });
-
-            if !dominated {
-                best_station = Some((station.osm_id, score, mode_priority));
+            match mode_priority {
+                2 => if best_exact.map_or(true, |(_, s)| score > s) { best_exact = Some((station.osm_id, score)); },
+                1 => if best_comp.map_or(true, |(_, s)| score > s) { best_comp = Some((station.osm_id, score)); },
+                _ => if best_other.map_or(true, |(_, s)| score > s) { best_other = Some((station.osm_id, score)); },
             }
         }
     }
 
+    let best_station_id = best_exact.or(best_comp).or(best_other).map(|(id, _)| id);
+
     // Step 2: If station found, look for matching platform
-    if let Some((station_id, _, _)) = best_station {
+    if let Some(station_id) = best_station_id {
         let mut matching_platform: Option<i64> = None;
 
         if platform_code.is_some() {
+            let mut best_plat_exact: Option<(i64, f64)> = None;
+            let mut best_plat_comp: Option<(i64, f64)> = None;
+            let mut best_plat_other: Option<(i64, f64)> = None;
+
             for platform in &platforms {
                 let (score, is_platform_match) = score_candidate(
                     platform,
@@ -479,20 +473,25 @@ fn match_stop_with_rtree(
                     radius_m,
                 );
 
-                if is_platform_match && score >= MIN_MATCH_SCORE * 0.8 {
-                    if platform.parent_osm_id == Some(station_id) {
-                        matching_platform = Some(platform.osm_id);
-                        break;
+                if is_platform_match && score >= MIN_MATCH_SCORE * 0.8 && platform.parent_osm_id == Some(station_id) {
+                    let mode_priority = mode_match_priority(mode, &platform.mode_type);
+                    match mode_priority {
+                        2 => if best_plat_exact.map_or(true, |(_, s)| score > s) { best_plat_exact = Some((platform.osm_id, score)); },
+                        1 => if best_plat_comp.map_or(true, |(_, s)| score > s) { best_plat_comp = Some((platform.osm_id, score)); },
+                        _ => if best_plat_other.map_or(true, |(_, s)| score > s) { best_plat_other = Some((platform.osm_id, score)); },
                     }
                 }
             }
+            matching_platform = best_plat_exact.or(best_plat_comp).or(best_plat_other).map(|(id, _)| id);
         }
 
         return Some((station_id, matching_platform));
     }
 
     // Step 3: Fallback to platforms if no primary station found
-    let mut best_platform: Option<(i64, Option<i64>, f64, bool, u8)> = None;
+    let mut best_plat_exact: Option<(i64, Option<i64>, f64, bool)> = None;
+    let mut best_plat_comp: Option<(i64, Option<i64>, f64, bool)> = None;
+    let mut best_plat_other: Option<(i64, Option<i64>, f64, bool)> = None;
 
     for platform in &platforms {
         let (score, is_platform_match) = score_candidate(
@@ -512,33 +511,16 @@ fn match_stop_with_rtree(
 
         if adjusted_score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &platform.mode_type);
-
-            let dominated =
-                best_platform
-                    .as_ref()
-                    .map_or(false, |(_, _, best_score, _, best_prio)| {
-                        if mode_priority < *best_prio {
-                            adjusted_score <= *best_score + 0.15
-                        } else if mode_priority > *best_prio {
-                            false
-                        } else {
-                            adjusted_score <= *best_score
-                        }
-                    });
-
-            if !dominated {
-                best_platform = Some((
-                    platform.osm_id,
-                    platform.parent_osm_id,
-                    adjusted_score,
-                    is_platform_match,
-                    mode_priority,
-                ));
+            let val = (platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match);
+            match mode_priority {
+                2 => if best_plat_exact.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_exact = Some(val); },
+                1 => if best_plat_comp.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_comp = Some(val); },
+                _ => if best_plat_other.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_other = Some(val); },
             }
         }
     }
 
-    if let Some((osm_id, parent_id, _, is_platform_match, _)) = best_platform {
+    if let Some((osm_id, parent_id, _, is_platform_match)) = best_plat_exact.or(best_plat_comp).or(best_plat_other) {
         let station_id = parent_id.unwrap_or(osm_id);
         let platform_id = if is_platform_match {
             Some(osm_id)
