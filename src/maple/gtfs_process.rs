@@ -904,6 +904,29 @@ pub async fn gtfs_process_feed(
             gtfs.print_stats();
             gtfs
         }
+        "f-vvs~de" => {
+            let mut gtfs = gtfs;
+
+            let route_ids_to_delete = vec![
+                "de:vvs:10001_:",
+                "de:vvs:10002_:",
+                "de:vvs:10003_:",
+                "de:vvs:10004_:",
+                "de:vvs:10005_:",
+                "de:vvs:10006_:",
+                "de:vvs:10060_:",
+            ];
+
+            gtfs.routes
+                .retain(|route_id, _| !route_ids_to_delete.contains(&route_id.as_str()));
+
+            gtfs.trips
+                .retain(|_trip_id, trip| !route_ids_to_delete.contains(&trip.route_id.as_str()));
+
+            println!("Filtered duplicated S-Bahn out of VVS");
+            gtfs.print_stats();
+            gtfs
+        }
         "f-uc~irvine~anteater~express" => {
             let mut gtfs = gtfs;
 
