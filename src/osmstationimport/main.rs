@@ -291,63 +291,96 @@ fn is_stop_area_relation(tags: &osmpbfreader::Tags) -> bool {
 /// Returns (parent_osm_id, parent_name) where parent is the main station
 fn find_parent_station_in_relation(
     rel: &Relation,
-    node_set: &HashSet<i64>,
+    node_data: &HashMap<i64, NodeData>,
 ) -> Option<(i64, Option<String>)> {
-    // First, look for members with role "label" or empty role that are stations
-    // The "label" role typically indicates the main station name node
+    let mut best: Option<(i64, u8, usize)> = None;
 
-    let mut label_node: Option<i64> = None;
-    let mut station_node: Option<i64> = None;
-
-    for member in &rel.refs {
+    for (idx, member) in rel.refs.iter().enumerate() {
         if let OsmId::Node(node_id) = member.member {
             let id = node_id.0;
-            // Only consider nodes that are in our station set
-            if !node_set.contains(&id) {
-                continue;
-            }
-
-            let role = member.role.as_str();
-
-            // "label" role is the primary name node
-            if role == "label" {
-                label_node = Some(id);
-            }
-            // Empty role or "stop" typically indicates the main station
-            else if role.is_empty() || role == "stop" || role == "station" {
-                if station_node.is_none() {
-                    station_node = Some(id);
+            if let Some(node) = node_data.get(&id) {
+                if let Some(rank) = parent_candidate_rank(node, member.role.as_str()) {
+                    if best
+                        .map(|(_, best_rank, best_idx)| (rank, idx) < (best_rank, best_idx))
+                        .unwrap_or(true)
+                    {
+                        best = Some((id, rank, idx));
+                    }
                 }
             }
         }
     }
 
-    // Prefer label node, then station node
-    if let Some(id) = label_node {
-        return Some((id, None));
-    }
-    if let Some(id) = station_node {
-        return Some((id, None));
-    }
-
-    None
+    best.map(|(id, _, _)| (id, None))
 }
 
-/// Get all platform/child node IDs from a stop_area relation
-fn get_platform_nodes_in_relation(rel: &Relation) -> Vec<i64> {
-    let mut platforms = Vec::new();
+/// Rank station-level candidates inside a stop_area.
+///
+/// In a public_transport=stop_area, relation members with role="stop" are
+/// usually public_transport=stop_position children. They must not be selected as
+/// the parent just because the role name looks important.
+fn parent_candidate_rank(node: &NodeData, role: &str) -> Option<u8> {
+    let station_type = node.station_type.as_deref();
+    let railway_tag = node.railway_tag.as_deref();
+
+    if matches!(station_type, Some("platform" | "stop_position")) {
+        return None;
+    }
+
+    let kind_rank = if matches!(station_type, Some("station"))
+        || matches!(railway_tag, Some("station"))
+    {
+        0
+    } else if matches!(station_type, Some("halt")) || matches!(railway_tag, Some("halt")) {
+        1
+    } else if matches!(station_type, Some("tram_stop"))
+        || matches!(railway_tag, Some("tram_stop"))
+    {
+        // Fallback for older/smaller tram-only stop areas with no explicit
+        // station/halt node.
+        3
+    } else if role == "label" {
+        4
+    } else {
+        return None;
+    };
+
+    let role_rank = match role {
+        "station" => 0,
+        "" => 1,
+        "label" => 2,
+        // Deliberately low priority: in stop_area this usually means a
+        // stop_position child, not the station parent.
+        "stop" => 5,
+        _ => 6,
+    };
+
+    Some(kind_rank * 10 + role_rank)
+}
+
+/// Get all node IDs from a stop_area relation; child filtering happens with tags.
+fn get_child_nodes_in_relation(rel: &Relation) -> Vec<i64> {
+    let mut nodes = Vec::new();
 
     for member in &rel.refs {
         if let OsmId::Node(node_id) = member.member {
-            let role = member.role.as_str();
-            // Platforms have role "platform" or nodes with local_ref
-            if role == "platform" || role == "stop" || role.is_empty() {
-                platforms.push(node_id.0);
-            }
+            nodes.push(node_id.0);
         }
     }
 
-    platforms
+    nodes
+}
+
+fn is_relation_child_node(node: &NodeData) -> bool {
+    node.local_ref.is_some()
+        || matches!(
+            node.station_type.as_deref(),
+            Some("platform" | "stop_position" | "tram_stop")
+        )
+        || matches!(
+            node.railway_tag.as_deref(),
+            Some("platform" | "tram_stop" | "stop")
+        )
 }
 
 /// Apply name overrides
@@ -676,15 +709,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 }
                 OsmId::Node(node_id) => {
                     if let Some(node) = node_data.get(&node_id.0) {
-                        // Check if this is a primary station node (rail/subway/tram station)
-                        if node.mode_type == "rail"
-                            || node.mode_type == "subway"
-                            || node.mode_type == "tram"
-                        {
+                        // Check if this is a primary station node (rail/subway/tram/light_rail station)
+                        if matches!(
+                            node.mode_type.as_str(),
+                            "rail" | "subway" | "tram" | "light_rail"
+                        ) {
                             // stricter check: must be a station/halt/stop, not just a platform
-                            if node.station_type.as_deref() == Some("station") 
+                            if node.station_type.as_deref() == Some("station")
                                 || node.station_type.as_deref() == Some("halt")
-                                || node.station_type.as_deref() == Some("tram_stop") 
+                                || node.station_type.as_deref() == Some("tram_stop")
                                 || node.station_type.as_deref() == Some("subway_entrance") // sometimes entrances are main nodes
                                 || node.railway_tag.as_deref() == Some("station")
                                 || node.railway_tag.as_deref() == Some("halt")
@@ -712,21 +745,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
 
         // Find the parent station in this relation
-        if let Some((parent_id, _)) = find_parent_station_in_relation(rel, &node_ids) {
-            // Get all platform/child nodes in this relation
-            let platform_nodes = get_platform_nodes_in_relation(rel);
+        if let Some((parent_id, _)) = find_parent_station_in_relation(rel, &node_data) {
+            // Get all possible child nodes in this relation; tag filtering happens below.
+            let child_nodes = get_child_nodes_in_relation(rel);
 
-            for platform_id in platform_nodes {
+            for child_id in child_nodes {
                 // Don't map a node to itself
-                if platform_id != parent_id && node_ids.contains(&platform_id) {
-                    // Check if this node has local_ref (indicating it's a platform)
-                    if let Some(node) = node_data.get(&platform_id) {
-                        if node.local_ref.is_some()
-                            || node.station_type.as_deref() == Some("platform")
-                            || node.station_type.as_deref() == Some("stop_position")
-                            || node.station_type.as_deref() == Some("tram_stop")
-                        {
-                            parent_map.insert(platform_id, parent_id);
+                if child_id != parent_id && node_ids.contains(&child_id) {
+                    if let Some(node) = node_data.get(&child_id) {
+                        if is_relation_child_node(node) {
+                            parent_map.insert(child_id, parent_id);
                             mappings_created += 1;
                         }
                     }
