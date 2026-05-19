@@ -344,6 +344,10 @@ pub async fn gtfs_process_feed(
                     "S-Bahn Berlin GmbH",
                     //f-u3-günterangergüterverkehrsgmbh~coomnibusvermietungkg~fritzbeh
                     "Barnimer Busgesellschaft mbH",
+                    //VVS
+                    "Nachtbus (SSB)",
+                    "Bus (SSB)",
+                    "Privatunternehmer-Bus (VVS)",
                 ],
             )?;
 
@@ -382,7 +386,7 @@ pub async fn gtfs_process_feed(
                     String::from("subway"),
                     String::from("tram"),
                 ]),
-                true,
+                false,
                 true,
             )
             .await?;
@@ -395,7 +399,7 @@ pub async fn gtfs_process_feed(
                     String::from("coach"),
                     String::from("trolleybus"),
                 ]),
-                true,
+                false,
                 true,
             )
             .await?;
