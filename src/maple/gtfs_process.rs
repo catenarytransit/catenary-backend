@@ -373,6 +373,16 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-vvs~de" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-germany-latest.osm.pbf",
+                None,
+                true,
+                true,
+            )
+            .await?;
+        }
         "f-u-nl" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
