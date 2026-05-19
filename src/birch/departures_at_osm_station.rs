@@ -25,8 +25,7 @@ use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
 use diesel::dsl::sql;
-use diesel::query_dsl::methods::FilterDsl;
-use diesel::query_dsl::methods::SelectDsl;
+use diesel::QueryDsl;
 use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
@@ -256,6 +255,66 @@ pub async fn departures_at_osm_station(
     };
 
     if linked_stops.is_empty() {
+        if let Some(ref station_info) = osm_station_info {
+            let point = geo::Point::new(station_info.lon, station_info.lat);
+            let search_radius = 500.0;
+            let spatial_resolution =
+                catenary::make_degree_length_as_distance_from_point(&point, search_radius);
+
+            let where_query = format!(
+                "ST_DWithin(gtfs.osm_stations.point, 'SRID=4326;POINT({} {})', {})",
+                station_info.lon, station_info.lat, spatial_resolution
+            );
+
+            let nearby_osm_stations = catenary::schema::gtfs::osm_stations::dsl::osm_stations
+                .filter(sql::<Bool>(&where_query))
+                .filter(catenary::schema::gtfs::osm_stations::osm_id.ne(station_info.osm_id))
+                .select(catenary::models::OsmStation::as_select())
+                .load::<catenary::models::OsmStation>(&mut *conn)
+                .await
+                .unwrap_or_default();
+
+            let mut candidates = Vec::new();
+
+            for nearby_station in nearby_osm_stations {
+                if let (Some(name1), Some(name2)) = (&station_info.name, &nearby_station.name) {
+                    let similarity =
+                        strsim::jaro_winkler(&name1.to_lowercase(), &name2.to_lowercase());
+
+                    if similarity > 0.8 {
+                        let nearby_stops_count: i64 = catenary::schema::gtfs::stops::dsl::stops
+                            .filter(
+                                catenary::schema::gtfs::stops::osm_station_id
+                                    .eq(nearby_station.osm_id),
+                            )
+                            .filter(catenary::schema::gtfs::stops::allowed_spatial_query.eq(true))
+                            .count()
+                            .get_result(&mut *conn)
+                            .await
+                            .unwrap_or(0);
+
+                        if nearby_stops_count > 0 {
+                            candidates.push(nearby_station);
+                        }
+                    }
+                }
+            }
+
+            if !candidates.is_empty() {
+                candidates.sort_by_key(|s| if s.parent_osm_id.is_some() { 1 } else { 0 });
+                let best_match = &candidates[0];
+
+                #[derive(Serialize)]
+                struct OsmStationRedirectResponse {
+                    redirect_to_osm_station_id: i64,
+                }
+
+                return HttpResponse::Ok().json(OsmStationRedirectResponse {
+                    redirect_to_osm_station_id: best_match.osm_id,
+                });
+            }
+        }
+
         return HttpResponse::Ok().json(DeparturesAtOsmStationResponse {
             osm_station: osm_station_info,
             stops: vec![],
