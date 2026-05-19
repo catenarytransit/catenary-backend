@@ -723,6 +723,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     if let Some(node) = node_data.get(&platform_id) {
                         if node.local_ref.is_some()
                             || node.station_type.as_deref() == Some("platform")
+                            || node.station_type.as_deref() == Some("stop_position")
                         {
                             parent_map.insert(platform_id, parent_id);
                             mappings_created += 1;
