@@ -1884,17 +1884,55 @@ pub async fn new_rt_data(
                         }
 
                         let mut stop_time_updates_vec = Vec::new();
+
+                        let base_midnight_ts = trip_descriptor
+                            .start_date
+                            .as_ref()
+                            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok())
+                            .and_then(|nd| {
+                                timezone
+                                    .as_ref()
+                                    .and_then(|tz| {
+                                        tz.from_local_datetime(&nd.and_hms_opt(0, 0, 0).unwrap())
+                                            .single()
+                                    })
+                                    .map(|dt| dt.timestamp())
+                            });
+                        let compressed_start_time_seconds =
+                            compressed_trip.map(|ct| ct.start_time as i64).unwrap_or(0);
+
                         for stu in &trip_update.stop_time_update {
                             let mut resolved_stop_id: Option<String> = stu.stop_id.clone();
+                            let mut sched_arr_computed: Option<i64> = None;
+                            let mut sched_dep_computed: Option<i64> = None;
 
-                            if resolved_stop_id.is_none() {
-                                if let Some(seq) = stu.stop_sequence {
-                                    if let Some(rows) = itinerary_rows {
-                                        if let Some(matching_row) =
-                                            rows.iter().find(|r| r.stop_sequence == (seq as i32))
-                                        {
+                            if let Some(seq) = stu.stop_sequence {
+                                if let Some(rows) = itinerary_rows {
+                                    if let Some(matching_row) =
+                                        rows.iter().find(|r| r.stop_sequence == (seq as i32))
+                                    {
+                                        if resolved_stop_id.is_none() {
                                             resolved_stop_id =
                                                 Some(matching_row.stop_id.to_string());
+                                        }
+                                        if let Some(base_ms) = base_midnight_ts {
+                                            if let Some(arr) = matching_row.arrival_time_since_start
+                                            {
+                                                sched_arr_computed = Some(
+                                                    base_ms
+                                                        + compressed_start_time_seconds
+                                                        + arr as i64,
+                                                );
+                                            }
+                                            if let Some(dep) =
+                                                matching_row.departure_time_since_start
+                                            {
+                                                sched_dep_computed = Some(
+                                                    base_ms
+                                                        + compressed_start_time_seconds
+                                                        + dep as i64,
+                                                );
+                                            }
                                         }
                                     }
                                 }
@@ -2225,7 +2263,25 @@ pub async fn new_rt_data(
                                                 (ref_epoch as i64) + (i32::from(diff) as i64);
                                             if time <= 0 { None } else { Some(time) }
                                         }
-                                        None => None,
+                                        None => {
+                                            if let Some(delay) = arrival.delay {
+                                                if let Some(sched) = arrival.scheduled_time {
+                                                    let time = (ref_epoch as i64)
+                                                        + (i32::from(sched) as i64)
+                                                        + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
+                                                } else if let Some(sched_arr_time) =
+                                                    sched_arr_computed
+                                                {
+                                                    let time = sched_arr_time + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            }
+                                        }
                                     },
                                     uncertainty: arrival.uncertainty,
                                 }),
@@ -2238,7 +2294,25 @@ pub async fn new_rt_data(
                                                     (ref_epoch as i64) + (i32::from(diff) as i64);
                                                 if time <= 0 { None } else { Some(time) }
                                             }
-                                            None => None,
+                                            None => {
+                                                if let Some(delay) = departure.delay {
+                                                    if let Some(sched) = departure.scheduled_time {
+                                                        let time = (ref_epoch as i64)
+                                                            + (i32::from(sched) as i64)
+                                                            + (delay as i64);
+                                                        if time > 0 { Some(time) } else { None }
+                                                    } else if let Some(sched_dep_time) =
+                                                        sched_dep_computed
+                                                    {
+                                                        let time = sched_dep_time + (delay as i64);
+                                                        if time > 0 { Some(time) } else { None }
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            }
                                         },
                                         uncertainty: departure.uncertainty,
                                     }
