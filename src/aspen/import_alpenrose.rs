@@ -1885,19 +1885,15 @@ pub async fn new_rt_data(
 
                         let mut stop_time_updates_vec = Vec::new();
 
-                        let base_midnight_ts = trip_descriptor
-                            .start_date
-                            .as_ref()
-                            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok())
-                            .and_then(|nd| {
-                                timezone
-                                    .as_ref()
-                                    .and_then(|tz| {
-                                        tz.from_local_datetime(&nd.and_hms_opt(0, 0, 0).unwrap())
-                                            .single()
-                                    })
-                                    .map(|dt| dt.timestamp())
-                            });
+                        let base_midnight_ts = trip_descriptor.start_date.as_ref().and_then(|nd| {
+                            timezone
+                                .as_ref()
+                                .and_then(|tz| {
+                                    tz.from_local_datetime(&nd.and_hms_opt(12, 0, 0).unwrap())
+                                        .single()
+                                })
+                                .map(|dt| dt.timestamp() - (12 * 3600))
+                        });
                         let compressed_start_time_seconds =
                             compressed_trip.map(|ct| ct.start_time as i64).unwrap_or(0);
 
