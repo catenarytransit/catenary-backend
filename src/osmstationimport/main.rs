@@ -724,6 +724,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         if node.local_ref.is_some()
                             || node.station_type.as_deref() == Some("platform")
                             || node.station_type.as_deref() == Some("stop_position")
+                            || node.station_type.as_deref() == Some("tram_stop")
                         {
                             parent_map.insert(platform_id, parent_id);
                             mappings_created += 1;
