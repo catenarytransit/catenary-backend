@@ -445,9 +445,21 @@ fn match_stop_with_rtree(
         if score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &station.mode_type);
             match mode_priority {
-                2 => if best_exact.map_or(true, |(_, s)| score > s) { best_exact = Some((station.osm_id, score)); },
-                1 => if best_comp.map_or(true, |(_, s)| score > s) { best_comp = Some((station.osm_id, score)); },
-                _ => if best_other.map_or(true, |(_, s)| score > s) { best_other = Some((station.osm_id, score)); },
+                2 => {
+                    if best_exact.map_or(true, |(_, s)| score > s) {
+                        best_exact = Some((station.osm_id, score));
+                    }
+                }
+                1 => {
+                    if best_comp.map_or(true, |(_, s)| score > s) {
+                        best_comp = Some((station.osm_id, score));
+                    }
+                }
+                _ => {
+                    if best_other.map_or(true, |(_, s)| score > s) {
+                        best_other = Some((station.osm_id, score));
+                    }
+                }
             }
         }
     }
@@ -473,16 +485,34 @@ fn match_stop_with_rtree(
                     radius_m,
                 );
 
-                if is_platform_match && score >= MIN_MATCH_SCORE * 0.8 && platform.parent_osm_id == Some(station_id) {
+                if is_platform_match
+                    && score >= MIN_MATCH_SCORE * 0.8
+                    && platform.parent_osm_id == Some(station_id)
+                {
                     let mode_priority = mode_match_priority(mode, &platform.mode_type);
                     match mode_priority {
-                        2 => if best_plat_exact.map_or(true, |(_, s)| score > s) { best_plat_exact = Some((platform.osm_id, score)); },
-                        1 => if best_plat_comp.map_or(true, |(_, s)| score > s) { best_plat_comp = Some((platform.osm_id, score)); },
-                        _ => if best_plat_other.map_or(true, |(_, s)| score > s) { best_plat_other = Some((platform.osm_id, score)); },
+                        2 => {
+                            if best_plat_exact.map_or(true, |(_, s)| score > s) {
+                                best_plat_exact = Some((platform.osm_id, score));
+                            }
+                        }
+                        1 => {
+                            if best_plat_comp.map_or(true, |(_, s)| score > s) {
+                                best_plat_comp = Some((platform.osm_id, score));
+                            }
+                        }
+                        _ => {
+                            if best_plat_other.map_or(true, |(_, s)| score > s) {
+                                best_plat_other = Some((platform.osm_id, score));
+                            }
+                        }
                     }
                 }
             }
-            matching_platform = best_plat_exact.or(best_plat_comp).or(best_plat_other).map(|(id, _)| id);
+            matching_platform = best_plat_exact
+                .or(best_plat_comp)
+                .or(best_plat_other)
+                .map(|(id, _)| id);
         }
 
         return Some((station_id, matching_platform));
@@ -511,16 +541,35 @@ fn match_stop_with_rtree(
 
         if adjusted_score >= MIN_MATCH_SCORE {
             let mode_priority = mode_match_priority(mode, &platform.mode_type);
-            let val = (platform.osm_id, platform.parent_osm_id, adjusted_score, is_platform_match);
+            let val = (
+                platform.osm_id,
+                platform.parent_osm_id,
+                adjusted_score,
+                is_platform_match,
+            );
             match mode_priority {
-                2 => if best_plat_exact.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_exact = Some(val); },
-                1 => if best_plat_comp.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_comp = Some(val); },
-                _ => if best_plat_other.map_or(true, |(_, _, s, _)| adjusted_score > s) { best_plat_other = Some(val); },
+                2 => {
+                    if best_plat_exact.map_or(true, |(_, _, s, _)| adjusted_score > s) {
+                        best_plat_exact = Some(val);
+                    }
+                }
+                1 => {
+                    if best_plat_comp.map_or(true, |(_, _, s, _)| adjusted_score > s) {
+                        best_plat_comp = Some(val);
+                    }
+                }
+                _ => {
+                    if best_plat_other.map_or(true, |(_, _, s, _)| adjusted_score > s) {
+                        best_plat_other = Some(val);
+                    }
+                }
             }
         }
     }
 
-    if let Some((osm_id, parent_id, _, is_platform_match)) = best_plat_exact.or(best_plat_comp).or(best_plat_other) {
+    if let Some((osm_id, parent_id, _, is_platform_match)) =
+        best_plat_exact.or(best_plat_comp).or(best_plat_other)
+    {
         let station_id = parent_id.unwrap_or(osm_id);
         let platform_id = if is_platform_match {
             Some(osm_id)

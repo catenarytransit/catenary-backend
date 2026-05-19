@@ -2406,9 +2406,13 @@ pub async fn new_rt_data(
                             trip_update.vehicle.clone().map(|x| x.into());
 
                         if let Some(trip_id_str) = &trip_id {
-                            if let Some(vehicle_entity_ids) = trip_id_to_vehicle_gtfs_rt_id.get(trip_id_str) {
+                            if let Some(vehicle_entity_ids) =
+                                trip_id_to_vehicle_gtfs_rt_id.get(trip_id_str)
+                            {
                                 if let Some(vehicle_entity_id) = vehicle_entity_ids.get(0) {
-                                    if let Some(vehicle_pos) = aspenised_vehicle_positions.get(vehicle_entity_id) {
+                                    if let Some(vehicle_pos) =
+                                        aspenised_vehicle_positions.get(vehicle_entity_id)
+                                    {
                                         if let Some(vehicle_desc) = &vehicle_pos.vehicle {
                                             match trip_update_vehicle.as_mut() {
                                                 Some(tu_veh) => {
@@ -2419,14 +2423,17 @@ pub async fn new_rt_data(
                                                         tu_veh.label = vehicle_desc.label.clone();
                                                     }
                                                     if tu_veh.license_plate.is_none() {
-                                                        tu_veh.license_plate = vehicle_desc.license_plate.clone();
+                                                        tu_veh.license_plate =
+                                                            vehicle_desc.license_plate.clone();
                                                     }
                                                     if tu_veh.wheelchair_accessible.is_none() {
-                                                        tu_veh.wheelchair_accessible = vehicle_desc.wheelchair_accessible;
+                                                        tu_veh.wheelchair_accessible =
+                                                            vehicle_desc.wheelchair_accessible;
                                                     }
                                                 }
                                                 None => {
-                                                    trip_update_vehicle = Some(vehicle_desc.clone());
+                                                    trip_update_vehicle =
+                                                        Some(vehicle_desc.clone());
                                                 }
                                             }
                                         }

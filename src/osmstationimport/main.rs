@@ -333,8 +333,7 @@ fn parent_candidate_rank(node: &NodeData, role: &str) -> Option<u8> {
         0
     } else if matches!(station_type, Some("halt")) || matches!(railway_tag, Some("halt")) {
         1
-    } else if matches!(station_type, Some("tram_stop"))
-        || matches!(railway_tag, Some("tram_stop"))
+    } else if matches!(station_type, Some("tram_stop")) || matches!(railway_tag, Some("tram_stop"))
     {
         // Fallback for older/smaller tram-only stop areas with no explicit
         // station/halt node.
