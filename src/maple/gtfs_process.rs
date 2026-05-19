@@ -387,7 +387,7 @@ pub async fn gtfs_process_feed(
                     String::from("tram"),
                 ]),
                 false,
-                true,
+                false,
             )
             .await?;
 
@@ -400,7 +400,7 @@ pub async fn gtfs_process_feed(
                     String::from("trolleybus"),
                 ]),
                 false,
-                true,
+                false,
             )
             .await?;
         }
