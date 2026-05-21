@@ -412,7 +412,7 @@ pub fn map_metrolinx_trip_to_consist(
                 passenger_count: None,
                 passenger_class: if is_engine { None } else { Some(PassengerClass::Unknown) },
                 is_locomotive: Some(is_engine),
-                is_revenue: Some(\!is_engine),
+                is_revenue: Some(!is_engine),
             });
         }
     }
@@ -426,7 +426,7 @@ pub fn map_metrolinx_trip_to_consist(
 
     UnifiedConsist {
         global_journey_id: EcoString::from(global_journey_id_gtfs_trip_id),
-        groups: vec\![group],
+        groups: vec![group],
         formation_status: FormationStatus::MatchesSchedule,
     }
 }
