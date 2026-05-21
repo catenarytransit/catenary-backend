@@ -337,3 +337,96 @@ pub fn map_darwin_v1_formation_to_consist(
         formation_status: FormationStatus::MatchesSchedule,
     }
 }
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MetrolinxTrainResponse {
+    pub last_updated: Option<String>,
+    pub count: Option<i32>,
+    pub trips: Vec<MetrolinxTrip>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MetrolinxTrip {
+    pub trip_id: Option<compact_str::CompactString>,
+    pub engine: Option<compact_str::CompactString>,
+    pub line: Option<compact_str::CompactString>,
+    pub union: Option<i32>,
+    pub lineup: Option<Vec<MetrolinxCar>>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MetrolinxCar {
+    pub position: i32,
+    pub number: Option<compact_str::CompactString>,
+    pub role: Option<compact_str::CompactString>,
+    pub accessible: bool,
+    pub bike: bool,
+    pub cab: bool,
+}
+
+pub fn map_metrolinx_trip_to_consist(
+    global_journey_id_gtfs_trip_id: &str,
+    trip_data: &MetrolinxTrip,
+) -> catenary::consist_v1::UnifiedConsist {
+    use catenary::consist_v1::{
+        Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
+        PassengerClass, UnifiedConsist, VehicleElement,
+    };
+    use ecow::EcoString;
+
+    let mut vehicles = Vec::new();
+    
+    if let Some(lineup) = &trip_data.lineup {
+        let mut sorted_lineup = lineup.clone();
+        sorted_lineup.sort_by_key(|c| c.position);
+        
+        for car in sorted_lineup {
+            let mut facilities = Vec::new();
+            if car.accessible {
+                facilities.push(Amenity {
+                    amenity_type: AmenityType::WheelchairSpace,
+                    status: AmenityStatus::Available,
+                    count: None,
+                });
+            }
+            if car.bike {
+                facilities.push(Amenity {
+                    amenity_type: AmenityType::BikeSpace,
+                    status: AmenityStatus::Available,
+                    count: None,
+                });
+            }
+            
+            let is_engine = car.role.as_ref().map(|x| x.as_str()) == Some("ENGINE");
+            
+            vehicles.push(VehicleElement {
+                uic_number: EcoString::from(car.number.as_deref().unwrap_or("Unknown")),
+                label: None,
+                order: car.position as u8,
+                position_on_platform: None,
+                facilities,
+                occupancy: None,
+                passenger_count: None,
+                passenger_class: if is_engine { None } else { Some(PassengerClass::Unknown) },
+                is_locomotive: Some(is_engine),
+                is_revenue: Some(\!is_engine),
+            });
+        }
+    }
+    
+    let group = ConsistGroup {
+        group_name: trip_data.trip_id.as_ref().map(|x| EcoString::from(x.as_str())),
+        destination: None,
+        vehicles,
+        group_orientation: Some(Orientation::Unknown),
+    };
+
+    UnifiedConsist {
+        global_journey_id: EcoString::from(global_journey_id_gtfs_trip_id),
+        groups: vec\![group],
+        formation_status: FormationStatus::MatchesSchedule,
+    }
+}

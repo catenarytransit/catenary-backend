@@ -303,6 +303,29 @@ pub async fn new_rt_data(
         crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
     > = AHashMap::new();
 
+    let mut metrolinx_trip_id_to_consist: AHashMap<String, crate::consist_cache_and_conversion::MetrolinxTrip> = AHashMap::new();
+
+    if chateau_id == "gotransit" || chateau_id == "upexpress" {
+        let client = reqwest::Client::new();
+        let metrolinx_res = client
+            .get("https://metrolinx-train-go.transitspotter.com/get-trains/all")
+            .send()
+            .await;
+        if let Ok(res) = metrolinx_res {
+            if let Ok(data) = res.json::<crate::consist_cache_and_conversion::MetrolinxTrainResponse>().await {
+                for trip in data.trips {
+                    if let Some(trip_id) = &trip.trip_id {
+                        metrolinx_trip_id_to_consist.insert(trip_id.to_string(), trip);
+                    }
+                }
+            } else {
+                println!("Failed to parse Metrolinx train json");
+            }
+        } else {
+            println!("Failed to fetch Metrolinx trains from transitspotter");
+        }
+    }
+
     if chateau_id == "nationalrailuk" {
         let darwin_url =
             std::env::var("DARWIN_RT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
@@ -2467,6 +2490,18 @@ pub async fn new_rt_data(
                                     consist = Some(crate::consist_cache_and_conversion::map_darwin_v1_formation_to_consist(
                                         trip_id_str,
                                         formation_v1
+                                    ));
+                                }
+                            }
+                        }
+
+                        if chateau_id == "gotransit" || chateau_id == "upexpress" {
+                            if let Some(trip_id_str) = &trip_id {
+                                let metrolinx_id = trip_id_str.split('-').nth(1).unwrap_or(trip_id_str);
+                                if let Some(metrolinx_trip) = metrolinx_trip_id_to_consist.get(metrolinx_id) {
+                                    consist = Some(crate::consist_cache_and_conversion::map_metrolinx_trip_to_consist(
+                                        trip_id_str,
+                                        metrolinx_trip
                                     ));
                                 }
                             }
