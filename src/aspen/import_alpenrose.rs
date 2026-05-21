@@ -303,7 +303,10 @@ pub async fn new_rt_data(
         crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
     > = AHashMap::new();
 
-    let mut metrolinx_trip_id_to_consist: AHashMap<String, crate::consist_cache_and_conversion::MetrolinxTrip> = AHashMap::new();
+    let mut metrolinx_trip_id_to_consist: AHashMap<
+        String,
+        crate::consist_cache_and_conversion::MetrolinxTrip,
+    > = AHashMap::new();
 
     if chateau_id == "gotransit" || chateau_id == "upexpress" {
         let client = reqwest::Client::new();
@@ -312,7 +315,10 @@ pub async fn new_rt_data(
             .send()
             .await;
         if let Ok(res) = metrolinx_res {
-            if let Ok(data) = res.json::<crate::consist_cache_and_conversion::MetrolinxTrainResponse>().await {
+            if let Ok(data) = res
+                .json::<crate::consist_cache_and_conversion::MetrolinxTrainResponse>()
+                .await
+            {
                 for trip in data.trips {
                     if let Some(trip_id) = &trip.trip_id {
                         metrolinx_trip_id_to_consist.insert(trip_id.to_string(), trip);
@@ -2497,12 +2503,18 @@ pub async fn new_rt_data(
 
                         if chateau_id == "gotransit" || chateau_id == "upexpress" {
                             if let Some(trip_id_str) = &trip_id {
-                                let metrolinx_id = trip_id_str.split('-').nth(1).unwrap_or(trip_id_str);
-                                if let Some(metrolinx_trip) = metrolinx_trip_id_to_consist.get(metrolinx_id) {
-                                    consist = Some(crate::consist_cache_and_conversion::map_metrolinx_trip_to_consist(
+                                let metrolinx_id =
+                                    compressed_trip.and_then(|t| t.trip_short_name.as_deref());
+
+                                if let Some(trip_short_name) = &metrolinx_id {
+                                    if let Some(metrolinx_trip) =
+                                        metrolinx_trip_id_to_consist.get(*trip_short_name)
+                                    {
+                                        consist = Some(crate::consist_cache_and_conversion::map_metrolinx_trip_to_consist(
                                         trip_id_str,
                                         metrolinx_trip
                                     ));
+                                    }
                                 }
                             }
                         }

@@ -378,11 +378,11 @@ pub fn map_metrolinx_trip_to_consist(
     use ecow::EcoString;
 
     let mut vehicles = Vec::new();
-    
+
     if let Some(lineup) = &trip_data.lineup {
         let mut sorted_lineup = lineup.clone();
         sorted_lineup.sort_by_key(|c| c.position);
-        
+
         for car in sorted_lineup {
             let mut facilities = Vec::new();
             if car.accessible {
@@ -399,9 +399,9 @@ pub fn map_metrolinx_trip_to_consist(
                     count: None,
                 });
             }
-            
+
             let is_engine = car.role.as_ref().map(|x| x.as_str()) == Some("ENGINE");
-            
+
             vehicles.push(VehicleElement {
                 uic_number: EcoString::from(car.number.as_deref().unwrap_or("Unknown")),
                 label: None,
@@ -410,15 +410,22 @@ pub fn map_metrolinx_trip_to_consist(
                 facilities,
                 occupancy: None,
                 passenger_count: None,
-                passenger_class: if is_engine { None } else { Some(PassengerClass::Unknown) },
+                passenger_class: if is_engine {
+                    None
+                } else {
+                    Some(PassengerClass::Unknown)
+                },
                 is_locomotive: Some(is_engine),
                 is_revenue: Some(!is_engine),
             });
         }
     }
-    
+
     let group = ConsistGroup {
-        group_name: trip_data.trip_id.as_ref().map(|x| EcoString::from(x.as_str())),
+        group_name: trip_data
+            .trip_id
+            .as_ref()
+            .map(|x| EcoString::from(x.as_str())),
         destination: None,
         vehicles,
         group_orientation: Some(Orientation::Unknown),
