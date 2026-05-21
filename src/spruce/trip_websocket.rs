@@ -22,8 +22,21 @@ use std::time::{Duration, Instant};
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
+const MAP_UPDATE_COALESCE_INTERVAL: Duration = Duration::from_millis(50);
+const MAP_UPDATE_BUILD_CONCURRENCY: usize = 4;
 
 type SentMapState = (u64, BoundsInputV3, HashSet<String>);
+
+#[derive(Message)]
+#[rtype(result = "()")]
+enum MapBuildEvent {
+    Built {
+        chateau_id: String,
+        text: String,
+        new_state: SentMapState,
+    },
+    Finished,
+}
 
 use crate::{ClientMessage, MapViewportUpdate, ServerMessage, nearby_departures};
 use futures::StreamExt;
@@ -46,6 +59,7 @@ pub struct TripWebSocket {
     pub sent_state: HashMap<String, SentMapState>,
     pub map_update_generation: u64,
     pub pending_map_updates: HashMap<String, Arc<PrecomputedChateauMap>>,
+    pub map_build_in_progress: bool,
 
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
@@ -74,6 +88,7 @@ impl TripWebSocket {
             sent_state: HashMap::new(),
             map_update_generation: 0,
             pending_map_updates: HashMap::new(),
+            map_build_in_progress: false,
             etcd_reuser,
             aspen_endpoint_cache: HashMap::new(),
             in_progress_trip_fetches: HashMap::new(),
@@ -91,64 +106,57 @@ impl TripWebSocket {
     }
 
     fn start_map_update_coalescer(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(Duration::from_millis(200), |act, ctx| {
-            if act.pending_map_updates.is_empty() {
+        ctx.run_interval(MAP_UPDATE_COALESCE_INTERVAL, |act, ctx| {
+            if act.map_build_in_progress || act.pending_map_updates.is_empty() {
                 return;
             }
-            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> =
-                act.pending_map_updates.drain().collect();
+
             let Some(params) = act.client_viewport.clone() else {
                 return;
             };
-            let sent_state = act.sent_state.clone();
-            let map_update_generation = act.map_update_generation;
 
-            let fut = async move {
-                let mut results = Vec::new();
-                for (chateau_id, response) in updates {
+            act.map_build_in_progress = true;
+
+            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> =
+                act.pending_map_updates.drain().collect();
+            let sent_state = act.sent_state.clone();
+
+            let build_stream = futures::stream::iter(updates)
+                .map(move |(chateau_id, response)| {
                     let state_entry = sent_state.get(&chateau_id).cloned();
                     let params_clone = params.clone();
-                    let res = match tokio::task::spawn_blocking(move || {
-                        Self::build_map_update_message(
-                            chateau_id,
-                            response,
-                            params_clone,
-                            state_entry,
-                        )
-                    })
-                    .await
-                    {
-                        Ok(r) => r,
-                        Err(e) => {
-                            eprintln!("Failed to build map_update websocket message: {:?}", e);
-                            None
-                        }
-                    };
-                    if let Some(r) = res {
-                        results.push(r);
-                    }
-                }
-                results
-            };
 
-            ctx.spawn(actix::fut::wrap_future(fut).map(
-                move |results, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
-                    if act.map_update_generation != map_update_generation {
-                        return;
-                    }
-                    for (chateau_id, text, new_state) in results {
-                        if let Some((current_last_updated_time_ms, _, _)) =
-                            act.sent_state.get(&chateau_id)
+                    async move {
+                        match tokio::task::spawn_blocking(move || {
+                            Self::build_map_update_message(
+                                chateau_id,
+                                response,
+                                params_clone,
+                                state_entry,
+                            )
+                            .map(|(chateau_id, text, new_state)| {
+                                MapBuildEvent::Built {
+                                    chateau_id,
+                                    text,
+                                    new_state,
+                                }
+                            })
+                        })
+                        .await
                         {
-                            if *current_last_updated_time_ms > new_state.0 {
-                                continue;
+                            Ok(event) => event,
+                            Err(e) => {
+                                eprintln!("Failed to build map_update websocket message: {:?}", e);
+                                None
                             }
                         }
-                        ctx.text(text);
-                        act.sent_state.insert(chateau_id, new_state);
                     }
-                },
-            ));
+                })
+                .buffer_unordered(MAP_UPDATE_BUILD_CONCURRENCY)
+                .filter_map(|event| async move { event })
+                .chain(futures::stream::once(async { MapBuildEvent::Finished }));
+
+            ctx.add_message_stream(build_stream);
         });
     }
 
@@ -557,8 +565,8 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         let new_chateaus: HashSet<String> =
                             params.chateaus.iter().cloned().collect();
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);
+                        self.client_viewport = Some(params.clone());
                         self.update_map_subscriptions(ctx, new_chateaus);
-                        self.client_viewport = Some(params);
 
                         // Request updates for all subscribed chateaus (cached ones will come back instantly).
                         // Each chateau is routed to a stable coordinator shard.
@@ -630,6 +638,42 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                 ctx.stop();
             }
             _ => (),
+        }
+    }
+}
+
+impl Handler<MapBuildEvent> for TripWebSocket {
+    type Result = ();
+
+    fn handle(&mut self, event: MapBuildEvent, ctx: &mut Self::Context) {
+        match event {
+            MapBuildEvent::Built {
+                chateau_id,
+                text,
+                new_state,
+            } => {
+                let still_requested = self
+                    .client_viewport
+                    .as_ref()
+                    .map_or(false, |params| params.chateaus.contains(&chateau_id));
+
+                if !still_requested {
+                    return;
+                }
+
+                if let Some((current_last_updated_time_ms, _, _)) = self.sent_state.get(&chateau_id)
+                {
+                    if *current_last_updated_time_ms > new_state.0 {
+                        return;
+                    }
+                }
+
+                ctx.text(text);
+                self.sent_state.insert(chateau_id, new_state);
+            }
+            MapBuildEvent::Finished => {
+                self.map_build_in_progress = false;
+            }
         }
     }
 }
