@@ -381,7 +381,6 @@ pub fn map_metrolinx_trip_to_consist(
 
     if let Some(lineup) = &trip_data.lineup {
         let mut sorted_lineup = lineup.clone();
-        sorted_lineup.sort_by_key(|c| c.position);
 
         for car in sorted_lineup {
             let mut facilities = Vec::new();
