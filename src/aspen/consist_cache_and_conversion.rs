@@ -404,7 +404,7 @@ pub fn map_metrolinx_trip_to_consist(
 
             vehicles.push(VehicleElement {
                 uic_number: EcoString::from(car.number.as_deref().unwrap_or("Unknown")),
-                label: None,
+                label: car.number.map(|x| x.to_string().into()),
                 order: car.position as u8,
                 position_on_platform: None,
                 facilities,
