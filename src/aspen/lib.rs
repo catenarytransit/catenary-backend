@@ -229,7 +229,11 @@ pub struct ProcessAlpenroseData {
 pub async fn spawn_aspen_client_from_ip(
     addr: &SocketAddr,
 ) -> Result<AspenRpcClient, Box<dyn std::error::Error + Sync + Send>> {
-    let transport = tarpc::serde_transport::tcp::connect(addr, Bincode::default).await?;
+    let mut transport_builder = tarpc::serde_transport::tcp::connect(addr, Bincode::default);
+    transport_builder
+        .config_mut()
+        .max_frame_length(1024 * 1024 * 128); // 128 MB limit
+    let transport = transport_builder.await?;
 
     Ok(AspenRpcClient::new(client::Config::default(), transport).spawn())
 }
