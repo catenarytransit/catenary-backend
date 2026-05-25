@@ -1965,6 +1965,8 @@ pub async fn new_rt_data(
                                                 departure_occupancy_status: None,
                                                 schedule_relationship: None,
                                                 stop_time_properties: None,
+                                                actual_track: None,
+                                                scheduled_track: None,
                                             },
                                         );
                                     }
