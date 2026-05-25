@@ -163,7 +163,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         let p_start = projection.forward(Point::from(line.start));
         let p_end = projection.forward(Point::from(line.end));
 
-        let stadium = create_stadium(p_start, p_end, buffer_distance_metres, smoothness);
+        let stadium = create_pointed_buffer(p_start, p_end, buffer_distance_metres);
         buffered_polygons.push(stadium);
     }
 
@@ -298,55 +298,55 @@ impl LocalProjection {
     }
 }
 
-/// Generates a "Stadium" polygon (buffered line segment) with rounded caps
-fn create_stadium(
+/// Generates a buffered line segment with pointed (triangular) caps
+fn create_pointed_buffer(
     start: Point<f64>,
     end: Point<f64>,
     radius: f64,
-    num_points: usize,
 ) -> Polygon<f64> {
     let dx = end.x() - start.x();
     let dy = end.y() - start.y();
     let len = (dx * dx + dy * dy).sqrt();
 
+    // Prevent division by zero for zero-length segments
+    if len == 0.0 {
+        return Polygon::new(LineString::from(vec![
+            (start.x() + radius, start.y()),
+            (start.x(), start.y() + radius),
+            (start.x() - radius, start.y()),
+            (start.x(), start.y() - radius),
+            (start.x() + radius, start.y()),
+        ]), vec![]);
+    }
+
+    // Unit vector representing the direction of the line
+    let ux = dx / len;
+    let uy = dy / len;
+
     // Normal vector (perpendicular to the line)
-    // Avoid division by zero
-    let (_nx, _ny) = if len == 0.0 {
-        (0.0, 0.0)
-    } else {
-        (-dy / len, dx / len)
-    };
+    let nx = -uy;
+    let ny = ux;
 
-    let mut points = Vec::new();
+    let mut points = Vec::with_capacity(7);
 
-    // 1. Generate the right-side semi-circle (around the 'end' point)
-    // Angle of the line
-    let angle = dy.atan2(dx);
-    // Start angle for the cap (line angle - 90 degrees)
-    let start_angle = angle - PI / 2.0;
+    // 1. Right side (around the 'end' point)
+    // Top right corner
+    points.push((end.x() + radius * nx, end.y() + radius * ny));
+    // Triangular point extending past the end
+    points.push((end.x() + radius * ux, end.y() + radius * uy));
+    // Bottom right corner
+    points.push((end.x() - radius * nx, end.y() - radius * ny));
 
-    for i in 0..=num_points {
-        let theta = start_angle + (PI * i as f64 / num_points as f64);
-        let px = end.x() + radius * theta.cos();
-        let py = end.y() + radius * theta.sin();
-        points.push((px, py));
-    }
-
-    // 2. Generate the left-side semi-circle (around the 'start' point)
-    // Start angle for the cap (line angle + 90 degrees)
-    let start_angle_2 = angle + PI / 2.0;
-
-    for i in 0..=num_points {
-        let theta = start_angle_2 + (PI * i as f64 / num_points as f64);
-        let px = start.x() + radius * theta.cos();
-        let py = start.y() + radius * theta.sin();
-        points.push((px, py));
-    }
+    // 2. Left side (around the 'start' point)
+    // Bottom left corner
+    points.push((start.x() - radius * nx, start.y() - radius * ny));
+    // Triangular point extending past the start
+    points.push((start.x() - radius * ux, start.y() - radius * uy));
+    // Top left corner
+    points.push((start.x() + radius * nx, start.y() + radius * ny));
 
     // Close the ring
-    if !points.is_empty() {
-        points.push(points[0]);
-    }
+    points.push(points[0]);
 
     Polygon::new(LineString::from(points), vec![])
 }
