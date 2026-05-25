@@ -2380,7 +2380,10 @@ pub async fn new_rt_data(
                             }
 
                             stop_time_updates_vec.push(AspenisedStopTimeUpdate {
-                                stop_sequence: stu.stop_sequence.map(|x| x as u16),
+                                stop_sequence: match chateau_id {
+                                    "metra" => None,
+                                    _ => stu.stop_sequence.map(|x| x as u16),
+                                },
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
                                 platform_info: platform,
