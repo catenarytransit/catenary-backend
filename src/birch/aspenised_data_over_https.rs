@@ -1145,7 +1145,7 @@ async fn fetch_full_trip_updates_dataset(
 
     match full_aspen_dataset {
         Ok(full_aspen_dataset) => {
-            HttpResponse::Ok().body(ron::to_string(&full_aspen_dataset).unwrap())
+            HttpResponse::Ok().body(ron::to_string_pretty(&full_aspen_dataset).unwrap())
         }
         Err(e) => {
             eprintln!("Error fetching from aspen: {e}");
