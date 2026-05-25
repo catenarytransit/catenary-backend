@@ -480,6 +480,14 @@ pub async fn new_rt_data(
         .await?;
     let chateau_elapsed = start_chateau_query.elapsed();
 
+    let is_europe = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
+        "EXISTS(SELECT 1 FROM gtfs.chateaus WHERE chateau = '{}' AND ST_Intersects(hull, ST_MakeEnvelope(-28.4207529, 34.31734126604816, 40.85603290981834, 71.4754084, 4326)))",
+        chateau_id
+    )))
+    .get_result::<bool>(conn)
+    .await
+    .unwrap_or(false);
+
     //we want all the routes for this chateau
     let start_routes_query = Instant::now();
     let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
@@ -1914,6 +1922,8 @@ pub async fn new_rt_data(
 
                         let mut stop_time_updates_vec = Vec::new();
 
+                        let mut propagated_delay: Option<i32> = None;
+
                         let base_midnight_ts = trip_descriptor.start_date.as_ref().and_then(|nd| {
                             timezone
                                 .as_ref()
@@ -1926,7 +1936,56 @@ pub async fn new_rt_data(
                         let compressed_start_time_seconds =
                             compressed_trip.map(|ct| ct.start_time as i64).unwrap_or(0);
 
-                        for stu in &trip_update.stop_time_update {
+                        let merged_stus;
+                        if is_europe {
+                            if let Some(rows) = itinerary_rows {
+                                let mut temp = Vec::new();
+                                let mut rt_stu_map = std::collections::HashMap::new();
+                                for stu_item in &trip_update.stop_time_update {
+                                    if let Some(seq) = stu_item.stop_sequence {
+                                        rt_stu_map.insert(seq as i32, stu_item.clone());
+                                    } else if let Some(ref sid) = stu_item.stop_id {
+                                        if let Some(r) =
+                                            rows.iter().find(|x| x.stop_id.as_str() == sid)
+                                        {
+                                            rt_stu_map.insert(r.stop_sequence, stu_item.clone());
+                                        }
+                                    }
+                                }
+                                for row in rows {
+                                    if let Some(stu_item) = rt_stu_map.remove(&row.stop_sequence) {
+                                        temp.push(stu_item);
+                                    } else {
+                                        temp.push(
+                                            catenary::compact_formats::CompactStopTimeUpdate {
+                                                stop_sequence: Some(row.stop_sequence as u16),
+                                                stop_id: Some(row.stop_id.to_string()),
+                                                arrival: None,
+                                                departure: None,
+                                                departure_occupancy_status: None,
+                                                schedule_relationship: None,
+                                                stop_time_properties: None,
+                                            },
+                                        );
+                                    }
+                                }
+                                let mut remaining: Vec<_> = rt_stu_map.into_values().collect();
+                                temp.extend(remaining);
+                                temp.sort_by_key(|s| s.stop_sequence.unwrap_or(u16::MAX));
+                                merged_stus = Some(temp);
+                            } else {
+                                merged_stus = None;
+                            }
+                        } else {
+                            merged_stus = None;
+                        }
+
+                        let stus_iter = match &merged_stus {
+                            Some(v) => v,
+                            None => &trip_update.stop_time_update,
+                        };
+
+                        for stu in stus_iter {
                             let mut resolved_stop_id: Option<String> = stu.stop_id.clone();
                             let mut sched_arr_computed: Option<i64> = None;
                             let mut sched_dep_computed: Option<i64> = None;
@@ -1960,6 +2019,49 @@ pub async fn new_rt_data(
                                             }
                                         }
                                     }
+                                }
+                            }
+
+                            let mut arr_clone = stu.arrival.clone();
+                            let mut dep_clone = stu.departure.clone();
+
+                            if is_europe {
+                                if let Some(arr) = arr_clone.as_mut() {
+                                    if let Some(d) = arr.delay {
+                                        propagated_delay = Some(d);
+                                    } else if arr.time.is_none() {
+                                        if let Some(pd) = propagated_delay {
+                                            arr.delay = Some(pd);
+                                        }
+                                    }
+                                } else if let Some(pd) = propagated_delay {
+                                    arr_clone = Some(Box::new(
+                                        catenary::compact_formats::CompactStopTimeEvent {
+                                            delay: Some(pd),
+                                            time: None,
+                                            uncertainty: None,
+                                            scheduled_time: None,
+                                        },
+                                    ));
+                                }
+
+                                if let Some(dep) = dep_clone.as_mut() {
+                                    if let Some(d) = dep.delay {
+                                        propagated_delay = Some(d);
+                                    } else if dep.time.is_none() {
+                                        if let Some(pd) = propagated_delay {
+                                            dep.delay = Some(pd);
+                                        }
+                                    }
+                                } else if let Some(pd) = propagated_delay {
+                                    dep_clone = Some(Box::new(
+                                        catenary::compact_formats::CompactStopTimeEvent {
+                                            delay: Some(pd),
+                                            time: None,
+                                            uncertainty: None,
+                                            scheduled_time: None,
+                                        },
+                                    ));
                                 }
                             }
 
@@ -2280,7 +2382,7 @@ pub async fn new_rt_data(
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
                                 platform_info: platform,
-                                arrival: stu.arrival.clone().map(|arrival| AspenStopTimeEvent {
+                                arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
                                     delay: None,
                                     time: match arrival.time {
                                         Some(diff) => {
@@ -2310,37 +2412,35 @@ pub async fn new_rt_data(
                                     },
                                     uncertainty: arrival.uncertainty,
                                 }),
-                                departure: stu.departure.clone().map(|departure| {
-                                    AspenStopTimeEvent {
-                                        delay: None,
-                                        time: match departure.time {
-                                            Some(diff) => {
-                                                let time =
-                                                    (ref_epoch as i64) + (i32::from(diff) as i64);
-                                                if time <= 0 { None } else { Some(time) }
-                                            }
-                                            None => {
-                                                if let Some(delay) = departure.delay {
-                                                    if let Some(sched) = departure.scheduled_time {
-                                                        let time = (ref_epoch as i64)
-                                                            + (i32::from(sched) as i64)
-                                                            + (delay as i64);
-                                                        if time > 0 { Some(time) } else { None }
-                                                    } else if let Some(sched_dep_time) =
-                                                        sched_dep_computed
-                                                    {
-                                                        let time = sched_dep_time + (delay as i64);
-                                                        if time > 0 { Some(time) } else { None }
-                                                    } else {
-                                                        None
-                                                    }
+                                departure: dep_clone.map(|departure| AspenStopTimeEvent {
+                                    delay: None,
+                                    time: match departure.time {
+                                        Some(diff) => {
+                                            let time =
+                                                (ref_epoch as i64) + (i32::from(diff) as i64);
+                                            if time <= 0 { None } else { Some(time) }
+                                        }
+                                        None => {
+                                            if let Some(delay) = departure.delay {
+                                                if let Some(sched) = departure.scheduled_time {
+                                                    let time = (ref_epoch as i64)
+                                                        + (i32::from(sched) as i64)
+                                                        + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
+                                                } else if let Some(sched_dep_time) =
+                                                    sched_dep_computed
+                                                {
+                                                    let time = sched_dep_time + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
                                                 } else {
                                                     None
                                                 }
+                                            } else {
+                                                None
                                             }
-                                        },
-                                        uncertainty: departure.uncertainty,
-                                    }
+                                        }
+                                    },
+                                    uncertainty: departure.uncertainty,
                                 }),
                                 platform_string: platform_resp,
                                 schedule_relationship:
