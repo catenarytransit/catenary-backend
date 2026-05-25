@@ -129,6 +129,51 @@ pub async fn single_fetch_time(
         SccHashMap<std::net::SocketAddr, catenary::aspen::lib::AspenRpcClient>,
     > = Arc::new(scc::HashMap::new());
 
+    let client_long_timeout = reqwest::ClientBuilder::new()
+        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(60))
+        .deflate(true)
+        .gzip(true)
+        .brotli(true)
+        .cookie_store(true)
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+
+    let mut proxy_clients = Vec::new();
+    let mut proxy_clients_long_timeout = Vec::new();
+    for proxy_url in HTTP_PROXY_ADDRESSES.iter() {
+        proxy_clients.push(
+            reqwest::ClientBuilder::new()
+                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
+                .timeout(Duration::from_secs(10))
+                .connect_timeout(Duration::from_secs(10))
+                .deflate(true)
+                .gzip(true)
+                .brotli(true)
+                .cookie_store(true)
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap(),
+        );
+
+        proxy_clients_long_timeout.push(
+            reqwest::ClientBuilder::new()
+                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
+                .timeout(Duration::from_secs(60))
+                .connect_timeout(Duration::from_secs(60))
+                .deflate(true)
+                .gzip(true)
+                .brotli(true)
+                .cookie_store(true)
+                .danger_accept_invalid_certs(true)
+                .build()
+                .unwrap(),
+        );
+    }
+    let proxy_clients = Arc::new(proxy_clients);
+    let proxy_clients_long_timeout = Arc::new(proxy_clients_long_timeout);
+
     futures::stream::iter(
         assignments_lock
             .iter()
@@ -140,6 +185,9 @@ pub async fn single_fetch_time(
             })
             .map(|(feed_id, assignment)| {
                 let client = client.clone();
+                let client_long_timeout = client_long_timeout.clone();
+                let proxy_clients = Arc::clone(&proxy_clients);
+                let proxy_clients_long_timeout = Arc::clone(&proxy_clients_long_timeout);
                 let hashes_of_data = Arc::clone(&hashes_of_data);
                 let last_fetch_per_feed = last_fetch_per_feed.clone();
                 let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
@@ -215,24 +263,28 @@ pub async fn single_fetch_time(
                         None => false,
                     };
 
+                    let (timeout_duration, connect_timeout_duration) = match feed_id.as_str() {
+                        "f-delfi~de~motis~rt" | "f-delfi~de~rt" | "f-u0-switzerland~rt" | "f-u0-switzerland~alerts~rt" => {
+                            (Duration::from_secs(60), Duration::from_secs(60))
+                        }
+                        _ => (Duration::from_secs(10), Duration::from_secs(10))
+                    };
+
                     let client_for_v_req = match use_proxy {
                         true => {
-                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
-
-                            reqwest::ClientBuilder::new()
-                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
-                                //timeout queries
-                                .timeout(Duration::from_secs(10))
-                                .connect_timeout(Duration::from_secs(10))
-                                .deflate(true)
-                                .gzip(true)
-                                .brotli(true)
-                                .cookie_store(true)
-                                .danger_accept_invalid_certs(true)
-                                .build()
-                                .unwrap()
+                            if timeout_duration > Duration::from_secs(10) {
+                                proxy_clients_long_timeout.choose(&mut rand::rng()).unwrap().clone()
+                            } else {
+                                proxy_clients.choose(&mut rand::rng()).unwrap().clone()
+                            }
                         }
-                        false => client.clone(),
+                        false => {
+                            if timeout_duration > Duration::from_secs(10) {
+                                client_long_timeout.clone()
+                            } else {
+                                client.clone()
+                            }
+                        }
                     };
 
                     let vehicle_positions_request = make_reqwest_for_url(
@@ -243,22 +295,19 @@ pub async fn single_fetch_time(
 
                     let client_for_t_req = match use_proxy {
                         true => {
-                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
-
-                            reqwest::ClientBuilder::new()
-                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
-                                //timeout queries
-                                .timeout(Duration::from_secs(10))
-                                .connect_timeout(Duration::from_secs(10))
-                                .deflate(true)
-                                .gzip(true)
-                                .brotli(true)
-                                .cookie_store(true)
-                                .danger_accept_invalid_certs(true)
-                                .build()
-                                .unwrap()
+                            if timeout_duration > Duration::from_secs(10) {
+                                proxy_clients_long_timeout.choose(&mut rand::rng()).unwrap().clone()
+                            } else {
+                                proxy_clients.choose(&mut rand::rng()).unwrap().clone()
+                            }
                         }
-                        false => client.clone(),
+                        false => {
+                            if timeout_duration > Duration::from_secs(10) {
+                                client_long_timeout.clone()
+                            } else {
+                                client.clone()
+                            }
+                        }
                     };
 
                     let trip_updates_request = make_reqwest_for_url(
@@ -269,22 +318,19 @@ pub async fn single_fetch_time(
 
                     let client_for_a_req = match use_proxy {
                         true => {
-                            let proxy_url = HTTP_PROXY_ADDRESSES.choose(&mut rand::rng()).unwrap();
-
-                            reqwest::ClientBuilder::new()
-                                .proxy(reqwest::Proxy::http(*proxy_url).unwrap())
-                                //timeout queries
-                                .timeout(Duration::from_secs(10))
-                                .connect_timeout(Duration::from_secs(10))
-                                .deflate(true)
-                                .gzip(true)
-                                .brotli(true)
-                                .cookie_store(true)
-                                .danger_accept_invalid_certs(true)
-                                .build()
-                                .unwrap()
+                            if timeout_duration > Duration::from_secs(10) {
+                                proxy_clients_long_timeout.choose(&mut rand::rng()).unwrap().clone()
+                            } else {
+                                proxy_clients.choose(&mut rand::rng()).unwrap().clone()
+                            }
                         }
-                        false => client.clone(),
+                        false => {
+                            if timeout_duration > Duration::from_secs(10) {
+                                client_long_timeout.clone()
+                            } else {
+                                client.clone()
+                            }
+                        }
                     };
 
                     let alerts_request = make_reqwest_for_url(
