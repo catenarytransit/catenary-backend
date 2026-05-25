@@ -106,14 +106,12 @@ pub async fn fetch_tlms_data(
                                         trip.trip_id = Some("Unknown".to_string());
                                     });
 
-                                    vehicle.vehicle = Some(
-                                        gtfs_realtime::VehicleDescriptor {
-                                            id: Some(entity.id.clone()),
-                                            label: Some(entity.id.clone()),
-                                            license_plate: None,
-                                            wheelchair_accessible: None,
-                                        }
-                                    );
+                                    vehicle.vehicle = Some(gtfs_realtime::VehicleDescriptor {
+                                        id: Some(entity.id.clone()),
+                                        label: Some(entity.id.clone()),
+                                        license_plate: None,
+                                        wheelchair_accessible: None,
+                                    });
                                 });
                             }
 

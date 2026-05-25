@@ -60,6 +60,7 @@ mod delay_calculation;
 mod import_alpenrose;
 mod route_type_overrides;
 mod stop_time_logic;
+pub mod trip_id_assigner_with_known_route_and_known_trip_updates;
 use ahash::AHashMap;
 use catenary::agency_specific_types::mta_subway;
 use catenary::aspen_dataset::GtfsRtType;

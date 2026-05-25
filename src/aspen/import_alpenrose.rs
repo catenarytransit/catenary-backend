@@ -15,6 +15,7 @@ use crate::metrolink_california_additions::vehicle_pos_supplement;
 use crate::persistence;
 use crate::route_type_overrides::apply_route_type_overrides;
 use crate::stop_time_logic::find_closest_stop_time_update;
+use crate::trip_id_assigner_with_known_route_and_known_trip_updates;
 use ahash::{AHashMap, AHashSet};
 use catenary::aspen_dataset::option_i32_to_occupancy_status;
 use catenary::aspen_dataset::option_i32_to_schedule_relationship;
@@ -420,6 +421,18 @@ pub async fn new_rt_data(
     }
 
     let conn = &mut conn.unwrap();
+
+    if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
+        if let Err(e) =
+            trip_id_assigner_with_known_route_and_known_trip_updates::assign_trips_for_deutschland(
+                &authoritative_gtfs_rt,
+                conn,
+            )
+            .await
+        {
+            eprintln!("Error in assign_trips_for_deutschland: {:?}", e);
+        }
+    }
 
     //don't stress about this! We are just making a lot of hashmaps that will become the future authoriative version of the realtime data
     //you'll also see a lot of indexes here (indicies)

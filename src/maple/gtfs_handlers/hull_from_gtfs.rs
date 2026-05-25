@@ -299,24 +299,23 @@ impl LocalProjection {
 }
 
 /// Generates a buffered line segment with pointed (triangular) caps
-fn create_pointed_buffer(
-    start: Point<f64>,
-    end: Point<f64>,
-    radius: f64,
-) -> Polygon<f64> {
+fn create_pointed_buffer(start: Point<f64>, end: Point<f64>, radius: f64) -> Polygon<f64> {
     let dx = end.x() - start.x();
     let dy = end.y() - start.y();
     let len = (dx * dx + dy * dy).sqrt();
 
     // Prevent division by zero for zero-length segments
     if len == 0.0 {
-        return Polygon::new(LineString::from(vec![
-            (start.x() + radius, start.y()),
-            (start.x(), start.y() + radius),
-            (start.x() - radius, start.y()),
-            (start.x(), start.y() - radius),
-            (start.x() + radius, start.y()),
-        ]), vec![]);
+        return Polygon::new(
+            LineString::from(vec![
+                (start.x() + radius, start.y()),
+                (start.x(), start.y() + radius),
+                (start.x() - radius, start.y()),
+                (start.x(), start.y() - radius),
+                (start.x() + radius, start.y()),
+            ]),
+            vec![],
+        );
     }
 
     // Unit vector representing the direction of the line
