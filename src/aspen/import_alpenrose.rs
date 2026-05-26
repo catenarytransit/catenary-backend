@@ -432,7 +432,10 @@ pub async fn new_rt_data(
         {
             Ok(trips) => {
                 assigned_dresden_trips = trips;
-                println!("Finished assigning trips for f-tlms~rt! Assigned {} trips.", assigned_dresden_trips.len());
+                println!(
+                    "Finished assigning trips for f-tlms~rt! Assigned {} trips.",
+                    assigned_dresden_trips.len()
+                );
             }
             Err(e) => {
                 eprintln!("Error in assign_trips_for_dresden: {:?}", e);
@@ -577,11 +580,16 @@ pub async fn new_rt_data(
 
             for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                    let assigned_trip_id = if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
-                        vehicle_pos.vehicle.as_ref().and_then(|v| v.id.as_ref()).and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
-                    } else {
-                        None
-                    };
+                    let assigned_trip_id =
+                        if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
+                            vehicle_pos
+                                .vehicle
+                                .as_ref()
+                                .and_then(|v| v.id.as_ref())
+                                .and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
+                        } else {
+                            None
+                        };
 
                     if let Some(trip_id) = assigned_trip_id {
                         trip_ids_to_lookup.insert(trip_id);
@@ -1366,13 +1374,22 @@ pub async fn new_rt_data(
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                        let assigned_trip_id = if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
-                            vehicle_pos.vehicle.as_ref().and_then(|v| v.id.as_ref()).and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
+                        let assigned_trip_id = if chateau_id == "deutschland"
+                            && realtime_feed_id == "f-tlms~rt"
+                        {
+                            vehicle_pos
+                                .vehicle
+                                .as_ref()
+                                .and_then(|v| v.id.as_ref())
+                                .and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
                         } else {
                             None
                         };
 
-                        let recalculate_route_id: Option<String> = match assigned_trip_id.as_ref().or(vehicle_pos.trip.as_ref().and_then(|t| t.trip_id.as_ref())) {
+                        let recalculate_route_id: Option<String> = match assigned_trip_id
+                            .as_ref()
+                            .or(vehicle_pos.trip.as_ref().and_then(|t| t.trip_id.as_ref()))
+                        {
                             Some(trip_id) => {
                                 let compressed_trip = trip_id_to_trip.get(trip_id);
                                 match compressed_trip {
@@ -1381,10 +1398,15 @@ pub async fn new_rt_data(
                                             route_id_to_route.get(&compressed_trip.route_id);
                                         match route {
                                             Some(route) => Some(route.route_id.clone()),
-                                            None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
+                                            None => vehicle_pos
+                                                .trip
+                                                .as_ref()
+                                                .and_then(|t| t.route_id.clone()),
                                         }
                                     }
-                                    None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
+                                    None => {
+                                        vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone())
+                                    }
                                 }
                             }
                             None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
@@ -1540,13 +1562,14 @@ pub async fn new_rt_data(
                                 // Prefer the canonical trip_id from the scheduled data when
                                 // available (e.g., for Foothill Transit where the realtime
                                 // IDs may differ from the database IDs).
-                                let corrected_trip_id = match assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
-                                    Some(trip_id) => match trip_id_to_trip.get(trip_id) {
-                                        Some(static_trip) => Some(static_trip.trip_id.clone()),
-                                        None => Some(trip_id.clone()),
-                                    },
-                                    None => None,
-                                };
+                                let corrected_trip_id =
+                                    match assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
+                                        Some(trip_id) => match trip_id_to_trip.get(trip_id) {
+                                            Some(static_trip) => Some(static_trip.trip_id.clone()),
+                                            None => Some(trip_id.clone()),
+                                        },
+                                        None => None,
+                                    };
 
                                 AspenisedVehicleTripInfo {
                                     trip_id: corrected_trip_id,
@@ -1561,7 +1584,10 @@ pub async fn new_rt_data(
                                     // Use the original realtime trip_id for lookup into the
                                     // scheduled data; the metadata itself (including
                                     // trip_short_name) comes from Postgres.
-                                    trip_short_name: match assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
+                                    trip_short_name: match assigned_trip_id
+                                        .as_ref()
+                                        .or(trip.trip_id.as_ref())
+                                    {
                                         Some(trip_id) => {
                                             let trip = trip_id_to_trip.get(&trip_id.clone());
                                             match trip {
@@ -1660,7 +1686,9 @@ pub async fn new_rt_data(
                                 route_ids_to_insert.insert(route_id.clone());
                             }
 
-                            if let Some(trip_id) = assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
+                            if let Some(trip_id) =
+                                assigned_trip_id.as_ref().or(trip.trip_id.as_ref())
+                            {
                                 let trip = trip_id_to_trip.get(trip_id);
                                 if let Some(trip) = &trip {
                                     route_ids_to_insert.insert(trip.route_id.clone());
@@ -2417,32 +2445,35 @@ pub async fn new_rt_data(
                                 old_rt_data: false,
                                 platform_info: platform,
                                 arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
-                                delay: arrival.delay,
-                                time: match arrival.time {
-                                    Some(diff) => {
-                                        let time = (ref_epoch as i64) + (i32::from(diff) as i64);
-                                        if time <= 0 { None } else { Some(time) }
-                                    }
-                                    None => {
-                                        if let Some(delay) = arrival.delay {
-                                            if let Some(sched) = arrival.scheduled_time {
-                                                let time = (ref_epoch as i64)
-                                                    + (i32::from(sched) as i64)
-                                                    + (delay as i64);
-                                                if time > 0 { Some(time) } else { None }
-                                            } else if let Some(sched_arr_time) = sched_arr_computed {
-                                                let time = sched_arr_time + (delay as i64);
-                                                if time > 0 { Some(time) } else { None }
+                                    delay: arrival.delay,
+                                    time: match arrival.time {
+                                        Some(diff) => {
+                                            let time =
+                                                (ref_epoch as i64) + (i32::from(diff) as i64);
+                                            if time <= 0 { None } else { Some(time) }
+                                        }
+                                        None => {
+                                            if let Some(delay) = arrival.delay {
+                                                if let Some(sched) = arrival.scheduled_time {
+                                                    let time = (ref_epoch as i64)
+                                                        + (i32::from(sched) as i64)
+                                                        + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
+                                                } else if let Some(sched_arr_time) =
+                                                    sched_arr_computed
+                                                {
+                                                    let time = sched_arr_time + (delay as i64);
+                                                    if time > 0 { Some(time) } else { None }
+                                                } else {
+                                                    None
+                                                }
                                             } else {
                                                 None
                                             }
-                                        } else {
-                                            None
                                         }
-                                    }
-                                },
-                                uncertainty: arrival.uncertainty,
-                            }),
+                                    },
+                                    uncertainty: arrival.uncertainty,
+                                }),
                                 departure: dep_clone.map(|departure| AspenStopTimeEvent {
                                     delay: departure.delay,
                                     time: match departure.time {

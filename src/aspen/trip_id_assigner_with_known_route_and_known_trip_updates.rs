@@ -3,7 +3,11 @@ use chrono_tz::Europe::Berlin;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use scc::HashMap as SccHashMap;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Write};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -12,14 +16,14 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::models::{CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow, Stop};
 use catenary::postgres_tools::CatenaryPostgresPool;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VehicleHistoryEntry {
     pub latitude: f32,
     pub longitude: f32,
     pub timestamp: u64,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct VehicleState {
     pub positions: Vec<VehicleHistoryEntry>,
     pub last_matched_pattern: Option<String>,
@@ -29,6 +33,49 @@ pub struct VehicleState {
 
 lazy_static::lazy_static! {
     static ref VEHICLE_POSITION_HISTORY: Mutex<HashMap<String, VehicleState>> = Mutex::new(HashMap::new());
+}
+
+fn save_vehicle_history(
+    history: &HashMap<String, VehicleState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dir = "data/aspen_data";
+    std::fs::create_dir_all(dir)?;
+
+    let file_path = format!("{}/dresden_vehicle_history.bin.zlib", dir);
+    let temp_file_path = format!("{}/dresden_vehicle_history.bin.zlib.tmp", dir);
+
+    let file = File::create(&temp_file_path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
+
+    let bytes = catenary::bincode_serialize(history)?;
+    encoder.write_all(&bytes)?;
+
+    encoder.finish()?;
+
+    std::fs::rename(temp_file_path, file_path)?;
+
+    Ok(())
+}
+
+fn load_vehicle_history()
+-> Result<Option<HashMap<String, VehicleState>>, Box<dyn std::error::Error + Send + Sync>> {
+    let file_path = "data/aspen_data/dresden_vehicle_history.bin.zlib";
+    let path = Path::new(&file_path);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut decoder = flate2::read::ZlibDecoder::new(reader);
+    let mut buffer = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+
+    let history: HashMap<String, VehicleState> = catenary::bincode_deserialize(&buffer)?;
+
+    Ok(Some(history))
 }
 
 fn gc_history(history: &mut HashMap<String, VehicleState>, current_time_ms: u64) {
@@ -119,7 +166,10 @@ pub async fn assign_trips_for_dresden(
     let feed_msg = match authoritative_gtfs_rt.get_async(&tlms_feed_key).await {
         Some(msg) => {
             let msg_val = msg.get().clone();
-            debug!("Found 'f-tlms~rt' vehicle positions feed with {} entities", msg_val.entity.len());
+            debug!(
+                "Found 'f-tlms~rt' vehicle positions feed with {} entities",
+                msg_val.entity.len()
+            );
             msg_val
         }
         None => {
@@ -157,7 +207,10 @@ pub async fn assign_trips_for_dresden(
         .load::<ItineraryPatternMeta>(conn)
         .await?;
 
-    debug!("Loaded {} itinerary pattern metas for active routes", metas.len());
+    debug!(
+        "Loaded {} itinerary pattern metas for active routes",
+        metas.len()
+    );
     if metas.is_empty() {
         debug!("No itinerary pattern metas found for active routes in 'deutschland' chateau");
         return Ok(HashMap::new());
@@ -225,7 +278,12 @@ pub async fn assign_trips_for_dresden(
         .load::<catenary::models::CalendarDate>(conn)
         .await?;
 
-    debug!("Loaded {} calendars and {} calendar date exceptions for today ({})", calendars.len(), calendar_dates.len(), today);
+    debug!(
+        "Loaded {} calendars and {} calendar date exceptions for today ({})",
+        calendars.len(),
+        calendar_dates.len(),
+        today
+    );
 
     let mut active_services = HashSet::new();
     for cal in calendars {
@@ -258,7 +316,10 @@ pub async fn assign_trips_for_dresden(
         }
     }
 
-    debug!("Active service IDs for today: {} services", active_services.len());
+    debug!(
+        "Active service IDs for today: {} services",
+        active_services.len()
+    );
     if active_services.is_empty() {
         debug!("No active service IDs for today");
         return Ok(HashMap::new());
@@ -275,16 +336,19 @@ pub async fn assign_trips_for_dresden(
         .load::<CompressedTrip>(conn)
         .await?;
 
-    debug!("Loaded {} compressed trips for active routes and active services", trips.len());
+    debug!(
+        "Loaded {} compressed trips for active routes and active services",
+        trips.len()
+    );
 
     let mut delfi_updates = HashMap::new();
     let delfi_feed_key = ("f-delfi~de~motis~rt".to_string(), GtfsRtType::TripUpdates);
-    if let Some(delfi_msg) = authoritative_gtfs_rt
-        .get_async(&delfi_feed_key)
-        .await
-    {
+    if let Some(delfi_msg) = authoritative_gtfs_rt.get_async(&delfi_feed_key).await {
         let delfi_msg = delfi_msg.get();
-        debug!("Found 'f-delfi~de~motis~rt' trip updates feed with {} entities", delfi_msg.entity.len());
+        debug!(
+            "Found 'f-delfi~de~motis~rt' trip updates feed with {} entities",
+            delfi_msg.entity.len()
+        );
         for entity in &delfi_msg.entity {
             if let Some(tu) = &entity.trip_update {
                 if let Some(trip_id) = &tu.trip.trip_id {
@@ -303,7 +367,10 @@ pub async fn assign_trips_for_dresden(
                 }
             }
         }
-        debug!("Processed {} delfi trip updates with delay information", delfi_updates.len());
+        debug!(
+            "Processed {} delfi trip updates with delay information",
+            delfi_updates.len()
+        );
     } else {
         debug!("'f-delfi~de~motis~rt' trip updates feed not found in authoritative_gtfs_rt");
     }
@@ -312,6 +379,31 @@ pub async fn assign_trips_for_dresden(
 
     {
         let mut history_lock = VEHICLE_POSITION_HISTORY.lock().unwrap();
+
+        static LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !std::sync::atomic::AtomicBool::load(&LOADED, std::sync::atomic::Ordering::Relaxed) {
+            match load_vehicle_history() {
+                Ok(Some(history)) => {
+                    *history_lock = history;
+                    debug!(
+                        "Loaded {} vehicle history entries from disk",
+                        history_lock.len()
+                    );
+                }
+                Ok(None) => {
+                    debug!("No vehicle history file found on disk, starting fresh");
+                }
+                Err(e) => {
+                    log::error!("Error loading vehicle history from disk: {:?}", e);
+                }
+            }
+            std::sync::atomic::AtomicBool::store(
+                &LOADED,
+                true,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
+
         gc_history(&mut history_lock, current_time_ms);
 
         for entity in &feed_msg.entity {
@@ -334,12 +426,18 @@ pub async fn assign_trips_for_dresden(
                     Some(trip) => match &trip.route_id {
                         Some(r_id) => r_id.clone(),
                         None => {
-                            debug!("Skipping vehicle {} because route_id is missing", vehicle_id);
+                            debug!(
+                                "Skipping vehicle {} because route_id is missing",
+                                vehicle_id
+                            );
                             continue;
                         }
                     },
                     None => {
-                        debug!("Skipping vehicle {} because trip descriptor is missing", vehicle_id);
+                        debug!(
+                            "Skipping vehicle {} because trip descriptor is missing",
+                            vehicle_id
+                        );
                         continue;
                     }
                 };
@@ -347,7 +445,10 @@ pub async fn assign_trips_for_dresden(
                 let pos = match &vehicle.position {
                     Some(p) => p,
                     None => {
-                        debug!("Skipping vehicle {} because position is missing", vehicle_id);
+                        debug!(
+                            "Skipping vehicle {} because position is missing",
+                            vehicle_id
+                        );
                         continue;
                     }
                 };
@@ -355,7 +456,10 @@ pub async fn assign_trips_for_dresden(
                 let current_lat = pos.latitude;
                 let current_lon = pos.longitude;
 
-                debug!("Processing vehicle_id: {}, route_id: {}, pos: ({}, {})", vehicle_id, route_id, current_lat, current_lon);
+                debug!(
+                    "Processing vehicle_id: {}, route_id: {}, pos: ({}, {})",
+                    vehicle_id, route_id, current_lat, current_lon
+                );
 
                 let state =
                     history_lock
@@ -378,7 +482,11 @@ pub async fn assign_trips_for_dresden(
                     timestamp: current_time_ms,
                 });
 
-                debug!("Vehicle {} history size: {}", vehicle_id, state.positions.len());
+                debug!(
+                    "Vehicle {} history size: {}",
+                    vehicle_id,
+                    state.positions.len()
+                );
 
                 if state.positions.len() >= 3 {
                     let p1 = &state.positions[state.positions.len() - 3];
@@ -393,7 +501,10 @@ pub async fn assign_trips_for_dresden(
                     if len1 > 1e-5 && len2 > 1e-5 {
                         let dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
                         if dot < -0.5 {
-                            debug!("Vehicle {} direction reversal detected (dot: {}). Clearing history.", vehicle_id, dot);
+                            debug!(
+                                "Vehicle {} direction reversal detected (dot: {}). Clearing history.",
+                                vehicle_id, dot
+                            );
                             state.positions.clear();
                             state.positions.push(VehicleHistoryEntry {
                                 latitude: current_lat,
@@ -409,7 +520,12 @@ pub async fn assign_trips_for_dresden(
                     .filter(|m| m.route_id.as_str() == route_id.as_str())
                     .collect();
 
-                debug!("Vehicle {} has {} candidate itinerary pattern metas for route_id {}", vehicle_id, candidate_metas.len(), route_id);
+                debug!(
+                    "Vehicle {} has {} candidate itinerary pattern metas for route_id {}",
+                    vehicle_id,
+                    candidate_metas.len(),
+                    route_id
+                );
                 if candidate_metas.is_empty() {
                     continue;
                 }
@@ -422,13 +538,19 @@ pub async fn assign_trips_for_dresden(
                     let pattern_stops = match patterns.get(&meta.itinerary_pattern_id) {
                         Some(ps) => ps,
                         None => {
-                            debug!("No pattern stops found for itinerary_pattern_id {}", meta.itinerary_pattern_id);
+                            debug!(
+                                "No pattern stops found for itinerary_pattern_id {}",
+                                meta.itinerary_pattern_id
+                            );
                             continue;
                         }
                     };
 
                     if pattern_stops.is_empty() {
-                        debug!("Pattern stops are empty for itinerary_pattern_id {}", meta.itinerary_pattern_id);
+                        debug!(
+                            "Pattern stops are empty for itinerary_pattern_id {}",
+                            meta.itinerary_pattern_id
+                        );
                         continue;
                     }
 
@@ -463,7 +585,15 @@ pub async fn assign_trips_for_dresden(
                                     let was_near_end = last_idx > (num_stops * 8) / 10;
                                     let is_near_start = current_closest_idx < (num_stops * 2) / 10;
                                     if was_near_end && is_near_start {
-                                        debug!("Vehicle {} was near end ({}/{}) of pattern {} and is now near start ({}/{}) - resetting state.", vehicle_id, last_idx, num_stops, last_pattern, current_closest_idx, num_stops);
+                                        debug!(
+                                            "Vehicle {} was near end ({}/{}) of pattern {} and is now near start ({}/{}) - resetting state.",
+                                            vehicle_id,
+                                            last_idx,
+                                            num_stops,
+                                            last_pattern,
+                                            current_closest_idx,
+                                            num_stops
+                                        );
                                         state.positions.clear();
                                         state.positions.push(VehicleHistoryEntry {
                                             latitude: current_lat,
@@ -499,7 +629,15 @@ pub async fn assign_trips_for_dresden(
                     }
 
                     let score = dist_score * progress_score;
-                    debug!("  Pattern {} stops: {}, avg_dist: {:.6}, dist_score: {:.4}, progress_score: {:.2}, total score: {:.4}", meta.itinerary_pattern_id, num_stops, avg_dist, dist_score, progress_score, score);
+                    debug!(
+                        "  Pattern {} stops: {}, avg_dist: {:.6}, dist_score: {:.4}, progress_score: {:.2}, total score: {:.4}",
+                        meta.itinerary_pattern_id,
+                        num_stops,
+                        avg_dist,
+                        dist_score,
+                        progress_score,
+                        score
+                    );
 
                     if score > best_pattern_score {
                         best_pattern_score = score;
@@ -508,7 +646,10 @@ pub async fn assign_trips_for_dresden(
                     }
                 }
 
-                debug!("Vehicle {} best pattern: {:?} with score: {:.4}", vehicle_id, best_pattern_id, best_pattern_score);
+                debug!(
+                    "Vehicle {} best pattern: {:?} with score: {:.4}",
+                    vehicle_id, best_pattern_id, best_pattern_score
+                );
 
                 if let Some(pat_id) = best_pattern_id {
                     state.last_matched_pattern = Some(pat_id.clone());
@@ -524,7 +665,12 @@ pub async fn assign_trips_for_dresden(
                         .filter(|t| t.itinerary_pattern_id == pat_id)
                         .collect();
 
-                    debug!("Vehicle {} found {} candidate trips for pattern {}", vehicle_id, candidate_trips.len(), pat_id);
+                    debug!(
+                        "Vehicle {} found {} candidate trips for pattern {}",
+                        vehicle_id,
+                        candidate_trips.len(),
+                        pat_id
+                    );
 
                     let mut best_trip_id = None;
                     let mut min_trip_dist = f32::MAX;
@@ -539,18 +685,34 @@ pub async fn assign_trips_for_dresden(
                             let dist = ((current_lat - expected_lat).powi(2)
                                 + (current_lon - expected_lon).powi(2))
                             .sqrt();
-                            debug!("  Trip {} delay: {}s, adjusted_time: {}, expected_pos: ({:.6}, {:.6}), current_pos: ({:.6}, {:.6}), dist: {:.6}", trip.trip_id, delay_sec, adjusted_time, expected_lat, expected_lon, current_lat, current_lon, dist);
+                            debug!(
+                                "  Trip {} delay: {}s, adjusted_time: {}, expected_pos: ({:.6}, {:.6}), current_pos: ({:.6}, {:.6}), dist: {:.6}",
+                                trip.trip_id,
+                                delay_sec,
+                                adjusted_time,
+                                expected_lat,
+                                expected_lon,
+                                current_lat,
+                                current_lon,
+                                dist
+                            );
 
                             if dist < min_trip_dist {
                                 min_trip_dist = dist;
                                 best_trip_id = Some(trip.trip_id.clone());
                             }
                         } else {
-                            debug!("  Trip {} could not determine expected position (adjusted_time: {})", trip.trip_id, adjusted_time);
+                            debug!(
+                                "  Trip {} could not determine expected position (adjusted_time: {})",
+                                trip.trip_id, adjusted_time
+                            );
                         }
                     }
 
-                    debug!("Vehicle {} best trip: {:?} with distance {:.6}", vehicle_id, best_trip_id, min_trip_dist);
+                    debug!(
+                        "Vehicle {} best trip: {:?} with distance {:.6}",
+                        vehicle_id, best_trip_id, min_trip_dist
+                    );
 
                     if let Some(trip_id) = best_trip_id {
                         debug!("Assigning trip_id {} to vehicle {}", trip_id, vehicle_id);
@@ -559,9 +721,87 @@ pub async fn assign_trips_for_dresden(
                 }
             }
         }
+
+        if let Err(e) = save_vehicle_history(&history_lock) {
+            log::error!("Error saving vehicle history to disk: {:?}", e);
+        }
     }
 
-    debug!("assign_trips_for_dresden finished. Assigned {} trips.", assignments.len());
+    debug!(
+        "assign_trips_for_dresden finished. Assigned {} trips.",
+        assignments.len()
+    );
 
     Ok(assignments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vehicle_history_serialization() {
+        let mut history = HashMap::new();
+        let state = VehicleState {
+            positions: vec![
+                VehicleHistoryEntry {
+                    latitude: 51.0504,
+                    longitude: 13.7373,
+                    timestamp: 1625000000,
+                },
+                VehicleHistoryEntry {
+                    latitude: 51.0510,
+                    longitude: 13.7380,
+                    timestamp: 1625000030,
+                },
+            ],
+            last_matched_pattern: Some("test_pattern".to_string()),
+            last_stop_index: Some(3),
+            last_update_time: 1625000030,
+        };
+        history.insert("vehicle_1".to_string(), state);
+
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("dresden_vehicle_history_test.bin.zlib");
+        let temp_file_path = temp_dir.join("dresden_vehicle_history_test.bin.zlib.tmp");
+
+        let save_res = (|| {
+            let file = File::create(&temp_file_path)?;
+            let writer = BufWriter::new(file);
+            let mut encoder =
+                flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
+            let bytes = catenary::bincode_serialize(&history)?;
+            encoder.write_all(&bytes)?;
+            encoder.finish()?;
+            std::fs::rename(&temp_file_path, &file_path)?;
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })();
+        assert!(save_res.is_ok());
+
+        let loaded_history: Result<HashMap<String, VehicleState>, Box<dyn std::error::Error>> =
+            (|| {
+                let file = File::open(&file_path)?;
+                let reader = BufReader::new(file);
+                let mut decoder = flate2::read::ZlibDecoder::new(reader);
+                let mut buffer = Vec::new();
+                std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+                let hist = catenary::bincode_deserialize(&buffer)?;
+                Ok(hist)
+            })();
+
+        assert!(loaded_history.is_ok());
+        let loaded_history = loaded_history.unwrap();
+        assert_eq!(loaded_history.len(), 1);
+        let loaded_state = loaded_history.get("vehicle_1").unwrap();
+        assert_eq!(loaded_state.positions.len(), 2);
+        assert_eq!(loaded_state.positions[0].latitude, 51.0504);
+        assert_eq!(
+            loaded_state.last_matched_pattern.as_deref(),
+            Some("test_pattern")
+        );
+        assert_eq!(loaded_state.last_stop_index, Some(3));
+        assert_eq!(loaded_state.last_update_time, 1625000030);
+
+        let _ = std::fs::remove_file(file_path);
+    }
 }
