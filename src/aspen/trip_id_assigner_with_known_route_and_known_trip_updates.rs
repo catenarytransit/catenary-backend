@@ -107,6 +107,9 @@ pub async fn assign_trips_for_deutschland(
     authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     conn: &mut diesel_async::AsyncPgConnection,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use log::debug;
+
+    debug!("Starting assign_trips_for_deutschland...");
     let now_berlin = chrono::Utc::now().with_timezone(&Berlin);
     let today = now_berlin.date_naive();
     let time_of_day_secs = now_berlin.time().num_seconds_from_midnight() as i32;
@@ -114,8 +117,15 @@ pub async fn assign_trips_for_deutschland(
 
     let tlms_feed_key = ("f-tlms~rt".to_string(), GtfsRtType::VehiclePositions);
     let mut feed_msg = match authoritative_gtfs_rt.get_async(&tlms_feed_key).await {
-        Some(msg) => msg.get().clone(),
-        None => return Ok(()),
+        Some(msg) => {
+            let msg_val = msg.get().clone();
+            debug!("Found 'f-tlms~rt' vehicle positions feed with {} entities", msg_val.entity.len());
+            msg_val
+        }
+        None => {
+            debug!("'f-tlms~rt' vehicle positions feed not found in authoritative_gtfs_rt");
+            return Ok(());
+        }
     };
 
     let mut active_route_ids = HashSet::new();
@@ -130,10 +140,12 @@ pub async fn assign_trips_for_deutschland(
     }
 
     if active_route_ids.is_empty() {
+        debug!("No active route IDs found in 'f-tlms~rt' entities");
         return Ok(());
     }
 
     let active_routes_vec: Vec<String> = active_route_ids.into_iter().collect();
+    debug!("Active route IDs in 'f-tlms~rt': {:?}", active_routes_vec);
 
     use catenary::schema::gtfs::itinerary_pattern_meta::dsl as ip_meta_dsl;
     let metas = ip_meta_dsl::itinerary_pattern_meta
@@ -143,7 +155,9 @@ pub async fn assign_trips_for_deutschland(
         .load::<ItineraryPatternMeta>(conn)
         .await?;
 
+    debug!("Loaded {} itinerary pattern metas for active routes", metas.len());
     if metas.is_empty() {
+        debug!("No itinerary pattern metas found for active routes in 'deutschland' chateau");
         return Ok(());
     }
 
@@ -160,6 +174,8 @@ pub async fn assign_trips_for_deutschland(
         .load::<ItineraryPatternRow>(conn)
         .await?;
 
+    debug!("Loaded {} itinerary pattern rows", ip_rows.len());
+
     let stop_ids: Vec<String> = ip_rows.iter().map(|r| r.stop_id.to_string()).collect();
 
     use catenary::schema::gtfs::stops::dsl as stops_dsl;
@@ -169,6 +185,8 @@ pub async fn assign_trips_for_deutschland(
         .select(Stop::as_select())
         .load::<Stop>(conn)
         .await?;
+
+    debug!("Loaded {} stops", stops.len());
 
     let stops_by_id: HashMap<String, Stop> =
         stops.into_iter().map(|s| (s.gtfs_id.clone(), s)).collect();
@@ -186,6 +204,7 @@ pub async fn assign_trips_for_deutschland(
     for stops_list in patterns.values_mut() {
         stops_list.sort_by_key(|(row, _)| row.stop_sequence);
     }
+    debug!("Organized {} itinerary patterns with stops", patterns.len());
 
     use catenary::schema::gtfs::calendar::dsl as cal_dsl;
     let calendars = cal_dsl::calendar
@@ -203,6 +222,8 @@ pub async fn assign_trips_for_deutschland(
         .select(catenary::models::CalendarDate::as_select())
         .load::<catenary::models::CalendarDate>(conn)
         .await?;
+
+    debug!("Loaded {} calendars and {} calendar date exceptions for today ({})", calendars.len(), calendar_dates.len(), today);
 
     let mut active_services = HashSet::new();
     for cal in calendars {
@@ -235,7 +256,9 @@ pub async fn assign_trips_for_deutschland(
         }
     }
 
+    debug!("Active service IDs for today: {} services", active_services.len());
     if active_services.is_empty() {
+        debug!("No active service IDs for today");
         return Ok(());
     }
 
@@ -250,12 +273,16 @@ pub async fn assign_trips_for_deutschland(
         .load::<CompressedTrip>(conn)
         .await?;
 
+    debug!("Loaded {} compressed trips for active routes and active services", trips.len());
+
     let mut delfi_updates = HashMap::new();
+    let delfi_feed_key = ("f-delfi~de~motis~rt".to_string(), GtfsRtType::TripUpdates);
     if let Some(delfi_msg) = authoritative_gtfs_rt
-        .get_async(&("f-delfi~de~motis~rt".to_string(), GtfsRtType::TripUpdates))
+        .get_async(&delfi_feed_key)
         .await
     {
         let delfi_msg = delfi_msg.get();
+        debug!("Found 'f-delfi~de~motis~rt' trip updates feed with {} entities", delfi_msg.entity.len());
         for entity in &delfi_msg.entity {
             if let Some(tu) = &entity.trip_update {
                 if let Some(trip_id) = &tu.trip.trip_id {
@@ -274,6 +301,9 @@ pub async fn assign_trips_for_deutschland(
                 }
             }
         }
+        debug!("Processed {} delfi trip updates with delay information", delfi_updates.len());
+    } else {
+        debug!("'f-delfi~de~motis~rt' trip updates feed not found in authoritative_gtfs_rt");
     }
 
     let mut changes_made = false;
@@ -287,26 +317,43 @@ pub async fn assign_trips_for_deutschland(
                 let vehicle_id = match &vehicle.vehicle {
                     Some(desc) => match &desc.id {
                         Some(id) => id.clone(),
-                        None => continue,
+                        None => {
+                            debug!("Skipping vehicle entity because vehicle.id is missing");
+                            continue;
+                        }
                     },
-                    None => continue,
+                    None => {
+                        debug!("Skipping vehicle entity because vehicle descriptor is missing");
+                        continue;
+                    }
                 };
 
                 let route_id = match &vehicle.trip {
                     Some(trip) => match &trip.route_id {
                         Some(r_id) => r_id.clone(),
-                        None => continue,
+                        None => {
+                            debug!("Skipping vehicle {} because route_id is missing", vehicle_id);
+                            continue;
+                        }
                     },
-                    None => continue,
+                    None => {
+                        debug!("Skipping vehicle {} because trip descriptor is missing", vehicle_id);
+                        continue;
+                    }
                 };
 
                 let pos = match &vehicle.position {
                     Some(p) => p,
-                    None => continue,
+                    None => {
+                        debug!("Skipping vehicle {} because position is missing", vehicle_id);
+                        continue;
+                    }
                 };
 
                 let current_lat = pos.latitude;
                 let current_lon = pos.longitude;
+
+                debug!("Processing vehicle_id: {}, route_id: {}, pos: ({}, {})", vehicle_id, route_id, current_lat, current_lon);
 
                 let state =
                     history_lock
@@ -329,6 +376,8 @@ pub async fn assign_trips_for_deutschland(
                     timestamp: current_time_ms,
                 });
 
+                debug!("Vehicle {} history size: {}", vehicle_id, state.positions.len());
+
                 if state.positions.len() >= 3 {
                     let p1 = &state.positions[state.positions.len() - 3];
                     let p2 = &state.positions[state.positions.len() - 2];
@@ -342,6 +391,7 @@ pub async fn assign_trips_for_deutschland(
                     if len1 > 1e-5 && len2 > 1e-5 {
                         let dot = (dx1 * dx2 + dy1 * dy2) / (len1 * len2);
                         if dot < -0.5 {
+                            debug!("Vehicle {} direction reversal detected (dot: {}). Clearing history.", vehicle_id, dot);
                             state.positions.clear();
                             state.positions.push(VehicleHistoryEntry {
                                 latitude: current_lat,
@@ -357,6 +407,7 @@ pub async fn assign_trips_for_deutschland(
                     .filter(|m| m.route_id.as_str() == route_id.as_str())
                     .collect();
 
+                debug!("Vehicle {} has {} candidate itinerary pattern metas for route_id {}", vehicle_id, candidate_metas.len(), route_id);
                 if candidate_metas.is_empty() {
                     continue;
                 }
@@ -368,10 +419,14 @@ pub async fn assign_trips_for_deutschland(
                 for meta in &candidate_metas {
                     let pattern_stops = match patterns.get(&meta.itinerary_pattern_id) {
                         Some(ps) => ps,
-                        None => continue,
+                        None => {
+                            debug!("No pattern stops found for itinerary_pattern_id {}", meta.itinerary_pattern_id);
+                            continue;
+                        }
                     };
 
                     if pattern_stops.is_empty() {
+                        debug!("Pattern stops are empty for itinerary_pattern_id {}", meta.itinerary_pattern_id);
                         continue;
                     }
 
@@ -406,6 +461,7 @@ pub async fn assign_trips_for_deutschland(
                                     let was_near_end = last_idx > (num_stops * 8) / 10;
                                     let is_near_start = current_closest_idx < (num_stops * 2) / 10;
                                     if was_near_end && is_near_start {
+                                        debug!("Vehicle {} was near end ({}/{}) of pattern {} and is now near start ({}/{}) - resetting state.", vehicle_id, last_idx, num_stops, last_pattern, current_closest_idx, num_stops);
                                         state.positions.clear();
                                         state.positions.push(VehicleHistoryEntry {
                                             latitude: current_lat,
@@ -441,12 +497,16 @@ pub async fn assign_trips_for_deutschland(
                     }
 
                     let score = dist_score * progress_score;
+                    debug!("  Pattern {} stops: {}, avg_dist: {:.6}, dist_score: {:.4}, progress_score: {:.2}, total score: {:.4}", meta.itinerary_pattern_id, num_stops, avg_dist, dist_score, progress_score, score);
+
                     if score > best_pattern_score {
                         best_pattern_score = score;
                         best_pattern_id = Some(meta.itinerary_pattern_id.clone());
                         best_closest_idx = current_closest_idx;
                     }
                 }
+
+                debug!("Vehicle {} best pattern: {:?} with score: {:.4}", vehicle_id, best_pattern_id, best_pattern_score);
 
                 if let Some(pat_id) = best_pattern_id {
                     state.last_matched_pattern = Some(pat_id.clone());
@@ -462,6 +522,8 @@ pub async fn assign_trips_for_deutschland(
                         .filter(|t| t.itinerary_pattern_id == pat_id)
                         .collect();
 
+                    debug!("Vehicle {} found {} candidate trips for pattern {}", vehicle_id, candidate_trips.len(), pat_id);
+
                     let mut best_trip_id = None;
                     let mut min_trip_dist = f32::MAX;
 
@@ -475,17 +537,26 @@ pub async fn assign_trips_for_deutschland(
                             let dist = ((current_lat - expected_lat).powi(2)
                                 + (current_lon - expected_lon).powi(2))
                             .sqrt();
+                            debug!("  Trip {} delay: {}s, adjusted_time: {}, expected_pos: ({:.6}, {:.6}), current_pos: ({:.6}, {:.6}), dist: {:.6}", trip.trip_id, delay_sec, adjusted_time, expected_lat, expected_lon, current_lat, current_lon, dist);
+
                             if dist < min_trip_dist {
                                 min_trip_dist = dist;
                                 best_trip_id = Some(trip.trip_id.clone());
                             }
+                        } else {
+                            debug!("  Trip {} could not determine expected position (adjusted_time: {})", trip.trip_id, adjusted_time);
                         }
                     }
 
+                    debug!("Vehicle {} best trip: {:?} with distance {:.6}", vehicle_id, best_trip_id, min_trip_dist);
+
                     if let Some(trip_id) = best_trip_id {
                         if let Some(t_info) = &mut vehicle.trip {
+                            debug!("Assigning trip_id {} to vehicle {} (was {:?})", trip_id, vehicle_id, t_info.trip_id);
                             t_info.trip_id = Some(trip_id);
                             changes_made = true;
+                        } else {
+                            debug!("Could not assign trip_id {} to vehicle {} because vehicle.trip is None", trip_id, vehicle_id);
                         }
                     }
                 }
@@ -493,11 +564,14 @@ pub async fn assign_trips_for_deutschland(
         }
     }
 
+    debug!("assign_trips_for_deutschland finished. changes_made: {}", changes_made);
+
     if changes_made {
         let _ = authoritative_gtfs_rt
             .entry_async(tlms_feed_key)
             .await
             .and_modify(|existing| *existing = feed_msg);
+        debug!("Updated authoritative_gtfs_rt with the modified vehicle positions");
     }
 
     Ok(())
