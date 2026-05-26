@@ -103,7 +103,8 @@ pub async fn fetch_tlms_data(
                                             }
                                         }
 
-                                        trip.trip_id = Some("Unknown".to_string());
+                                        trip.trip_id = None;
+                                        //trip.trip_id = Some("Unknown".to_string());
                                     });
 
                                     vehicle.vehicle = Some(gtfs_realtime::VehicleDescriptor {
