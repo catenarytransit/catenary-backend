@@ -103,20 +103,20 @@ fn get_expected_trip_position(
     None
 }
 
-pub async fn assign_trips_for_deutschland(
+pub async fn assign_trips_for_dresden(
     authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     conn: &mut diesel_async::AsyncPgConnection,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
     use log::debug;
 
-    debug!("Starting assign_trips_for_deutschland...");
+    debug!("Starting assign_trips_for_dresden...");
     let now_berlin = chrono::Utc::now().with_timezone(&Berlin);
     let today = now_berlin.date_naive();
     let time_of_day_secs = now_berlin.time().num_seconds_from_midnight() as i32;
     let current_time_ms = now_berlin.timestamp_millis() as u64;
 
     let tlms_feed_key = ("f-tlms~rt".to_string(), GtfsRtType::VehiclePositions);
-    let mut feed_msg = match authoritative_gtfs_rt.get_async(&tlms_feed_key).await {
+    let feed_msg = match authoritative_gtfs_rt.get_async(&tlms_feed_key).await {
         Some(msg) => {
             let msg_val = msg.get().clone();
             debug!("Found 'f-tlms~rt' vehicle positions feed with {} entities", msg_val.entity.len());
@@ -124,7 +124,7 @@ pub async fn assign_trips_for_deutschland(
         }
         None => {
             debug!("'f-tlms~rt' vehicle positions feed not found in authoritative_gtfs_rt");
-            return Ok(());
+            return Ok(HashMap::new());
         }
     };
 
@@ -133,7 +133,9 @@ pub async fn assign_trips_for_deutschland(
         if let Some(vehicle) = &entity.vehicle {
             if let Some(trip) = &vehicle.trip {
                 if let Some(route_id) = &trip.route_id {
-                    active_route_ids.insert(route_id.clone());
+                    if route_id.starts_with("de:vvo") {
+                        active_route_ids.insert(route_id.clone());
+                    }
                 }
             }
         }
@@ -141,7 +143,7 @@ pub async fn assign_trips_for_deutschland(
 
     if active_route_ids.is_empty() {
         debug!("No active route IDs found in 'f-tlms~rt' entities");
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     let active_routes_vec: Vec<String> = active_route_ids.into_iter().collect();
@@ -158,7 +160,7 @@ pub async fn assign_trips_for_deutschland(
     debug!("Loaded {} itinerary pattern metas for active routes", metas.len());
     if metas.is_empty() {
         debug!("No itinerary pattern metas found for active routes in 'deutschland' chateau");
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     let meta_ids: Vec<String> = metas
@@ -259,7 +261,7 @@ pub async fn assign_trips_for_deutschland(
     debug!("Active service IDs for today: {} services", active_services.len());
     if active_services.is_empty() {
         debug!("No active service IDs for today");
-        return Ok(());
+        return Ok(HashMap::new());
     }
 
     let active_services_vec: Vec<String> = active_services.into_iter().collect();
@@ -306,14 +308,14 @@ pub async fn assign_trips_for_deutschland(
         debug!("'f-delfi~de~motis~rt' trip updates feed not found in authoritative_gtfs_rt");
     }
 
-    let mut changes_made = false;
+    let mut assignments = HashMap::new();
 
     {
         let mut history_lock = VEHICLE_POSITION_HISTORY.lock().unwrap();
         gc_history(&mut history_lock, current_time_ms);
 
-        for entity in &mut feed_msg.entity {
-            if let Some(vehicle) = &mut entity.vehicle {
+        for entity in &feed_msg.entity {
+            if let Some(vehicle) = &entity.vehicle {
                 let vehicle_id = match &vehicle.vehicle {
                     Some(desc) => match &desc.id {
                         Some(id) => id.clone(),
@@ -551,28 +553,15 @@ pub async fn assign_trips_for_deutschland(
                     debug!("Vehicle {} best trip: {:?} with distance {:.6}", vehicle_id, best_trip_id, min_trip_dist);
 
                     if let Some(trip_id) = best_trip_id {
-                        if let Some(t_info) = &mut vehicle.trip {
-                            debug!("Assigning trip_id {} to vehicle {} (was {:?})", trip_id, vehicle_id, t_info.trip_id);
-                            t_info.trip_id = Some(trip_id);
-                            changes_made = true;
-                        } else {
-                            debug!("Could not assign trip_id {} to vehicle {} because vehicle.trip is None", trip_id, vehicle_id);
-                        }
+                        debug!("Assigning trip_id {} to vehicle {}", trip_id, vehicle_id);
+                        assignments.insert(vehicle_id, trip_id);
                     }
                 }
             }
         }
     }
 
-    debug!("assign_trips_for_deutschland finished. changes_made: {}", changes_made);
+    debug!("assign_trips_for_dresden finished. Assigned {} trips.", assignments.len());
 
-    if changes_made {
-        let _ = authoritative_gtfs_rt
-            .entry_async(tlms_feed_key)
-            .await
-            .and_modify(|existing| *existing = feed_msg);
-        debug!("Updated authoritative_gtfs_rt with the modified vehicle positions");
-    }
-
-    Ok(())
+    Ok(assignments)
 }

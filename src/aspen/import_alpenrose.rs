@@ -422,17 +422,21 @@ pub async fn new_rt_data(
 
     let conn = &mut conn.unwrap();
 
+    let mut assigned_dresden_trips = std::collections::HashMap::new();
     if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
-        if let Err(e) =
-            trip_id_assigner_with_known_route_and_known_trip_updates::assign_trips_for_deutschland(
-                &authoritative_gtfs_rt,
-                conn,
-            )
-            .await
+        match trip_id_assigner_with_known_route_and_known_trip_updates::assign_trips_for_dresden(
+            &authoritative_gtfs_rt,
+            conn,
+        )
+        .await
         {
-            eprintln!("Error in assign_trips_for_deutschland: {:?}", e);
-        } else {
-            println!("Finished assigning trips for f-tlms~rt !");
+            Ok(trips) => {
+                assigned_dresden_trips = trips;
+                println!("Finished assigning trips for f-tlms~rt! Assigned {} trips.", assigned_dresden_trips.len());
+            }
+            Err(e) => {
+                eprintln!("Error in assign_trips_for_dresden: {:?}", e);
+            }
         }
     }
 
@@ -573,7 +577,15 @@ pub async fn new_rt_data(
 
             for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                    if let Some(trip) = &vehicle_pos.trip {
+                    let assigned_trip_id = if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
+                        vehicle_pos.vehicle.as_ref().and_then(|v| v.id.as_ref()).and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
+                    } else {
+                        None
+                    };
+
+                    if let Some(trip_id) = assigned_trip_id {
+                        trip_ids_to_lookup.insert(trip_id);
+                    } else if let Some(trip) = &vehicle_pos.trip {
                         if let Some(trip_id) = &trip.trip_id {
                             trip_ids_to_lookup.insert(trip_id.clone());
                         }
@@ -1354,25 +1366,28 @@ pub async fn new_rt_data(
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
-                        let recalculate_route_id: Option<String> = match &vehicle_pos.trip {
-                            Some(trip) => match &trip.trip_id {
-                                Some(trip_id) => {
-                                    let compressed_trip = trip_id_to_trip.get(trip_id);
-                                    match compressed_trip {
-                                        Some(compressed_trip) => {
-                                            let route =
-                                                route_id_to_route.get(&compressed_trip.route_id);
-                                            match route {
-                                                Some(route) => Some(route.route_id.clone()),
-                                                None => trip.route_id.clone(),
-                                            }
+                        let assigned_trip_id = if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
+                            vehicle_pos.vehicle.as_ref().and_then(|v| v.id.as_ref()).and_then(|vid| assigned_dresden_trips.get(vid.as_str()).cloned())
+                        } else {
+                            None
+                        };
+
+                        let recalculate_route_id: Option<String> = match assigned_trip_id.as_ref().or(vehicle_pos.trip.as_ref().and_then(|t| t.trip_id.as_ref())) {
+                            Some(trip_id) => {
+                                let compressed_trip = trip_id_to_trip.get(trip_id);
+                                match compressed_trip {
+                                    Some(compressed_trip) => {
+                                        let route =
+                                            route_id_to_route.get(&compressed_trip.route_id);
+                                        match route {
+                                            Some(route) => Some(route.route_id.clone()),
+                                            None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
                                         }
-                                        None => trip.route_id.clone(),
                                     }
+                                    None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
                                 }
-                                None => trip.route_id.clone(),
-                            },
-                            None => None,
+                            }
+                            None => vehicle_pos.trip.as_ref().and_then(|t| t.route_id.clone()),
                         };
 
                         let mut position = vehicle_pos.position.as_ref().map(|position| {
@@ -1436,63 +1451,62 @@ pub async fn new_rt_data(
                         }
 
                         let trip_headsign = vehicle_pos.trip.as_ref().and_then(|trip| {
-                            trip.trip_id.as_ref().and_then(|trip_id| {
-                                trip_id_to_trip.get(trip_id).and_then(|trip| {
-                                    accumulated_itinerary_patterns
-                                        .get(&trip.itinerary_pattern_id)
-                                        .map(|x| &x.0)
-                                        .and_then(|itinerary_pattern| {
-                                            itinerary_pattern
-                                                .direction_pattern_id
-                                                .as_ref()
-                                                .and_then(|direction_pattern_id: &String| {
-                                                    direction_pattern_id_to_direction_pattern_meta
-                                                        .get(direction_pattern_id.as_str())
-                                                        .map(|direction_pattern| {
-                                                            let mut headsign =
-                                                                direction_pattern.headsign_or_destination.clone();
+                            let tid = assigned_trip_id.as_ref().or(trip.trip_id.as_ref())?;
+                            trip_id_to_trip.get(tid).and_then(|trip| {
+                                accumulated_itinerary_patterns
+                                    .get(&trip.itinerary_pattern_id)
+                                    .map(|x| &x.0)
+                                    .and_then(|itinerary_pattern| {
+                                        itinerary_pattern
+                                            .direction_pattern_id
+                                            .as_ref()
+                                            .and_then(|direction_pattern_id: &String| {
+                                                direction_pattern_id_to_direction_pattern_meta
+                                                    .get(direction_pattern_id.as_str())
+                                                    .map(|direction_pattern| {
+                                                        let mut headsign =
+                                                            direction_pattern.headsign_or_destination.clone();
 
-                                                            if let Some(stop_headsigns) =
-                                                                &direction_pattern.stop_headsigns_unique_list
+                                                        if let Some(stop_headsigns) =
+                                                            &direction_pattern.stop_headsigns_unique_list
+                                                        {
+                                                            if let Some(current_stop_event) =
+                                                                current_stop_event
                                                             {
-                                                                if let Some(current_stop_event) =
-                                                                    current_stop_event
+                                                                if let Some(itinerary_pattern_rows) =
+                                                                    accumulated_itinerary_patterns
+                                                                        .get(&trip.itinerary_pattern_id)
+                                                                        .map(|x| &x.1)
                                                                 {
-                                                                    if let Some(itinerary_pattern_rows) =
-                                                                        accumulated_itinerary_patterns
-                                                                            .get(&trip.itinerary_pattern_id)
-                                                                            .map(|x| &x.1)
+                                                                    if let Some(matching_itinerary_row) =
+                                                                        current_stop_event.stop_id.as_ref().and_then(|current_stop_id| {
+                                                                            itinerary_pattern_rows.iter().find(|x| x.stop_id == *current_stop_id)
+                                                                        })
                                                                     {
-                                                                        if let Some(matching_itinerary_row) =
-                                                                            current_stop_event.stop_id.as_ref().and_then(|current_stop_id| {
-                                                                                itinerary_pattern_rows.iter().find(|x| x.stop_id == *current_stop_id)
-                                                                            })
+                                                                        if let Some(stop_headsign_idx) =
+                                                                            matching_itinerary_row.stop_headsign_idx
                                                                         {
-                                                                            if let Some(stop_headsign_idx) =
-                                                                                matching_itinerary_row.stop_headsign_idx
-                                                                            {
-                                                                                // Access headsign directly by index - avoids allocating Vec<String>
-                                                                                let mut idx = 0usize;
-                                                                                for headsign_opt in stop_headsigns.iter() {
-                                                                                    if let Some(text) = headsign_opt {
-                                                                                        if idx == stop_headsign_idx as usize {
-                                                                                            headsign = text.clone();
-                                                                                            break;
-                                                                                        }
-                                                                                        idx += 1;
+                                                                            // Access headsign directly by index - avoids allocating Vec<String>
+                                                                            let mut idx = 0usize;
+                                                                            for headsign_opt in stop_headsigns.iter() {
+                                                                                if let Some(text) = headsign_opt {
+                                                                                    if idx == stop_headsign_idx as usize {
+                                                                                        headsign = text.clone();
+                                                                                        break;
                                                                                     }
+                                                                                    idx += 1;
                                                                                 }
                                                                             }
                                                                         }
                                                                     }
                                                                 }
                                                             }
+                                                        }
 
-                                                            headsign
-                                                        })
-                                                })
-                                        })
-                                })
+                                                        headsign
+                                                    })
+                                            })
+                                    })
                             })
                         })
                         .map(|headsign| {
@@ -1526,7 +1540,7 @@ pub async fn new_rt_data(
                                 // Prefer the canonical trip_id from the scheduled data when
                                 // available (e.g., for Foothill Transit where the realtime
                                 // IDs may differ from the database IDs).
-                                let corrected_trip_id = match &trip.trip_id {
+                                let corrected_trip_id = match assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
                                     Some(trip_id) => match trip_id_to_trip.get(trip_id) {
                                         Some(static_trip) => Some(static_trip.trip_id.clone()),
                                         None => Some(trip_id.clone()),
@@ -1547,7 +1561,7 @@ pub async fn new_rt_data(
                                     // Use the original realtime trip_id for lookup into the
                                     // scheduled data; the metadata itself (including
                                     // trip_short_name) comes from Postgres.
-                                    trip_short_name: match &trip.trip_id {
+                                    trip_short_name: match assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
                                         Some(trip_id) => {
                                             let trip = trip_id_to_trip.get(&trip_id.clone());
                                             match trip {
@@ -1646,7 +1660,7 @@ pub async fn new_rt_data(
                                 route_ids_to_insert.insert(route_id.clone());
                             }
 
-                            if let Some(trip_id) = &trip.trip_id {
+                            if let Some(trip_id) = assigned_trip_id.as_ref().or(trip.trip_id.as_ref()) {
                                 let trip = trip_id_to_trip.get(trip_id);
                                 if let Some(trip) = &trip {
                                     route_ids_to_insert.insert(trip.route_id.clone());
