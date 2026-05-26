@@ -431,6 +431,8 @@ pub async fn new_rt_data(
             .await
         {
             eprintln!("Error in assign_trips_for_deutschland: {:?}", e);
+        } else {
+            println!("Finished assigning trips for f-tlms~rt !");
         }
     }
 
