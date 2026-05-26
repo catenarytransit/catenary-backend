@@ -2400,38 +2400,35 @@ pub async fn new_rt_data(
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
                                 platform_info: platform,
-                                arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
-                                    delay: None,
-                                    time: match arrival.time {
-                                        Some(diff) => {
-                                            let time =
-                                                (ref_epoch as i64) + (i32::from(diff) as i64);
-                                            if time <= 0 { None } else { Some(time) }
-                                        }
-                                        None => {
-                                            if let Some(delay) = arrival.delay {
-                                                if let Some(sched) = arrival.scheduled_time {
-                                                    let time = (ref_epoch as i64)
-                                                        + (i32::from(sched) as i64)
-                                                        + (delay as i64);
-                                                    if time > 0 { Some(time) } else { None }
-                                                } else if let Some(sched_arr_time) =
-                                                    sched_arr_computed
-                                                {
-                                                    let time = sched_arr_time + (delay as i64);
-                                                    if time > 0 { Some(time) } else { None }
-                                                } else {
-                                                    None
-                                                }
+                                arrival: arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
+                                delay: arrival.delay,
+                                time: match arrival.time {
+                                    Some(diff) => {
+                                        let time = (ref_epoch as i64) + (i32::from(diff) as i64);
+                                        if time <= 0 { None } else { Some(time) }
+                                    }
+                                    None => {
+                                        if let Some(delay) = arrival.delay {
+                                            if let Some(sched) = arrival.scheduled_time {
+                                                let time = (ref_epoch as i64)
+                                                    + (i32::from(sched) as i64)
+                                                    + (delay as i64);
+                                                if time > 0 { Some(time) } else { None }
+                                            } else if let Some(sched_arr_time) = sched_arr_computed {
+                                                let time = sched_arr_time + (delay as i64);
+                                                if time > 0 { Some(time) } else { None }
                                             } else {
                                                 None
                                             }
+                                        } else {
+                                            None
                                         }
-                                    },
-                                    uncertainty: arrival.uncertainty,
-                                }),
+                                    }
+                                },
+                                uncertainty: arrival.uncertainty,
+                            }),
                                 departure: dep_clone.map(|departure| AspenStopTimeEvent {
-                                    delay: None,
+                                    delay: departure.delay,
                                     time: match departure.time {
                                         Some(diff) => {
                                             let time =
