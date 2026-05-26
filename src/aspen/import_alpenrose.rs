@@ -2400,7 +2400,7 @@ pub async fn new_rt_data(
                                 stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
                                 old_rt_data: false,
                                 platform_info: platform,
-                                arrival: arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
+                                arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
                                 delay: arrival.delay,
                                 time: match arrival.time {
                                     Some(diff) => {
