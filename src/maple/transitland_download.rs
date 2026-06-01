@@ -106,17 +106,20 @@ async fn data_public_lu_latest_resource(
 async fn get_mvo_keycloak_token(
     client: reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let mut form_data = HashMap::new();
-    form_data.insert("client_id", "dbp-public-ui");
-    form_data.insert("username", "5f7xgv6ilp@ro5wy.anonbox.net");
-    form_data.insert("password", ")#E8qE'~CqND5b#");
-    form_data.insert("grant_type", "password");
-    form_data.insert("scope", "openid");
+    
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("Content-Type", "application/x-www-form-urlencoded".parse()?);
 
-    let response = client
-        .post("https://user.mobilitaetsverbuende.at/auth/realms/dbp-public/protocol/openid-connect/token")
-        .form(&form_data)
-        .send();
+    let mut params = std::collections::HashMap::new();
+    params.insert("client_id", "dbp-public-ui");
+    params.insert("username", "mvo-at-gtfs-2@catenarymaps.org");
+    params.insert("password", "elegant-obvious-gift");
+    params.insert("grant_type", "password");
+    params.insert("scope", "openid");
+
+    let request = client.request(reqwest::Method::POST, "https://user.mobilitaetsverbuende.at/auth/realms/dbp-public/protocol/openid-connect/token")
+        .headers(headers)
+        .form(&params);
 
     match response.await {
         Ok(resp) => {
