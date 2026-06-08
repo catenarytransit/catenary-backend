@@ -780,6 +780,19 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    if feed_id == "f-gtfs~de" {
+        return crate::large_gtfs_insertion::gtfs_process_large_feed(
+            gtfs_unzipped_path,
+            feed_id,
+            arc_conn_pool,
+            chateau_id,
+            attempt_id,
+            this_download_data,
+            elasticclient,
+        )
+        .await;
+    }
+
     println!("starting GTFS read for feed {}", feed_id);
 
     let gtfs = gtfs_structures::GtfsReader::default()
@@ -2564,7 +2577,7 @@ where
     }
 }
 
-fn faster_stop_time_reader_injection(
+pub(crate) fn faster_stop_time_reader_injection(
     gtfs: Gtfs,
     stop_times_path: &Path,
 ) -> Result<Gtfs, Box<dyn std::error::Error + Sync + Send>> {

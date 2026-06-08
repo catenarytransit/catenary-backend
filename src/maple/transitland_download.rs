@@ -106,7 +106,6 @@ async fn data_public_lu_latest_resource(
 async fn get_mvo_keycloak_token(
     client: reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert("Content-Type", "application/x-www-form-urlencoded".parse()?);
 
@@ -121,7 +120,7 @@ async fn get_mvo_keycloak_token(
         .headers(headers)
         .form(&params);
 
-    match response.await {
+    match request.send().await {
         Ok(resp) => {
             let resp_data = resp.json::<TokenResponse>().await;
             match resp_data {

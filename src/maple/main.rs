@@ -66,6 +66,7 @@ mod cleanup;
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
 mod gtfs_process;
+mod large_gtfs_insertion;
 pub mod osm_station_matching;
 mod raw_file_agency_remover;
 mod refresh_metadata_tables;
