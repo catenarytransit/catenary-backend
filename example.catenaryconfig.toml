@@ -36,6 +36,10 @@ only_feed_ids = []
 
 [birch]
 worker_amount = 4
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+
 
 [spruce]
 worker_amount = 2

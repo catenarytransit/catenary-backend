@@ -846,10 +846,12 @@ async fn main() -> std::io::Result<()> {
 
     let etcd_username = std::env::var("ETCD_USERNAME")
         .ok()
+        .or_else(|| catenary_config.birch.etcd_username.clone())
         .or_else(|| catenary_config.aspen.etcd_username.clone());
 
     let etcd_password = std::env::var("ETCD_PASSWORD")
         .ok()
+        .or_else(|| catenary_config.birch.etcd_password.clone())
         .or_else(|| catenary_config.aspen.etcd_password.clone());
 
     let elastic_url = std::env::var("ELASTICSEARCH_URL")

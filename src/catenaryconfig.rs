@@ -83,6 +83,9 @@ pub struct AlpenroseConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct BirchConfig {
+    pub etcd_urls: Option<Vec<String>>,
+    pub etcd_username: Option<String>,
+    pub etcd_password: Option<String>,
     pub worker_amount: Option<usize>,
 }
 
@@ -314,6 +317,18 @@ impl BirchConfig {
     fn apply_env_overrides(&mut self) {
         if let Ok(value) = std::env::var("WORKER_AMOUNT") {
             self.worker_amount = value.parse::<usize>().ok().or(self.worker_amount);
+        }
+
+        if let Ok(value) = std::env::var("ETCD_URLS") {
+            self.etcd_urls = Some(parse_comma_separated(&value));
+        }
+
+        if let Ok(value) = std::env::var("ETCD_USERNAME") {
+            self.etcd_username = Some(value);
+        }
+
+        if let Ok(value) = std::env::var("ETCD_PASSWORD") {
+            self.etcd_password = Some(value);
         }
     }
 }
