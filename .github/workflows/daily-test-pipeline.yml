@@ -1,0 +1,183 @@
+name: Daily Test Pipeline
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: Daily Integration Test
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_DB: catenary
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      etcd:
+        image: quay.io/coreos/etcd:v3.5.9
+        env:
+          ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+          ETCD_ADVERTISE_CLIENT_URLS: http://0.0.0.0:2379
+        ports:
+          - 2379:2379
+
+      elasticsearch:
+        image: elasticsearch:8.11.1
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: "false"
+          ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+        ports:
+          - 9200:9200
+        options: >-
+          --health-cmd="curl http://localhost:9200/_cluster/health"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout catenary-backend
+        uses: actions/checkout@v4
+
+      - name: Checkout transitland-atlas
+        uses: actions/checkout@v4
+        with:
+          repository: catenarytransit/transitland-atlas
+          path: transitland-atlas
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config postgresql-client redis cmake jq
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build binaries
+        run: |
+          cargo build --release --bin maple --bin spruce --bin birch --bin alpenrose --bin aspen
+
+      - name: Setup catenaryconfig.toml
+        run: |
+          cat <<EOF > catenaryconfig.toml
+          [maple]
+          transitland = "./transitland-atlas"
+          use_girolle = false
+          no_elastic = false
+          delete_before_ingest = true
+          only_feed_ids = ["f-vvs~de"]
+          gtfs_zip_temp = "./temp/gtfs_zip"
+          gtfs_uncompressed_temp = "./temp/gtfs_uncompressed"
+          threads_gtfs = 2
+          force_ingest_all = true
+          bypass_temp_delete = false
+
+          [aspen]
+          etcd_urls = ["localhost:2379"]
+          channels = 4
+          alpenrose_thread_count = 4
+          port = 40427
+          etcd_username = ""
+          etcd_password = ""
+
+          [aspenleader]
+          etcd_urls = ["localhost:2379"]
+          etcd_username = ""
+          etcd_password = ""
+
+          [alpenrose]
+          request_limit = 40
+          etcd_urls = ["localhost:2379"]
+          only_feed_ids = ["f-vvs~de~rt"]
+          etcd_username = ""
+          etcd_password = ""
+
+          [birch]
+          worker_amount = 4
+          etcd_urls = ["localhost:2379"]
+          etcd_username = ""
+          etcd_password = ""
+
+          [spruce]
+          worker_amount = 2
+          etcd_urls = ["localhost:2379"]
+          etcd_username = ""
+          etcd_password = ""
+
+          [elasticsearch]
+          url = "http://localhost:9200"
+
+          [postgres]
+          database_url = "postgres://postgres:postgres@localhost:5432/catenary"
+          max_connections = 128
+          EOF
+
+      - name: Prepare Temp Directories
+        run: |
+          mkdir -p temp/gtfs_zip temp/gtfs_uncompressed
+
+      - name: Run Database Migrations
+        run: |
+          export DATABASE_URL="postgres://postgres:postgres@localhost:5432/catenary"
+          for d in $(find migrations -mindepth 1 -maxdepth 1 -type d | sort); do
+            echo "Running migration $d/up.sql..."
+            PGPASSWORD=postgres psql -h localhost -U postgres -d catenary -f "$d/up.sql"
+          done
+
+      - name: Run Ingest (Maple)
+        run: |
+          ./target/release/maple
+
+      - name: Print Database Table Row Counts
+        run: |
+          export PGPASSWORD=postgres
+          psql -h localhost -U postgres -d catenary -c "
+          SELECT table_name,
+                 (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %I.%I', table_schema, table_name), false, true, '')))[1]::text::int AS row_count
+          FROM information_schema.tables
+          WHERE table_schema = 'gtfs'
+          ORDER BY table_name;
+          "
+
+      - name: Run background services (spruce, birch, alpenrose, aspen)
+        run: |
+          ./target/release/spruce &
+          ./target/release/birch &
+          ./target/release/alpenrose &
+          ./target/release/aspen &
+          echo "Services started in the background."
+
+      - name: Wait 10 seconds
+        run: sleep 10
+
+      - name: Run Stuttgart HB departures test query
+        run: |
+          # Stuttgart HB Coordinates: lat=48.7839, lon=9.1817
+          response=$(curl -f -s "http://127.0.0.1:17419/nearbydeparturesfromcoordsv3?lat=48.7839&lon=9.1817")
+          echo "Test query response:"
+          echo "$response" | jq .
+          
+          # Basic validation: ensure that we got stops back in the query response
+          if echo "$response" | jq -e '.stops | length > 0' > /dev/null; then
+            echo "Success: Found nearby stops!"
+          else
+            echo "Error: No stops returned in response"
+            exit 1
+          fi
