@@ -5,6 +5,9 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -173,3 +176,16 @@ jobs:
             echo "Error: No stops returned in response"
             exit 1
           fi
+
+      - name: Fetch full trip updates dataset
+        run: |
+          # Fetch full trip updates dataset from birch localhost
+          curl -s "http://127.0.0.1:17419/fetch_full_trip_updates_dataset?chateau=vvs~de" > trip_updates.txt
+          
+          # Print the total file size
+          echo "Total file size:"
+          wc -c trip_updates.txt
+          
+          # Print the first 50 lines
+          echo "First 50 lines:"
+          head -n 50 trip_updates.txt
