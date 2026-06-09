@@ -25,14 +25,20 @@ etcd_urls = ["localhost:2379"]
 channels = 4
 alpenrose_thread_count = 4
 port = 40427
+etcd_username = ""
+etcd_password = ""
 
 [aspenleader]
 etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
 
 [alpenrose]
 request_limit = 40
 etcd_urls = ["localhost:2379"]
 only_feed_ids = []
+etcd_username = ""
+etcd_password = ""
 
 [birch]
 worker_amount = 4
@@ -43,6 +49,9 @@ etcd_password = ""
 
 [spruce]
 worker_amount = 2
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
 
 [elasticsearch]
 url = "http://localhost:9200"

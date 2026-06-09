@@ -124,6 +124,13 @@ async fn main() -> std::io::Result<()> {
         .ok()
         .or_else(|| {
             catenary_config
+                .spruce
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
+        .or_else(|| {
+            catenary_config
                 .aspen
                 .etcd_urls
                 .as_ref()
@@ -137,9 +144,11 @@ async fn main() -> std::io::Result<()> {
 
     let etcd_username = std::env::var("ETCD_USERNAME")
         .ok()
+        .or_else(|| catenary_config.spruce.etcd_username.clone())
         .or_else(|| catenary_config.aspen.etcd_username.clone());
     let etcd_password = std::env::var("ETCD_PASSWORD")
         .ok()
+        .or_else(|| catenary_config.spruce.etcd_password.clone())
         .or_else(|| catenary_config.aspen.etcd_password.clone());
 
     let etcd_connection_ips = Arc::new(EtcdConnectionIps {
