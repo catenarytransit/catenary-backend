@@ -73,6 +73,13 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let alpenrose_config = &catenaryconfig::config().alpenrose;
+    let restrict_to_feed_ids: Option<HashSet<String>> = match std::env::var("ONLY_FEED_IDS") {
+        Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
+        Err(_) => alpenrose_config
+            .only_feed_ids
+            .clone()
+            .map(HashSet::from_iter),
+    };
     let request_limit = match std::env::var("REQUEST_LIMIT").ok().or_else(|| {
         alpenrose_config
             .request_limit
@@ -353,7 +360,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                     let prefix_search = format!("/alpenrose_assignments/{}/", this_worker_id);
 
-                    let assignments = etcd
+                    let mut assignments = etcd
                         .get(
                             prefix_search.clone(),
                             Some(etcd_client::GetOptions::new().with_prefix()),
@@ -372,6 +379,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                             )
                         })
                         .collect::<HashMap<String, RealtimeFeedFetch>>();
+
+                    if let Some(allowed_feeds) = &restrict_to_feed_ids {
+                        assignments.retain(|feed_id, _| allowed_feeds.contains(feed_id));
+                    }
 
                     *assignments_for_this_worker_lock = assignments;
                 }

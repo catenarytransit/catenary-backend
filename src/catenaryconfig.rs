@@ -78,6 +78,7 @@ pub struct AlpenroseConfig {
     pub etcd_urls: Option<Vec<String>>,
     pub etcd_username: Option<String>,
     pub etcd_password: Option<String>,
+    pub only_feed_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -301,6 +302,10 @@ impl AlpenroseConfig {
 
         if let Ok(value) = std::env::var("ETCD_PASSWORD") {
             self.etcd_password = Some(value);
+        }
+
+        if let Ok(value) = std::env::var("ONLY_FEED_IDS") {
+            self.only_feed_ids = Some(parse_comma_separated(&value));
         }
     }
 }

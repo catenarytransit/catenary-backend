@@ -3,8 +3,7 @@ use crate::get_feed_metadata::get_feed_metadata;
 use catenary::fast_hash;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use dmfr_dataset_reader::read_folders;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -23,9 +22,23 @@ pub async fn perform_leader_job(
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre?;
 
+    let alpenrose_config = &catenary::catenaryconfig::config().alpenrose;
+    let restrict_to_feed_ids: Option<HashSet<String>> = match std::env::var("ONLY_FEED_IDS") {
+        Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
+        Err(_) => alpenrose_config
+            .only_feed_ids
+            .clone()
+            .map(HashSet::from_iter),
+    };
+
     let feeds_map: BTreeMap<String, RealtimeFeedFetch> = {
         let mut feeds_map = BTreeMap::new();
         for feed in feeds {
+            if let Some(allowed_feeds) = &restrict_to_feed_ids {
+                if !allowed_feeds.contains(&feed.feed_id) {
+                    continue;
+                }
+            }
             feeds_map.insert(feed.feed_id.clone(), feed);
         }
         feeds_map
