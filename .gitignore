@@ -115,3 +115,5 @@ tiles_output/
 
 #Agents
 .agent/
+
+catenaryconfig.toml
