@@ -8,7 +8,6 @@ use crate::gtfs_handlers::colour_correction::{
 };
 use crate::gtfs_handlers::shape_colour_calculator::{ShapeToColourResponse, shape_to_colour};
 use crate::gtfs_handlers::stops_associated_items::make_hashmaps_of_children_stop_info;
-use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
@@ -167,6 +166,207 @@ fn parse_agencies(
     Ok(agencies)
 }
 
+async fn insert_shared_calendar_files_into_postgres(
+    path: &Path,
+    feed_id: &str,
+    arc_conn_pool: Arc<CatenaryPostgresPool>,
+    chateau_id: &str,
+    attempt_id: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let conn_pool = arc_conn_pool.as_ref();
+    let conn_pre = conn_pool.get().await;
+    let conn = &mut conn_pre?;
+
+    let calendar_path = path.join("calendar.txt");
+    if calendar_path.exists() {
+        let calendar_file = File::open(&calendar_path)?;
+        let mut calendar_rdr = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .flexible(true)
+            .from_reader(BufReader::new(calendar_file));
+
+        let calendar_headers = calendar_rdr.headers()?.clone();
+        let c_service_id_idx = calendar_headers
+            .iter()
+            .position(|h| h == "service_id")
+            .context("calendar.txt missing service_id")?;
+        let c_monday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "monday")
+            .context("calendar.txt missing monday")?;
+        let c_tuesday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "tuesday")
+            .context("calendar.txt missing tuesday")?;
+        let c_wednesday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "wednesday")
+            .context("calendar.txt missing wednesday")?;
+        let c_thursday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "thursday")
+            .context("calendar.txt missing thursday")?;
+        let c_friday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "friday")
+            .context("calendar.txt missing friday")?;
+        let c_saturday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "saturday")
+            .context("calendar.txt missing saturday")?;
+        let c_sunday_idx = calendar_headers
+            .iter()
+            .position(|h| h == "sunday")
+            .context("calendar.txt missing sunday")?;
+        let c_start_date_idx = calendar_headers
+            .iter()
+            .position(|h| h == "start_date")
+            .context("calendar.txt missing start_date")?;
+        let c_end_date_idx = calendar_headers
+            .iter()
+            .position(|h| h == "end_date")
+            .context("calendar.txt missing end_date")?;
+
+        let parse_bool = |value: Option<&str>| -> bool {
+            matches!(
+                value.unwrap_or_default().trim(),
+                "1" | "true" | "TRUE" | "t" | "T" | "yes" | "YES"
+            )
+        };
+
+        let parse_date = |value: Option<&str>,
+                          field_name: &str|
+         -> Result<NaiveDate, Box<dyn Error + Send + Sync>> {
+            let value = value.unwrap_or_default().trim();
+            NaiveDate::parse_from_str(value, "%Y%m%d")
+                .with_context(|| format!("calendar.txt invalid {}: {}", field_name, value))
+                .map_err(|err| err.into())
+        };
+
+        let mut vec_of_calendar = Vec::new();
+        let mut seen_service_ids: HashSet<String> = HashSet::new();
+        for record_result in calendar_rdr.records() {
+            let record = record_result?;
+            let service_id = record
+                .get(c_service_id_idx)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            if service_id.is_empty() || !seen_service_ids.insert(service_id.clone()) {
+                continue;
+            }
+
+            vec_of_calendar.push(catenary::models::Calendar {
+                onestop_feed_id: feed_id.to_string(),
+                service_id,
+                monday: parse_bool(record.get(c_monday_idx)),
+                tuesday: parse_bool(record.get(c_tuesday_idx)),
+                wednesday: parse_bool(record.get(c_wednesday_idx)),
+                thursday: parse_bool(record.get(c_thursday_idx)),
+                friday: parse_bool(record.get(c_friday_idx)),
+                saturday: parse_bool(record.get(c_saturday_idx)),
+                sunday: parse_bool(record.get(c_sunday_idx)),
+                gtfs_start_date: parse_date(record.get(c_start_date_idx), "start_date")?,
+                gtfs_end_date: parse_date(record.get(c_end_date_idx), "end_date")?,
+                chateau: chateau_id.to_string(),
+                attempt_id: attempt_id.to_string(),
+            });
+        }
+
+        for calendar_chunk in vec_of_calendar.chunks(1000) {
+            diesel::insert_into(catenary::schema::gtfs::calendar::table)
+                .values(calendar_chunk)
+                .execute(conn)
+                .await?;
+        }
+    }
+
+    let calendar_dates_path = path.join("calendar_dates.txt");
+    if calendar_dates_path.exists() {
+        let calendar_dates_file = File::open(&calendar_dates_path)?;
+        let mut calendar_dates_rdr = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .flexible(true)
+            .from_reader(BufReader::new(calendar_dates_file));
+
+        let calendar_dates_headers = calendar_dates_rdr.headers()?.clone();
+        let cd_service_id_idx = calendar_dates_headers
+            .iter()
+            .position(|h| h == "service_id")
+            .context("calendar_dates.txt missing service_id")?;
+        let cd_date_idx = calendar_dates_headers
+            .iter()
+            .position(|h| h == "date")
+            .context("calendar_dates.txt missing date")?;
+        let cd_exception_type_idx = calendar_dates_headers
+            .iter()
+            .position(|h| h == "exception_type")
+            .context("calendar_dates.txt missing exception_type")?;
+
+        let mut vec_of_calendar_dates = Vec::new();
+        let mut seen_dates: HashSet<(String, NaiveDate)> = HashSet::new();
+
+        for record_result in calendar_dates_rdr.records() {
+            let record = record_result?;
+            let service_id = record
+                .get(cd_service_id_idx)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+
+            if service_id.is_empty() {
+                continue;
+            }
+
+            let gtfs_date = NaiveDate::parse_from_str(
+                record.get(cd_date_idx).unwrap_or_default().trim(),
+                "%Y%m%d",
+            )
+            .with_context(|| {
+                format!(
+                    "calendar_dates.txt invalid date for service_id {}",
+                    service_id
+                )
+            })?;
+
+            if !seen_dates.insert((service_id.clone(), gtfs_date)) {
+                continue;
+            }
+
+            let exception_type = record
+                .get(cd_exception_type_idx)
+                .unwrap_or_default()
+                .trim()
+                .parse::<i16>()
+                .with_context(|| {
+                    format!(
+                        "calendar_dates.txt invalid exception_type for service_id {}",
+                        service_id
+                    )
+                })?;
+
+            vec_of_calendar_dates.push(catenary::models::CalendarDate {
+                onestop_feed_id: feed_id.to_string(),
+                service_id,
+                gtfs_date,
+                chateau: chateau_id.to_string(),
+                exception_type,
+                attempt_id: attempt_id.to_string(),
+            });
+        }
+
+        for calendar_date_chunk in vec_of_calendar_dates.chunks(2000) {
+            diesel::insert_into(catenary::schema::gtfs::calendar_dates::table)
+                .values(calendar_date_chunk)
+                .execute(conn)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     const R: f64 = 6371.0;
     let d_lat = (lat2 - lat1).to_radians();
@@ -279,6 +479,16 @@ pub async fn gtfs_process_large_feed(
             }
         }
     }
+
+    println!("Inserting shared calendar files for {}", feed_id);
+    insert_shared_calendar_files_into_postgres(
+        Path::new(&path),
+        feed_id,
+        Arc::clone(&arc_conn_pool),
+        chateau_id,
+        attempt_id,
+    )
+    .await?;
 
     let routes_path = Path::new(&path).join("routes.txt");
     let routes_file = File::open(&routes_path)?;
@@ -706,15 +916,6 @@ pub async fn gtfs_process_large_feed(
             attempt_id,
             &shape_id_to_route_ids_lookup,
             &agency_shapes_minimised,
-        )
-        .await?;
-
-        calendar_into_postgres(
-            &agency_gtfs,
-            feed_id,
-            Arc::clone(&arc_conn_pool),
-            chateau_id,
-            attempt_id,
         )
         .await?;
 
