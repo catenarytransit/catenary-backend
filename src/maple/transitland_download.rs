@@ -759,8 +759,6 @@ pub async fn download_return_eligible_feeds(
                                 }
                             }
 
-                            let duration = start.elapsed();
-
                             println!("Attempting Download of {}", parse_url);
 
                             let response = try_to_download(
@@ -770,6 +768,7 @@ pub async fn download_return_eligible_feeds(
                                 &parse_url,
                             ).await;            
 
+                            let duration = start.elapsed();
                             let duration_ms = duration.as_millis();
             
                             // say that the download state was unsuccessful by default, and insert the duration
