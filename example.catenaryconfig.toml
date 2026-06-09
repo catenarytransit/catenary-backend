@@ -3,7 +3,7 @@ transitland = "/path/to/transitland"
 use_girolle = false
 no_elastic = false
 delete_before_ingest = false
-only_feed_ids = []
+#only_feed_ids = []
 gtfs_zip_temp = "/tmp/catenary/gtfs_zip"
 gtfs_uncompressed_temp = "/tmp/catenary/gtfs_uncompressed"
 threads_gtfs = 2
@@ -36,7 +36,7 @@ etcd_password = ""
 [alpenrose]
 request_limit = 40
 etcd_urls = ["localhost:2379"]
-only_feed_ids = []
+#only_feed_ids = []
 etcd_username = ""
 etcd_password = ""
 
