@@ -34,6 +34,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use ahash::AHashSet;
 use catenary::postgres_tools::make_async_pool;
+use catenary::catenaryconfig;
 use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
 use compact_str::CompactString;
@@ -1579,8 +1580,12 @@ async fn main() -> anyhow::Result<()> {
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
-    let etcd_urls_original =
-        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let aspen_config = &catenaryconfig::config().aspen;
+
+    let etcd_urls_original = std::env::var("ETCD_URLS")
+        .ok()
+        .or_else(|| aspen_config.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .unwrap_or_else(|| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
         .split(',')
         .map(|x| x.to_string())
@@ -1588,13 +1593,13 @@ async fn main() -> anyhow::Result<()> {
 
     let etcd_addresses = Arc::new(etcd_urls);
 
-    let etcd_username = std::env::var("ETCD_USERNAME");
+    let etcd_username = std::env::var("ETCD_USERNAME").ok().or_else(|| aspen_config.etcd_username.clone());
 
-    let etcd_password = std::env::var("ETCD_PASSWORD");
+    let etcd_password = std::env::var("ETCD_PASSWORD").ok().or_else(|| aspen_config.etcd_password.clone());
 
     let etcd_connect_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
-            (Ok(username), Ok(password)) => {
+            (Some(username), Some(password)) => {
                 Some(etcd_client::ConnectOptions::new().with_user(username, password))
             }
             _ => None,
@@ -1603,10 +1608,14 @@ async fn main() -> anyhow::Result<()> {
     let arc_etcd_connect_options = Arc::new(etcd_connect_options.clone());
 
     let channel_count = std::env::var("CHANNELS")
+        .ok()
+        .or_else(|| aspen_config.channels.map(|value| value.to_string()))
         .expect("channels not set")
         .parse::<usize>()
         .expect("channels not a number");
     let alpenrosethreadcount = std::env::var("ALPENROSETHREADCOUNT")
+        .ok()
+        .or_else(|| aspen_config.alpenrose_thread_count.map(|value| value.to_string()))
         .expect("alpenrosethreadcount not set")
         .parse::<usize>()
         .expect("alpenrosethreadcount not a number");
@@ -1619,9 +1628,12 @@ async fn main() -> anyhow::Result<()> {
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
     println!("Connected to postgres");
 
-    let port_number: u16 = match std::env::var("PORT") {
-        Ok(port) => port.parse::<u16>().unwrap(),
-        Err(e) => {
+    let port_number: u16 = match std::env::var("PORT")
+        .ok()
+        .or_else(|| aspen_config.port.map(|value| value.to_string()))
+    {
+        Some(port) => port.parse::<u16>().unwrap(),
+        None => {
             println!("No port number found, defaulting to 40427");
             40427u16
         }

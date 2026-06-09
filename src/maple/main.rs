@@ -81,6 +81,7 @@ use dmfr_dataset_reader::read_folders;
 
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use crate::transitland_download::DownloadedFeedsInformation;
+use catenary::catenaryconfig;
 
 use clap::{Parser, Subcommand};
 
@@ -112,19 +113,23 @@ enum Commands {
     },
 }
 
-fn get_threads_gtfs() -> usize {
-    let thread_env = std::env::var("THREADS_GTFS");
-
-    match thread_env {
-        Ok(thread_env) => thread_env.parse::<usize>().unwrap_or(4),
-        Err(_) => 4,
+fn get_threads_gtfs(maple_config: &catenaryconfig::MapleConfig) -> usize {
+    match std::env::var("THREADS_GTFS") {
+        Ok(thread_env) => thread_env
+            .parse::<usize>()
+            .unwrap_or_else(|_| maple_config.threads_gtfs.unwrap_or(4)),
+        Err(_) => maple_config.threads_gtfs.unwrap_or(4),
     }
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let catenary_config = catenaryconfig::config();
+    let maple_config = &catenary_config.maple;
     let args = Args::parse();
 
-    let discord_log_env = std::env::var("DISCORD_LOG");
+    let discord_log_env = std::env::var("DISCORD_LOG")
+        .ok()
+        .or_else(|| maple_config.discord_log.clone());
 
     // Check for subcommand
     if let Some(Commands::MatchOsm { feed_id }) = &args.command {
@@ -159,8 +164,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         .await;
     }
 
-    let elasticclient = if !args.no_elastic {
-        let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
+    let no_elastic = args.no_elastic || maple_config.no_elastic.unwrap_or(false);
+
+    let elasticclient = if !no_elastic {
+        let elastic_url = std::env::var("ELASTICSEARCH_URL")
+            .ok()
+            .or_else(|| maple_config.elasticsearch_url.clone())
+            .unwrap();
 
         let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
 
@@ -173,15 +183,20 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         None
     };
 
-    let use_girolle = args.use_girolle.unwrap_or(false);
+    let use_girolle = args
+        .use_girolle
+        .or(maple_config.use_girolle)
+        .unwrap_or(false);
 
-    let delete_everything_in_feed_before_ingest = match std::env::var("DELETE_BEFORE_INGEST") {
-        Ok(val) => match val.as_str().to_lowercase().as_str() {
-            "true" => true,
-            _ => false,
-        },
-        Err(_) => false,
-    };
+    let delete_everything_in_feed_before_ingest = std::env::var("DELETE_BEFORE_INGEST")
+        .ok()
+        .and_then(|val| match val.as_str().to_lowercase().as_str() {
+            "true" | "1" | "yes" | "on" => Some(true),
+            "false" | "0" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .or(maple_config.delete_before_ingest)
+        .unwrap_or(false);
 
     if delete_everything_in_feed_before_ingest {
         println!("Each feed will be wiped before ingestion");
@@ -238,13 +253,23 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
         Err(_) => match std::env::var("ONLY_FEED_ID") {
             Ok(feed_id) => Some(HashSet::from([feed_id])),
-            Err(_) => None,
+            Err(_) => maple_config.only_feed_ids.clone().map(HashSet::from_iter).or_else(|| {
+                maple_config
+                    .only_feed_id
+                    .clone()
+                    .map(|feed_id| HashSet::from([feed_id]))
+            }),
         },
     };
 
     let gtfs_temp_storage = std::env::var("GTFS_ZIP_TEMP")
-        .expect("Missing GTFS_ZIP_TEMP env variable. Please give a path to store gtfs zip files.");
-    let gtfs_uncompressed_temp_storage = std::env::var("GTFS_UNCOMPRESSED_TEMP").expect("Missing GTFS_UNCOMPRESSED_TEMP env variable. Please give a path to store gtfs uncompressed files.");
+        .ok()
+        .or_else(|| maple_config.gtfs_zip_temp.clone())
+        .expect("Missing GTFS_ZIP_TEMP config value. Please give a path to store gtfs zip files.");
+    let gtfs_uncompressed_temp_storage = std::env::var("GTFS_UNCOMPRESSED_TEMP")
+        .ok()
+        .or_else(|| maple_config.gtfs_uncompressed_temp.clone())
+        .expect("Missing GTFS_UNCOMPRESSED_TEMP config value. Please give a path to store gtfs uncompressed files.");
 
     // get connection pool from database pool
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
@@ -280,13 +305,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     // Default ingestion path
     // Validate transitland arg manually effectively
-    let transitland_path = match args.transitland {
-        Some(p) => p,
-        None => {
-            eprintln!("Error: --transitland <PATH> is required for ingestion.");
+    let transitland_path = args
+        .transitland
+        .or_else(|| std::env::var("TRANSITLAND").ok())
+        .or_else(|| maple_config.transitland.clone())
+        .unwrap_or_else(|| {
+            eprintln!("Error: set maple.transitland in catenaryconfig.toml or pass --transitland <PATH>.");
             std::process::exit(1);
-        }
-    };
+        });
 
     // reads a transitland directory and returns a hashmap of all the data feeds (urls) associated with their correct operator and vise versa
     // See https://github.com/catenarytransit/dmfr-folder-reader
@@ -306,7 +332,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     // The DMFR result dataset looks genuine, with over 200 pieces of data!
     if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
-        if let Ok(discord_log_env) = &discord_log_env {
+        if let Some(discord_log_env) = &discord_log_env {
             let hook_result = Webhook::new(discord_log_env.as_str())
                 .username("Catenary Maple")
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
@@ -385,7 +411,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             _ => None,
         };
 
-        if let Ok(discord_log_env) = &discord_log_env {
+        if let Some(discord_log_env) = &discord_log_env {
             let hook_result = Webhook::new(discord_log_env.as_str())
                 .username("Catenary Maple")
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
@@ -695,7 +721,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             println!("Processing {} feeds", total_feeds_to_process);
 
-            if let Ok(discord_log_env) = &discord_log_env {
+            if let Some(discord_log_env) = &discord_log_env {
                 let hook_result = Webhook::new(discord_log_env.as_str())
                     .username("Catenary Maple")
                     .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
@@ -713,7 +739,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             }
 
             // Use async tokio tasks with semaphore-based concurrency control
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(get_threads_gtfs()));
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(get_threads_gtfs(maple_config)));
             let mut handles = Vec::new();
 
             for (feed_id, attempt_id, chateau_id) in feeds_to_process {
@@ -772,7 +798,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         !matching_hash_rows.is_empty()
                     };
 
-                    if !file_contents_exists || std::env::var("FORCE_INGEST_ALL").is_ok() {
+                    if !file_contents_exists
+                        || std::env::var("FORCE_INGEST_ALL").is_ok()
+                        || maple_config.force_ingest_all.unwrap_or(false)
+                    {
                         if delete_everything_in_feed_before_ingest {
                             let wipe_whole_feed_result =
                                 wipe_whole_feed(&feed_id, Arc::clone(&arc_conn_pool)).await;
@@ -934,7 +963,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 gtfs_process_result.as_ref().unwrap_err()
                             );
 
-                            if let Ok(discord_log_env) = &discord_log_env {
+                            if let Some(discord_log_env) = &discord_log_env {
                                 let hook_result = Webhook::new(discord_log_env.as_str())
                                     .username("Catenary Maple")
                                     .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
@@ -1218,7 +1247,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
     println!("Maple ingest completed");
 
-    if let Ok(discord_log_env) = &discord_log_env {
+    if let Some(discord_log_env) = &discord_log_env {
         let hook_result = Webhook::new(discord_log_env.as_str())
             .username("Catenary Maple")
             .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
@@ -1234,7 +1263,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .send();
     }
 
-    if std::env::var("BYPASS_TEMP_DELETE").is_err() {
+    if std::env::var("BYPASS_TEMP_DELETE").is_err() && !maple_config.bypass_temp_delete.unwrap_or(false) {
         println!("Deleting temp data");
         fs::remove_dir_all(gtfs_temp_storage).unwrap();
         fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();

@@ -1,0 +1,42 @@
+[maple]
+transitland = "/path/to/transitland"
+use_girolle = false
+no_elastic = false
+delete_before_ingest = false
+only_feed_ids = []
+gtfs_zip_temp = "/tmp/catenary/gtfs_zip"
+gtfs_uncompressed_temp = "/tmp/catenary/gtfs_uncompressed"
+threads_gtfs = 2
+force_ingest_all = false
+bypass_temp_delete = false
+discord_log = ""
+elasticsearch_url = "http://localhost:9200"
+
+[maple.transitland_download]
+download_threads = 64
+croatia_npt_username = ""
+croatia_npt_password = ""
+grand_lyon_username = ""
+grand_lyon_password = ""
+de_username = ""
+de_password = ""
+
+[aspen]
+etcd_urls = ["localhost:2379"]
+channels = 4
+alpenrose_thread_count = 4
+port = 40427
+
+[aspenleader]
+etcd_urls = ["localhost:2379"]
+
+[alpenrose]
+request_limit = 40
+etcd_urls = ["localhost:2379"]
+
+[birch]
+worker_amount = 4
+
+[postgres]
+database_url = "postgres://user:pass@localhost:5432/catenary"
+max_connections = 128

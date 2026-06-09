@@ -56,6 +56,7 @@ use actix_web::middleware::DefaultHeaders;
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, Responder, middleware, web};
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::catenaryconfig;
 use catenary::models::IpToGeoAddr;
 use catenary::postgis_to_diesel::diesel_multi_polygon_to_geo;
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
@@ -801,6 +802,8 @@ async fn ip_addr_to_geo_api(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let catenary_config = catenaryconfig::config();
+
     // Connect to the database.
     let pool = Arc::new(make_async_pool().await.unwrap());
     let arc_pool = Arc::clone(&pool);
@@ -811,13 +814,21 @@ async fn main() -> std::io::Result<()> {
     let sqlx_pool: Arc<sqlx::Pool<sqlx::Postgres>> = Arc::new(
         PgPoolOptions::new()
             .max_connections(16)
-            .connect(std::env::var("DATABASE_URL").unwrap().as_str())
+            .connect(
+                std::env::var("DATABASE_URL")
+                    .ok()
+                    .or_else(|| catenary_config.postgres.database_url.clone())
+                    .expect("DATABASE_URL or [postgres].database_url must be configured")
+                    .as_str(),
+            )
             .await
             .unwrap(),
     );
 
-    let etcd_urls_original =
-        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls_original = std::env::var("ETCD_URLS")
+        .ok()
+        .or_else(|| catenary_config.aspen.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .unwrap_or_else(|| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
         .split(',')
         .map(|x| x.to_string())
@@ -827,22 +838,31 @@ async fn main() -> std::io::Result<()> {
         ip_addresses: etcd_urls,
     });
 
-    let etcd_username = std::env::var("ETCD_USERNAME");
+    let etcd_username = std::env::var("ETCD_USERNAME")
+        .ok()
+        .or_else(|| catenary_config.aspen.etcd_username.clone());
 
-    let etcd_password = std::env::var("ETCD_PASSWORD");
+    let etcd_password = std::env::var("ETCD_PASSWORD")
+        .ok()
+        .or_else(|| catenary_config.aspen.etcd_password.clone());
 
-    let elastic_url = std::env::var("ELASTICSEARCH_URL").unwrap();
+    let elastic_url = std::env::var("ELASTICSEARCH_URL")
+        .ok()
+        .or_else(|| catenary_config.maple.elasticsearch_url.clone())
+        .expect("ELASTICSEARCH_URL or [maple].elasticsearch_url must be configured");
 
     let etcd_connection_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
-            (Ok(username), Ok(password)) => {
+            (Some(username), Some(password)) => {
                 Some(etcd_client::ConnectOptions::new().with_user(username, password))
             }
             _ => None,
         };
 
     let worker_amount = std::env::var("WORKER_AMOUNT")
-        .unwrap_or_else(|_| "4".to_string())
+        .ok()
+        .or(catenary_config.birch.worker_amount.map(|value| value.to_string()))
+        .unwrap_or_else(|| "4".to_string())
         .parse::<usize>()
         .unwrap_or(4);
 

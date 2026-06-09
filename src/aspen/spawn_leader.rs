@@ -7,28 +7,33 @@ use leader_thread::aspen_leader_thread;
 use uuid::Uuid;
 
 use catenary::postgres_tools::*;
+use catenary::catenaryconfig;
 
 use catenary::aspen::lib::ChateauxLeaderHashMap;
 use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
+    let aspenleader_config = &catenaryconfig::config().aspenleader;
+
     // Worker Id for this instance of Aspen
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
-    let etcd_username = std::env::var("ETCD_USERNAME");
+    let etcd_username = std::env::var("ETCD_USERNAME").ok().or_else(|| aspenleader_config.etcd_username.clone());
 
-    let etcd_password = std::env::var("ETCD_PASSWORD");
+    let etcd_password = std::env::var("ETCD_PASSWORD").ok().or_else(|| aspenleader_config.etcd_password.clone());
     let etcd_lease_id_for_this_worker: i64 = rand::rng().random_range(0..i64::MAX);
     let etcd_connect_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
-            (Ok(username), Ok(password)) => {
+            (Some(username), Some(password)) => {
                 Some(etcd_client::ConnectOptions::new().with_user(username, password))
             }
             _ => None,
         };
 
-    let etcd_urls_original =
-        std::env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
+    let etcd_urls_original = std::env::var("ETCD_URLS")
+        .ok()
+        .or_else(|| aspenleader_config.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .unwrap_or_else(|| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
         .split(',')
         .map(|x| x.to_string())

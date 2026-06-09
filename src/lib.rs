@@ -100,6 +100,7 @@ use std::{fs::File, io::BufReader, io::BufWriter};
 pub mod agency_specific_types;
 pub mod aspen_dataset;
 pub mod compact_formats;
+pub mod catenaryconfig;
 pub mod connections_lookup;
 pub mod genentech_auth;
 pub mod graph_formats;

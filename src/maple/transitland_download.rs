@@ -4,6 +4,7 @@
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
 use catenary::GirolleFeedDownloadResult;
+use catenary::catenaryconfig;
 use catenary::models::StaticDownloadAttempt;
 use chrono::{DateTime, FixedOffset};
 use diesel::prelude::*;
@@ -548,9 +549,15 @@ pub async fn download_return_eligible_feeds(
     girolle_data: &Option<BTreeMap<String, GirolleFeedDownloadResult>>,
     use_girolle: bool,
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
+    let maple_config = &catenaryconfig::config().maple;
     let threads: usize = match std::env::var("DOWNLOAD_THREADS") {
-        Ok(ok) => ok.parse::<usize>().unwrap_or_else(|_| 64),
-        Err(_) => 64,
+        Ok(ok) => ok
+            .parse::<usize>()
+            .unwrap_or_else(|_| maple_config.transitland_download.download_threads.unwrap_or(64)),
+        Err(_) => maple_config
+            .transitland_download
+            .download_threads
+            .unwrap_or(64),
     };
 
     let total_bytes_downloaded: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
@@ -845,7 +852,7 @@ pub async fn download_return_eligible_feeds(
                                             Ok(download_attempts_postgres_lookup) => {
                                                 answer.operation_success = true;
 
-                                                if std::env::var("ONLY_FEED_IDS").is_ok() || std::env::var("ONLY_FEED_ID").is_ok() || std::env::var("FORCE_INGEST_ALL").is_ok() {
+                                                if maple_config.force_ingest_all.unwrap_or(false) {
                                                     answer.ingest = true;
                                                 } else {
                                                      // this zip file has never been seen before! Insert it!
@@ -958,6 +965,7 @@ fn transform_for_bay_area(x: String) -> String {
 
 async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
     let mut request = request;
+    let maple_config = &catenaryconfig::config().maple;
 
     let mut headers = reqwest::header::HeaderMap::new();
 
@@ -1038,11 +1046,11 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             // }
 
             // Basic auth also seems to work
-            let username = std::env::var("CROATIA_NPT_USERNAME");
-            let password = std::env::var("CROATIA_NPT_PASSWORD");
+            let username = maple_config.transitland_download.croatia_npt_username.clone().or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok());
+            let password = maple_config.transitland_download.croatia_npt_password.clone().or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok());
 
-            if let Ok(username) = username {
-                if let Ok(password) = password {
+            if let Some(username) = username {
+                if let Some(password) = password {
                     println!("Password found for Croatia!");
                     request = request.basic_auth(username, Some(password));
                 }
@@ -1067,11 +1075,11 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
         //ENV vars get GRAND_LYON_USERNAME
         //ENV vars get GRAND_LYON_PASSWORD
 
-        let username = std::env::var("GRAND_LYON_USERNAME");
-        let password = std::env::var("GRAND_LYON_PASSWORD");
+        let username = maple_config.transitland_download.grand_lyon_username.clone().or_else(|| std::env::var("GRAND_LYON_USERNAME").ok());
+        let password = maple_config.transitland_download.grand_lyon_password.clone().or_else(|| std::env::var("GRAND_LYON_PASSWORD").ok());
 
-        if let Ok(username) = username {
-            if let Ok(password) = password {
+        if let Some(username) = username {
+            if let Some(password) = password {
                 println!("Password found for grand lyon!");
                 request = request.basic_auth(username, Some(password));
             }
@@ -1079,11 +1087,11 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
     }
 
     if feed_id == "f-gtfs~de" {
-        let username = std::env::var("DE_USERNAME");
-        let password = std::env::var("DE_PASSWORD");
+        let username = maple_config.transitland_download.de_username.clone().or_else(|| std::env::var("DE_USERNAME").ok());
+        let password = maple_config.transitland_download.de_password.clone().or_else(|| std::env::var("DE_PASSWORD").ok());
 
-        if let Ok(username) = username {
-            if let Ok(password) = password {
+        if let Some(username) = username {
+            if let Some(password) = password {
                 println!("Password found for DE!");
                 request = request.basic_auth(username, Some(password));
             }
@@ -1096,8 +1104,9 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
 async fn get_croatia_npt_token(
     client: reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let username = std::env::var("CROATIA_NPT_USERNAME").unwrap_or_default();
-    let password = std::env::var("CROATIA_NPT_PASSWORD").unwrap_or_default();
+    let maple_config = &catenaryconfig::config().maple;
+    let username = maple_config.transitland_download.croatia_npt_username.clone().or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok()).unwrap_or_default();
+    let password = maple_config.transitland_download.croatia_npt_password.clone().or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok()).unwrap_or_default();
 
     if username.is_empty() || password.is_empty() {
         println!("Warning: CROATIA_NPT_USERNAME or CROATIA_NPT_PASSWORD is not set");
