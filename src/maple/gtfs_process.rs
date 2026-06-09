@@ -412,7 +412,7 @@ pub async fn gtfs_process_feed(
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
-                Some(vec![String::from("rail")]),
+                Some(vec![String::from("rail", "metro")]),
                 true,
                 false,
             )
