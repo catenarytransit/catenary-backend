@@ -202,12 +202,13 @@ pub async fn shapes_into_postgres(
                 }
             }
 
-            {
+{
                 use catenary::schema::gtfs::shapes::dsl::*;
 
                 if !batch_of_shapes.is_empty() {
                     diesel::insert_into(shapes)
                         .values(batch_of_shapes)
+                        .on_conflict_do_nothing() // Automatically ignores duplicates on the primary key constraint
                         .execute(conn)
                         .await?;
                 }
