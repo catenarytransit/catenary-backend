@@ -827,7 +827,13 @@ async fn main() -> std::io::Result<()> {
 
     let etcd_urls_original = std::env::var("ETCD_URLS")
         .ok()
-        .or_else(|| catenary_config.aspen.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .or_else(|| {
+            catenary_config
+                .aspen
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
         .unwrap_or_else(|| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
         .split(',')
@@ -848,8 +854,8 @@ async fn main() -> std::io::Result<()> {
 
     let elastic_url = std::env::var("ELASTICSEARCH_URL")
         .ok()
-        .or_else(|| catenary_config.maple.elasticsearch_url.clone())
-        .expect("ELASTICSEARCH_URL or [maple].elasticsearch_url must be configured");
+        .or_else(|| catenary_config.elasticsearch.url.clone())
+        .expect("ELASTICSEARCH_URL or [elasticsearch].url must be configured");
 
     let etcd_connection_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
@@ -861,7 +867,10 @@ async fn main() -> std::io::Result<()> {
 
     let worker_amount = std::env::var("WORKER_AMOUNT")
         .ok()
-        .or(catenary_config.birch.worker_amount.map(|value| value.to_string()))
+        .or(catenary_config
+            .birch
+            .worker_amount
+            .map(|value| value.to_string()))
         .unwrap_or_else(|| "4".to_string())
         .parse::<usize>()
         .unwrap_or(4);

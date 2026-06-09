@@ -118,29 +118,52 @@ async fn main() -> std::io::Result<()> {
     // env_logger::init();
 
     let pool = Arc::new(make_async_pool().await.unwrap());
+    let catenary_config = catenary::catenaryconfig::config();
 
-    let etcd_urls_string = std::env::var("ETCD_URLS").unwrap();
-    let etcd_urls_vec: Vec<String> = etcd_urls_string.split(",").map(|x| x.to_string()).collect();
-    let etcd_username = std::env::var("ETCD_USERNAME").unwrap();
-    let etcd_password = std::env::var("ETCD_PASSWORD").unwrap();
+    let etcd_urls_original = std::env::var("ETCD_URLS")
+        .ok()
+        .or_else(|| {
+            catenary_config
+                .aspen
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
+        .unwrap_or_else(|| "localhost:2379".to_string());
+    let etcd_urls_vec: Vec<String> = etcd_urls_original
+        .split(',')
+        .map(|x| x.to_string())
+        .collect::<Vec<String>>();
+
+    let etcd_username = std::env::var("ETCD_USERNAME")
+        .ok()
+        .or_else(|| catenary_config.aspen.etcd_username.clone());
+    let etcd_password = std::env::var("ETCD_PASSWORD")
+        .ok()
+        .or_else(|| catenary_config.aspen.etcd_password.clone());
 
     let etcd_connection_ips = Arc::new(EtcdConnectionIps {
         ip_addresses: etcd_urls_vec.clone(),
     });
 
-    let etcd_connection_options = Arc::new(Some(
-        etcd_client::ConnectOptions::new()
-            .with_user(etcd_username.clone(), etcd_password.clone())
-            .with_keep_alive(
-                std::time::Duration::from_secs(1),
-                std::time::Duration::from_secs(5),
-            ),
-    ));
+    let etcd_connection_options = Arc::new(match (etcd_username, etcd_password) {
+        (Some(username), Some(password)) => Some(
+            etcd_client::ConnectOptions::new()
+                .with_user(username, password)
+                .with_keep_alive(
+                    std::time::Duration::from_secs(1),
+                    std::time::Duration::from_secs(5),
+                ),
+        ),
+        _ => None,
+    });
 
     let worker_amount = std::env::var("WORKER_AMOUNT")
-        .unwrap_or("2".to_string())
+        .ok()
+        .or_else(|| catenary_config.spruce.worker_amount.map(|v| v.to_string()))
+        .unwrap_or_else(|| "2".to_string())
         .parse::<usize>()
-        .unwrap();
+        .unwrap_or(2);
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
 

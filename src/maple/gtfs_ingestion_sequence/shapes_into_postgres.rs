@@ -202,7 +202,7 @@ pub async fn shapes_into_postgres(
                 }
             }
 
-{
+            {
                 use catenary::schema::gtfs::shapes::dsl::*;
 
                 if !batch_of_shapes.is_empty() {

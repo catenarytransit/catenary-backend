@@ -33,8 +33,8 @@ use tikv_jemallocator::Jemalloc;
 static GLOBAL: Jemalloc = Jemalloc;
 
 use ahash::AHashSet;
-use catenary::postgres_tools::make_async_pool;
 use catenary::catenaryconfig;
+use catenary::postgres_tools::make_async_pool;
 use catenary::{aspen::lib::*, id_cleanup};
 use clap::Parser;
 use compact_str::CompactString;
@@ -1593,9 +1593,13 @@ async fn main() -> anyhow::Result<()> {
 
     let etcd_addresses = Arc::new(etcd_urls);
 
-    let etcd_username = std::env::var("ETCD_USERNAME").ok().or_else(|| aspen_config.etcd_username.clone());
+    let etcd_username = std::env::var("ETCD_USERNAME")
+        .ok()
+        .or_else(|| aspen_config.etcd_username.clone());
 
-    let etcd_password = std::env::var("ETCD_PASSWORD").ok().or_else(|| aspen_config.etcd_password.clone());
+    let etcd_password = std::env::var("ETCD_PASSWORD")
+        .ok()
+        .or_else(|| aspen_config.etcd_password.clone());
 
     let etcd_connect_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
@@ -1615,7 +1619,11 @@ async fn main() -> anyhow::Result<()> {
         .expect("channels not a number");
     let alpenrosethreadcount = std::env::var("ALPENROSETHREADCOUNT")
         .ok()
-        .or_else(|| aspen_config.alpenrose_thread_count.map(|value| value.to_string()))
+        .or_else(|| {
+            aspen_config
+                .alpenrose_thread_count
+                .map(|value| value.to_string())
+        })
         .expect("alpenrosethreadcount not set")
         .parse::<usize>()
         .expect("alpenrosethreadcount not a number");

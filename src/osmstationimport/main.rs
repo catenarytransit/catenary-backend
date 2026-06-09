@@ -1077,9 +1077,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("\n=== Pass 5: Elasticsearch bulk indexing & Admin Region Lookup ===");
 
     // Determine ES URL
-    let es_url = args.elastic_url.unwrap_or_else(|| {
-        std::env::var("ELASTICSEARCH_URL").unwrap_or_else(|_| "http://localhost:9200".to_string())
-    });
+    let es_url = args
+        .elastic_url
+        .ok_or_else(|| "".to_string())
+        .or_else(|_| std::env::var("ELASTICSEARCH_URL"))
+        .ok()
+        .or_else(|| catenary::catenaryconfig::config().elasticsearch.url.clone())
+        .unwrap_or_else(|| "http://localhost:9200".to_string());
 
     println!("Connecting to Elasticsearch at {}...", es_url);
 

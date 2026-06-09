@@ -73,10 +73,11 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let alpenrose_config = &catenaryconfig::config().alpenrose;
-    let request_limit = match std::env::var("REQUEST_LIMIT")
-        .ok()
-        .or_else(|| alpenrose_config.request_limit.map(|value| value.to_string()))
-    {
+    let request_limit = match std::env::var("REQUEST_LIMIT").ok().or_else(|| {
+        alpenrose_config
+            .request_limit
+            .map(|value| value.to_string())
+    }) {
         Some(request_limit) => request_limit.parse::<usize>().unwrap(),
         None => 40,
     };
@@ -152,7 +153,12 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let etcd_urls_original = std::env::var("ETCD_URLS")
         .ok()
-        .or_else(|| alpenrose_config.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .or_else(|| {
+            alpenrose_config
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
         .unwrap_or_else(|| "localhost:2379".to_string());
     let etcd_urls = etcd_urls_original
         .split(',')
@@ -161,9 +167,13 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let etcd_urls = Arc::new(etcd_urls);
 
-    let etcd_username = std::env::var("ETCD_USERNAME").ok().or_else(|| alpenrose_config.etcd_username.clone());
+    let etcd_username = std::env::var("ETCD_USERNAME")
+        .ok()
+        .or_else(|| alpenrose_config.etcd_username.clone());
 
-    let etcd_password = std::env::var("ETCD_PASSWORD").ok().or_else(|| alpenrose_config.etcd_password.clone());
+    let etcd_password = std::env::var("ETCD_PASSWORD")
+        .ok()
+        .or_else(|| alpenrose_config.etcd_password.clone());
 
     let etcd_connection_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {

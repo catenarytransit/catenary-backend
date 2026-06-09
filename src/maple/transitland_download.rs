@@ -551,9 +551,12 @@ pub async fn download_return_eligible_feeds(
 ) -> Result<Vec<DownloadedFeedsInformation>, ()> {
     let maple_config = &catenaryconfig::config().maple;
     let threads: usize = match std::env::var("DOWNLOAD_THREADS") {
-        Ok(ok) => ok
-            .parse::<usize>()
-            .unwrap_or_else(|_| maple_config.transitland_download.download_threads.unwrap_or(64)),
+        Ok(ok) => ok.parse::<usize>().unwrap_or_else(|_| {
+            maple_config
+                .transitland_download
+                .download_threads
+                .unwrap_or(64)
+        }),
         Err(_) => maple_config
             .transitland_download
             .download_threads
@@ -1046,8 +1049,16 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
             // }
 
             // Basic auth also seems to work
-            let username = maple_config.transitland_download.croatia_npt_username.clone().or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok());
-            let password = maple_config.transitland_download.croatia_npt_password.clone().or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok());
+            let username = maple_config
+                .transitland_download
+                .croatia_npt_username
+                .clone()
+                .or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok());
+            let password = maple_config
+                .transitland_download
+                .croatia_npt_password
+                .clone()
+                .or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok());
 
             if let Some(username) = username {
                 if let Some(password) = password {
@@ -1075,8 +1086,16 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
         //ENV vars get GRAND_LYON_USERNAME
         //ENV vars get GRAND_LYON_PASSWORD
 
-        let username = maple_config.transitland_download.grand_lyon_username.clone().or_else(|| std::env::var("GRAND_LYON_USERNAME").ok());
-        let password = maple_config.transitland_download.grand_lyon_password.clone().or_else(|| std::env::var("GRAND_LYON_PASSWORD").ok());
+        let username = maple_config
+            .transitland_download
+            .grand_lyon_username
+            .clone()
+            .or_else(|| std::env::var("GRAND_LYON_USERNAME").ok());
+        let password = maple_config
+            .transitland_download
+            .grand_lyon_password
+            .clone()
+            .or_else(|| std::env::var("GRAND_LYON_PASSWORD").ok());
 
         if let Some(username) = username {
             if let Some(password) = password {
@@ -1087,8 +1106,16 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
     }
 
     if feed_id == "f-gtfs~de" {
-        let username = maple_config.transitland_download.de_username.clone().or_else(|| std::env::var("DE_USERNAME").ok());
-        let password = maple_config.transitland_download.de_password.clone().or_else(|| std::env::var("DE_PASSWORD").ok());
+        let username = maple_config
+            .transitland_download
+            .de_username
+            .clone()
+            .or_else(|| std::env::var("DE_USERNAME").ok());
+        let password = maple_config
+            .transitland_download
+            .de_password
+            .clone()
+            .or_else(|| std::env::var("DE_PASSWORD").ok());
 
         if let Some(username) = username {
             if let Some(password) = password {
@@ -1105,8 +1132,18 @@ async fn get_croatia_npt_token(
     client: reqwest::Client,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let maple_config = &catenaryconfig::config().maple;
-    let username = maple_config.transitland_download.croatia_npt_username.clone().or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok()).unwrap_or_default();
-    let password = maple_config.transitland_download.croatia_npt_password.clone().or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok()).unwrap_or_default();
+    let username = maple_config
+        .transitland_download
+        .croatia_npt_username
+        .clone()
+        .or_else(|| std::env::var("CROATIA_NPT_USERNAME").ok())
+        .unwrap_or_default();
+    let password = maple_config
+        .transitland_download
+        .croatia_npt_password
+        .clone()
+        .or_else(|| std::env::var("CROATIA_NPT_PASSWORD").ok())
+        .unwrap_or_default();
 
     if username.is_empty() || password.is_empty() {
         println!("Warning: CROATIA_NPT_USERNAME or CROATIA_NPT_PASSWORD is not set");

@@ -151,9 +151,15 @@ The following `cargo clippy` rules are enforced.
 
 The OSM Station Import system associates GTFS railway stops with OpenStreetMap stations. This provides additional metadata like multilingual names, UIC references, and station relationships.
 
-#### Step 1: Import OSM Stations
+### Step 1: Setup configuration and dependent databases.
 
-First, obtain a pre-filtered PBF file containing railway stations (or use one from Geofabrik filtered with osmium):
+Ensure that Postgres, Elasticsearch, and etcd are all running services.
+
+Then copy `example.catenaryconfig.toml` to `catenaryconfig.toml` and insert the URLs and passwords for the services you wish.
+
+#### Step 2: Import OSM Stations
+
+Obtain a pre-filtered PBF file containing railway stations (or use one from Geofabrik filtered with osmium):
 
 ```bash
 cargo run --bin osmstationimport -- --file /path/to/railstations.osm.pbf
@@ -173,17 +179,37 @@ The importer:
 - Parses multilingual names (`name:en`, `name:de`, etc.)
 - Stores in `gtfs.osm_stations` table with spatial indexing
 
-#### Step 2: Run Maple Import
+#### Step 3: Run Maple Import
 
 When Maple processes GTFS feeds, it automatically matches stops to OSM stations for rail/tram/subway routes:
 
 ```bash
-cargo run --bin maple -- --transitland /path/to/transitland-atlas
+cargo run --bin maple
 ```
 
- See the Maple readme for more info
+See the Maple readme for more information.
 
-### Routing Engine Setup
+#### Step 4: Launch at least one instance of Alpenrose, the GTFS rt downloader.
+```bash
+cargo run --bin alpenrose
+```
+
+#### Step 5: Launch at least one copy of Aspen, the GTFS realtime data processor.
+```bash
+cargo run --bin aspen
+```
+
+#### Step 6: Launch Birch, the HTTP API provider
+```bash
+cargo run --bin birch
+```
+
+#### Step 7: Launch Spruce, the Websocket data provider
+```bash
+cargo run --bin spruce
+```
+
+### Routing Engine Setup (HIGHLY UNSTABLE, IN PROGRESS)
 
 The routing engine provides point-to-point transit directions using three main microservices:
 

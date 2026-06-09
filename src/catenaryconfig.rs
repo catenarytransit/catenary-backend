@@ -19,7 +19,11 @@ pub struct CatenaryConfig {
     #[serde(default)]
     pub birch: BirchConfig,
     #[serde(default)]
+    pub spruce: SpruceConfig,
+    #[serde(default)]
     pub postgres: PostgresConfig,
+    #[serde(default)]
+    pub elasticsearch: ElasticsearchConfig,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -36,7 +40,6 @@ pub struct MapleConfig {
     pub force_ingest_all: Option<bool>,
     pub bypass_temp_delete: Option<bool>,
     pub discord_log: Option<String>,
-    pub elasticsearch_url: Option<String>,
     #[serde(default)]
     pub transitland_download: TransitlandDownloadConfig,
 }
@@ -88,12 +91,23 @@ pub struct PostgresConfig {
     pub max_connections: Option<u32>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SpruceConfig {
+    pub worker_amount: Option<usize>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ElasticsearchConfig {
+    pub url: Option<String>,
+}
+
 pub fn config() -> &'static CatenaryConfig {
     CATENARY_CONFIG.get_or_init(load_config)
 }
 
 fn load_config() -> CatenaryConfig {
-    let path = std::env::var("CATENARYCONFIG").unwrap_or_else(|_| "catenaryconfig.toml".to_string());
+    let path =
+        std::env::var("CATENARYCONFIG").unwrap_or_else(|_| "catenaryconfig.toml".to_string());
 
     let mut config = match fs::read_to_string(Path::new(&path)) {
         Ok(contents) => match toml::from_str::<CatenaryConfig>(&contents) {
@@ -138,7 +152,9 @@ impl CatenaryConfig {
         self.aspenleader.apply_env_overrides();
         self.alpenrose.apply_env_overrides();
         self.birch.apply_env_overrides();
+        self.spruce.apply_env_overrides();
         self.postgres.apply_env_overrides();
+        self.elasticsearch.apply_env_overrides();
     }
 }
 
@@ -188,10 +204,6 @@ impl MapleConfig {
 
         if let Ok(value) = std::env::var("DISCORD_LOG") {
             self.discord_log = Some(value);
-        }
-
-        if let Ok(value) = std::env::var("ELASTICSEARCH_URL") {
-            self.elasticsearch_url = Some(value);
         }
     }
 }
@@ -247,7 +259,8 @@ impl AspenConfig {
         }
 
         if let Ok(value) = std::env::var("ALPENROSETHREADCOUNT") {
-            self.alpenrose_thread_count = value.parse::<usize>().ok().or(self.alpenrose_thread_count);
+            self.alpenrose_thread_count =
+                value.parse::<usize>().ok().or(self.alpenrose_thread_count);
         }
 
         if let Ok(value) = std::env::var("PORT") {
@@ -308,6 +321,22 @@ impl PostgresConfig {
 
         if let Ok(value) = std::env::var("POSTGRES_MAX_CONNECTIONS") {
             self.max_connections = value.parse::<u32>().ok().or(self.max_connections);
+        }
+    }
+}
+
+impl SpruceConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Ok(value) = std::env::var("WORKER_AMOUNT") {
+            self.worker_amount = value.parse::<usize>().ok().or(self.worker_amount);
+        }
+    }
+}
+
+impl ElasticsearchConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Ok(value) = std::env::var("ELASTICSEARCH_URL") {
+            self.url = Some(value);
         }
     }
 }

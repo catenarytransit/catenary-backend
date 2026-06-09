@@ -10,7 +10,6 @@ threads_gtfs = 2
 force_ingest_all = false
 bypass_temp_delete = false
 discord_log = ""
-elasticsearch_url = "http://localhost:9200"
 
 [maple.transitland_download]
 download_threads = 64
@@ -36,6 +35,12 @@ etcd_urls = ["localhost:2379"]
 
 [birch]
 worker_amount = 4
+
+[spruce]
+worker_amount = 2
+
+[elasticsearch]
+url = "http://localhost:9200"
 
 [postgres]
 database_url = "postgres://user:pass@localhost:5432/catenary"

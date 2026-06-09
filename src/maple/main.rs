@@ -169,7 +169,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let elasticclient = if !no_elastic {
         let elastic_url = std::env::var("ELASTICSEARCH_URL")
             .ok()
-            .or_else(|| maple_config.elasticsearch_url.clone())
+            .or_else(|| catenary_config.elasticsearch.url.clone())
             .unwrap();
 
         let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
@@ -253,12 +253,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
         Err(_) => match std::env::var("ONLY_FEED_ID") {
             Ok(feed_id) => Some(HashSet::from([feed_id])),
-            Err(_) => maple_config.only_feed_ids.clone().map(HashSet::from_iter).or_else(|| {
-                maple_config
-                    .only_feed_id
-                    .clone()
-                    .map(|feed_id| HashSet::from([feed_id]))
-            }),
+            Err(_) => maple_config
+                .only_feed_ids
+                .clone()
+                .map(HashSet::from_iter)
+                .or_else(|| {
+                    maple_config
+                        .only_feed_id
+                        .clone()
+                        .map(|feed_id| HashSet::from([feed_id]))
+                }),
         },
     };
 
@@ -310,7 +314,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         .or_else(|| std::env::var("TRANSITLAND").ok())
         .or_else(|| maple_config.transitland.clone())
         .unwrap_or_else(|| {
-            eprintln!("Error: set maple.transitland in catenaryconfig.toml or pass --transitland <PATH>.");
+            eprintln!(
+                "Error: set maple.transitland in catenaryconfig.toml or pass --transitland <PATH>."
+            );
             std::process::exit(1);
         });
 
@@ -1263,7 +1269,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             .send();
     }
 
-    if std::env::var("BYPASS_TEMP_DELETE").is_err() && !maple_config.bypass_temp_delete.unwrap_or(false) {
+    if std::env::var("BYPASS_TEMP_DELETE").is_err()
+        && !maple_config.bypass_temp_delete.unwrap_or(false)
+    {
         println!("Deleting temp data");
         fs::remove_dir_all(gtfs_temp_storage).unwrap();
         fs::remove_dir_all(gtfs_uncompressed_temp_storage).unwrap();

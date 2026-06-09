@@ -1,11 +1,11 @@
 // Copyright: Kyler Chin <kyler@catenarymaps.org>
 // Catenary Transit Initiatives
 // Removal of the attribution is not allowed, as covered under the AGPL license
+use crate::catenaryconfig;
 use diesel_async::pooled_connection::AsyncDieselConnectionManager;
 use diesel_async::pooled_connection::ManagerConfig;
 use diesel_async::pooled_connection::RecyclingMethod;
 use diesel_async::pooled_connection::bb8::Pool;
-use crate::catenaryconfig;
 use std::env;
 
 /// This type alias is the pool, which can be quried for connections.
@@ -38,7 +38,11 @@ pub async fn make_async_pool() -> Result<
         );
     let max_size = env::var("POSTGRES_MAX_CONNECTIONS")
         .ok()
-        .or_else(|| postgres_config.max_connections.map(|value| value.to_string()))
+        .or_else(|| {
+            postgres_config
+                .max_connections
+                .map(|value| value.to_string())
+        })
         .unwrap_or_else(|| "128".to_string())
         .parse::<u32>()
         .unwrap_or(128);
