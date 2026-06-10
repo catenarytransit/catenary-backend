@@ -187,6 +187,8 @@ The importer:
 - Parses multilingual names (`name:en`, `name:de`, etc.)
 - Stores in `gtfs.osm_stations` table with spatial indexing
 
+-----------------------------------------------------------
+
 #### Step 3: Run Maple Import
 
 When Maple processes GTFS feeds, it automatically matches stops to OSM stations for rail/tram/subway routes:
@@ -221,6 +223,8 @@ cargo run --bin birch
 ```bash
 cargo run --bin spruce
 ```
+
+-------------------------------------------------------
 
 ### Routing Engine Setup (HIGHLY UNSTABLE, IN PROGRESS)
 
