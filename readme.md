@@ -2,23 +2,29 @@
 
 Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
 
+The code is heavily commented, go to each folder in src for more information.
+
+### In production
+
 - **Maple**: GTFS Downloader and ingestion engine into postgres
-- **Edelweiss**: Routing execution engine (in progress, see also [our routing testbed](https://github.com/catenarytransit/routing)
-- **Avens**: OSM Preprocessor and graph generator for routing (in progress)
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes); successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines. Submodule Pando is used for distribution management
 - **Aspen Leader**: Coordinator/leader process for Aspen workers using etcd.
-- **Linnaea**: Visualisation of the graphs for debugging and research paper purposes
-- **Gentian**: Transit graph generation runner (in progress)
-- **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
 - **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times
 - **Birch**: HTTP API server
 - **OSM Station Import**: Imports railway stations from OpenStreetMap PBF files for GTFS stop association
 
-The kubernetes configuration is generated using Helm templates. See Helm's documentation for further information on that.
+### In active development
 
-The code is heavily commented, go to each folder in src for more information.
+#### Loom (Line ordering optimisation maps)
+- **Globeflower**: Equivalent to chapter 3: Line Graph Construction, by Patrick Brosi
+- **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files. Equivalent to Chapter 4 & 6 combined, skipping 5.
 
+#### Routing
+
+- **Avens**: OSM Preprocessor and graph generator for routing
+- **Gentian**: Transit graph generation runner
+- **Edelweiss**: Routing execution engine (in progress, see also [our routing testbed](https://github.com/catenarytransit/routing)
 ## Citations
 
 This project is built off the work of researchers in Germany and many other places, vielen dank!
