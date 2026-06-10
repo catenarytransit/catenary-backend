@@ -74,7 +74,7 @@ pub const METROLINK_STOP_LIST: [(&str, &str); 68] = [
 ];
 
 //amtrak stop id gtfs -> ptc
-pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 21] = [
+pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 22] = [
     //oceanside
     ("OSD", "OCEANSIDE"),
     //san clemente pier
