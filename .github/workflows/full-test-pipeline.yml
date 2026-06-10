@@ -77,7 +77,7 @@ jobs:
 
       - name: Build binaries
         run: |
-          cargo build --release --bin maple --bin spruce --bin birch --bin alpenrose --bin aspen
+          cargo build --release --bin maple --bin spruce --bin birch --bin alpenrose --bin aspen --bin aspenleader
 
       - name: Setup catenaryconfig.toml
         run: |
@@ -151,12 +151,13 @@ jobs:
           ORDER BY table_name;
           "
 
-      - name: Run background services (spruce, birch, alpenrose, aspen)
+      - name: Run background services (spruce, birch, alpenrose, aspen, aspenleader)
         run: |
           ./target/release/spruce &
           ./target/release/birch &
           ./target/release/alpenrose &
           ./target/release/aspen &
+          ./target/release/aspenleader &
           echo "Services started in the background."
 
       - name: Wait 10 seconds

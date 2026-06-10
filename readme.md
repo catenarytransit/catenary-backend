@@ -7,6 +7,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Avens**: OSM Preprocessor and graph generator for routing (in progress)
 - **Alpenrose**: Distributed system to ingest GTFS-rt and other realtime data (Rose des Alpes); successor to Kactus.
 - **Aspen**: Processing of realtime data and dynamic insertion into other engines. Submodule Pando is used for distribution management
+- **Aspen Leader**: Coordinator/leader process for Aspen workers using etcd.
 - **Linnaea**: Visualisation of the graphs for debugging and research paper purposes
 - **Gentian**: Transit graph generation runner (in progress)
 - **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
@@ -197,6 +198,11 @@ cargo run --bin alpenrose
 #### Step 5: Launch at least one copy of Aspen, the GTFS realtime data processor.
 ```bash
 cargo run --bin aspen
+```
+
+#### Step 5b: Launch Aspen Leader, the coordinator process for Aspen.
+```bash
+cargo run --bin aspenleader
 ```
 
 #### Step 6: Launch Birch, the HTTP API provider
