@@ -1546,7 +1546,18 @@ pub async fn departures_at_stop(
                     trip_deleted: trip_deleted,
                 };
 
-                events.push(stopevent);
+                let already_exists = events.iter().any(|e| {
+                    e.chateau == stopevent.chateau
+                        && e.trip_id == stopevent.trip_id
+                        && e.stop_id == stopevent.stop_id
+                        && (stopevent.service_date.is_none()
+                            || e.service_date.is_none()
+                            || e.service_date == stopevent.service_date)
+                });
+
+                if !already_exists {
+                    events.push(stopevent);
+                }
             }
         }
     }
