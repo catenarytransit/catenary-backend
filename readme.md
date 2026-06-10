@@ -17,8 +17,8 @@ The code is heavily commented, go to each folder in src for more information.
 ### In active development
 
 #### Loom (Line ordering optimisation maps)
-- **Globeflower**: Equivalent to chapter 3: Line Graph Construction, by Patrick Brosi
-- **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files. Equivalent to Chapter 4 & 6 combined, skipping 5.
+- **Globeflower**: Equivalent to chapter 3: Line Graph Construction, by Patrick Brosi. (the C++ equivalent is topo)
+- **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files. Equivalent to Chapter 4 & 6 combined, skipping 5. (the C++ equivalent is loom)
 
 #### Routing
 
