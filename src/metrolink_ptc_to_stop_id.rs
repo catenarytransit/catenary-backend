@@ -77,6 +77,8 @@ pub const METROLINK_STOP_LIST: [(&str, &str); 68] = [
 pub const AMTRAK_STOP_TO_SCAX_PTC_LIST: [(&str, &str); 21] = [
     //oceanside
     ("OSD", "OCEANSIDE"),
+    //san clemente pier
+    ("SNP", "SAN CLEMENTE PIER"),
     //san juan capistrano
     ("SNC", "SAN JUAN CAPISTRANO"),
     //irvine
