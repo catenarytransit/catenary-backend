@@ -38,10 +38,10 @@ use language_tags::LanguageTag;
 use prost::Message;
 use regex::Regex;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -217,6 +217,88 @@ where
     }
 }
 
+struct AgencyPartition {
+    agency_idx: usize,
+    raw_agency_id: String,
+    sanitized_folder_name: String,
+    path: PathBuf,
+    target_route_ids: HashSet<String>,
+}
+
+struct PartitionWriterPool {
+    file_name: String,
+    headers: csv::StringRecord,
+    partitions: Vec<PathBuf>,
+    open_writers: HashMap<usize, csv::Writer<BufWriter<File>>>,
+    access_order: VecDeque<usize>,
+    max_open: usize,
+}
+
+impl PartitionWriterPool {
+    fn new(
+        file_name: &str,
+        headers: csv::StringRecord,
+        partitions: Vec<PathBuf>,
+        max_open: usize,
+    ) -> Self {
+        Self {
+            file_name: file_name.to_string(),
+            headers,
+            partitions,
+            open_writers: HashMap::new(),
+            access_order: VecDeque::new(),
+            max_open,
+        }
+    }
+
+    fn write_record(&mut self, partition_idx: usize, record: &csv::StringRecord) -> Result<()> {
+        if !self.open_writers.contains_key(&partition_idx) {
+            if self.open_writers.len() >= self.max_open {
+                if let Some(oldest_idx) = self.access_order.pop_front() {
+                    if let Some(mut wtr) = self.open_writers.remove(&oldest_idx) {
+                        wtr.flush()?;
+                    }
+                }
+            }
+
+            let path = self.partitions[partition_idx].join(&self.file_name);
+            let file_exists = path.exists();
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(true)
+                .open(&path)?;
+            let mut wtr = csv::WriterBuilder::new()
+                .has_headers(!file_exists)
+                .from_writer(BufWriter::new(file));
+            if !file_exists {
+                wtr.write_record(&self.headers)?;
+            }
+            self.open_writers.insert(partition_idx, wtr);
+        } else {
+            if let Some(pos) = self
+                .access_order
+                .iter()
+                .position(|&idx| idx == partition_idx)
+            {
+                self.access_order.remove(pos);
+            }
+        }
+
+        self.access_order.push_back(partition_idx);
+        let wtr = self.open_writers.get_mut(&partition_idx).unwrap();
+        wtr.write_record(record)?;
+        Ok(())
+    }
+
+    fn flush_all(&mut self) -> Result<()> {
+        for wtr in self.open_writers.values_mut() {
+            wtr.flush()?;
+        }
+        Ok(())
+    }
+}
+
 pub async fn gtfs_process_large_feed(
     gtfs_unzipped_path: &str,
     feed_id: &str,
@@ -333,17 +415,21 @@ pub async fn gtfs_process_large_feed(
     }
 
     let split_dir = Path::new(&path).join("split_agencies");
+    if split_dir.exists() {
+        fs::remove_dir_all(&split_dir)
+            .with_context(|| format!("Failed to clear old split dir {}", split_dir.display()))?;
+    }
     fs::create_dir_all(&split_dir)?;
 
     let mut global_stop_ids_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
     let mut global_stop_ids_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
 
     let num_agencies = agencies.len();
-
-    for agency in &agencies {
+    let mut agency_partitions = Vec::new();
+    for (agency_idx, agency) in agencies.iter().enumerate() {
         let raw_agency_id = agency.id.as_deref().unwrap_or("");
-        let sanitized_agency = sanitize_agency_id(raw_agency_id);
-        let agency_id = sanitized_agency.clone();
+        let sanitized_agency = format!("{}_{}", agency_idx, sanitize_agency_id(raw_agency_id));
+        let agency_path = split_dir.join(&sanitized_agency);
 
         let mut target_route_ids = HashSet::new();
         let mut agency_routes = Vec::new();
@@ -363,11 +449,10 @@ pub async fn gtfs_process_large_feed(
         }
 
         if target_route_ids.is_empty() {
-            println!("Skipping agency {}, no active routes", sanitized_agency);
+            println!("Skipping agency index {}, no active routes", agency_idx);
             continue;
         }
 
-        let agency_path = split_dir.join(&sanitized_agency);
         fs::create_dir_all(&agency_path)?;
 
         {
@@ -382,6 +467,35 @@ pub async fn gtfs_process_large_feed(
             wtr.flush()?;
         }
 
+        agency_partitions.push(AgencyPartition {
+            agency_idx,
+            raw_agency_id: raw_agency_id.to_string(),
+            sanitized_folder_name: sanitized_agency,
+            path: agency_path,
+            target_route_ids,
+        });
+    }
+
+    let num_partitions = agency_partitions.len();
+    let partition_paths: Vec<PathBuf> = agency_partitions.iter().map(|p| p.path.clone()).collect();
+
+    let mut route_id_to_partition_indices: HashMap<String, Vec<usize>> = HashMap::new();
+    for (part_idx, partition) in agency_partitions.iter().enumerate() {
+        for route_id in &partition.target_route_ids {
+            route_id_to_partition_indices
+                .entry(route_id.clone())
+                .or_default()
+                .push(part_idx);
+        }
+    }
+
+    let mut target_trip_ids_by_partition = vec![HashSet::new(); num_partitions];
+    let mut target_shape_ids_by_partition = vec![HashSet::new(); num_partitions];
+    let mut target_service_ids_by_partition = vec![HashSet::new(); num_partitions];
+
+    let mut trip_id_to_partition_indices: HashMap<String, Vec<usize>> = HashMap::new();
+
+    {
         let trips_path = Path::new(&path).join("trips.txt");
         let trips_file = File::open(&trips_path)?;
         let mut trips_rdr = csv::ReaderBuilder::new()
@@ -404,37 +518,19 @@ pub async fn gtfs_process_large_feed(
             .position(|h| h == "service_id")
             .context("trips.txt missing service_id")?;
 
-        let mut target_trip_ids = HashSet::new();
-        let mut target_shape_ids = HashSet::new();
-        let mut target_service_ids = HashSet::new();
-
-        let mut trips_wtr = csv::WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(File::create(agency_path.join("trips.txt"))?);
-        trips_wtr.write_record(&trips_headers)?;
+        let mut trips_pool =
+            PartitionWriterPool::new("trips.txt", trips_headers, partition_paths.clone(), 32);
 
         let mut record = csv::StringRecord::new();
         while trips_rdr.read_record(&mut record)? {
             let route_id = record.get(t_route_id_idx).unwrap_or_default().trim();
-            if target_route_ids.contains(route_id) {
+            if let Some(part_indices) = route_id_to_partition_indices.get(route_id) {
                 let trip_id = record.get(t_trip_id_idx).unwrap_or_default().trim();
                 let service_id = if let Some(trip) = global_gtfs.trips.get(trip_id) {
                     trip.service_id.as_str()
                 } else {
                     record.get(t_service_id_idx).unwrap_or_default().trim()
                 };
-
-                target_trip_ids.insert(trip_id.to_string());
-                if !service_id.is_empty() {
-                    target_service_ids.insert(service_id.to_string());
-                }
-
-                if let Some(shape_idx) = t_shape_id_idx {
-                    let shape_id = record.get(shape_idx).unwrap_or_default().trim();
-                    if !shape_id.is_empty() {
-                        target_shape_ids.insert(shape_id.to_string());
-                    }
-                }
 
                 let mut new_record = csv::StringRecord::new();
                 for (idx, field) in record.iter().enumerate() {
@@ -444,11 +540,38 @@ pub async fn gtfs_process_large_feed(
                         new_record.push_field(field);
                     }
                 }
-                trips_wtr.write_record(&new_record)?;
+
+                for &part_idx in part_indices {
+                    target_trip_ids_by_partition[part_idx].insert(trip_id.to_string());
+                    if !service_id.is_empty() {
+                        target_service_ids_by_partition[part_idx].insert(service_id.to_string());
+                    }
+
+                    if let Some(shape_idx) = t_shape_id_idx {
+                        let shape_id = record.get(shape_idx).unwrap_or_default().trim();
+                        if !shape_id.is_empty() {
+                            target_shape_ids_by_partition[part_idx].insert(shape_id.to_string());
+                        }
+                    }
+
+                    trip_id_to_partition_indices
+                        .entry(trip_id.to_string())
+                        .or_default()
+                        .push(part_idx);
+
+                    trips_pool.write_record(part_idx, &new_record)?;
+                }
             }
         }
-        trips_wtr.flush()?;
+        trips_pool.flush_all()?;
+    }
 
+    let mut target_stop_ids_by_partition = vec![HashSet::new(); num_partitions];
+
+    // To process massive datasets (e.g. 2GB stop_times.txt) under strict memory bounds,
+    // we stream stop times row-by-row and immediately dispatch them to their respective
+    // partition writers rather than caching them in memory.
+    {
         let stop_times_path = Path::new(&path).join("stop_times.txt");
         let stop_times_file = File::open(&stop_times_path)?;
         let mut stop_times_rdr = csv::ReaderBuilder::new()
@@ -466,24 +589,28 @@ pub async fn gtfs_process_large_feed(
             .position(|h| h == "stop_id")
             .context("stop_times.txt missing stop_id")?;
 
-        let mut target_stop_ids = HashSet::new();
-
-        let mut stop_times_wtr = csv::WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(File::create(agency_path.join("stop_times.txt"))?);
-        stop_times_wtr.write_record(&stop_times_headers)?;
+        let mut stop_times_pool = PartitionWriterPool::new(
+            "stop_times.txt",
+            stop_times_headers,
+            partition_paths.clone(),
+            32,
+        );
 
         let mut record = csv::StringRecord::new();
         while stop_times_rdr.read_record(&mut record)? {
             let trip_id = record.get(st_trip_id_idx).unwrap_or_default().trim();
-            if target_trip_ids.contains(trip_id) {
+            if let Some(part_indices) = trip_id_to_partition_indices.get(trip_id) {
                 let stop_id = record.get(st_stop_id_idx).unwrap_or_default().trim();
-                target_stop_ids.insert(stop_id.to_string());
-                stop_times_wtr.write_record(&record)?;
+                for &part_idx in part_indices {
+                    target_stop_ids_by_partition[part_idx].insert(stop_id.to_string());
+                    stop_times_pool.write_record(part_idx, &record)?;
+                }
             }
         }
-        stop_times_wtr.flush()?;
+        stop_times_pool.flush_all()?;
+    }
 
+    {
         let stops_path = Path::new(&path).join("stops.txt");
         let stops_file = File::open(&stops_path)?;
         let mut stops_rdr = csv::ReaderBuilder::new()
@@ -498,17 +625,31 @@ pub async fn gtfs_process_large_feed(
             .context("stops.txt missing stop_id")?;
         let s_parent_station_idx = stops_headers.iter().position(|h| h == "parent_station");
 
-        let mut parent_ids_to_fetch = HashSet::new();
-
+        let mut stop_id_to_parent = HashMap::new();
         let mut record = csv::StringRecord::new();
         while stops_rdr.read_record(&mut record)? {
-            let stop_id = record.get(s_stop_id_idx).unwrap_or_default().trim();
-            if target_stop_ids.contains(stop_id) {
-                if let Some(parent_idx) = s_parent_station_idx {
-                    let parent = record.get(parent_idx).unwrap_or_default().trim();
-                    if !parent.is_empty() {
-                        parent_ids_to_fetch.insert(parent.to_string());
-                    }
+            let stop_id = record
+                .get(s_stop_id_idx)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            if let Some(parent_idx) = s_parent_station_idx {
+                let parent = record
+                    .get(parent_idx)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                if !parent.is_empty() {
+                    stop_id_to_parent.insert(stop_id, parent);
+                }
+            }
+        }
+
+        let mut parent_ids_to_fetch_by_partition = vec![HashSet::new(); num_partitions];
+        for part_idx in 0..num_partitions {
+            for stop_id in &target_stop_ids_by_partition[part_idx] {
+                if let Some(parent) = stop_id_to_parent.get(stop_id) {
+                    parent_ids_to_fetch_by_partition[part_idx].insert(parent.clone());
                 }
             }
         }
@@ -519,48 +660,107 @@ pub async fn gtfs_process_large_feed(
             .flexible(true)
             .from_reader(BufReader::new(stops_file2));
 
-        let mut stops_wtr = csv::WriterBuilder::new()
-            .has_headers(true)
-            .from_writer(File::create(agency_path.join("stops.txt"))?);
-        stops_wtr.write_record(&stops_headers)?;
+        let mut stops_pool =
+            PartitionWriterPool::new("stops.txt", stops_headers, partition_paths.clone(), 32);
 
         let mut record = csv::StringRecord::new();
         while stops_rdr2.read_record(&mut record)? {
             let stop_id = record.get(s_stop_id_idx).unwrap_or_default().trim();
-            if target_stop_ids.contains(stop_id) || parent_ids_to_fetch.contains(stop_id) {
-                stops_wtr.write_record(&record)?;
-            }
-        }
-        stops_wtr.flush()?;
-
-        let shapes_path = Path::new(&path).join("shapes.txt");
-        if shapes_path.exists() && !target_shape_ids.is_empty() {
-            let shapes_file = File::open(&shapes_path)?;
-            let mut shapes_rdr = csv::ReaderBuilder::new()
-                .has_headers(true)
-                .flexible(true)
-                .from_reader(BufReader::new(shapes_file));
-
-            let shapes_headers = shapes_rdr.headers()?.clone();
-            let sh_shape_id_idx = shapes_headers
-                .iter()
-                .position(|h| h == "shape_id")
-                .context("shapes.txt missing shape_id")?;
-
-            let mut shapes_wtr = csv::WriterBuilder::new()
-                .has_headers(true)
-                .from_writer(File::create(agency_path.join("shapes.txt"))?);
-            shapes_wtr.write_record(&shapes_headers)?;
-
-            let mut record = csv::StringRecord::new();
-            while shapes_rdr.read_record(&mut record)? {
-                let shape_id = record.get(sh_shape_id_idx).unwrap_or_default().trim();
-                if target_shape_ids.contains(shape_id) {
-                    shapes_wtr.write_record(&record)?;
+            for part_idx in 0..num_partitions {
+                if target_stop_ids_by_partition[part_idx].contains(stop_id)
+                    || parent_ids_to_fetch_by_partition[part_idx].contains(stop_id)
+                {
+                    stops_pool.write_record(part_idx, &record)?;
                 }
             }
-            shapes_wtr.flush()?;
         }
+        stops_pool.flush_all()?;
+    }
+
+    {
+        let shapes_path = Path::new(&path).join("shapes.txt");
+        if shapes_path.exists() {
+            let has_shapes = target_shape_ids_by_partition.iter().any(|s| !s.is_empty());
+            if has_shapes {
+                let shapes_file = File::open(&shapes_path)?;
+                let mut shapes_rdr = csv::ReaderBuilder::new()
+                    .has_headers(true)
+                    .flexible(true)
+                    .from_reader(BufReader::new(shapes_file));
+
+                let shapes_headers = shapes_rdr.headers()?.clone();
+                let sh_shape_id_idx = shapes_headers
+                    .iter()
+                    .position(|h| h == "shape_id")
+                    .context("shapes.txt missing shape_id")?;
+
+                let mut shapes_pool = PartitionWriterPool::new(
+                    "shapes.txt",
+                    shapes_headers,
+                    partition_paths.clone(),
+                    32,
+                );
+
+                let mut record = csv::StringRecord::new();
+                while shapes_rdr.read_record(&mut record)? {
+                    let shape_id = record.get(sh_shape_id_idx).unwrap_or_default().trim();
+                    for part_idx in 0..num_partitions {
+                        if target_shape_ids_by_partition[part_idx].contains(shape_id) {
+                            shapes_pool.write_record(part_idx, &record)?;
+                        }
+                    }
+                }
+                shapes_pool.flush_all()?;
+            }
+        }
+    }
+
+    {
+        let frequencies_path = Path::new(&path).join("frequencies.txt");
+        if frequencies_path.exists() {
+            let has_frequencies = target_trip_ids_by_partition.iter().any(|s| !s.is_empty());
+            if has_frequencies {
+                let frequencies_file = File::open(&frequencies_path)?;
+                let mut frequencies_rdr = csv::ReaderBuilder::new()
+                    .has_headers(true)
+                    .flexible(true)
+                    .from_reader(BufReader::new(frequencies_file));
+
+                let frequencies_headers = frequencies_rdr.headers()?.clone();
+                let f_trip_id_idx = frequencies_headers
+                    .iter()
+                    .position(|h| h == "trip_id")
+                    .context("frequencies.txt missing trip_id")?;
+
+                let mut frequencies_pool = PartitionWriterPool::new(
+                    "frequencies.txt",
+                    frequencies_headers,
+                    partition_paths.clone(),
+                    32,
+                );
+
+                let mut record = csv::StringRecord::new();
+                while frequencies_rdr.read_record(&mut record)? {
+                    let trip_id = record.get(f_trip_id_idx).unwrap_or_default().trim();
+                    for part_idx in 0..num_partitions {
+                        if target_trip_ids_by_partition[part_idx].contains(trip_id) {
+                            frequencies_pool.write_record(part_idx, &record)?;
+                        }
+                    }
+                }
+                frequencies_pool.flush_all()?;
+            }
+        }
+    }
+
+    for (part_idx, partition) in agency_partitions.iter().enumerate() {
+        let agency_path = &partition.path;
+        let sanitized_agency = &partition.sanitized_folder_name;
+        let agency_id = sanitized_agency.clone();
+        let agency = &agencies[partition.agency_idx];
+
+        let target_service_ids = &target_service_ids_by_partition[part_idx];
+        let target_trip_ids = &target_trip_ids_by_partition[part_idx];
 
         let calendar_path = agency_path.join("calendar.txt");
         if !global_gtfs.calendar.is_empty() && !target_service_ids.is_empty() {
@@ -620,35 +820,6 @@ pub async fn gtfs_process_large_feed(
                 }
             }
             calendar_dates_wtr.flush()?;
-        }
-
-        let frequencies_path = Path::new(&path).join("frequencies.txt");
-        if frequencies_path.exists() && !target_trip_ids.is_empty() {
-            let frequencies_file = File::open(&frequencies_path)?;
-            let mut frequencies_rdr = csv::ReaderBuilder::new()
-                .has_headers(true)
-                .flexible(true)
-                .from_reader(BufReader::new(frequencies_file));
-
-            let frequencies_headers = frequencies_rdr.headers()?.clone();
-            let f_trip_id_idx = frequencies_headers
-                .iter()
-                .position(|h| h == "trip_id")
-                .context("frequencies.txt missing trip_id")?;
-
-            let mut frequencies_wtr = csv::WriterBuilder::new()
-                .has_headers(true)
-                .from_writer(File::create(agency_path.join("frequencies.txt"))?);
-            frequencies_wtr.write_record(&frequencies_headers)?;
-
-            let mut record = csv::StringRecord::new();
-            while frequencies_rdr.read_record(&mut record)? {
-                let trip_id = record.get(f_trip_id_idx).unwrap_or_default().trim();
-                if target_trip_ids.contains(trip_id) {
-                    frequencies_wtr.write_record(&record)?;
-                }
-            }
-            frequencies_wtr.flush()?;
         }
 
         {
