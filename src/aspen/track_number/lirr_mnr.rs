@@ -17,7 +17,7 @@ const AMTRAK_TO_MTA: &[(&str, &str)] = &[
 ];
 
 use catenary::agency_specific_types::mta_rail::MtaTrain;
-use catenary::consist_v1::{
+use catenary::formation_v1::{
     Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
     PassengerClass, SiriOccupancy, UnifiedConsist, VehicleElement,
 };

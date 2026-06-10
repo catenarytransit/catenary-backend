@@ -37,7 +37,7 @@
 #[macro_use]
 extern crate diesel_derive_newtype;
 
-pub mod consist_v1;
+pub mod formation_v1;
 #[macro_use]
 extern crate serde;
 

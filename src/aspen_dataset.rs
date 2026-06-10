@@ -376,7 +376,7 @@ pub struct AspenisedTripUpdate {
     pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
     pub trip_properties: Option<AspenTripProperties>,
     pub trip_headsign: Option<CompactString>,
-    pub consist: Option<crate::consist_v1::UnifiedConsist>,
+    pub consist: Option<crate::formation_v1::UnifiedConsist>,
     pub found_schedule_trip_id: bool,
     #[serde(default)]
     pub last_seen: u64,
@@ -455,7 +455,7 @@ pub struct AspenisedStopTimeUpdate {
     pub stop_time_properties: Option<AspenisedStopTimeProperties>,
     pub platform_string: Option<ecow::EcoString>,
     pub old_rt_data: bool,
-    pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
+    pub platform_info: Option<crate::formation_v1::AspenisedPlatformInfo>,
 }
 
 pub fn option_i32_to_occupancy_status(
@@ -666,7 +666,7 @@ pub struct AspenisedVehiclePosition {
     pub congestion_level: Option<i32>,
     pub occupancy_status: Option<i32>,
     pub occupancy_percentage: Option<u32>,
-    pub consist: Option<crate::consist_v1::UnifiedConsist>,
+    pub consist: Option<crate::formation_v1::UnifiedConsist>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

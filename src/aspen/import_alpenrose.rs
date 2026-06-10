@@ -2125,8 +2125,9 @@ pub async fn new_rt_data(
                             }
 
                             let mut platform_resp = None;
-                            let mut platform: Option<catenary::consist_v1::AspenisedPlatformInfo> =
-                                None;
+                            let mut platform: Option<
+                                catenary::formation_v1::AspenisedPlatformInfo,
+                            > = None;
 
                             match chateau_id {
                                 "metrolinktrains" => {
@@ -2382,7 +2383,7 @@ pub async fn new_rt_data(
                                 "nyct" => {
                                     if let Some(nyct_stus_copied) = &nyct_stus_copied {
                                         platform =
-                                            Some(catenary::consist_v1::AspenisedPlatformInfo {
+                                            Some(catenary::formation_v1::AspenisedPlatformInfo {
                                                 aimed: None,
                                                 expected: None,
                                                 platform_sectors: None,

@@ -1,0 +1,6 @@
+--2026-06-10 16:08:28--  https://birch.catenarymaps.org/gtfs_rt?feed_id=f-metro~losangeles~bus~rt
+Resolving birch.catenarymaps.org (birch.catenarymaps.org)... 2606:4700:3030::ac43:9527, 2606:4700:3031::6815:3795, 172.67.149.39, ...
+Connecting to birch.catenarymaps.org (birch.catenarymaps.org)|2606:4700:3030::ac43:9527|:443... connected.
+HTTP request sent, awaiting response... 400 Bad Request
+2026-06-10 16:08:29 ERROR 400: Bad Request.
+

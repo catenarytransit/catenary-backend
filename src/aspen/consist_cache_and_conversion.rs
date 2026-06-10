@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use catenary::agency_specific_types::mta_rail::MtaTrain;
 use catenary::agency_specific_types::mta_subway;
 use catenary::agency_specific_types::mta_subway::{MtaSubwayTrips, Trip};
-use catenary::consist_v1::{
+use catenary::formation_v1::{
     Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
     PassengerClass, SiriOccupancy, UnifiedConsist, VehicleElement,
 };
@@ -370,8 +370,8 @@ pub struct MetrolinxCar {
 pub fn map_metrolinx_trip_to_consist(
     global_journey_id_gtfs_trip_id: &str,
     trip_data: &MetrolinxTrip,
-) -> catenary::consist_v1::UnifiedConsist {
-    use catenary::consist_v1::{
+) -> catenary::formation_v1::UnifiedConsist {
+    use catenary::formation_v1::{
         Amenity, AmenityStatus, AmenityType, ConsistGroup, FormationStatus, Orientation,
         PassengerClass, UnifiedConsist, VehicleElement,
     };

@@ -71,7 +71,7 @@ pub struct StopTimeRefresh {
     pub gtfs_stop_sequence: Option<u16>,
     pub rt_platform_string: Option<EcoString>,
     pub departure_occupancy_status: Option<u8>,
-    pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
+    pub platform_info: Option<crate::formation_v1::AspenisedPlatformInfo>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -108,7 +108,7 @@ pub struct TripIntroductionInformation {
     pub connections_per_stop: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>, // stop_id -> chateau -> route_ids
     pub trip_id: Option<String>,
     pub chateau: Option<String>,
-    pub consist: Option<crate::consist_v1::UnifiedConsist>,
+    pub consist: Option<crate::formation_v1::UnifiedConsist>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -132,7 +132,7 @@ pub struct StopTimeIntroduction {
     pub timepoint: Option<bool>,
     pub replaced_stop: bool,
     pub osm_station_id: Option<i64>,
-    pub platform_info: Option<crate::consist_v1::AspenisedPlatformInfo>,
+    pub platform_info: Option<crate::formation_v1::AspenisedPlatformInfo>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Hash, Eq, PartialEq)]
