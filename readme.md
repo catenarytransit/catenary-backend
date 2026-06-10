@@ -11,7 +11,7 @@ Catenary Backend is a distributed system comprised of microservices operating in
 - **Linnaea**: Visualisation of the graphs for debugging and research paper purposes
 - **Gentian**: Transit graph generation runner (in progress)
 - **Harebell**: Map tile geometry generator creating line ordering optimised graph maps (LOOM) MVT files.
-- **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times (not started yet)
+- **Spruce**: Websocket server for frontend to stream data to and from backend, including realtime locations, stop times
 - **Birch**: HTTP API server
 - **OSM Station Import**: Imports railway stations from OpenStreetMap PBF files for GTFS stop association
 
