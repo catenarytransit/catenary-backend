@@ -8,8 +8,8 @@ use crate::gtfs_handlers::colour_correction::{
 };
 use crate::gtfs_handlers::shape_colour_calculator::{ShapeToColourResponse, shape_to_colour};
 use crate::gtfs_handlers::stops_associated_items::make_hashmaps_of_children_stop_info;
-use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
+use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
 use crate::gtfs_process::{
@@ -166,8 +166,6 @@ fn parse_agencies(
     }
     Ok(agencies)
 }
-
-
 
 fn haversine_distance(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     const R: f64 = 6371.0;
