@@ -38,8 +38,6 @@ use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use elasticsearch::BulkParts;
-use elasticsearch::Elasticsearch;
-use elasticsearch::http::transport::{Transport, TransportBuilder};
 use geo::{Distance, Haversine, Point};
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use regex::Regex;
@@ -1076,26 +1074,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // =========================================================================
     println!("\n=== Pass 5: Elasticsearch bulk indexing & Admin Region Lookup ===");
 
-    // Determine ES URL
-    let es_url = args
+    // Determine ES URLs
+    let es_urls = args
         .elastic_url
-        .ok_or_else(|| "".to_string())
-        .or_else(|_| std::env::var("ELASTICSEARCH_URL"))
-        .ok()
-        .or_else(|| catenary::catenaryconfig::config().elasticsearch.url.clone())
-        .unwrap_or_else(|| "http://localhost:9200".to_string());
+        .map(|s| {
+            s.split(',')
+                .map(|x| x.trim().to_string())
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_else(|| catenary::catenaryconfig::config().elasticsearch.get_urls());
 
-    println!("Connecting to Elasticsearch at {}...", es_url);
+    println!("Connecting to Elasticsearch at {:?}...", es_urls);
 
     // Connect to Elasticsearch
-    let transport = match TransportBuilder::new(
-        elasticsearch::http::transport::SingleNodeConnectionPool::new(
-            es_url.parse().expect("Invalid Elasticsearch URL"),
-        ),
-    )
-    .build()
-    {
-        Ok(t) => Some(t),
+    let elasticclient = match catenary::elasticutils::elastic_connect(&es_urls) {
+        Ok(client) => Some(client),
         Err(e) => {
             println!(
                 "Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.",
@@ -1104,8 +1097,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             None
         }
     };
-
-    let elasticclient = transport.map(Elasticsearch::new);
 
     let http_client = reqwest::Client::new();
 

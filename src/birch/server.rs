@@ -854,10 +854,7 @@ async fn main() -> std::io::Result<()> {
         .or_else(|| catenary_config.birch.etcd_password.clone())
         .or_else(|| catenary_config.aspen.etcd_password.clone());
 
-    let elastic_url = std::env::var("ELASTICSEARCH_URL")
-        .ok()
-        .or_else(|| catenary_config.elasticsearch.url.clone())
-        .expect("ELASTICSEARCH_URL or [elasticsearch].url must be configured");
+    let elastic_urls = catenary_config.elasticsearch.get_urls();
 
     let etcd_connection_options: Option<etcd_client::ConnectOptions> =
         match (etcd_username, etcd_password) {
@@ -880,8 +877,7 @@ async fn main() -> std::io::Result<()> {
     println!("Using {} workers", worker_amount);
     println!("ETCD config: {:#?}", etcd_connection_options);
 
-    let elasticclient =
-        catenary::elasticutils::single_elastic_connect(elastic_url.as_str()).unwrap();
+    let elasticclient = catenary::elasticutils::elastic_connect(&elastic_urls).unwrap();
 
     let elasticclient = Arc::new(elasticclient);
 

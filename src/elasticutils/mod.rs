@@ -4,7 +4,7 @@ use elasticsearch::{
     cat::CatIndicesParts,
     http::{
         Url,
-        transport::{SingleNodeConnectionPool, TransportBuilder},
+        transport::{MultiNodeConnectionPool, SingleNodeConnectionPool, TransportBuilder},
     },
     indices::{IndicesCreateParts, IndicesPutMappingParts, IndicesPutSettingsParts},
 };
@@ -12,17 +12,37 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::error::Error;
 
-pub fn single_elastic_connect(
-    server_url: &str,
+pub fn elastic_connect(
+    server_urls: &[String],
 ) -> Result<Elasticsearch, Box<dyn Error + Sync + Send>> {
-    let url = Url::parse(server_url)?;
-    let conn_pool = SingleNodeConnectionPool::new(url);
-    let transport = TransportBuilder::new(conn_pool)
-        .cert_validation(elasticsearch::cert::CertificateValidation::None)
-        .build()?;
+    if server_urls.is_empty() {
+        return Err("No Elasticsearch URLs provided".into());
+    }
+    let urls: Vec<Url> = server_urls
+        .iter()
+        .map(|s| Url::parse(s))
+        .collect::<Result<_, _>>()?;
+
+    let transport = if urls.len() == 1 {
+        let conn_pool = SingleNodeConnectionPool::new(urls[0].clone());
+        TransportBuilder::new(conn_pool)
+            .cert_validation(elasticsearch::cert::CertificateValidation::None)
+            .build()?
+    } else {
+        let conn_pool = MultiNodeConnectionPool::round_robin(urls, None);
+        TransportBuilder::new(conn_pool)
+            .cert_validation(elasticsearch::cert::CertificateValidation::None)
+            .build()?
+    };
     let client = Elasticsearch::new(transport);
 
     Ok(client)
+}
+
+pub fn single_elastic_connect(
+    server_url: &str,
+) -> Result<Elasticsearch, Box<dyn Error + Sync + Send>> {
+    elastic_connect(&[server_url.to_string()])
 }
 
 pub async fn wipe_db(client: &Elasticsearch) -> Result<(), Box<dyn Error + Sync + Send>> {

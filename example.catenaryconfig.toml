@@ -54,7 +54,7 @@ etcd_username = ""
 etcd_password = ""
 
 [elasticsearch]
-url = "http://localhost:9200"
+urls = ["http://localhost:9200"]
 
 [postgres]
 database_url = "postgres://user:pass@localhost:5432/catenary"

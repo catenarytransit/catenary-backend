@@ -106,6 +106,7 @@ pub struct SpruceConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ElasticsearchConfig {
     pub url: Option<String>,
+    pub urls: Option<Vec<String>>,
 }
 
 pub fn config() -> &'static CatenaryConfig {
@@ -369,9 +370,21 @@ impl SpruceConfig {
 }
 
 impl ElasticsearchConfig {
+    pub fn get_urls(&self) -> Vec<String> {
+        if let Some(urls) = &self.urls {
+            urls.clone()
+        } else if let Some(url) = &self.url {
+            vec![url.clone()]
+        } else {
+            vec!["http://localhost:9200".to_string()]
+        }
+    }
+
     fn apply_env_overrides(&mut self) {
-        if let Ok(value) = std::env::var("ELASTICSEARCH_URL") {
-            self.url = Some(value);
+        if let Ok(value) = std::env::var("ELASTICSEARCH_URLS") {
+            self.urls = Some(parse_comma_separated(&value));
+        } else if let Ok(value) = std::env::var("ELASTICSEARCH_URL") {
+            self.urls = Some(parse_comma_separated(&value));
         }
     }
 }

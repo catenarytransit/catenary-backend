@@ -167,12 +167,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let no_elastic = args.no_elastic || maple_config.no_elastic.unwrap_or(false);
 
     let elasticclient = if !no_elastic {
-        let elastic_url = std::env::var("ELASTICSEARCH_URL")
-            .ok()
-            .or_else(|| catenary_config.elasticsearch.url.clone())
-            .unwrap();
+        let elastic_urls = catenary_config.elasticsearch.get_urls();
 
-        let elasticclient = catenary::elasticutils::single_elastic_connect(elastic_url.as_str())?;
+        let elasticclient = catenary::elasticutils::elastic_connect(&elastic_urls)?;
 
         //catenary::elasticutils::wipe_db(&elasticclient).await?;
 
