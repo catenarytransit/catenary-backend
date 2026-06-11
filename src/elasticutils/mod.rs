@@ -960,6 +960,7 @@ pub async fn make_index_and_mappings(
                                 "path_match": "parent.*.*",
                                 "mapping": {
                                     "type": "text",
+                                    "analyzer": "peliasAdmin",
                                     "fields": {
                                         "keyword": {
                                             "type": "keyword",
@@ -979,7 +980,11 @@ pub async fn make_index_and_mappings(
                         "import_id": { "type": "integer" },
                         "file_name": { "type": "keyword" },
                         "point": { "type": "geo_point" },
-                        "station_name_search": { "type": "text", "analyzer": "standard" },
+                        "station_name_search": {
+                            "type": "text",
+                            "analyzer": "peliasIndex",
+                            "search_analyzer": "peliasQuery"
+                        },
                         "station_name": {
                             "type": "object",
                             "dynamic": true,
