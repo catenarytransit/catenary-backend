@@ -793,6 +793,7 @@ pub async fn make_index_and_mappings(
             "osm_stations",
             json!({
                 "settings": {
+                    "index.mapping.total_fields.limit": 20000,
                     "analysis": {
                         "tokenizer": {
                             "peliasTokenizer": {
