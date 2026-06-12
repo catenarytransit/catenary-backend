@@ -895,6 +895,12 @@ pub async fn gtfs_process_large_feed(
 
         let reduction = maple_syrup::reduce(&agency_gtfs);
 
+        // immediately clear trip.stop_times after reduction
+        for trip in agency_gtfs.trips.values_mut() {
+            trip.stop_times.clear();
+            trip.stop_times.shrink_to_fit();
+        }
+
         let mut route_to_direction_patterns: HashMap<String, Vec<&maple_syrup::DirectionPattern>> =
             HashMap::new();
         for (_, direction_pattern) in &reduction.direction_patterns {
@@ -910,6 +916,10 @@ pub async fn gtfs_process_large_feed(
             shape_id_to_route_ids_lookup,
             route_ids_to_shape_ids,
         } = shape_to_colour(feed_id, &agency_gtfs);
+
+        // then clear trips entirely
+        agency_gtfs.trips.clear();
+        agency_gtfs.trips.shrink_to_fit();
 
         let agency_shapes_txt = agency_path.join("shapes.txt");
         let agency_shapes_minimised = match agency_shapes_txt.exists() {
