@@ -41,6 +41,11 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+#[cfg(not(target_env = "msvc"))]
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static malloc_conf: &[u8] = b"background_thread:true,dirty_decay_ms:500\0";
+
 use ahash::AHashMap;
 use catenary::GirolleFeedDownloadResult;
 use catenary::postgres_tools::CatenaryPostgresPool;
