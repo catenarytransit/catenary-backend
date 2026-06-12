@@ -1169,7 +1169,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                                                 if let Some(name) =
                                                     props.get(layer).and_then(|v| v.as_str())
                                                 {
-                                                   
+                                                    translations.insert(
+                                                        "name".to_string(),
+                                                        serde_json::Value::String(name.to_string()),
+                                                    );
                                                 }
 
                                                 if let Some(names) = props.get(names_layer) {

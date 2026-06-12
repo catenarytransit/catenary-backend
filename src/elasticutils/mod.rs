@@ -827,6 +827,7 @@ pub async fn make_index_and_mappings(
                                 "lowercase",
                                 "trim",
                                 "peliasAsciiFolding",
+                                "peliasOrdinalMultiplexer",
                                 "unique_only_same_position",
                                 "notnull"
                             ]
@@ -839,6 +840,7 @@ pub async fn make_index_and_mappings(
                                 "lowercase",
                                 "trim",
                                 "peliasAsciiFolding",
+                                "peliasOrdinalMultiplexer",
                                 "peliasOneEdgeGramFilter",
                                 "unique_only_same_position",
                                 "notnull"
@@ -852,6 +854,7 @@ pub async fn make_index_and_mappings(
                                 "lowercase",
                                 "trim",
                                 "peliasAsciiFolding",
+                                "peliasOrdinalMultiplexer",
                                 "peliasSynonymFilter",
                                 "unique_only_same_position",
                                 "notnull"
@@ -865,6 +868,7 @@ pub async fn make_index_and_mappings(
                                 "lowercase",
                                 "trim",
                                 "peliasAsciiFolding",
+                                "peliasOrdinalMultiplexer",
                                 "unique_only_same_position",
                                 "notnull"
                             ]
@@ -901,6 +905,13 @@ pub async fn make_index_and_mappings(
                             }
                         },
                         "filter": {
+                            "peliasOrdinalMultiplexer": {
+                                "type": "multiplexer",
+                                "filters": [
+                                    "remove_ordinals"
+                                ],
+                                "preserve_original": true
+                            },
                             "peliasAsciiFolding": {
                             "type": "asciifolding",
                             "preserve_original": true
