@@ -489,7 +489,6 @@ pub async fn gtfs_process_large_feed(
         }
     }
 
-    let mut target_trip_ids_by_partition = vec![HashSet::new(); num_partitions];
     let mut target_shape_ids_by_partition = vec![HashSet::new(); num_partitions];
     let mut target_service_ids_by_partition = vec![HashSet::new(); num_partitions];
 
@@ -542,7 +541,6 @@ pub async fn gtfs_process_large_feed(
                 }
 
                 for &part_idx in part_indices {
-                    target_trip_ids_by_partition[part_idx].insert(trip_id.to_string());
                     if !service_id.is_empty() {
                         target_service_ids_by_partition[part_idx].insert(service_id.to_string());
                     }
@@ -718,7 +716,7 @@ pub async fn gtfs_process_large_feed(
     {
         let frequencies_path = Path::new(&path).join("frequencies.txt");
         if frequencies_path.exists() {
-            let has_frequencies = target_trip_ids_by_partition.iter().any(|s| !s.is_empty());
+            let has_frequencies = !trip_id_to_partition_indices.is_empty();
             if has_frequencies {
                 let frequencies_file = File::open(&frequencies_path)?;
                 let mut frequencies_rdr = csv::ReaderBuilder::new()
@@ -742,8 +740,8 @@ pub async fn gtfs_process_large_feed(
                 let mut record = csv::StringRecord::new();
                 while frequencies_rdr.read_record(&mut record)? {
                     let trip_id = record.get(f_trip_id_idx).unwrap_or_default().trim();
-                    for part_idx in 0..num_partitions {
-                        if target_trip_ids_by_partition[part_idx].contains(trip_id) {
+                    if let Some(part_indices) = trip_id_to_partition_indices.get(trip_id) {
+                        for &part_idx in part_indices {
                             frequencies_pool.write_record(part_idx, &record)?;
                         }
                     }
@@ -753,6 +751,26 @@ pub async fn gtfs_process_large_feed(
         }
     }
 
+    // Drop large mapping structures to minimize memory pressure before the partition loop.
+    drop(trip_id_to_partition_indices);
+    drop(route_id_to_partition_indices);
+    drop(target_shape_ids_by_partition);
+    drop(target_stop_ids_by_partition);
+
+    // Free the global feed data structures, retaining only calendar/calendar_dates.
+    global_gtfs.trips.clear();
+    global_gtfs.trips.shrink_to_fit();
+    global_gtfs.stops.clear();
+    global_gtfs.stops.shrink_to_fit();
+    global_gtfs.routes.clear();
+    global_gtfs.routes.shrink_to_fit();
+
+    // Force Jemalloc to purge thread caches to reduce fragmentation.
+    #[cfg(not(target_env = "msvc"))]
+    {
+        let _ = tikv_jemalloc_ctl::epoch::advance();
+    }
+
     for (part_idx, partition) in agency_partitions.iter().enumerate() {
         let agency_path = &partition.path;
         let sanitized_agency = &partition.sanitized_folder_name;
@@ -760,7 +778,6 @@ pub async fn gtfs_process_large_feed(
         let agency = &agencies[partition.agency_idx];
 
         let target_service_ids = &target_service_ids_by_partition[part_idx];
-        let target_trip_ids = &target_trip_ids_by_partition[part_idx];
 
         let calendar_path = agency_path.join("calendar.txt");
         if !global_gtfs.calendar.is_empty() && !target_service_ids.is_empty() {
@@ -1279,10 +1296,6 @@ pub async fn gtfs_process_large_feed(
             })
             .collect();
 
-        let mut finished_route_chunks_elasticsearch: Vec<
-            Vec<elasticsearch::http::request::JsonBody<_>>,
-        > = Vec::new();
-
         for route_chunk in &agency_gtfs.routes.iter().chunks(256) {
             let mut insertable_elastic: Vec<elasticsearch::http::request::JsonBody<_>> = Vec::new();
             for (route_id, route) in route_chunk {
@@ -1429,7 +1442,33 @@ pub async fn gtfs_process_large_feed(
                 }
             }
 
-            finished_route_chunks_elasticsearch.push(insertable_elastic);
+            if !insertable_elastic.is_empty() {
+                if let Some(client) = elasticclient {
+                    let response = client
+                        .bulk(elasticsearch::BulkParts::Index("routes"))
+                        .body(insertable_elastic)
+                        .send()
+                        .await;
+
+                    if let Ok(res) = response {
+                        if let Ok(response_body) = res.json::<serde_json::Value>().await {
+                            if response_body.get("errors").map(|x| x.as_bool()).flatten()
+                                == Some(true)
+                            {
+                                eprintln!(
+                                    "ElasticSearch bulk insert for routes had errors: {:?}",
+                                    response_body
+                                );
+                            }
+                        }
+                    } else if let Err(e) = response {
+                        eprintln!(
+                            "Failed to send routes bulk insert to ElasticSearch: {:?}",
+                            e
+                        );
+                    }
+                }
+            }
         }
 
         {
@@ -1450,6 +1489,17 @@ pub async fn gtfs_process_large_feed(
         }
 
         let _ = fs::remove_dir_all(&agency_path);
+
+        // Drop large structures to release memory as early as possible.
+        drop(agency_gtfs);
+        drop(route_to_direction_patterns);
+        drop(reduction);
+
+        // Force Jemalloc to flush thread-local caches back to the OS.
+        #[cfg(not(target_env = "msvc"))]
+        {
+            let _ = tikv_jemalloc_ctl::epoch::advance();
+        }
     }
 
     println!("Loading global GTFS metadata (lightweight) for stops/hull/feed_info...");
