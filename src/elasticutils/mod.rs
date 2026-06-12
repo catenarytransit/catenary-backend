@@ -854,8 +854,8 @@ pub async fn make_index_and_mappings(
                                 "lowercase",
                                 "trim",
                                 "peliasAsciiFolding",
-                                "peliasOrdinalMultiplexer",
                                 "peliasSynonymFilter",
+                                "peliasOrdinalMultiplexer",
                                 "unique_only_same_position",
                                 "notnull"
                             ]
