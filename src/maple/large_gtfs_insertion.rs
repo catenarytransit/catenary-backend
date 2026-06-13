@@ -815,7 +815,7 @@ pub async fn gtfs_process_large_feed(
                 "end_date",
             ])?;
             for (service_id, cal) in &global_gtfs.calendar {
-                if target_service_ids.contains(service_id) {
+                if target_service_ids.contains(service_id.as_str()) {
                     calendar_wtr.write_record(&[
                         service_id.as_str(),
                         if cal.monday { "1" } else { "0" },
@@ -840,7 +840,7 @@ pub async fn gtfs_process_large_feed(
                 .from_writer(File::create(&calendar_dates_path)?);
             calendar_dates_wtr.write_record(&["service_id", "date", "exception_type"])?;
             for (service_id, dates) in &global_gtfs.calendar_dates {
-                if target_service_ids.contains(service_id) {
+                if target_service_ids.contains(service_id.as_str()) {
                     for date in dates {
                         let exc_type = match date.exception_type {
                             gtfs_structures::Exception::Added => "1",
