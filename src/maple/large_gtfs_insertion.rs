@@ -1539,7 +1539,10 @@ pub async fn gtfs_process_large_feed(
             #[cfg(unix)]
             {
                 let _ = fs::remove_file(dst);
-                std::os::unix::fs::symlink(src, dst)?;
+                // Canonicalise the source path so the symlink gets an absolute path
+                // and doesn't break when resolved from inside the temp directory.
+                let abs_src = std::fs::canonicalize(src)?;
+                std::os::unix::fs::symlink(abs_src, dst)?;
             }
             #[cfg(not(unix))]
             {
