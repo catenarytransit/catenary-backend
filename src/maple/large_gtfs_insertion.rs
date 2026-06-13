@@ -383,7 +383,8 @@ pub async fn gtfs_process_large_feed(
     .await?;
 
     // OPTIMIZATION 1: Extract ONLY the needed service IDs to release massive GTFS collections early.
-    let mut trip_to_service_id: HashMap<CompactString, CompactString> = HashMap::with_capacity(global_gtfs.trips.len());
+    let mut trip_to_service_id: HashMap<CompactString, CompactString> =
+        HashMap::with_capacity(global_gtfs.trips.len());
     for (trip_id, trip) in &global_gtfs.trips {
         trip_to_service_id.insert(
             CompactString::from(trip_id.as_str()),
@@ -514,8 +515,10 @@ pub async fn gtfs_process_large_feed(
         }
     }
 
-    let mut target_shape_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
-    let mut target_service_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
+    let mut target_shape_ids_by_partition: Vec<HashSet<CompactString>> =
+        vec![HashSet::new(); num_partitions];
+    let mut target_service_ids_by_partition: Vec<HashSet<CompactString>> =
+        vec![HashSet::new(); num_partitions];
 
     let mut trip_id_to_partition_indices: HashMap<CompactString, Vec<usize>> = HashMap::new();
 
@@ -550,7 +553,7 @@ pub async fn gtfs_process_large_feed(
             let route_id = record.get(t_route_id_idx).unwrap_or_default().trim();
             if let Some(part_indices) = route_id_to_partition_indices.get(route_id) {
                 let trip_id = record.get(t_trip_id_idx).unwrap_or_default().trim();
-                
+
                 // Map the service using our extracted CompactString cache
                 let service_id = trip_to_service_id
                     .get(trip_id)
@@ -570,7 +573,8 @@ pub async fn gtfs_process_large_feed(
                     if !service_id.is_empty() {
                         // OPTIMIZATION 3: Check existence before allocation
                         if !target_service_ids_by_partition[part_idx].contains(service_id) {
-                            target_service_ids_by_partition[part_idx].insert(CompactString::from(service_id));
+                            target_service_ids_by_partition[part_idx]
+                                .insert(CompactString::from(service_id));
                         }
                     }
 
@@ -578,7 +582,8 @@ pub async fn gtfs_process_large_feed(
                         let shape_id = record.get(shape_idx).unwrap_or_default().trim();
                         if !shape_id.is_empty() {
                             if !target_shape_ids_by_partition[part_idx].contains(shape_id) {
-                                target_shape_ids_by_partition[part_idx].insert(CompactString::from(shape_id));
+                                target_shape_ids_by_partition[part_idx]
+                                    .insert(CompactString::from(shape_id));
                             }
                         }
                     }
@@ -595,7 +600,8 @@ pub async fn gtfs_process_large_feed(
         trips_pool.flush_all()?;
     }
 
-    let mut target_stop_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
+    let mut target_stop_ids_by_partition: Vec<HashSet<CompactString>> =
+        vec![HashSet::new(); num_partitions];
 
     {
         let stop_times_path = Path::new(&path).join("stop_times.txt");
@@ -660,12 +666,14 @@ pub async fn gtfs_process_large_feed(
             if let Some(parent_idx) = s_parent_station_idx {
                 let parent = record.get(parent_idx).unwrap_or_default().trim();
                 if !parent.is_empty() {
-                    stop_id_to_parent.insert(CompactString::from(stop_id), CompactString::from(parent));
+                    stop_id_to_parent
+                        .insert(CompactString::from(stop_id), CompactString::from(parent));
                 }
             }
         }
 
-        let mut parent_ids_to_fetch_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
+        let mut parent_ids_to_fetch_by_partition: Vec<HashSet<CompactString>> =
+            vec![HashSet::new(); num_partitions];
         for part_idx in 0..num_partitions {
             for stop_id in &target_stop_ids_by_partition[part_idx] {
                 if let Some(parent) = stop_id_to_parent.get(stop_id.as_str()) {
