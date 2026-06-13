@@ -382,6 +382,29 @@ pub async fn gtfs_process_large_feed(
     )
     .await?;
 
+    // OPTIMIZATION 1: Extract ONLY the needed service IDs to release massive GTFS collections early.
+    let mut trip_to_service_id: HashMap<CompactString, CompactString> = HashMap::with_capacity(global_gtfs.trips.len());
+    for (trip_id, trip) in &global_gtfs.trips {
+        trip_to_service_id.insert(
+            CompactString::from(trip_id.as_str()),
+            CompactString::from(trip.service_id.as_str()),
+        );
+    }
+
+    // Free the global feed data structures BEFORE streaming, retaining only calendar/calendar_dates.
+    global_gtfs.trips.clear();
+    global_gtfs.trips.shrink_to_fit();
+    global_gtfs.stops.clear();
+    global_gtfs.stops.shrink_to_fit();
+    global_gtfs.routes.clear();
+    global_gtfs.routes.shrink_to_fit();
+
+    // Force Jemalloc to purge thread caches to reduce fragmentation.
+    #[cfg(not(target_env = "msvc"))]
+    {
+        let _ = tikv_jemalloc_ctl::epoch::advance();
+    }
+
     let routes_path = Path::new(&path).join("routes.txt");
     let routes_file = File::open(&routes_path)?;
     let mut routes_rdr = csv::ReaderBuilder::new()
@@ -443,6 +466,7 @@ pub async fn gtfs_process_large_feed(
             };
 
             if is_match {
+                // Keep target_route_ids as String here for agency_partitions storage
                 target_route_ids.insert(route_id.clone());
                 agency_routes.push(record.clone());
             }
@@ -479,20 +503,21 @@ pub async fn gtfs_process_large_feed(
     let num_partitions = agency_partitions.len();
     let partition_paths: Vec<PathBuf> = agency_partitions.iter().map(|p| p.path.clone()).collect();
 
-    let mut route_id_to_partition_indices: HashMap<String, Vec<usize>> = HashMap::new();
+    // OPTIMIZATION 2: Switch mapping structs to CompactString mapping structs
+    let mut route_id_to_partition_indices: HashMap<CompactString, Vec<usize>> = HashMap::new();
     for (part_idx, partition) in agency_partitions.iter().enumerate() {
         for route_id in &partition.target_route_ids {
             route_id_to_partition_indices
-                .entry(route_id.clone())
+                .entry(CompactString::from(route_id.as_str()))
                 .or_default()
                 .push(part_idx);
         }
     }
 
-    let mut target_shape_ids_by_partition = vec![HashSet::new(); num_partitions];
-    let mut target_service_ids_by_partition = vec![HashSet::new(); num_partitions];
+    let mut target_shape_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
+    let mut target_service_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
 
-    let mut trip_id_to_partition_indices: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut trip_id_to_partition_indices: HashMap<CompactString, Vec<usize>> = HashMap::new();
 
     {
         let trips_path = Path::new(&path).join("trips.txt");
@@ -525,11 +550,12 @@ pub async fn gtfs_process_large_feed(
             let route_id = record.get(t_route_id_idx).unwrap_or_default().trim();
             if let Some(part_indices) = route_id_to_partition_indices.get(route_id) {
                 let trip_id = record.get(t_trip_id_idx).unwrap_or_default().trim();
-                let service_id = if let Some(trip) = global_gtfs.trips.get(trip_id) {
-                    trip.service_id.as_str()
-                } else {
-                    record.get(t_service_id_idx).unwrap_or_default().trim()
-                };
+                
+                // Map the service using our extracted CompactString cache
+                let service_id = trip_to_service_id
+                    .get(trip_id)
+                    .map(|s| s.as_str())
+                    .unwrap_or_else(|| record.get(t_service_id_idx).unwrap_or_default().trim());
 
                 let mut new_record = csv::StringRecord::new();
                 for (idx, field) in record.iter().enumerate() {
@@ -542,18 +568,23 @@ pub async fn gtfs_process_large_feed(
 
                 for &part_idx in part_indices {
                     if !service_id.is_empty() {
-                        target_service_ids_by_partition[part_idx].insert(service_id.to_string());
+                        // OPTIMIZATION 3: Check existence before allocation
+                        if !target_service_ids_by_partition[part_idx].contains(service_id) {
+                            target_service_ids_by_partition[part_idx].insert(CompactString::from(service_id));
+                        }
                     }
 
                     if let Some(shape_idx) = t_shape_id_idx {
                         let shape_id = record.get(shape_idx).unwrap_or_default().trim();
                         if !shape_id.is_empty() {
-                            target_shape_ids_by_partition[part_idx].insert(shape_id.to_string());
+                            if !target_shape_ids_by_partition[part_idx].contains(shape_id) {
+                                target_shape_ids_by_partition[part_idx].insert(CompactString::from(shape_id));
+                            }
                         }
                     }
 
                     trip_id_to_partition_indices
-                        .entry(trip_id.to_string())
+                        .entry(CompactString::from(trip_id))
                         .or_default()
                         .push(part_idx);
 
@@ -564,11 +595,8 @@ pub async fn gtfs_process_large_feed(
         trips_pool.flush_all()?;
     }
 
-    let mut target_stop_ids_by_partition = vec![HashSet::new(); num_partitions];
+    let mut target_stop_ids_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
 
-    // To process massive datasets (e.g. 2GB stop_times.txt) under strict memory bounds,
-    // we stream stop times row-by-row and immediately dispatch them to their respective
-    // partition writers rather than caching them in memory.
     {
         let stop_times_path = Path::new(&path).join("stop_times.txt");
         let stop_times_file = File::open(&stop_times_path)?;
@@ -600,7 +628,9 @@ pub async fn gtfs_process_large_feed(
             if let Some(part_indices) = trip_id_to_partition_indices.get(trip_id) {
                 let stop_id = record.get(st_stop_id_idx).unwrap_or_default().trim();
                 for &part_idx in part_indices {
-                    target_stop_ids_by_partition[part_idx].insert(stop_id.to_string());
+                    if !target_stop_ids_by_partition[part_idx].contains(stop_id) {
+                        target_stop_ids_by_partition[part_idx].insert(CompactString::from(stop_id));
+                    }
                     stop_times_pool.write_record(part_idx, &record)?;
                 }
             }
@@ -623,31 +653,25 @@ pub async fn gtfs_process_large_feed(
             .context("stops.txt missing stop_id")?;
         let s_parent_station_idx = stops_headers.iter().position(|h| h == "parent_station");
 
-        let mut stop_id_to_parent = HashMap::new();
+        let mut stop_id_to_parent: HashMap<CompactString, CompactString> = HashMap::new();
         let mut record = csv::StringRecord::new();
         while stops_rdr.read_record(&mut record)? {
-            let stop_id = record
-                .get(s_stop_id_idx)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let stop_id = record.get(s_stop_id_idx).unwrap_or_default().trim();
             if let Some(parent_idx) = s_parent_station_idx {
-                let parent = record
-                    .get(parent_idx)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
+                let parent = record.get(parent_idx).unwrap_or_default().trim();
                 if !parent.is_empty() {
-                    stop_id_to_parent.insert(stop_id, parent);
+                    stop_id_to_parent.insert(CompactString::from(stop_id), CompactString::from(parent));
                 }
             }
         }
 
-        let mut parent_ids_to_fetch_by_partition = vec![HashSet::new(); num_partitions];
+        let mut parent_ids_to_fetch_by_partition: Vec<HashSet<CompactString>> = vec![HashSet::new(); num_partitions];
         for part_idx in 0..num_partitions {
             for stop_id in &target_stop_ids_by_partition[part_idx] {
-                if let Some(parent) = stop_id_to_parent.get(stop_id) {
-                    parent_ids_to_fetch_by_partition[part_idx].insert(parent.clone());
+                if let Some(parent) = stop_id_to_parent.get(stop_id.as_str()) {
+                    if !parent_ids_to_fetch_by_partition[part_idx].contains(parent) {
+                        parent_ids_to_fetch_by_partition[part_idx].insert(parent.clone());
+                    }
                 }
             }
         }
@@ -750,20 +774,6 @@ pub async fn gtfs_process_large_feed(
             }
         }
     }
-
-    // Drop large mapping structures to minimize memory pressure before the partition loop.
-    drop(trip_id_to_partition_indices);
-    drop(route_id_to_partition_indices);
-    drop(target_shape_ids_by_partition);
-    drop(target_stop_ids_by_partition);
-
-    // Free the global feed data structures, retaining only calendar/calendar_dates.
-    global_gtfs.trips.clear();
-    global_gtfs.trips.shrink_to_fit();
-    global_gtfs.stops.clear();
-    global_gtfs.stops.shrink_to_fit();
-    global_gtfs.routes.clear();
-    global_gtfs.routes.shrink_to_fit();
 
     // Force Jemalloc to purge thread caches to reduce fragmentation.
     #[cfg(not(target_env = "msvc"))]
