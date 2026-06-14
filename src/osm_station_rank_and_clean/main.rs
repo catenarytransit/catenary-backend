@@ -15,32 +15,32 @@ use std::error::Error;
 
 #[derive(QueryableByName, Debug)]
 struct TerminalCountRow {
-    #[diesel(sql_type = diesel::sql_types::Int8)]
-    osm_station_id: i64,
-    #[diesel(sql_type = diesel::sql_types::Int8)]
-    terminal_count: i64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    osm_station_id: Option<i64>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    terminal_count: Option<i64>,
 }
 
 #[derive(QueryableByName, Debug)]
 struct AssociatedShapeRow {
-    #[diesel(sql_type = diesel::sql_types::Int8)]
-    osm_station_id: i64,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    onestop_feed_id: String,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    attempt_id: String,
-    #[diesel(sql_type = diesel::sql_types::Text)]
-    shape_id: String,
-    #[diesel(sql_type = diesel::sql_types::Double)]
-    length: f64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    osm_station_id: Option<i64>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    onestop_feed_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    attempt_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    shape_id: Option<String>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Double>)]
+    length: Option<f64>,
 }
 
 #[derive(QueryableByName, Debug)]
 struct CentralityRow {
-    #[diesel(sql_type = diesel::sql_types::Int8)]
-    osm_station_id: i64,
-    #[diesel(sql_type = diesel::sql_types::Int8)]
-    centrality: i64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    osm_station_id: Option<i64>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Int8>)]
+    centrality: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -323,7 +323,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .await?;
 
             for r in chunk_terminal_counts {
-                terminal_counts.insert(r.osm_station_id, r.terminal_count as i32);
+                if let Some(osm_id) = r.osm_station_id {
+                    terminal_counts.insert(osm_id, r.terminal_count.unwrap_or(0) as i32);
+                }
             }
 
             // Feature: Route Span Log (R_i)
@@ -371,8 +373,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .await?;
 
             for row in chunk_shapes {
-                let log_val = (row.length + 1.0).ln();
-                *station_shape_logs.entry(row.osm_station_id).or_default() += log_val;
+                if let Some(osm_id) = row.osm_station_id {
+                    let log_val = (row.length.unwrap_or(0.0) + 1.0).ln();
+                    *station_shape_logs.entry(osm_id).or_default() += log_val;
+                }
             }
 
             // Feature: Degree Centrality (C_i)
@@ -439,7 +443,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .await?;
 
             for r in chunk_centralities {
-                centralities.insert(r.osm_station_id, r.centrality as i32);
+                if let Some(osm_id) = r.osm_station_id {
+                    centralities.insert(osm_id, r.centrality.unwrap_or(0) as i32);
+                }
             }
         }
 
