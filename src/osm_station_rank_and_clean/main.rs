@@ -291,8 +291,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                      COUNT(DISTINCT (dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id))::bigint as terminal_count \
                  FROM gtfs.stops s \
                  JOIN gtfs.direction_pattern dp \
-                   ON s.onestop_feed_id = dp.onestop_feed_id \
-                  AND s.attempt_id = dp.attempt_id \
+                   ON s.chateau = dp.chateau \
                   AND s.gtfs_id = dp.stop_id \
                  JOIN gtfs.direction_pattern_meta dpm \
                    ON dp.onestop_feed_id = dpm.onestop_feed_id \
@@ -337,8 +336,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                        AND dpm.attempt_id = dp.attempt_id \
                        AND dp.direction_pattern_id = dpm.direction_pattern_id \
                       JOIN gtfs.stops s \
-                        ON dp.onestop_feed_id = s.onestop_feed_id \
-                       AND dp.attempt_id = s.attempt_id \
+                        ON dp.chateau = s.chateau \
                        AND dp.stop_id = s.gtfs_id \
                       WHERE s.osm_station_id = ANY($1) \
                         AND dpm.route_type IS DISTINCT FROM 3 \
@@ -351,8 +349,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                        AND ipm.attempt_id = ip.attempt_id \
                        AND ip.itinerary_pattern_id = ipm.itinerary_pattern_id \
                       JOIN gtfs.stops s \
-                        ON ip.onestop_feed_id = s.onestop_feed_id \
-                       AND ip.attempt_id = s.attempt_id \
+                        ON ip.chateau = s.chateau \
                        AND ip.stop_id = s.gtfs_id \
                       JOIN gtfs.routes r \
                         ON ipm.onestop_feed_id = r.onestop_feed_id \
@@ -388,13 +385,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                           dp.stop_sequence \
                       FROM gtfs.direction_pattern dp \
                       JOIN gtfs.stops s \
-                        ON dp.onestop_feed_id = s.onestop_feed_id \
-                       AND dp.attempt_id = s.attempt_id \
+                        ON dp.chateau = s.chateau \
                        AND dp.stop_id = s.gtfs_id \
                       WHERE s.osm_station_id = ANY($1) \
                   ), \
                   ordered_dp AS ( \
                       SELECT \
+                          dp.chateau, \
                           dp.onestop_feed_id, \
                           dp.attempt_id, \
                           dp.direction_pattern_id, \
@@ -422,8 +419,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                        AND od.direction_pattern_id = r.direction_pattern_id \
                        AND od.stop_sequence = r.stop_sequence \
                       JOIN gtfs.stops s_curr \
-                        ON od.onestop_feed_id = s_curr.onestop_feed_id \
-                       AND od.attempt_id = s_curr.attempt_id \
+                        ON od.chateau = s_curr.chateau \
                        AND od.stop_id = s_curr.gtfs_id \
                   ) \
                   SELECT \
