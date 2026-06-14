@@ -257,13 +257,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         use catenary::schema::gtfs::stops::dsl as stops_dsl;
 
-        let total_chunks = (parent_osm_ids.len() + 4999) / 5000;
+        let total_chunks = (parent_osm_ids.len() + 9) / 10;
         println!(
-            "Querying features (stops, terminals, shapes, centrality) in {} chunk(s) of 5000 stations...",
+            "Querying features (stops, terminals, shapes, centrality) in {} chunk(s) of 10 stations...",
             total_chunks
         );
 
-        for (chunk_idx, chunk) in parent_osm_ids.chunks(5000).enumerate() {
+        for (chunk_idx, chunk) in parent_osm_ids.chunks(10).enumerate() {
             println!(
                 "  Querying features for chunk {}/{} ({} stations)...",
                 chunk_idx + 1,
