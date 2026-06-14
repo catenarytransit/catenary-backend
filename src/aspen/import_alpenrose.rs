@@ -2894,7 +2894,7 @@ pub async fn new_rt_data(
                     if let Some(trip_modification) = &trip_update_entity.trip_modifications {
                         trip_modifications.insert(
                             trip_update_entity.id.clone().into(),
-                            trip_modification.clone().into(),
+                            (*trip_modification.clone()).into(),
                         );
 
                         for selected_trip in trip_modification.selected_trips.iter() {

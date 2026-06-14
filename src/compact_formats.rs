@@ -32,7 +32,7 @@ pub struct CompactFeedEntity {
     pub alert: Option<Box<Alert>>,
     pub shape: Option<Box<Shape>>,
     pub stop: Option<Box<Stop>>,
-    pub trip_modifications: Option<TripModifications>,
+    pub trip_modifications: Option<Box<TripModifications>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -51,8 +51,8 @@ pub struct CompactStopTimeUpdate {
     pub stop_id: Option<String>,
     pub arrival: Option<Box<CompactStopTimeEvent>>,
     pub departure: Option<Box<CompactStopTimeEvent>>,
-    pub departure_occupancy_status: Option<i32>,
-    pub schedule_relationship: Option<i32>,
+    pub departure_occupancy_status: Option<u8>,
+    pub schedule_relationship: Option<u8>,
     pub stop_time_properties: Option<Box<StopTimeProperties>>,
 }
 
@@ -130,7 +130,7 @@ impl CompactFeedEntity {
             alert: entity.alert.map(Box::new),
             shape: entity.shape.map(Box::new),
             stop: entity.stop.map(Box::new),
-            trip_modifications: entity.trip_modifications,
+            trip_modifications: entity.trip_modifications.map(Box::new),
         }
     }
 
@@ -146,7 +146,7 @@ impl CompactFeedEntity {
             alert: self.alert.as_ref().map(|boxed| (**boxed).clone()),
             shape: self.shape.as_ref().map(|boxed| (**boxed).clone()),
             stop: self.stop.as_ref().map(|boxed| (**boxed).clone()),
-            trip_modifications: self.trip_modifications.clone(),
+            trip_modifications: self.trip_modifications.as_ref().map(|boxed| (**boxed).clone()),
         }
     }
 }
