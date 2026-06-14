@@ -134,10 +134,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .load::<(i32, String)>(&mut conn)
         .await?;
 
+    println!("Loaded {} OSM station import records.", imports.len());
+
     let mut groups: HashMap<String, Vec<i32>> = HashMap::new();
     for (import_id, file_name) in imports {
         groups.entry(file_name).or_default().push(import_id);
     }
+    println!(
+        "Grouped imports into {} distinct file name groups.",
+        groups.len()
+    );
 
     let mut ranked_inserts: Vec<OsmStationRankedInsert> = Vec::new();
 
@@ -146,7 +152,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // 3. Phased Processing per file_name
     for (file_name, import_ids) in groups {
-        println!("Processing import group: {}", file_name);
+        println!(
+            "Processing import group: {} (contains import IDs: {:?})",
+            file_name, import_ids
+        );
 
         use catenary::schema::gtfs::osm_stations::dsl as stations_dsl;
         let parent_stations: Vec<OsmStation> = stations_dsl::osm_stations
@@ -160,6 +169,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             continue;
         }
 
+        println!(
+            "Loaded {} parent stations for group {}",
+            parent_stations.len(),
+            file_name
+        );
+
         let parent_osm_ids: Vec<i64> = parent_stations.iter().map(|s| s.osm_id).collect();
 
         // Active modes compilation
@@ -169,6 +184,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .select((stations_dsl::parent_osm_id, stations_dsl::mode_type))
             .load::<(Option<i64>, String)>(&mut conn)
             .await?;
+
+        println!(
+            "Loaded {} child station mode records for mode compilation.",
+            child_modes.len()
+        );
 
         let mut parent_to_child_modes: HashMap<i64, Vec<String>> = HashMap::new();
         for (parent_id, m_type) in child_modes {
@@ -225,6 +245,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .into_iter()
             .filter_map(|(pid, cnt)| pid.map(|id| (id, cnt as i32)))
             .collect();
+        println!(
+            "Retrieved platform counts for {} stations.",
+            platform_counts.len()
+        );
 
         let mut stops_counts: HashMap<i64, i32> = HashMap::new();
         let mut terminal_counts: HashMap<i64, i32> = HashMap::new();
@@ -233,7 +257,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         use catenary::schema::gtfs::stops::dsl as stops_dsl;
 
-        for chunk in parent_osm_ids.chunks(5000) {
+        let total_chunks = (parent_osm_ids.len() + 4999) / 5000;
+        println!(
+            "Querying features (stops, terminals, shapes, centrality) in {} chunk(s) of 5000 stations...",
+            total_chunks
+        );
+
+        for (chunk_idx, chunk) in parent_osm_ids.chunks(5000).enumerate() {
+            println!(
+                "  Querying features for chunk {}/{} ({} stations)...",
+                chunk_idx + 1,
+                total_chunks,
+                chunk.len()
+            );
             // Feature: Associated Stops Count (F_i) using Diesel DSL query builder
             let chunk_stops_counts: Vec<(Option<i64>, i64)> = stops_dsl::stops
                 .filter(stops_dsl::osm_station_id.eq_any(chunk))
@@ -416,6 +452,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .map(|(osm_id, sum_val)| (osm_id, sum_val.round() as i32))
             .collect();
 
+        println!(
+            "Feature extraction complete. Extracted feature counts: stops={}, terminals={}, route_spans={}, centralities={}",
+            stops_counts.len(),
+            terminal_counts.len(),
+            route_span_logs.len(),
+            centralities.len()
+        );
+
         // 4. Score Calculation
         let mut p_vals = Vec::new();
         let mut f_vals = Vec::new();
@@ -431,11 +475,30 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             c_vals.push(*centralities.get(&s.osm_id).unwrap_or(&0) as f64);
         }
 
+        println!("Computing mean and standard deviation for score standardization...");
         let (p_mean, p_std) = compute_mean_and_std(&p_vals);
         let (f_mean, f_std) = compute_mean_and_std(&f_vals);
         let (t_mean, t_std) = compute_mean_and_std(&t_vals);
         let (r_mean, r_std) = compute_mean_and_std(&r_vals);
         let (c_mean, c_std) = compute_mean_and_std(&c_vals);
+        println!("Standardization statistics:");
+        println!(
+            "  Platform counts: mean = {:.4}, std = {:.4}",
+            p_mean, p_std
+        );
+        println!(
+            "  Associated stops: mean = {:.4}, std = {:.4}",
+            f_mean, f_std
+        );
+        println!(
+            "  Terminal routes: mean = {:.4}, std = {:.4}",
+            t_mean, t_std
+        );
+        println!(
+            "  Route span logs: mean = {:.4}, std = {:.4}",
+            r_mean, r_std
+        );
+        println!("  Centrality: mean = {:.4}, std = {:.4}", c_mean, c_std);
 
         struct ScoredStation<'a> {
             station: &'a OsmStation,
@@ -522,12 +585,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         stations_with_tiers.sort_by(|a, b| b.scored.score.total_cmp(&a.scored.score));
 
         // 5. RDSS Phase
+        println!(
+            "Starting Resolution-Dependent Spatial Suppression (RDSS) for {} stations...",
+            stations_with_tiers.len()
+        );
         let mut rtree: RTree<PlacedStation> = RTree::new();
         let mut final_label_zooms: HashMap<i64, i16> = HashMap::new();
         let mut overshadowed_by: HashMap<i64, (i64, String)> = HashMap::new();
 
         // Evaluate zoom levels 4 to 15
         for z in 4..=15 {
+            let mut placed_count = 0;
+            let mut overshadowed_count = 0;
+            let mut base_zoom_filtered = 0;
+            let mut subway_skipped = 0;
             if z >= 9 {
                 // Above zoom 9, suppression doesn't apply. Assign remaining stations max(9, base_zoom)
                 for item in &stations_with_tiers {
@@ -538,6 +609,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     let base_zoom = get_icon_min_zoom(item.tier);
                     let final_zoom = z.max(base_zoom);
                     final_label_zooms.insert(osm_id, final_zoom);
+                    placed_count += 1;
                 }
             } else {
                 // Zoom levels below 9: Apply Resolution-Dependent Spatial Suppression
@@ -558,12 +630,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                     let base_zoom = get_icon_min_zoom(item.tier);
                     if z < base_zoom {
+                        base_zoom_filtered += 1;
                         continue;
                     }
 
                     // Subway stations do not participate in spatial suppression/overshadowing
                     if item.scored.subway {
                         final_label_zooms.insert(osm_id, z);
+                        subway_skipped += 1;
                         continue;
                     }
 
@@ -597,6 +671,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             osm_id,
                             (parent_station.osm_id, parent_station.osm_type.clone()),
                         );
+                        overshadowed_count += 1;
                     } else {
                         // No collision: assign label_min_zoom and insert into R-Tree
                         final_label_zooms.insert(osm_id, z);
@@ -606,9 +681,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             lon,
                             lat,
                         });
+                        placed_count += 1;
                     }
                 }
             }
+            println!(
+                "  Zoom {:>2}: placed={:<4} overshadowed={:<4} subway_skipped={:<4} base_zoom_filtered={:<4}",
+                z, placed_count, overshadowed_count, subway_skipped, base_zoom_filtered
+            );
         }
 
         // Collect insertion rows
@@ -667,7 +747,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // 6. Save Results in batches
     use catenary::schema::gtfs::osm_stations_ranked::dsl as ranked_dsl;
-    for chunk in ranked_inserts.chunks(1000) {
+    let total_save_chunks = (ranked_inserts.len() + 999) / 1000;
+    println!(
+        "Saving {} ranked stations to database in {} chunk(s)...",
+        ranked_inserts.len(),
+        total_save_chunks
+    );
+    for (chunk_idx, chunk) in ranked_inserts.chunks(1000).enumerate() {
+        println!(
+            "  Inserting chunk {}/{} (size: {})...",
+            chunk_idx + 1,
+            total_save_chunks,
+            chunk.len()
+        );
         diesel::insert_into(ranked_dsl::osm_stations_ranked)
             .values(chunk)
             .execute(&mut conn)
@@ -675,6 +767,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     // 7. Transactional Publishing
+    println!(
+        "Committing transaction to finalize run ID: {} and cleanup previous runs...",
+        run_id
+    );
     use diesel_async::AsyncConnection;
     conn.transaction::<_, Box<dyn Error + Send + Sync>, _>(|tx| {
         Box::pin(async move {
@@ -708,6 +804,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     })
     .await?;
 
-    println!("Ranking run completed successfully.");
+    let duration = Utc::now() - run_start_time;
+    println!(
+        "Ranking run completed successfully in {}s.",
+        duration.num_seconds()
+    );
     Ok(())
 }
