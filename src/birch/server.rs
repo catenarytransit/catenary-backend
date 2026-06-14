@@ -1020,6 +1020,8 @@ async fn main() -> std::io::Result<()> {
             .service(routesofchateauwithagencyv2)
             .service(osm_stations)
             .service(osm_stations_meta)
+            .service(osm_stations_ranked)
+            .service(osm_stations_ranked_meta)
             .service(unmatched_rail_stops)
             .service(unmatched_rail_stops_meta)
             .service(aspenised_data_over_https::fetch_full_trip_updates_dataset)
