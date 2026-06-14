@@ -1495,4 +1495,16 @@ mod tests {
             "Point (-122.0, 37.0) should be outside exclusion polygons"
         );
     }
+
+    #[test]
+    fn test_is_in_usa() {
+        assert!(is_in_usa(34.0522, -118.2437));
+        assert!(is_in_usa(40.7128, -74.0060));
+        assert!(is_in_usa(61.2181, -149.9003));
+        assert!(is_in_usa(21.3069, -157.8583));
+
+        assert!(!is_in_usa(48.8566, 2.3522));
+        assert!(!is_in_usa(-33.8688, 151.2093));
+        assert!(!is_in_usa(35.6762, 139.6503));
+    }
 }
