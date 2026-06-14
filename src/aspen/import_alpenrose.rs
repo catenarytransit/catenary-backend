@@ -2954,7 +2954,7 @@ pub async fn new_rt_data(
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
                         let alert_id = alert_entity.id.clone();
-                        let aspenised_alert: AspenisedAlert = alert.clone().into();
+                        let aspenised_alert: AspenisedAlert = (*alert.clone()).into();
 
                         let processed_alert =
                             crate::alerts_processing::process_alert(aspenised_alert, chateau_id);
