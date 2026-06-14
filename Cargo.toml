@@ -316,3 +316,8 @@ path = "src/harebell/main.rs"
 [[bin]]
 name = "osmstationimport"
 path = "src/osmstationimport/main.rs"
+
+[[bin]]
+name = "osm_station_rank_and_clean"
+path = "src/osm_station_rank_and_clean/main.rs"
+

@@ -2,6 +2,7 @@
 // Catenary Transit Initiatives
 // Attribution cannot be removed
 
+use chrono::Utc;
 use compact_str::CompactString;
 use diesel::pg::Pg;
 use diesel::prelude::*;
@@ -530,4 +531,46 @@ pub struct OsmStation {
     pub is_derivative: bool,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Jsonb>)]
     pub admin_hierarchy: Option<serde_json::Value>,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::osm_stations_ranked)]
+pub struct OsmStationRankedInsert {
+    pub osm_id: i64,
+    pub osm_type: String,
+    pub run_id: i32,
+    pub point: postgis_diesel::types::Point,
+    pub name: Option<String>,
+    pub name_translations: Option<Value>,
+    pub station_type: Option<String>,
+    pub railway_tag: Option<String>,
+    pub mode_type: String,
+    pub uic_ref: Option<String>,
+    pub wikidata: Option<String>,
+    pub operator: Option<String>,
+    pub network: Option<String>,
+    pub tram: bool,
+    pub subway: bool,
+    pub rail: bool,
+    pub number_of_associated_stops: Option<i32>,
+    pub platform_count: Option<i32>,
+    pub terminal_route_count: i32,
+    pub route_span_log: i32,
+    pub degree_centrality: i32,
+    pub importance_level_station: i16,
+    pub admin_hierarchy: Option<Value>,
+    pub label_min_zoom: i16,
+    pub icon_min_zoom: i16,
+    pub overshadowed_by_osm_id: Option<i64>,
+    pub overshadowed_by_osm_type: Option<String>,
+    pub allowed_spatial_query: bool,
+}
+
+#[derive(Insertable, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::osm_stations_ranking_runs)]
+pub struct OsmStationsRankingRunInsert {
+    pub run_id: i32,
+    pub time_start: chrono::DateTime<chrono::Utc>,
+    pub time_end: Option<chrono::DateTime<chrono::Utc>>,
+    pub allowed_spatial_query: bool,
 }

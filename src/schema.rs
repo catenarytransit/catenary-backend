@@ -334,6 +334,56 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.osm_stations_ranked (osm_id, osm_type, run_id) {
+            osm_id -> Int8,
+            osm_type -> Text,
+            run_id -> Int4,
+            point -> Geometry,
+            name -> Nullable<Text>,
+            name_translations -> Nullable<Jsonb>,
+            station_type -> Nullable<Text>,
+            railway_tag -> Nullable<Text>,
+            mode_type -> Text,
+            uic_ref -> Nullable<Text>,
+            wikidata -> Nullable<Text>,
+            operator -> Nullable<Text>,
+            network -> Nullable<Text>,
+            tram -> Bool,
+            subway -> Bool,
+            rail -> Bool,
+            number_of_associated_stops -> Nullable<Int4>,
+            platform_count -> Nullable<Int4>,
+            terminal_route_count -> Int4,
+            route_span_log -> Int4,
+            degree_centrality -> Int4,
+            importance_level_station -> Int2,
+            admin_hierarchy -> Nullable<Jsonb>,
+            label_min_zoom -> Int2,
+            icon_min_zoom -> Int2,
+            overshadowed_by_osm_id -> Nullable<Int8>,
+            overshadowed_by_osm_type -> Nullable<Text>,
+            allowed_spatial_query -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.osm_stations_ranking_runs (run_id) {
+            run_id -> Int4,
+            time_start -> Timestamptz,
+            time_end -> Nullable<Timestamptz>,
+            allowed_spatial_query -> Bool,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.realtime_feeds (onestop_feed_id) {
             onestop_feed_id -> Text,
             name -> Nullable<Text>,
@@ -638,6 +688,8 @@ pub mod gtfs {
         itinerary_pattern_meta,
         osm_station_imports,
         osm_stations,
+        osm_stations_ranked,
+        osm_stations_ranking_runs,
         realtime_feeds,
         realtime_passwords,
         routes,
