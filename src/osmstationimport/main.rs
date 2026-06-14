@@ -477,6 +477,19 @@ struct WayData {
     network: Option<String>,
 }
 
+fn is_in_usa(lat: f64, lon: f64) -> bool {
+    if (24.0..50.0).contains(&lat) && (-125.0..-66.0).contains(&lon) {
+        return true;
+    }
+    if (51.0..72.0).contains(&lat) && (-180.0..-129.0).contains(&lon) {
+        return true;
+    }
+    if (18.0..29.0).contains(&lat) && (-180.0..-154.0).contains(&lon) {
+        return true;
+    }
+    false
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args = Args::parse();
@@ -942,6 +955,65 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     println!("Created {} derivative points from ways", derivative_count);
+
+    // Force clustering for USA rail stop_positions that lack a parent
+    let station_candidates: Vec<(i64, f64, f64)> = stations
+        .iter()
+        .filter(|s| {
+            let is_station = s.station_type.as_deref() == Some("station")
+                || s.station_type.as_deref() == Some("halt")
+                || s.railway_tag.as_deref() == Some("station")
+                || s.railway_tag.as_deref() == Some("halt");
+            is_station && s.mode_type == "rail"
+        })
+        .map(|s| (s.osm_id, s.point.y, s.point.x))
+        .collect();
+
+    let mut forced_clustering_count = 0;
+    for s in &mut stations {
+        let is_stop_position = s.station_type.as_deref() == Some("stop_position")
+            || s.railway_tag.as_deref() == Some("stop_position")
+            || s.railway_tag.as_deref() == Some("stop");
+        if s.mode_type == "rail"
+            && is_stop_position
+            && s.parent_osm_id.is_none()
+            && is_in_usa(s.point.y, s.point.x)
+        {
+            let p_stop = Point::new(s.point.x, s.point.y);
+            let mut closest_station: Option<(i64, f64)> = None;
+
+            for &(station_id, station_lat, station_lon) in &station_candidates {
+                if station_id == s.osm_id {
+                    continue;
+                }
+                let p_station = Point::new(station_lon, station_lat);
+                let dist = Haversine.distance(p_stop, p_station);
+                if dist <= 1000.0 {
+                    match closest_station {
+                        Some((_, closest_dist)) => {
+                            if dist < closest_dist {
+                                closest_station = Some((station_id, dist));
+                            }
+                        }
+                        None => {
+                            closest_station = Some((station_id, dist));
+                        }
+                    }
+                }
+            }
+
+            if let Some((parent_id, _)) = closest_station {
+                s.parent_osm_id = Some(parent_id);
+                forced_clustering_count += 1;
+            }
+        }
+    }
+    if forced_clustering_count > 0 {
+        println!(
+            "Forced clustering for {} USA rail stop_positions",
+            forced_clustering_count
+        );
+    }
 
     // =========================================================================
     // PASS 3.75: Exclude stations inside defined polygon areas
