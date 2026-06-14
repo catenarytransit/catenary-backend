@@ -2473,7 +2473,7 @@ pub async fn new_rt_data(
                                             }
                                         }
                                     },
-                                    uncertainty: arrival.uncertainty,
+                                    uncertainty: arrival.uncertainty.map(|u| u as i16),
                                 }),
                                 departure: dep_clone.map(|departure| AspenStopTimeEvent {
                                     delay: departure.delay,
@@ -2503,14 +2503,11 @@ pub async fn new_rt_data(
                                             }
                                         }
                                     },
-                                    uncertainty: departure.uncertainty,
+                                    uncertainty: departure.uncertainty.map(|u| u as i16),
                                 }),
                                 platform_string: platform_resp,
-                                schedule_relationship:
-                                    option_i32_to_stop_time_schedule_relationship(
-                                        &stu.schedule_relationship,
-                                    ),
-                                departure_occupancy_status: option_i32_to_occupancy_status(
+                                schedule_relationship: stu.schedule_relationship.map(|x| x.into()),
+                                departure_occupancy_status: option_u8_to_occupancy_status(
                                     &stu.departure_occupancy_status,
                                 ),
                                 stop_time_properties: stu

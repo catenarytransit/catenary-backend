@@ -146,7 +146,10 @@ impl CompactFeedEntity {
             alert: self.alert.as_ref().map(|boxed| (**boxed).clone()),
             shape: self.shape.as_ref().map(|boxed| (**boxed).clone()),
             stop: self.stop.as_ref().map(|boxed| (**boxed).clone()),
-            trip_modifications: self.trip_modifications.as_ref().map(|boxed| (**boxed).clone()),
+            trip_modifications: self
+                .trip_modifications
+                .as_ref()
+                .map(|boxed| (**boxed).clone()),
         }
     }
 }
@@ -194,8 +197,8 @@ impl CompactStopTimeUpdate {
             departure: stu
                 .departure
                 .map(|d| Box::new(CompactStopTimeEvent::from_stop_time_event(d, ref_epoch))),
-            departure_occupancy_status: stu.departure_occupancy_status,
-            schedule_relationship: stu.schedule_relationship,
+            departure_occupancy_status: stu.departure_occupancy_status.map(|dep_occ| dep_occ as u8),
+            schedule_relationship: stu.schedule_relationship.map(|sr| sr as u8),
             stop_time_properties: stu.stop_time_properties.map(Box::new),
             //actual_track: None, // Need custom logic to extract from NYCT extension
             //scheduled_track: None,
@@ -214,8 +217,8 @@ impl CompactStopTimeUpdate {
                 .departure
                 .as_ref()
                 .map(|d| d.to_stop_time_event(ref_epoch)),
-            departure_occupancy_status: self.departure_occupancy_status,
-            schedule_relationship: self.schedule_relationship,
+            departure_occupancy_status: self.departure_occupancy_status.map(|sr| sr as i32),
+            schedule_relationship: self.schedule_relationship.map(|sr| sr as i32),
             stop_time_properties: self.stop_time_properties.as_deref().cloned(),
         }
     }

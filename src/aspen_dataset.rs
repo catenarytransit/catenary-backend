@@ -478,6 +478,26 @@ pub fn option_i32_to_occupancy_status(
     }
 }
 
+pub fn option_u8_to_occupancy_status(
+    occupancy_status: &Option<u8>,
+) -> Option<AspenisedOccupancyStatus> {
+    match occupancy_status {
+        Some(status) => match status {
+            0 => Some(AspenisedOccupancyStatus::Empty),
+            1 => Some(AspenisedOccupancyStatus::ManySeatsAvailable),
+            2 => Some(AspenisedOccupancyStatus::FewSeatsAvailable),
+            3 => Some(AspenisedOccupancyStatus::StandingRoomOnly),
+            4 => Some(AspenisedOccupancyStatus::CrushedStandingRoomOnly),
+            5 => Some(AspenisedOccupancyStatus::Full),
+            6 => Some(AspenisedOccupancyStatus::NotAcceptingPassengers),
+            7 => Some(AspenisedOccupancyStatus::NoDataAvailable),
+            8 => Some(AspenisedOccupancyStatus::NotBoardable),
+            _ => None,
+        },
+        None => None,
+    }
+}
+
 pub fn occupancy_status_to_u8(occupancy_status: &AspenisedOccupancyStatus) -> u8 {
     match occupancy_status {
         AspenisedOccupancyStatus::Empty => 0,
@@ -571,6 +591,18 @@ pub fn option_i32_to_stop_time_schedule_relationship(
     }
 }
 
+impl From<u8> for AspenisedStopTimeScheduleRelationship {
+    fn from(input: u8) -> Self {
+        match input {
+            0 => AspenisedStopTimeScheduleRelationship::Scheduled,
+            1 => AspenisedStopTimeScheduleRelationship::Skipped,
+            2 => AspenisedStopTimeScheduleRelationship::NoData,
+            3 => AspenisedStopTimeScheduleRelationship::Unscheduled,
+            _ => AspenisedStopTimeScheduleRelationship::NoData,
+        }
+    }
+}
+
 impl Into<u8> for AspenisedStopTimeScheduleRelationship {
     fn into(self) -> u8 {
         match self {
@@ -641,7 +673,7 @@ impl From<StopTimeProperties> for AspenisedStopTimeProperties {
 pub struct AspenStopTimeEvent {
     pub delay: Option<i32>,
     pub time: Option<i64>,
-    pub uncertainty: Option<i32>,
+    pub uncertainty: Option<i16>,
 }
 
 impl From<StopTimeEvent> for AspenStopTimeEvent {
@@ -649,7 +681,7 @@ impl From<StopTimeEvent> for AspenStopTimeEvent {
         AspenStopTimeEvent {
             delay: stop_time_event.delay,
             time: stop_time_event.time,
-            uncertainty: stop_time_event.uncertainty,
+            uncertainty: stop_time_event.uncertainty.map(|u| u as i16),
         }
     }
 }
