@@ -15,7 +15,7 @@ use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use geo::{HaversineDistance, point};
 use rayon::prelude::*;
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use strsim::jaro_winkler;
 
@@ -654,8 +654,6 @@ pub async fn propagate_parent_matches(
 ) -> Result<usize, diesel::result::Error> {
     use catenary::schema::gtfs::stops::dsl as stops_dsl;
 
-    // 1. Fetch child matches: (parent_station, osm_station_id)
-    // We only care about children that have both a parent and a match
     let child_matches: Vec<(String, i64)> = stops_dsl::stops
         .filter(stops_dsl::onestop_feed_id.eq(feed_id))
         .filter(stops_dsl::attempt_id.eq(attempt_id))
@@ -668,11 +666,6 @@ pub async fn propagate_parent_matches(
         .filter_map(|(p, o)| Some((p?, o?)))
         .collect();
 
-    if child_matches.is_empty() {
-        return Ok(0);
-    }
-
-    // 2. Aggregate votes in memory: parent_id -> osm_id -> count
     let mut votes: HashMap<String, HashMap<i64, usize>> = HashMap::new();
     for (parent_id, osm_id) in child_matches {
         *votes
@@ -682,49 +675,58 @@ pub async fn propagate_parent_matches(
             .or_default() += 1;
     }
 
-    let parent_ids: Vec<&String> = votes.keys().collect();
+    let existing_parent_matches: HashMap<String, i64> = stops_dsl::stops
+        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+        .filter(stops_dsl::attempt_id.eq(attempt_id))
+        .filter(stops_dsl::location_type.eq(1))
+        .filter(stops_dsl::osm_station_id.is_not_null())
+        .select((stops_dsl::gtfs_id, stops_dsl::osm_station_id))
+        .load::<(String, Option<i64>)>(conn)
+        .await?
+        .into_iter()
+        .filter_map(|(id, osm)| Some((id, osm?)))
+        .collect();
 
-    // 3. Fetch only unmatched parents that are candidates (have children with matches)
-    // We chunk this to avoid hitting query parameter limits if many parents
-    let mut unmatched_parents: Vec<String> = Vec::new();
+    let mut parents_to_check: HashSet<String> = votes.keys().cloned().collect();
+    parents_to_check.extend(existing_parent_matches.keys().cloned());
+
+    let parents_to_check_vec: Vec<String> = parents_to_check.into_iter().collect();
+    let mut parent_location_type_stations = HashSet::new();
     const FETCH_BATCH_SIZE: usize = 5000;
 
-    for chunk in parent_ids.chunks(FETCH_BATCH_SIZE) {
+    for chunk in parents_to_check_vec.chunks(FETCH_BATCH_SIZE) {
         let batch: Vec<String> = stops_dsl::stops
             .filter(stops_dsl::onestop_feed_id.eq(feed_id))
             .filter(stops_dsl::attempt_id.eq(attempt_id))
-            .filter(stops_dsl::location_type.eq(1)) // station
-            .filter(stops_dsl::osm_station_id.is_null()) // only update if currently null
-            .filter(stops_dsl::gtfs_id.eq_any(chunk.iter().copied()))
+            .filter(stops_dsl::location_type.eq(1))
+            .filter(stops_dsl::gtfs_id.eq_any(chunk))
             .select(stops_dsl::gtfs_id)
             .load::<String>(conn)
             .await?;
-        unmatched_parents.extend(batch);
+        parent_location_type_stations.extend(batch);
     }
 
-    if unmatched_parents.is_empty() {
-        return Ok(0);
-    }
-
-    // 4. Determine best match for each unmatched parent
     let mut updates: Vec<(String, Option<i64>, Option<i64>)> = Vec::new();
 
-    for parent_id in unmatched_parents {
-        if let Some(counts) = votes.get(&parent_id) {
-            // Find osm_id with max count (majority vote)
-            if let Some((&best_osm_id, _)) = counts.iter().max_by_key(|&(_, count)| count) {
-                // For parent stations, we generally don't assign a platform_id
-                updates.push((parent_id, Some(best_osm_id), None));
-            }
+    for parent_id in parent_location_type_stations {
+        let new_match = votes.get(&parent_id).and_then(|counts| {
+            counts
+                .iter()
+                .max_by_key(|&(_, count)| count)
+                .map(|(&best_osm_id, _)| best_osm_id)
+        });
+
+        let old_match = existing_parent_matches.get(&parent_id).copied();
+
+        if new_match != old_match {
+            updates.push((parent_id, new_match, None));
         }
     }
 
-    println!(
-        "  OSM matching: propagating matches to {} parents via children",
-        updates.len()
-    );
+    if updates.is_empty() {
+        return Ok(0);
+    }
 
-    // 5. Batch update
     let mut total_updated = 0;
     const UPDATE_BATCH_SIZE: usize = 1000;
 
@@ -851,6 +853,23 @@ pub async fn match_stops_for_feed(
         return Ok(0);
     }
 
+    let existing_matches: HashMap<String, (Option<i64>, Option<i64>)> = stops_dsl::stops
+        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+        .filter(stops_dsl::attempt_id.eq(attempt_id))
+        .filter(stops_dsl::osm_station_id.is_not_null())
+        .select((
+            stops_dsl::gtfs_id,
+            stops_dsl::osm_station_id,
+            stops_dsl::osm_platform_id,
+        ))
+        .load::<(String, Option<i64>, Option<i64>)>(conn)
+        .await?
+        .into_iter()
+        .map(|(id, sid, pid)| (id, (sid, pid)))
+        .collect();
+
+    let mut processed_stops: HashSet<String> = HashSet::new();
+
     println!(
         "  OSM matching: {} rail/tram/subway stops to process for {}",
         all_stops.len(),
@@ -912,8 +931,6 @@ pub async fn match_stops_for_feed(
                     cell_stops.len()
                 );
             }
-            // Do not continue here! We must process these stops to clear any existing matches (set to NULL).
-            // Passing an empty R-tree will result in None matches, which is what we want.
         }
 
         // Build R-tree index (pre-compute lowercase names here)
@@ -956,19 +973,45 @@ pub async fn match_stops_for_feed(
             .collect();
 
         // Batch update the database
-        let updates: Vec<(String, Option<i64>, Option<i64>)> = matches
-            .into_iter()
-            .map(|m| (m.gtfs_id, m.osm_station_id, m.osm_platform_id))
-            .collect();
+        let mut updates: Vec<(String, Option<i64>, Option<i64>)> = Vec::new();
+        for m in matches {
+            processed_stops.insert(m.gtfs_id.clone());
 
-        let update_count = updates.len();
+            let has_changed = match existing_matches.get(&m.gtfs_id) {
+                Some(&(old_sid, old_pid)) => {
+                    (old_sid, old_pid) != (m.osm_station_id, m.osm_platform_id)
+                }
+                None => m.osm_station_id.is_some(),
+            };
 
-        if let Err(e) = batch_update_stops(conn, feed_id, attempt_id, &updates).await {
-            eprintln!("Error batch updating stops for cell {:?}: {:?}", cell, e);
-            continue;
+            if has_changed {
+                updates.push((m.gtfs_id, m.osm_station_id, m.osm_platform_id));
+            }
         }
 
-        matched_count += update_count as u64;
+        if !updates.is_empty() {
+            if let Err(e) = batch_update_stops(conn, feed_id, attempt_id, &updates).await {
+                eprintln!("Error batch updating stops for cell {:?}: {:?}", cell, e);
+                continue;
+            }
+        }
+    }
+
+    let mut stale_updates = Vec::new();
+    for (gtfs_id, _) in &existing_matches {
+        if !processed_stops.contains(gtfs_id) {
+            stale_updates.push((gtfs_id.clone(), None, None));
+        }
+    }
+
+    if !stale_updates.is_empty() {
+        println!(
+            "  OSM matching: clearing {} stale matches for stops no longer processed",
+            stale_updates.len()
+        );
+        for chunk in stale_updates.chunks(1000) {
+            batch_update_stops(conn, feed_id, attempt_id, chunk).await?;
+        }
     }
 
     // Propagate matches to parent stations (post-processing)
@@ -989,14 +1032,22 @@ pub async fn match_stops_for_feed(
         }
     }
 
-    if matched_count > 0 {
+    let final_matched_count = stops_dsl::stops
+        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+        .filter(stops_dsl::attempt_id.eq(attempt_id))
+        .filter(stops_dsl::osm_station_id.is_not_null())
+        .count()
+        .get_result::<i64>(conn)
+        .await? as u64;
+
+    if final_matched_count > 0 {
         println!(
             "  OSM station matching: {} stops matched for {}",
-            matched_count, chateau_id
+            final_matched_count, chateau_id
         );
     }
 
-    Ok(matched_count)
+    Ok(final_matched_count)
 }
 
 // Keep the old function for backwards compatibility if needed elsewhere
