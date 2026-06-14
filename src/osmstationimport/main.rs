@@ -38,7 +38,8 @@ use clap::Parser;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use elasticsearch::BulkParts;
-use geo::{Distance, Haversine, Point};
+use geo::{Contains, Distance, Haversine, Point};
+use geojson::GeoJson;
 use osmpbfreader::{OsmId, OsmObj, OsmPbfReader, Relation};
 use regex::Regex;
 use serde_json::json;
@@ -85,6 +86,27 @@ fn compute_file_hash(path: &str) -> Result<String, Box<dyn Error + Send + Sync>>
     }
 
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+// Embed the exclusion polygons at compile time to avoid runtime paths issues.
+fn load_exclude_polygons() -> Vec<geo::Geometry<f64>> {
+    let geojson_str = include_str!("exclude_polygon_areas.geojson");
+    let geojson = geojson_str
+        .parse::<GeoJson>()
+        .expect("Failed to parse exclude_polygon_areas.geojson");
+
+    let mut polygons = Vec::new();
+    if let GeoJson::FeatureCollection(fc) = geojson {
+        for feature in fc.features {
+            if let Some(geometry) = feature.geometry {
+                let geo_geom: geo::Geometry<f64> = geometry
+                    .try_into()
+                    .expect("Failed to convert GeoJSON geometry to geo geometry");
+                polygons.push(geo_geom);
+            }
+        }
+    }
+    polygons
 }
 
 /// Classify mode type based on OSM tags
@@ -922,6 +944,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     println!("Created {} derivative points from ways", derivative_count);
 
     // =========================================================================
+    // PASS 3.75: Exclude stations inside defined polygon areas
+    // =========================================================================
+    let exclude_polygons = load_exclude_polygons();
+    let old_count = stations.len();
+    stations.retain(|s| {
+        let p = Point::new(s.point.x, s.point.y);
+        !exclude_polygons.iter().any(|poly| poly.contains(&p))
+    });
+    let removed_count = old_count - stations.len();
+    if removed_count > 0 {
+        println!(
+            "Removed {} stations located inside excluded polygon areas",
+            removed_count
+        );
+    }
+
+    // =========================================================================
     // PASS 4: Deduplicate stations
     // =========================================================================
     println!("\n=== Pass 4: Deduplicating stations ===");
@@ -1356,4 +1395,32 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_load_exclude_polygons() {
+        let polygons = load_exclude_polygons();
+        assert!(
+            !polygons.is_empty(),
+            "Should load at least one exclusion polygon"
+        );
+
+        let p_inside = Point::new(-117.92, 33.81);
+        let inside = polygons.iter().any(|poly| poly.contains(&p_inside));
+        assert!(
+            inside,
+            "Point (-117.92, 33.81) should be inside an exclusion polygon"
+        );
+
+        let p_outside = Point::new(-122.0, 37.0);
+        let outside = polygons.iter().any(|poly| poly.contains(&p_outside));
+        assert!(
+            !outside,
+            "Point (-122.0, 37.0) should be outside exclusion polygons"
+        );
+    }
 }
