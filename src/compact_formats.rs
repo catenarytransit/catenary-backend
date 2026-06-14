@@ -7,6 +7,7 @@ use gtfs_realtime::{
 };
 use i24::I24;
 use serde::{Deserialize, Serialize};
+use tinypointers::
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactFeedMessage {
@@ -30,8 +31,8 @@ pub struct CompactFeedEntity {
     pub trip_update: Option<CompactTripUpdate>,
     pub vehicle: Option<VehiclePosition>,
     pub alert: Option<Alert>,
-    pub shape: Option<Shape>,
-    pub stop: Option<Stop>,
+    pub shape: Option<Box<Shape>>,
+    pub stop: Option<Box<Stop>>,
     pub trip_modifications: Option<TripModifications>,
 }
 
@@ -128,8 +129,8 @@ impl CompactFeedEntity {
                 .map(|tu| CompactTripUpdate::from_trip_update(tu, ref_epoch)),
             vehicle: entity.vehicle,
             alert: entity.alert,
-            shape: entity.shape,
-            stop: entity.stop,
+            shape: entity.shape.map(Box::new),
+            stop: entity.stop.map(Box::new),
             trip_modifications: entity.trip_modifications,
         }
     }
@@ -144,8 +145,8 @@ impl CompactFeedEntity {
                 .map(|tu| tu.to_trip_update(ref_epoch)),
             vehicle: self.vehicle.clone(),
             alert: self.alert.clone(),
-            shape: self.shape.clone(),
-            stop: self.stop.clone(),
+            shape: self.shape.clone().map(|boxed_shape| *boxed_shape),
+            stop: self.stop.clone().map(|boxed_stop| *boxed_stop),
             trip_modifications: self.trip_modifications.clone(),
         }
     }
