@@ -888,6 +888,14 @@ pub async fn osm_stations_ranked(
 }
 
 fn build_osm_stations_ranked_query(z: u8, x: u32, y: u32) -> String {
+
+    let maximum_importance_level = match z {
+        0..=2 => 2,
+        3..=5 => 3,
+        6..=7 => 5,
+        _ => 10
+    };
+
     format!(
         "
     SELECT
@@ -924,10 +932,12 @@ FROM (
     FROM
         gtfs.osm_stations_ranked
     WHERE
-        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true
+        (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND
+        importance_level_station <= {maximum_importance_level}
 ) q",
         z = z,
         x = x,
-        y = y
+        y = y,
+        maximum_importance_level = maximum_importance_level
     )
 }
