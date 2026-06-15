@@ -257,21 +257,21 @@ fn score_and_tier_stations<'a>(
     let num_rail = rail_stations.len();
     for (idx, item) in rail_stations.into_iter().enumerate() {
         let percentile = (idx + 1) as f64 / num_rail as f64;
-        let is_ch_or_be = station_countries
+        let is_country_to_rank_stricter = station_countries
             .get(&item.station.osm_id)
-            .map(|c| c == "CH" || c == "BE")
+            .map(|c| c == "CH" || c == "BE" ||  c == "SE" || c == "NO")
             .unwrap_or(false);
 
-        let tier = if is_ch_or_be {
+        let tier = if is_country_to_rank_stricter {
             if percentile > 0.999 {
                 1
-            } else if percentile > 0.996 {
+            } else if percentile > 0.997 {
                 2
-            } else if percentile > 0.99 {
+            } else if percentile > 0.992 {
                 3
-            } else if percentile > 0.95 {
+            } else if percentile > 0.97 {
                 4
-            } else if percentile > 0.90 {
+            } else if percentile > 0.96 {
                 5
             } else {
                 6
@@ -279,13 +279,13 @@ fn score_and_tier_stations<'a>(
         } else {
             if percentile > 0.998 {
                 1
-            } else if percentile > 0.995 {
+            } else if percentile > 0.997 {
                 2
-            } else if percentile > 0.98 {
+            } else if percentile > 0.985 {
                 3
-            } else if percentile > 0.95 {
+            } else if percentile > 0.97 {
                 4
-            } else if percentile > 0.90 {
+            } else if percentile > 0.96 {
                 5
             } else {
                 6
@@ -455,6 +455,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let parent_stations: Vec<OsmStation> = stations_dsl::osm_stations
             .filter(stations_dsl::import_id.eq_any(&import_ids))
             .filter(stations_dsl::parent_osm_id.is_null())
+            .filter(stations_dsl::local_ref.is_null())
+            .filter(stations_dsl::ref_.is_null())
             .load::<OsmStation>(&mut conn)
             .await?;
 
