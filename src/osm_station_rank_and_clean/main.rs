@@ -303,7 +303,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let chunk_terminal_counts = diesel::sql_query(
                     "SELECT \
                          s.osm_station_id, \
-                         COUNT(DISTINCT (dpm.onestop_feed_id, dpm.attempt_id, dpm.route_id))::bigint as terminal_count \
+                         COUNT(DISTINCT (dpm.chateau, dpm.route_id))::bigint as terminal_count \
                      FROM gtfs.stops s \
                      JOIN gtfs.direction_pattern dp \
                        ON s.chateau = dp.chateau \
