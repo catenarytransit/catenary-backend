@@ -38,12 +38,14 @@ CREATE TABLE gtfs.osm_stations_ranked (
     --is_intermodal BOOLEAN NOT NULL,
 
     importance_level_station SMALLINT NOT NULL,
-    -- There are 6 levels total. 
+    -- There are 6 levels total for rail stations
     -- 1 for the highest level station (Toulouse, Marseille, Lyon, Paris, Munchen, Zurich, Bern, Praha, Frankfurt, Kassel, Koln, Bruxelles, Amsterdam, Hamburg, Stuttgart). 
     -- Level 2 is like Sion, Brig, Neuchatel, Ulm, Ingolstadt, Regensburg, Magdeburg
     -- Level 3 is like Poitiers, Geltendorf, 's-Hertogenbosch, Southampton
     -- The levels above it are for the in between stations like Derby, Swindon, Reading, Bellinzona
     
+    -- then levels 7 to 9 are reserved for subway and tram stations. Subway and tram and light rail stations should NEVER recieve a ranking below 7.
+
     -- the other flags such as parent osm id are ignored because we are only picking parent stations for display purposes
 
     admin_hierarchy JSONB,

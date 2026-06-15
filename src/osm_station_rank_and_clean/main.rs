@@ -96,7 +96,11 @@ fn get_icon_min_zoom(level: i16) -> i16 {
         3 => 7,
         4 => 8,
         5 => 9,
-        _ => 10,
+        6 => 10,
+        7 => 11,
+        8 => 12,
+        9 => 13,
+        _ => 14,
     }
 }
 
@@ -578,7 +582,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let is_intermodal = active_modes_count > 1;
             let i_val = if is_intermodal { 1.0 } else { 0.0 };
 
-            let score = w[0] * zp + w[1] * zf + w[2] * zt + w[3] * zr + w[4] * zc + w[5] * i_val;
+            // Scale down route span significance for stations with few or no terminal routes
+            // to prevent minor intermediate stops on long lines from receiving inflated scores.
+            let mut adjusted_zr = zr;
+            if t_raw == 0.0 {
+                adjusted_zr *= 0.1;
+            } else if t_raw < 5.0 {
+                adjusted_zr *= 0.1 + 0.9 * (t_raw / 5.0);
+            }
+
+            let score = w[0] * zp + w[1] * zf + w[2] * zt + w[3] * adjusted_zr + w[4] * zc + w[5] * i_val;
 
             scored_stations.push(ScoredStation {
                 station: s,
@@ -595,19 +608,26 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             });
         }
 
-        // Sort by score ascending to compute percentiles
-        scored_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+        // Partition and rank rail and non-rail stations in separate stages
+        // to reserve tiers 1-6 for rail networks and tiers 7-9 for subway/tram/light_rail networks.
+        let (mut rail_stations, mut non_rail_stations): (Vec<ScoredStation>, Vec<ScoredStation>) = scored_stations
+            .into_iter()
+            .partition(|s| s.rail);
 
-        let num_stations = scored_stations.len();
+        rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+        non_rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+
         struct StationWithTier<'a> {
             scored: ScoredStation<'a>,
             tier: i16,
         }
 
         let mut stations_with_tiers = Vec::new();
-        for (idx, item) in scored_stations.into_iter().enumerate() {
-            let percentile = (idx + 1) as f64 / num_stations as f64;
-            let tier = if percentile > 0.99 {
+
+        let num_rail = rail_stations.len();
+        for (idx, item) in rail_stations.into_iter().enumerate() {
+            let percentile = (idx + 1) as f64 / num_rail as f64;
+            let tier = if percentile > 0.995 {
                 1
             } else if percentile > 0.95 {
                 2
@@ -619,6 +639,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 5
             } else {
                 6
+            };
+            stations_with_tiers.push(StationWithTier { scored: item, tier });
+        }
+
+        let num_non_rail = non_rail_stations.len();
+        for (idx, item) in non_rail_stations.into_iter().enumerate() {
+            let percentile = (idx + 1) as f64 / num_non_rail as f64;
+            let tier = if percentile > 0.90 {
+                7
+            } else if percentile > 0.50 {
+                8
+            } else {
+                9
             };
             stations_with_tiers.push(StationWithTier { scored: item, tier });
         }
