@@ -392,7 +392,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 let mut shapes = Vec::new();
                 for row in chunk_shapes {
                     if let Some(osm_id) = row.osm_station_id {
-                        let log_val = (row.length.unwrap_or(0.0) + 1.0).ln();
+                        let length_m = row.length.unwrap_or(0.0);
+                        let ln_val = (length_m + 1.0).ln();
+                        let boost = if length_m > 100_000.0 {
+                            (length_m / 100_000.0).ln()
+                        } else {
+                            0.0
+                        };
+                        let log_val = ln_val * (1.0 + 1.5 * boost);
                         shapes.push((osm_id, log_val));
                     }
                 }
@@ -627,11 +634,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let num_rail = rail_stations.len();
         for (idx, item) in rail_stations.into_iter().enumerate() {
             let percentile = (idx + 1) as f64 / num_rail as f64;
-            let tier = if percentile > 0.995 {
+            let tier = if percentile > 0.997 {
                 1
-            } else if percentile > 0.95 {
+            } else if percentile > 0.97 {
                 2
-            } else if percentile > 0.85 {
+            } else if percentile > 0.88 {
                 3
             } else if percentile > 0.60 {
                 4
