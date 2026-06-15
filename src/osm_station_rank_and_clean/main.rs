@@ -136,6 +136,13 @@ impl CountryArea {
             Self::MultiPolygon { multi_poly, .. } => multi_poly.contains(p),
         }
     }
+
+    fn cntr_id(&self) -> &str {
+        match self {
+            Self::Polygon { cntr_id, .. } => cntr_id,
+            Self::MultiPolygon { cntr_id, .. } => cntr_id,
+        }
+    }
 }
 
 struct ScoredStation<'a> {
@@ -165,6 +172,7 @@ fn score_and_tier_stations<'a>(
     route_span_logs: &HashMap<i64, i32>,
     centralities: &HashMap<i64, i32>,
     station_modes: &HashMap<i64, (bool, bool, bool)>,
+    station_countries: &HashMap<i64, String>,
     w: &[f64; 6],
 ) -> Vec<StationWithTier<'a>> {
     if stations.is_empty() {
@@ -249,18 +257,39 @@ fn score_and_tier_stations<'a>(
     let num_rail = rail_stations.len();
     for (idx, item) in rail_stations.into_iter().enumerate() {
         let percentile = (idx + 1) as f64 / num_rail as f64;
-        let tier = if percentile > 0.998 {
-            1
-        } else if percentile > 0.995 {
-            2
-        } else if percentile > 0.98 {
-            3
-        } else if percentile > 0.95 {
-            4
-        } else if percentile > 0.90 {
-            5
+        let is_ch_or_be = station_countries
+            .get(&item.station.osm_id)
+            .map(|c| c == "CH" || c == "BE")
+            .unwrap_or(false);
+
+        let tier = if is_ch_or_be {
+            if percentile > 0.999 {
+                1
+            } else if percentile > 0.996 {
+                2
+            } else if percentile > 0.99 {
+                3
+            } else if percentile > 0.95 {
+                4
+            } else if percentile > 0.90 {
+                5
+            } else {
+                6
+            }
         } else {
-            6
+            if percentile > 0.998 {
+                1
+            } else if percentile > 0.995 {
+                2
+            } else if percentile > 0.98 {
+                3
+            } else if percentile > 0.95 {
+                4
+            } else if percentile > 0.90 {
+                5
+            } else {
+                6
+            }
         };
         stations_with_tiers.push(StationWithTier { scored: item, tier });
     }
@@ -762,12 +791,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         );
 
         // 4. Score Calculation & Partitioned Cycle
+        let mut station_countries = HashMap::new();
         let mut target_country_stations = Vec::new();
         let mut other_stations = Vec::new();
 
         for s in &parent_stations {
             let check_point = geo::Point::new(s.point.x, s.point.y);
-            let mut is_target_country = false;
+            let mut matched_country = None;
             let lat_delta = 0.01;
             let lon_delta = 0.01;
             let search_box = rstar::AABB::from_corners(
@@ -776,11 +806,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
             for area in country_rtree.locate_in_envelope(&search_box) {
                 if area.contains_point(&check_point) {
-                    is_target_country = true;
+                    matched_country = Some(area.cntr_id().to_string());
                     break;
                 }
             }
-            if is_target_country {
+            if let Some(country) = matched_country {
+                station_countries.insert(s.osm_id, country);
                 target_country_stations.push(s);
             } else {
                 other_stations.push(s);
@@ -801,6 +832,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             &route_span_logs,
             &centralities,
             &station_modes,
+            &station_countries,
             &w,
         );
 
@@ -812,6 +844,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             &route_span_logs,
             &centralities,
             &station_modes,
+            &station_countries,
             &w,
         );
 
