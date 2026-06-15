@@ -636,13 +636,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let percentile = (idx + 1) as f64 / num_rail as f64;
             let tier = if percentile > 0.997 {
                 1
-            } else if percentile > 0.97 {
+            } else if percentile > 0.99 {
                 2
-            } else if percentile > 0.88 {
+            } else if percentile > 0.97 {
                 3
-            } else if percentile > 0.60 {
+            } else if percentile > 0.85 {
                 4
-            } else if percentile > 0.30 {
+            } else if percentile > 0.80 {
                 5
             } else {
                 6
