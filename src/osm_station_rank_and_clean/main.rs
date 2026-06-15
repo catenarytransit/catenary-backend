@@ -788,6 +788,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             file_name,
             total_save_chunks
         );
+        use diesel::pg::upsert::excluded;
         for (chunk_idx, chunk) in ranked_inserts.chunks(1000).enumerate() {
             println!(
                 "  Inserting chunk {}/{} (size: {})...",
@@ -797,6 +798,35 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             );
             diesel::insert_into(ranked_dsl::osm_stations_ranked)
                 .values(chunk)
+                .on_conflict((ranked_dsl::osm_id, ranked_dsl::osm_type, ranked_dsl::run_id))
+                .do_update()
+                .set((
+                    ranked_dsl::point.eq(excluded(ranked_dsl::point)),
+                    ranked_dsl::name.eq(excluded(ranked_dsl::name)),
+                    ranked_dsl::name_translations.eq(excluded(ranked_dsl::name_translations)),
+                    ranked_dsl::station_type.eq(excluded(ranked_dsl::station_type)),
+                    ranked_dsl::railway_tag.eq(excluded(ranked_dsl::railway_tag)),
+                    ranked_dsl::mode_type.eq(excluded(ranked_dsl::mode_type)),
+                    ranked_dsl::uic_ref.eq(excluded(ranked_dsl::uic_ref)),
+                    ranked_dsl::wikidata.eq(excluded(ranked_dsl::wikidata)),
+                    ranked_dsl::operator.eq(excluded(ranked_dsl::operator)),
+                    ranked_dsl::network.eq(excluded(ranked_dsl::network)),
+                    ranked_dsl::tram.eq(excluded(ranked_dsl::tram)),
+                    ranked_dsl::subway.eq(excluded(ranked_dsl::subway)),
+                    ranked_dsl::rail.eq(excluded(ranked_dsl::rail)),
+                    ranked_dsl::number_of_associated_stops.eq(excluded(ranked_dsl::number_of_associated_stops)),
+                    ranked_dsl::platform_count.eq(excluded(ranked_dsl::platform_count)),
+                    ranked_dsl::terminal_route_count.eq(excluded(ranked_dsl::terminal_route_count)),
+                    ranked_dsl::route_span_log.eq(excluded(ranked_dsl::route_span_log)),
+                    ranked_dsl::degree_centrality.eq(excluded(ranked_dsl::degree_centrality)),
+                    ranked_dsl::importance_level_station.eq(excluded(ranked_dsl::importance_level_station)),
+                    ranked_dsl::admin_hierarchy.eq(excluded(ranked_dsl::admin_hierarchy)),
+                    ranked_dsl::label_min_zoom.eq(excluded(ranked_dsl::label_min_zoom)),
+                    ranked_dsl::icon_min_zoom.eq(excluded(ranked_dsl::icon_min_zoom)),
+                    ranked_dsl::overshadowed_by_osm_id.eq(excluded(ranked_dsl::overshadowed_by_osm_id)),
+                    ranked_dsl::overshadowed_by_osm_type.eq(excluded(ranked_dsl::overshadowed_by_osm_type)),
+                    ranked_dsl::allowed_spatial_query.eq(excluded(ranked_dsl::allowed_spatial_query)),
+                ))
                 .execute(&mut conn)
                 .await?;
         }
