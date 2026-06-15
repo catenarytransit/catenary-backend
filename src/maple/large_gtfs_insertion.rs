@@ -445,7 +445,7 @@ pub async fn gtfs_process_large_feed(
     }
     fs::create_dir_all(&split_dir)?;
 
-    let mut global_stop_ids_to_route_types: HashMap<String, Vec<i16>> = HashMap::new();
+    let mut global_stop_ids_to_route_types: HashMap<String, Vec<u16>> = HashMap::new();
     let mut global_stop_ids_to_route_ids: HashMap<String, Vec<String>> = HashMap::new();
 
     let num_agencies = agencies.len();
@@ -909,6 +909,28 @@ pub async fn gtfs_process_large_feed(
         if agency_gtfs.trips.is_empty() {
             println!("Skipping agency split {}, no active trips", agency_id);
             continue;
+        }
+
+        let (stop_route_types, stop_route_ids) =
+            crate::gtfs_handlers::stops_associated_items::make_hashmap_stops_to_route_types_and_ids(&agency_gtfs);
+
+        for (stop_id, r_types) in stop_route_types {
+            let entry = global_stop_ids_to_route_types.entry(stop_id).or_default();
+            for r_type in r_types {
+                let r_type_u16 = r_type as u16;
+                if !entry.contains(&r_type_u16) {
+                    entry.push(r_type_u16);
+                }
+            }
+        }
+
+        for (stop_id, r_ids) in stop_route_ids {
+            let entry = global_stop_ids_to_route_ids.entry(stop_id).or_default();
+            for r_id in r_ids {
+                if !entry.contains(&r_id) {
+                    entry.push(r_id);
+                }
+            }
         }
 
         let reduction = maple_syrup::reduce(&agency_gtfs);
@@ -1591,13 +1613,23 @@ pub async fn gtfs_process_large_feed(
         .and_then(|fi| fi.default_lang.clone())
         .or_else(|| Some("de".to_string()));
 
+    let global_stop_ids_to_route_types_i16: HashMap<String, Vec<i16>> = global_stop_ids_to_route_types
+        .into_iter()
+        .map(|(stop_id, r_types)| {
+            (
+                stop_id,
+                r_types.into_iter().map(|rt| rt as i16).collect(),
+            )
+        })
+        .collect();
+
     stops_into_postgres_and_elastic(
         &global_gtfs,
         feed_id,
         Arc::clone(&arc_conn_pool),
         chateau_id,
         attempt_id,
-        &global_stop_ids_to_route_types,
+        &global_stop_ids_to_route_types_i16,
         &global_stop_ids_to_route_ids,
         &stop_id_to_children_ids,
         None,
