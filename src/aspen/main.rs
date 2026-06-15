@@ -675,6 +675,29 @@ impl AspenRpc for AspenServer {
                 }
             }
 
+            if chateau_id == "chicagotransitauthority" {
+                if let Some(v) = &mut vehicles_gtfs_rt {
+                    for entity in v.entity.iter_mut() {
+                        if let Some(vehicle) = &mut entity.vehicle {
+                            let route_id = vehicle.trip.as_ref().and_then(|t| t.route_id.as_ref());
+                            let vehicle_id = vehicle
+                                .vehicle
+                                .as_ref()
+                                .and_then(|vd| vd.id.as_ref())
+                                .unwrap_or(&entity.id)
+                                .clone();
+                            if let Some(r_id) = route_id {
+                                let new_id = format!("{}-{}", r_id, vehicle_id);
+                                entity.id = new_id.clone();
+                                if let Some(vd) = &mut vehicle.vehicle {
+                                    vd.id = Some(new_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             //delete stop times
             if let Some(v) = &mut vehicles_gtfs_rt {
                 for vehicle_position in v.entity.iter_mut() {
