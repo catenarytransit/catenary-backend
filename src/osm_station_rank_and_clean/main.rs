@@ -8,7 +8,7 @@ use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::StreamExt;
-use geo::{Distance, Haversine, Point};
+use geo::{BoundingRect, Contains, Distance, Haversine, Point};
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -106,8 +106,257 @@ fn get_icon_min_zoom(level: i16) -> i16 {
 
 const BUFFER_UNORDERED_CONCURRENCY: usize = 7;
 
+enum CountryArea {
+    Polygon {
+        cntr_id: String,
+        poly: geo::Polygon<f64>,
+        envelope: AABB<[f64; 2]>,
+    },
+    MultiPolygon {
+        cntr_id: String,
+        multi_poly: geo::MultiPolygon<f64>,
+        envelope: AABB<[f64; 2]>,
+    },
+}
+
+impl RTreeObject for CountryArea {
+    type Envelope = AABB<[f64; 2]>;
+    fn envelope(&self) -> Self::Envelope {
+        match self {
+            Self::Polygon { envelope, .. } => *envelope,
+            Self::MultiPolygon { envelope, .. } => *envelope,
+        }
+    }
+}
+
+impl CountryArea {
+    fn contains_point(&self, p: &Point<f64>) -> bool {
+        match self {
+            Self::Polygon { poly, .. } => poly.contains(p),
+            Self::MultiPolygon { multi_poly, .. } => multi_poly.contains(p),
+        }
+    }
+}
+
+struct ScoredStation<'a> {
+    station: &'a OsmStation,
+    p_val: i32,
+    f_val: i32,
+    t_val: i32,
+    r_val: i32,
+    c_val: i32,
+    is_intermodal: bool,
+    score: f64,
+    tram: bool,
+    subway: bool,
+    rail: bool,
+}
+
+struct StationWithTier<'a> {
+    scored: ScoredStation<'a>,
+    tier: i16,
+}
+
+fn score_and_tier_stations<'a>(
+    stations: &[&'a OsmStation],
+    platform_counts: &HashMap<i64, i32>,
+    stops_counts: &HashMap<i64, i32>,
+    terminal_counts: &HashMap<i64, i32>,
+    route_span_logs: &HashMap<i64, i32>,
+    centralities: &HashMap<i64, i32>,
+    station_modes: &HashMap<i64, (bool, bool, bool)>,
+    w: &[f64; 6],
+) -> Vec<StationWithTier<'a>> {
+    if stations.is_empty() {
+        return Vec::new();
+    }
+
+    let mut p_vals = Vec::new();
+    let mut f_vals = Vec::new();
+    let mut t_vals = Vec::new();
+    let mut r_vals = Vec::new();
+    let mut c_vals = Vec::new();
+
+    for s in stations {
+        p_vals.push(*platform_counts.get(&s.osm_id).unwrap_or(&0) as f64);
+        f_vals.push(*stops_counts.get(&s.osm_id).unwrap_or(&0) as f64);
+        t_vals.push(*terminal_counts.get(&s.osm_id).unwrap_or(&0) as f64);
+        r_vals.push(*route_span_logs.get(&s.osm_id).unwrap_or(&0) as f64);
+        c_vals.push(*centralities.get(&s.osm_id).unwrap_or(&0) as f64);
+    }
+
+    let (p_mean, p_std) = compute_mean_and_std(&p_vals);
+    let (f_mean, f_std) = compute_mean_and_std(&f_vals);
+    let (t_mean, t_std) = compute_mean_and_std(&t_vals);
+    let (r_mean, r_std) = compute_mean_and_std(&r_vals);
+    let (c_mean, c_std) = compute_mean_and_std(&c_vals);
+
+    let mut scored_stations = Vec::new();
+    for (idx, s) in stations.iter().enumerate() {
+        let p_raw = p_vals[idx];
+        let f_raw = f_vals[idx];
+        let t_raw = t_vals[idx];
+        let r_raw = r_vals[idx];
+        let c_raw = c_vals[idx];
+
+        let zp = standardise(p_raw, p_mean, p_std);
+        let zf = standardise(f_raw, f_mean, f_std);
+        let zt = standardise(t_raw, t_mean, t_std);
+        let zr = standardise(r_raw, r_mean, r_std);
+        let zc = standardise(c_raw, c_mean, c_std);
+
+        let modes = station_modes
+            .get(&s.osm_id)
+            .copied()
+            .unwrap_or((false, false, false));
+        let active_modes_count = modes.0 as i32 + modes.1 as i32 + modes.2 as i32;
+        let is_intermodal = active_modes_count > 1;
+        let i_val = if is_intermodal { 1.0 } else { 0.0 };
+
+        let mut adjusted_zr = zr;
+        if t_raw == 0.0 {
+            adjusted_zr *= 0.1;
+        } else if t_raw < 5.0 {
+            adjusted_zr *= 0.1 + 0.9 * (t_raw / 5.0);
+        }
+
+        let score = w[0] * zp + w[1] * zf + w[2] * zt + w[3] * adjusted_zr + w[4] * zc + w[5] * i_val;
+
+        scored_stations.push(ScoredStation {
+            station: *s,
+            p_val: p_raw as i32,
+            f_val: f_raw as i32,
+            t_val: t_raw as i32,
+            r_val: r_raw as i32,
+            c_val: c_raw as i32,
+            is_intermodal,
+            score,
+            tram: modes.0,
+            subway: modes.1,
+            rail: modes.2,
+        });
+    }
+
+    let (mut rail_stations, mut non_rail_stations): (Vec<ScoredStation>, Vec<ScoredStation>) = scored_stations
+        .into_iter()
+        .partition(|s| s.rail);
+
+    rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+    non_rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+
+    let mut stations_with_tiers = Vec::new();
+
+    let num_rail = rail_stations.len();
+    for (idx, item) in rail_stations.into_iter().enumerate() {
+        let percentile = (idx + 1) as f64 / num_rail as f64;
+        let tier = if percentile > 0.998 {
+            1
+        } else if percentile > 0.995 {
+            2
+        } else if percentile > 0.98 {
+            3
+        } else if percentile > 0.95 {
+            4
+        } else if percentile > 0.90 {
+            5
+        } else {
+            6
+        };
+        stations_with_tiers.push(StationWithTier { scored: item, tier });
+    }
+
+    let num_non_rail = non_rail_stations.len();
+    for (idx, item) in non_rail_stations.into_iter().enumerate() {
+        let percentile = (idx + 1) as f64 / num_non_rail as f64;
+        let tier = if percentile > 0.90 {
+            7
+        } else if percentile > 0.50 {
+            8
+        } else {
+            9
+        };
+        stations_with_tiers.push(StationWithTier { scored: item, tier });
+    }
+
+    stations_with_tiers
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut geojson_path = std::env::current_dir()?;
+    let mut found = false;
+    for _ in 0..10 {
+        let candidate = geojson_path.join("CNTR_RG_03M_2024_4326.geojson");
+        if candidate.exists() {
+            geojson_path = std::fs::canonicalize(candidate)?;
+            found = true;
+            break;
+        }
+        if !geojson_path.pop() {
+            break;
+        }
+    }
+
+    if !found {
+        return Err("Could not find CNTR_RG_03M_2024_4326.geojson in any parent directory".into());
+    }
+
+    println!("Loading country boundaries from: {:?}", geojson_path);
+    let file = std::fs::File::open(&geojson_path)?;
+    let reader = std::io::BufReader::new(file);
+    let geojson = serde_json::from_reader::<_, geojson::GeoJson>(reader)?;
+
+    let target_cntr_ids: HashSet<&str> = ["DE", "CH", "NL", "UK", "BE", "CZ", "IE"].iter().copied().collect();
+    let mut country_areas = Vec::new();
+
+    if let geojson::GeoJson::FeatureCollection(fc) = geojson {
+        for feature in fc.features {
+            if let Some(ref props) = feature.properties {
+                if let Some(cntr_id_val) = props.get("CNTR_ID") {
+                    if let Some(cntr_id_str) = cntr_id_val.as_str() {
+                        if target_cntr_ids.contains(cntr_id_str) {
+                            if let Some(geometry) = feature.geometry {
+                                let geo_geom: geo::Geometry<f64> = geometry.try_into()?;
+                                match geo_geom {
+                                    geo::Geometry::Polygon(poly) => {
+                                        if let Some(bbox) = poly.bounding_rect() {
+                                            let envelope = AABB::from_corners(
+                                                [bbox.min().x, bbox.min().y],
+                                                [bbox.max().x, bbox.max().y],
+                                            );
+                                            country_areas.push(CountryArea::Polygon {
+                                                cntr_id: cntr_id_str.to_string(),
+                                                poly,
+                                                envelope,
+                                            });
+                                        }
+                                    }
+                                    geo::Geometry::MultiPolygon(multi_poly) => {
+                                        if let Some(bbox) = multi_poly.bounding_rect() {
+                                            let envelope = AABB::from_corners(
+                                                [bbox.min().x, bbox.min().y],
+                                                [bbox.max().x, bbox.max().y],
+                                            );
+                                            country_areas.push(CountryArea::MultiPolygon {
+                                                cntr_id: cntr_id_str.to_string(),
+                                                multi_poly,
+                                                envelope,
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let country_rtree = RTree::bulk_load(country_areas);
+    println!("Loaded {} target country polygons/multipolygons into R-Tree.", country_rtree.size());
+
     let pool = make_async_pool().await?;
     let mut conn = pool.get().await?;
 
@@ -512,157 +761,64 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             centralities.len()
         );
 
-        // 4. Score Calculation
-        let mut p_vals = Vec::new();
-        let mut f_vals = Vec::new();
-        let mut t_vals = Vec::new();
-        let mut r_vals = Vec::new();
-        let mut c_vals = Vec::new();
+        // 4. Score Calculation & Partitioned Cycle
+        let mut target_country_stations = Vec::new();
+        let mut other_stations = Vec::new();
 
         for s in &parent_stations {
-            p_vals.push(*platform_counts.get(&s.osm_id).unwrap_or(&0) as f64);
-            f_vals.push(*stops_counts.get(&s.osm_id).unwrap_or(&0) as f64);
-            t_vals.push(*terminal_counts.get(&s.osm_id).unwrap_or(&0) as f64);
-            r_vals.push(*route_span_logs.get(&s.osm_id).unwrap_or(&0) as f64);
-            c_vals.push(*centralities.get(&s.osm_id).unwrap_or(&0) as f64);
-        }
-
-        println!("Computing mean and standard deviation for score standardization...");
-        let (p_mean, p_std) = compute_mean_and_std(&p_vals);
-        let (f_mean, f_std) = compute_mean_and_std(&f_vals);
-        let (t_mean, t_std) = compute_mean_and_std(&t_vals);
-        let (r_mean, r_std) = compute_mean_and_std(&r_vals);
-        let (c_mean, c_std) = compute_mean_and_std(&c_vals);
-        println!("Standardization statistics:");
-        println!(
-            "  Platform counts: mean = {:.4}, std = {:.4}",
-            p_mean, p_std
-        );
-        println!(
-            "  Associated stops: mean = {:.4}, std = {:.4}",
-            f_mean, f_std
-        );
-        println!(
-            "  Terminal routes: mean = {:.4}, std = {:.4}",
-            t_mean, t_std
-        );
-        println!(
-            "  Route span logs: mean = {:.4}, std = {:.4}",
-            r_mean, r_std
-        );
-        println!("  Centrality: mean = {:.4}, std = {:.4}", c_mean, c_std);
-
-        struct ScoredStation<'a> {
-            station: &'a OsmStation,
-            p_val: i32,
-            f_val: i32,
-            t_val: i32,
-            r_val: i32,
-            c_val: i32,
-            is_intermodal: bool,
-            score: f64,
-            tram: bool,
-            subway: bool,
-            rail: bool,
-        }
-
-        let mut scored_stations = Vec::new();
-        for (idx, s) in parent_stations.iter().enumerate() {
-            let p_raw = p_vals[idx];
-            let f_raw = f_vals[idx];
-            let t_raw = t_vals[idx];
-            let r_raw = r_vals[idx];
-            let c_raw = c_vals[idx];
-
-            let zp = standardise(p_raw, p_mean, p_std);
-            let zf = standardise(f_raw, f_mean, f_std);
-            let zt = standardise(t_raw, t_mean, t_std);
-            let zr = standardise(r_raw, r_mean, r_std);
-            let zc = standardise(c_raw, c_mean, c_std);
-
-            let modes = station_modes
-                .get(&s.osm_id)
-                .copied()
-                .unwrap_or((false, false, false));
-            let active_modes_count = modes.0 as i32 + modes.1 as i32 + modes.2 as i32;
-            let is_intermodal = active_modes_count > 1;
-            let i_val = if is_intermodal { 1.0 } else { 0.0 };
-
-            // Scale down route span significance for stations with few or no terminal routes
-            // to prevent minor intermediate stops on long lines from receiving inflated scores.
-            let mut adjusted_zr = zr;
-            if t_raw == 0.0 {
-                adjusted_zr *= 0.1;
-            } else if t_raw < 5.0 {
-                adjusted_zr *= 0.1 + 0.9 * (t_raw / 5.0);
+            let check_point = geo::Point::new(s.point.x, s.point.y);
+            let mut is_target_country = false;
+            let lat_delta = 0.01;
+            let lon_delta = 0.01;
+            let search_box = rstar::AABB::from_corners(
+                [s.point.x - lon_delta, s.point.y - lat_delta],
+                [s.point.x + lon_delta, s.point.y + lat_delta],
+            );
+            for area in country_rtree.locate_in_envelope(&search_box) {
+                if area.contains_point(&check_point) {
+                    is_target_country = true;
+                    break;
+                }
             }
-
-            let score = w[0] * zp + w[1] * zf + w[2] * zt + w[3] * adjusted_zr + w[4] * zc + w[5] * i_val;
-
-            scored_stations.push(ScoredStation {
-                station: s,
-                p_val: p_raw as i32,
-                f_val: f_raw as i32,
-                t_val: t_raw as i32,
-                r_val: r_raw as i32,
-                c_val: c_raw as i32,
-                is_intermodal,
-                score,
-                tram: modes.0,
-                subway: modes.1,
-                rail: modes.2,
-            });
+            if is_target_country {
+                target_country_stations.push(s);
+            } else {
+                other_stations.push(s);
+            }
         }
 
-        // Partition and rank rail and non-rail stations in separate stages
-        // to reserve tiers 1-6 for rail networks and tiers 7-9 for subway/tram/light_rail networks.
-        let (mut rail_stations, mut non_rail_stations): (Vec<ScoredStation>, Vec<ScoredStation>) = scored_stations
-            .into_iter()
-            .partition(|s| s.rail);
+        println!(
+            "Group partitioning: target_country_stations = {}, other_stations = {}",
+            target_country_stations.len(),
+            other_stations.len()
+        );
 
-        rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
-        non_rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
+        let mut stations_with_tiers_target = score_and_tier_stations(
+            &target_country_stations,
+            &platform_counts,
+            &stops_counts,
+            &terminal_counts,
+            &route_span_logs,
+            &centralities,
+            &station_modes,
+            &w,
+        );
 
-        struct StationWithTier<'a> {
-            scored: ScoredStation<'a>,
-            tier: i16,
-        }
+        let mut stations_with_tiers_other = score_and_tier_stations(
+            &other_stations,
+            &platform_counts,
+            &stops_counts,
+            &terminal_counts,
+            &route_span_logs,
+            &centralities,
+            &station_modes,
+            &w,
+        );
 
         let mut stations_with_tiers = Vec::new();
+        stations_with_tiers.append(&mut stations_with_tiers_target);
+        stations_with_tiers.append(&mut stations_with_tiers_other);
 
-        let num_rail = rail_stations.len();
-        for (idx, item) in rail_stations.into_iter().enumerate() {
-            let percentile = (idx + 1) as f64 / num_rail as f64;
-            let tier = if percentile > 0.997 {
-                1
-            } else if percentile > 0.99 {
-                2
-            } else if percentile > 0.97 {
-                3
-            } else if percentile > 0.85 {
-                4
-            } else if percentile > 0.80 {
-                5
-            } else {
-                6
-            };
-            stations_with_tiers.push(StationWithTier { scored: item, tier });
-        }
-
-        let num_non_rail = non_rail_stations.len();
-        for (idx, item) in non_rail_stations.into_iter().enumerate() {
-            let percentile = (idx + 1) as f64 / num_non_rail as f64;
-            let tier = if percentile > 0.90 {
-                7
-            } else if percentile > 0.50 {
-                8
-            } else {
-                9
-            };
-            stations_with_tiers.push(StationWithTier { scored: item, tier });
-        }
-
-        // Sort by score descending for Phase II: RDSS
         stations_with_tiers.sort_by(|a, b| b.scored.score.total_cmp(&a.scored.score));
 
         // 5. RDSS Phase
