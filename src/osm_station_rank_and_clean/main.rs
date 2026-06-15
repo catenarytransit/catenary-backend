@@ -7,6 +7,7 @@ use catenary::postgres_tools::make_async_pool;
 use chrono::Utc;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
+use futures::StreamExt;
 use geo::{Distance, Haversine, Point};
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use serde_json::Value;
@@ -99,6 +100,8 @@ fn get_icon_min_zoom(level: i16) -> i16 {
     }
 }
 
+const BUFFER_UNORDERED_CONCURRENCY: usize = 7;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let pool = make_async_pool().await?;
@@ -145,7 +148,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         groups.len()
     );
 
-    let mut ranked_inserts: Vec<OsmStationRankedInsert> = Vec::new();
+    use catenary::schema::gtfs::osm_stations_ranked::dsl as ranked_dsl;
+    let is_table_empty: bool = ranked_dsl::osm_stations_ranked
+        .select(diesel::dsl::count_star())
+        .first::<i64>(&mut conn)
+        .await?
+        == 0;
+    println!("Is gtfs.osm_stations_ranked empty? {}", is_table_empty);
+    let allowed_spatial_query_val = is_table_empty;
 
     // empirical weights vector: [P, F, T, R, C, I]
     let w = [2.0, 1.0, 1.5, 2.0, 1.5, 1.0];
@@ -156,6 +166,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             "Processing import group: {} (contains import IDs: {:?})",
             file_name, import_ids
         );
+
+        let mut ranked_inserts: Vec<OsmStationRankedInsert> = Vec::new();
 
         use catenary::schema::gtfs::osm_stations::dsl as stations_dsl;
         let parent_stations: Vec<OsmStation> = stations_dsl::osm_stations
@@ -257,195 +269,223 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         use catenary::schema::gtfs::stops::dsl as stops_dsl;
 
-        let total_chunks = (parent_osm_ids.len() + 9) / 10;
+        let chunks: Vec<Vec<i64>> = parent_osm_ids.chunks(10).map(|c| c.to_vec()).collect();
+        let total_chunks = chunks.len();
         println!(
-            "Querying features (stops, terminals, shapes, centrality) in {} chunk(s) of 10 stations...",
+            "Querying features (stops, terminals, shapes, centrality) in {} chunk(s) of 10 stations concurrently...",
             total_chunks
         );
 
-        for (chunk_idx, chunk) in parent_osm_ids.chunks(10).enumerate() {
-            println!(
-                "  Querying features for chunk {}/{} ({} stations)...",
-                chunk_idx + 1,
-                total_chunks,
-                chunk.len()
-            );
-            // Feature: Associated Stops Count (F_i) using Diesel DSL query builder
-            let chunk_stops_counts: Vec<(Option<i64>, i64)> = stops_dsl::stops
-                .filter(stops_dsl::osm_station_id.eq_any(chunk))
-                .group_by(stops_dsl::osm_station_id)
-                .select((stops_dsl::osm_station_id, diesel::dsl::count_star()))
-                .load::<(Option<i64>, i64)>(&mut conn)
+        let mut feature_stream = futures::stream::iter(chunks.into_iter().enumerate().map(|(chunk_idx, chunk)| {
+            let pool = pool.clone();
+            async move {
+                let mut conn = pool.get().await.map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+
+                // Feature: Associated Stops Count (F_i) using Diesel DSL query builder
+                let chunk_stops_counts: Vec<(Option<i64>, i64)> = stops_dsl::stops
+                    .filter(stops_dsl::osm_station_id.eq_any(&chunk))
+                    .group_by(stops_dsl::osm_station_id)
+                    .select((stops_dsl::osm_station_id, diesel::dsl::count_star()))
+                    .load::<(Option<i64>, i64)>(&mut conn)
+                    .await?;
+
+                let mut stops = Vec::new();
+                for (sid, count) in chunk_stops_counts {
+                    if let Some(osm_id) = sid {
+                        stops.push((osm_id, count as i32));
+                    }
+                }
+
+                // Feature: Terminal Route Count (T_i) using early filtering and index lookups
+                let chunk_terminal_counts = diesel::sql_query(
+                    "SELECT \
+                         s.osm_station_id, \
+                         COUNT(DISTINCT (dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id))::bigint as terminal_count \
+                     FROM gtfs.stops s \
+                     JOIN gtfs.direction_pattern dp \
+                       ON s.chateau = dp.chateau \
+                      AND s.gtfs_id = dp.stop_id \
+                     JOIN gtfs.direction_pattern_meta dpm \
+                       ON dp.onestop_feed_id = dpm.onestop_feed_id \
+                      AND dp.attempt_id = dpm.attempt_id \
+                      AND dp.direction_pattern_id = dpm.direction_pattern_id \
+                     WHERE s.osm_station_id = ANY($1) \
+                       AND dpm.route_type IS DISTINCT FROM 3 \
+                       AND ( \
+                           dp.stop_sequence = ( \
+                               SELECT MIN(dp_sub.stop_sequence) \
+                               FROM gtfs.direction_pattern dp_sub \
+                               WHERE dp_sub.onestop_feed_id = dp.onestop_feed_id \
+                                 AND dp_sub.attempt_id = dp.attempt_id \
+                                 AND dp_sub.direction_pattern_id = dp.direction_pattern_id \
+                           ) \
+                           OR \
+                           dp.stop_sequence = ( \
+                               SELECT MAX(dp_sub.stop_sequence) \
+                               FROM gtfs.direction_pattern dp_sub \
+                               WHERE dp_sub.onestop_feed_id = dp.onestop_feed_id \
+                                 AND dp_sub.attempt_id = dp.attempt_id \
+                                 AND dp_sub.direction_pattern_id = dp.direction_pattern_id \
+                           ) \
+                       ) \
+                     GROUP BY s.osm_station_id"
+                )
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(&chunk)
+                .get_results::<TerminalCountRow>(&mut conn)
                 .await?;
 
-            for (sid, count) in chunk_stops_counts {
-                if let Some(osm_id) = sid {
-                    stops_counts.insert(osm_id, count as i32);
+                let mut terminals = Vec::new();
+                for r in chunk_terminal_counts {
+                    if let Some(osm_id) = r.osm_station_id {
+                        terminals.push((osm_id, r.terminal_count.unwrap_or(0) as i32));
+                    }
                 }
-            }
 
-            // Feature: Terminal Route Count (T_i) using early filtering and index lookups
-            let chunk_terminal_counts = diesel::sql_query(
-                "SELECT \
-                     s.osm_station_id, \
-                     COUNT(DISTINCT (dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id))::bigint as terminal_count \
-                 FROM gtfs.stops s \
-                 JOIN gtfs.direction_pattern dp \
-                   ON s.chateau = dp.chateau \
-                  AND s.gtfs_id = dp.stop_id \
-                 JOIN gtfs.direction_pattern_meta dpm \
-                   ON dp.onestop_feed_id = dpm.onestop_feed_id \
-                  AND dp.attempt_id = dpm.attempt_id \
-                  AND dp.direction_pattern_id = dpm.direction_pattern_id \
-                 WHERE s.osm_station_id = ANY($1) \
-                   AND dpm.route_type IS DISTINCT FROM 3 \
-                   AND ( \
-                       dp.stop_sequence = ( \
-                           SELECT MIN(dp_sub.stop_sequence) \
-                           FROM gtfs.direction_pattern dp_sub \
-                           WHERE dp_sub.onestop_feed_id = dp.onestop_feed_id \
-                             AND dp_sub.attempt_id = dp.attempt_id \
-                             AND dp_sub.direction_pattern_id = dp.direction_pattern_id \
-                       ) \
-                       OR \
-                       dp.stop_sequence = ( \
-                           SELECT MAX(dp_sub.stop_sequence) \
-                           FROM gtfs.direction_pattern dp_sub \
-                           WHERE dp_sub.onestop_feed_id = dp.onestop_feed_id \
-                             AND dp_sub.attempt_id = dp.attempt_id \
-                             AND dp_sub.direction_pattern_id = dp.direction_pattern_id \
-                       ) \
-                   ) \
-                 GROUP BY s.osm_station_id"
-            )
-            .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(chunk)
-            .get_results::<TerminalCountRow>(&mut conn)
-            .await?;
-
-            for r in chunk_terminal_counts {
-                if let Some(osm_id) = r.osm_station_id {
-                    terminal_counts.insert(osm_id, r.terminal_count.unwrap_or(0) as i32);
-                }
-            }
-
-            // Feature: Route Span Log (R_i)
-            let chunk_shapes = diesel::sql_query(
-                "WITH associated_shape_keys AS ( \
-                      SELECT DISTINCT s.osm_station_id, dpm.onestop_feed_id, dpm.attempt_id, dpm.gtfs_shape_id as shape_id \
-                      FROM gtfs.direction_pattern_meta dpm \
-                      JOIN gtfs.direction_pattern dp \
-                        ON dpm.onestop_feed_id = dp.onestop_feed_id \
-                       AND dpm.attempt_id = dp.attempt_id \
-                       AND dp.direction_pattern_id = dpm.direction_pattern_id \
-                      JOIN gtfs.stops s \
-                        ON dp.chateau = s.chateau \
-                       AND dp.stop_id = s.gtfs_id \
-                      WHERE s.osm_station_id = ANY($1) \
-                        AND dpm.route_type IS DISTINCT FROM 3 \
-                        AND dpm.gtfs_shape_id IS NOT NULL \
-                      UNION \
-                      SELECT DISTINCT s.osm_station_id, ipm.onestop_feed_id, ipm.attempt_id, ipm.shape_id \
-                      FROM gtfs.itinerary_pattern_meta ipm \
-                      JOIN gtfs.itinerary_pattern ip \
-                        ON ipm.onestop_feed_id = ip.onestop_feed_id \
-                       AND ipm.attempt_id = ip.attempt_id \
-                       AND ip.itinerary_pattern_id = ipm.itinerary_pattern_id \
-                      JOIN gtfs.stops s \
-                        ON ip.chateau = s.chateau \
-                       AND ip.stop_id = s.gtfs_id \
-                      JOIN gtfs.routes r \
-                        ON ipm.onestop_feed_id = r.onestop_feed_id \
-                       AND ipm.attempt_id = r.attempt_id \
-                       AND ipm.route_id = r.route_id \
-                      WHERE s.osm_station_id = ANY($1) \
-                        AND r.route_type IS DISTINCT FROM 3 \
-                        AND ipm.shape_id IS NOT NULL \
-                  ) \
-                  SELECT ask.osm_station_id, ask.onestop_feed_id, ask.attempt_id, ask.shape_id, ST_Length(sh.linestring::geography)::double precision as length \
-                  FROM associated_shape_keys ask \
-                  JOIN gtfs.shapes sh \
-                    ON ask.onestop_feed_id = sh.onestop_feed_id \
-                   AND ask.attempt_id = sh.attempt_id \
-                   AND ask.shape_id = sh.shape_id"
-            )
-            .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(chunk)
-            .get_results::<AssociatedShapeRow>(&mut conn)
-            .await?;
-
-            for row in chunk_shapes {
-                if let Some(osm_id) = row.osm_station_id {
-                    let log_val = (row.length.unwrap_or(0.0) + 1.0).ln();
-                    *station_shape_logs.entry(osm_id).or_default() += log_val;
-                }
-            }
-
-            // Feature: Degree Centrality (C_i)
-            let chunk_centralities = diesel::sql_query(
-                "WITH our_dp_rows AS ( \
-                      SELECT \
-                          dp.onestop_feed_id, \
-                          dp.attempt_id, \
-                          dp.direction_pattern_id, \
-                          dp.stop_sequence \
-                      FROM gtfs.direction_pattern dp \
-                      JOIN gtfs.stops s \
-                        ON dp.chateau = s.chateau \
-                       AND dp.stop_id = s.gtfs_id \
-                      WHERE s.osm_station_id = ANY($1) \
-                  ), \
-                  ordered_dp AS ( \
-                      SELECT \
-                          dp.chateau, \
-                          dp.onestop_feed_id, \
-                          dp.attempt_id, \
-                          dp.direction_pattern_id, \
-                          dp.stop_sequence, \
-                          dp.stop_id, \
-                          LAG(dp.stop_id) OVER (PARTITION BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id ORDER BY dp.stop_sequence) as prev_stop_id, \
-                          LEAD(dp.stop_id) OVER (PARTITION BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id ORDER BY dp.stop_sequence) as next_stop_id \
-                      FROM gtfs.direction_pattern dp \
-                      WHERE (dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id) IN ( \
-                          SELECT DISTINCT onestop_feed_id, attempt_id, direction_pattern_id FROM our_dp_rows \
+                // Feature: Route Span Log (R_i)
+                let chunk_shapes = diesel::sql_query(
+                    "WITH associated_shape_keys AS ( \
+                          SELECT DISTINCT s.osm_station_id, dpm.onestop_feed_id, dpm.attempt_id, dpm.gtfs_shape_id as shape_id \
+                          FROM gtfs.direction_pattern_meta dpm \
+                          JOIN gtfs.direction_pattern dp \
+                            ON dpm.onestop_feed_id = dp.onestop_feed_id \
+                           AND dpm.attempt_id = dp.attempt_id \
+                           AND dp.direction_pattern_id = dpm.direction_pattern_id \
+                          JOIN gtfs.stops s \
+                            ON dp.chateau = s.chateau \
+                           AND dp.stop_id = s.gtfs_id \
+                          WHERE s.osm_station_id = ANY($1) \
+                            AND dpm.route_type IS DISTINCT FROM 3 \
+                            AND dpm.gtfs_shape_id IS NOT NULL \
+                          UNION \
+                          SELECT DISTINCT s.osm_station_id, ipm.onestop_feed_id, ipm.attempt_id, ipm.shape_id \
+                          FROM gtfs.itinerary_pattern_meta ipm \
+                          JOIN gtfs.itinerary_pattern ip \
+                            ON ipm.onestop_feed_id = ip.onestop_feed_id \
+                           AND ipm.attempt_id = ip.attempt_id \
+                           AND ip.itinerary_pattern_id = ipm.itinerary_pattern_id \
+                          JOIN gtfs.stops s \
+                            ON ip.chateau = s.chateau \
+                           AND ip.stop_id = s.gtfs_id \
+                          JOIN gtfs.routes r \
+                            ON ipm.onestop_feed_id = r.onestop_feed_id \
+                           AND ipm.attempt_id = r.attempt_id \
+                           AND ipm.route_id = r.route_id \
+                          WHERE s.osm_station_id = ANY($1) \
+                            AND r.route_type IS DISTINCT FROM 3 \
+                            AND ipm.shape_id IS NOT NULL \
                       ) \
-                  ), \
-                  adj_stops AS ( \
-                      SELECT DISTINCT \
-                          r.onestop_feed_id, \
-                          r.attempt_id, \
-                          r.direction_pattern_id, \
-                          r.stop_sequence, \
-                          s_curr.osm_station_id as current_osm_id, \
-                          unnest(ARRAY[od.prev_stop_id, od.next_stop_id]) as adj_stop_id \
-                      FROM ordered_dp od \
-                      JOIN our_dp_rows r \
-                        ON od.onestop_feed_id = r.onestop_feed_id \
-                       AND od.attempt_id = r.attempt_id \
-                       AND od.direction_pattern_id = r.direction_pattern_id \
-                       AND od.stop_sequence = r.stop_sequence \
-                      JOIN gtfs.stops s_curr \
-                        ON od.chateau = s_curr.chateau \
-                       AND od.stop_id = s_curr.gtfs_id \
-                  ) \
-                  SELECT \
-                      a.current_osm_id as osm_station_id, \
-                      COUNT(DISTINCT COALESCE(s.osm_station_id::text, s.gtfs_id))::bigint as centrality \
-                  FROM adj_stops a \
-                  JOIN gtfs.stops s \
-                    ON a.onestop_feed_id = s.onestop_feed_id \
-                   AND a.attempt_id = s.attempt_id \
-                   AND a.adj_stop_id = s.gtfs_id \
-                  WHERE a.adj_stop_id IS NOT NULL \
-                    AND s.osm_station_id IS DISTINCT FROM a.current_osm_id \
-                  GROUP BY a.current_osm_id"
-            )
-            .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(chunk)
-            .get_results::<CentralityRow>(&mut conn)
-            .await?;
+                      SELECT ask.osm_station_id, ask.onestop_feed_id, ask.attempt_id, ask.shape_id, ST_Length(sh.linestring::geography)::double precision as length \
+                      FROM associated_shape_keys ask \
+                      JOIN gtfs.shapes sh \
+                        ON ask.onestop_feed_id = sh.onestop_feed_id \
+                       AND ask.attempt_id = sh.attempt_id \
+                       AND ask.shape_id = sh.shape_id"
+                )
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(&chunk)
+                .get_results::<AssociatedShapeRow>(&mut conn)
+                .await?;
 
-            for r in chunk_centralities {
-                if let Some(osm_id) = r.osm_station_id {
-                    centralities.insert(osm_id, r.centrality.unwrap_or(0) as i32);
+                let mut shapes = Vec::new();
+                for row in chunk_shapes {
+                    if let Some(osm_id) = row.osm_station_id {
+                        let log_val = (row.length.unwrap_or(0.0) + 1.0).ln();
+                        shapes.push((osm_id, log_val));
+                    }
                 }
+
+                // Feature: Degree Centrality (C_i)
+                let chunk_centralities = diesel::sql_query(
+                    "WITH our_dp_rows AS ( \
+                          SELECT \
+                              dp.onestop_feed_id, \
+                              dp.attempt_id, \
+                              dp.direction_pattern_id, \
+                              dp.stop_sequence \
+                          FROM gtfs.direction_pattern dp \
+                          JOIN gtfs.stops s \
+                            ON dp.chateau = s.chateau \
+                           AND dp.stop_id = s.gtfs_id \
+                          WHERE s.osm_station_id = ANY($1) \
+                      ), \
+                      ordered_dp AS ( \
+                          SELECT \
+                              dp.chateau, \
+                              dp.onestop_feed_id, \
+                              dp.attempt_id, \
+                              dp.direction_pattern_id, \
+                              dp.stop_sequence, \
+                              dp.stop_id, \
+                              LAG(dp.stop_id) OVER (PARTITION BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id ORDER BY dp.stop_sequence) as prev_stop_id, \
+                              LEAD(dp.stop_id) OVER (PARTITION BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id ORDER BY dp.stop_sequence) as next_stop_id \
+                          FROM gtfs.direction_pattern dp \
+                          WHERE (dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id) IN ( \
+                              SELECT DISTINCT onestop_feed_id, attempt_id, direction_pattern_id FROM our_dp_rows \
+                          ) \
+                      ), \
+                      adj_stops AS ( \
+                          SELECT DISTINCT \
+                              r.onestop_feed_id, \
+                              r.attempt_id, \
+                              r.direction_pattern_id, \
+                              r.stop_sequence, \
+                              s_curr.osm_station_id as current_osm_id, \
+                              unnest(ARRAY[od.prev_stop_id, od.next_stop_id]) as adj_stop_id \
+                          FROM ordered_dp od \
+                          JOIN our_dp_rows r \
+                            ON od.onestop_feed_id = r.onestop_feed_id \
+                           AND od.attempt_id = r.attempt_id \
+                           AND od.direction_pattern_id = r.direction_pattern_id \
+                           AND od.stop_sequence = r.stop_sequence \
+                          JOIN gtfs.stops s_curr \
+                            ON od.chateau = s_curr.chateau \
+                           AND od.stop_id = s_curr.gtfs_id \
+                      ) \
+                      SELECT \
+                          a.current_osm_id as osm_station_id, \
+                          COUNT(DISTINCT COALESCE(s.osm_station_id::text, s.gtfs_id))::bigint as centrality \
+                      FROM adj_stops a \
+                      JOIN gtfs.stops s \
+                        ON a.onestop_feed_id = s.onestop_feed_id \
+                       AND a.attempt_id = s.attempt_id \
+                       AND a.adj_stop_id = s.gtfs_id \
+                      WHERE a.adj_stop_id IS NOT NULL \
+                        AND s.osm_station_id IS DISTINCT FROM a.current_osm_id \
+                      GROUP BY a.current_osm_id"
+                )
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Int8>, _>(&chunk)
+                .get_results::<CentralityRow>(&mut conn)
+                .await?;
+
+                let mut cents = Vec::new();
+                for r in chunk_centralities {
+                    if let Some(osm_id) = r.osm_station_id {
+                        cents.push((osm_id, r.centrality.unwrap_or(0) as i32));
+                    }
+                }
+
+                Ok::<_, Box<dyn Error + Send + Sync>>((chunk_idx, stops, terminals, shapes, cents))
+            }
+        }))
+        .buffer_unordered(BUFFER_UNORDERED_CONCURRENCY);
+
+        while let Some(res) = feature_stream.next().await {
+            let (chunk_idx, stops, terminals, shapes, cents) = res?;
+            println!(
+                "  Processed features chunk {}/{}...",
+                chunk_idx + 1,
+                total_chunks
+            );
+            for (osm_id, count) in stops {
+                stops_counts.insert(osm_id, count);
+            }
+            for (osm_id, count) in terminals {
+                terminal_counts.insert(osm_id, count);
+            }
+            for (osm_id, log_val) in shapes {
+                *station_shape_logs.entry(osm_id).or_default() += log_val;
+            }
+            for (osm_id, count) in cents {
+                centralities.insert(osm_id, count);
             }
         }
 
@@ -737,35 +777,29 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 icon_min_zoom: base_zoom,
                 overshadowed_by_osm_id: over_id,
                 overshadowed_by_osm_type: over_type,
-                allowed_spatial_query: false,
+                allowed_spatial_query: allowed_spatial_query_val,
             });
         }
-    }
-
-    println!(
-        "Computed ranking for {} stations. Saving to database...",
-        ranked_inserts.len()
-    );
-
-    // 6. Save Results in batches
-    use catenary::schema::gtfs::osm_stations_ranked::dsl as ranked_dsl;
-    let total_save_chunks = (ranked_inserts.len() + 999) / 1000;
-    println!(
-        "Saving {} ranked stations to database in {} chunk(s)...",
-        ranked_inserts.len(),
-        total_save_chunks
-    );
-    for (chunk_idx, chunk) in ranked_inserts.chunks(1000).enumerate() {
+        // 6. Save Results in batches immediately for this group
+        let total_save_chunks = (ranked_inserts.len() + 999) / 1000;
         println!(
-            "  Inserting chunk {}/{} (size: {})...",
-            chunk_idx + 1,
-            total_save_chunks,
-            chunk.len()
+            "Saving {} ranked stations from group {} to database in {} chunk(s)...",
+            ranked_inserts.len(),
+            file_name,
+            total_save_chunks
         );
-        diesel::insert_into(ranked_dsl::osm_stations_ranked)
-            .values(chunk)
-            .execute(&mut conn)
-            .await?;
+        for (chunk_idx, chunk) in ranked_inserts.chunks(1000).enumerate() {
+            println!(
+                "  Inserting chunk {}/{} (size: {})...",
+                chunk_idx + 1,
+                total_save_chunks,
+                chunk.len()
+            );
+            diesel::insert_into(ranked_dsl::osm_stations_ranked)
+                .values(chunk)
+                .execute(&mut conn)
+                .await?;
+        }
     }
 
     // 7. Transactional Publishing

@@ -823,17 +823,35 @@ fn get_osm_stations_ranked_fields() -> std::collections::BTreeMap<String, String
     fields.insert(String::from("tram"), String::from("boolean"));
     fields.insert(String::from("subway"), String::from("boolean"));
     fields.insert(String::from("rail"), String::from("boolean"));
-    fields.insert(String::from("number_of_associated_stops"), String::from("integer"));
+    fields.insert(
+        String::from("number_of_associated_stops"),
+        String::from("integer"),
+    );
     fields.insert(String::from("platform_count"), String::from("integer"));
-    fields.insert(String::from("terminal_route_count"), String::from("integer"));
+    fields.insert(
+        String::from("terminal_route_count"),
+        String::from("integer"),
+    );
     fields.insert(String::from("route_span_log"), String::from("integer"));
     fields.insert(String::from("degree_centrality"), String::from("integer"));
-    fields.insert(String::from("importance_level_station"), String::from("smallint"));
+    fields.insert(
+        String::from("importance_level_station"),
+        String::from("smallint"),
+    );
     fields.insert(String::from("label_min_zoom"), String::from("smallint"));
     fields.insert(String::from("icon_min_zoom"), String::from("smallint"));
-    fields.insert(String::from("overshadowed_by_osm_id"), String::from("bigint"));
-    fields.insert(String::from("overshadowed_by_osm_type"), String::from("text"));
-    fields.insert(String::from("allowed_spatial_query"), String::from("boolean"));
+    fields.insert(
+        String::from("overshadowed_by_osm_id"),
+        String::from("bigint"),
+    );
+    fields.insert(
+        String::from("overshadowed_by_osm_type"),
+        String::from("text"),
+    );
+    fields.insert(
+        String::from("allowed_spatial_query"),
+        String::from("boolean"),
+    );
     fields
 }
 
@@ -913,4 +931,3 @@ FROM (
         y = y
     )
 }
-
