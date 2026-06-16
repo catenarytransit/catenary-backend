@@ -16,7 +16,7 @@ pub struct Trip {
     pub direction: String,
     #[serde(rename = "tripId")]
     pub nyct_train_id: String,
-    pub shape_segment_ids: Vec<String>,
+    pub shape_segment_ids: Option<Vec<String>>,
     pub estimated_latitude: Option<f64>,
     pub estimated_longitude: Option<f64>,
     pub is_assigned: bool,
