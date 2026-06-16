@@ -228,7 +228,8 @@ fn score_and_tier_stations<'a>(
             adjusted_zr *= 0.1 + 0.9 * (t_raw / 5.0);
         }
 
-        let score = w[0] * zp + w[1] * zf + w[2] * zt + w[3] * adjusted_zr + w[4] * zc + w[5] * i_val;
+        let score =
+            w[0] * zp + w[1] * zf + w[2] * zt + w[3] * adjusted_zr + w[4] * zc + w[5] * i_val;
 
         scored_stations.push(ScoredStation {
             station: *s,
@@ -245,9 +246,8 @@ fn score_and_tier_stations<'a>(
         });
     }
 
-    let (mut rail_stations, mut non_rail_stations): (Vec<ScoredStation>, Vec<ScoredStation>) = scored_stations
-        .into_iter()
-        .partition(|s| s.rail);
+    let (mut rail_stations, mut non_rail_stations): (Vec<ScoredStation>, Vec<ScoredStation>) =
+        scored_stations.into_iter().partition(|s| s.rail);
 
     rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
     non_rail_stations.sort_by(|a, b| a.score.total_cmp(&b.score));
@@ -259,7 +259,7 @@ fn score_and_tier_stations<'a>(
         let percentile = (idx + 1) as f64 / num_rail as f64;
         let is_country_to_rank_stricter = station_countries
             .get(&item.station.osm_id)
-            .map(|c| c == "CH" || c == "BE" ||  c == "SE" || c == "NO")
+            .map(|c| c == "CH" || c == "BE" || c == "SE" || c == "NO")
             .unwrap_or(false);
 
         let tier = if is_country_to_rank_stricter {
@@ -335,7 +335,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let reader = std::io::BufReader::new(file);
     let geojson = serde_json::from_reader::<_, geojson::GeoJson>(reader)?;
 
-    let target_cntr_ids: HashSet<&str> = ["DE", "CH", "NL", "UK", "BE", "CZ", "IE"].iter().copied().collect();
+    let target_cntr_ids: HashSet<&str> = ["DE", "CH", "NL", "UK", "BE", "CZ", "IE"]
+        .iter()
+        .copied()
+        .collect();
     let mut country_areas = Vec::new();
 
     if let geojson::GeoJson::FeatureCollection(fc) = geojson {
@@ -384,7 +387,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
 
     let country_rtree = RTree::bulk_load(country_areas);
-    println!("Loaded {} target country polygons/multipolygons into R-Tree.", country_rtree.size());
+    println!(
+        "Loaded {} target country polygons/multipolygons into R-Tree.",
+        country_rtree.size()
+    );
 
     let pool = make_async_pool().await?;
     let mut conn = pool.get().await?;
@@ -455,8 +461,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let parent_stations: Vec<OsmStation> = stations_dsl::osm_stations
             .filter(stations_dsl::import_id.eq_any(&import_ids))
             .filter(stations_dsl::parent_osm_id.is_null())
-            .filter(stations_dsl::local_ref.is_null())
-            .filter(stations_dsl::ref_.is_null())
             .load::<OsmStation>(&mut conn)
             .await?;
 
@@ -494,6 +498,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
 
         let mut station_modes: HashMap<i64, (bool, bool, bool)> = HashMap::new();
+
+        let parent_stations = parent_stations
+            .into_iter()
+            .filter(|s|
+            //removes station platforms
+        !(s.local_ref.is_some() && 
+            match &s.station_type {
+                Some(station_type) => {
+                     station_type.as_str() == "stop_position"
+                },
+                None => false
+            }
+    ))
+            .collect::<Vec<_>>();
+
         for s in &parent_stations {
             let mut tram = false;
             let mut subway = false;
@@ -1044,18 +1063,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     ranked_dsl::tram.eq(excluded(ranked_dsl::tram)),
                     ranked_dsl::subway.eq(excluded(ranked_dsl::subway)),
                     ranked_dsl::rail.eq(excluded(ranked_dsl::rail)),
-                    ranked_dsl::number_of_associated_stops.eq(excluded(ranked_dsl::number_of_associated_stops)),
+                    ranked_dsl::number_of_associated_stops
+                        .eq(excluded(ranked_dsl::number_of_associated_stops)),
                     ranked_dsl::platform_count.eq(excluded(ranked_dsl::platform_count)),
                     ranked_dsl::terminal_route_count.eq(excluded(ranked_dsl::terminal_route_count)),
                     ranked_dsl::route_span_log.eq(excluded(ranked_dsl::route_span_log)),
                     ranked_dsl::degree_centrality.eq(excluded(ranked_dsl::degree_centrality)),
-                    ranked_dsl::importance_level_station.eq(excluded(ranked_dsl::importance_level_station)),
+                    ranked_dsl::importance_level_station
+                        .eq(excluded(ranked_dsl::importance_level_station)),
                     ranked_dsl::admin_hierarchy.eq(excluded(ranked_dsl::admin_hierarchy)),
                     ranked_dsl::label_min_zoom.eq(excluded(ranked_dsl::label_min_zoom)),
                     ranked_dsl::icon_min_zoom.eq(excluded(ranked_dsl::icon_min_zoom)),
-                    ranked_dsl::overshadowed_by_osm_id.eq(excluded(ranked_dsl::overshadowed_by_osm_id)),
-                    ranked_dsl::overshadowed_by_osm_type.eq(excluded(ranked_dsl::overshadowed_by_osm_type)),
-                    ranked_dsl::allowed_spatial_query.eq(excluded(ranked_dsl::allowed_spatial_query)),
+                    ranked_dsl::overshadowed_by_osm_id
+                        .eq(excluded(ranked_dsl::overshadowed_by_osm_id)),
+                    ranked_dsl::overshadowed_by_osm_type
+                        .eq(excluded(ranked_dsl::overshadowed_by_osm_type)),
+                    ranked_dsl::allowed_spatial_query
+                        .eq(excluded(ranked_dsl::allowed_spatial_query)),
                 ))
                 .execute(&mut conn)
                 .await?;

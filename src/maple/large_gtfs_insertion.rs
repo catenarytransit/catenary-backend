@@ -912,7 +912,9 @@ pub async fn gtfs_process_large_feed(
         }
 
         let (stop_route_types, stop_route_ids) =
-            crate::gtfs_handlers::stops_associated_items::make_hashmap_stops_to_route_types_and_ids(&agency_gtfs);
+            crate::gtfs_handlers::stops_associated_items::make_hashmap_stops_to_route_types_and_ids(
+                &agency_gtfs,
+            );
 
         for (stop_id, r_types) in stop_route_types {
             let entry = global_stop_ids_to_route_types.entry(stop_id).or_default();
@@ -1613,15 +1615,11 @@ pub async fn gtfs_process_large_feed(
         .and_then(|fi| fi.default_lang.clone())
         .or_else(|| Some("de".to_string()));
 
-    let global_stop_ids_to_route_types_i16: HashMap<String, Vec<i16>> = global_stop_ids_to_route_types
-        .into_iter()
-        .map(|(stop_id, r_types)| {
-            (
-                stop_id,
-                r_types.into_iter().map(|rt| rt as i16).collect(),
-            )
-        })
-        .collect();
+    let global_stop_ids_to_route_types_i16: HashMap<String, Vec<i16>> =
+        global_stop_ids_to_route_types
+            .into_iter()
+            .map(|(stop_id, r_types)| (stop_id, r_types.into_iter().map(|rt| rt as i16).collect()))
+            .collect();
 
     stops_into_postgres_and_elastic(
         &global_gtfs,

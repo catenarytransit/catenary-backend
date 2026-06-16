@@ -1246,7 +1246,7 @@ pub async fn gtfs_process_feed(
             gtfs,
             &Vec::from([String::from("FlixBus")]),
         ),
-    /*
+        /*
             "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
             &Vec::from([

@@ -888,12 +888,11 @@ pub async fn osm_stations_ranked(
 }
 
 fn build_osm_stations_ranked_query(z: u8, x: u32, y: u32) -> String {
-
     let maximum_importance_level = match z {
         0..=2 => 2,
         3..=5 => 3,
         6..=7 => 5,
-        _ => 10
+        _ => 10,
     };
 
     format!(
