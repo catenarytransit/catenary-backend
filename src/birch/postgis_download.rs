@@ -932,7 +932,7 @@ FROM (
         gtfs.osm_stations_ranked
     WHERE
         (point && ST_Transform(ST_TileEnvelope({z}, {x}, {y}), 4326)) AND allowed_spatial_query = true AND
-        importance_level_station <= {maximum_importance_level}
+        importance_level_station <= {maximum_importance_level} AND number_of_associated_stops != 0
 ) q",
         z = z,
         x = x,
