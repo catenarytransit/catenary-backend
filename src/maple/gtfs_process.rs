@@ -314,6 +314,7 @@ pub async fn gtfs_process_feed(
             crate::raw_file_agency_remover::remove_banned_agencies(
                 path.as_str(),
                 &[
+                    //covered by other agencies with realtime data as well
                     "SNCF",
                     "SNCB",
                     "FlixBus-de",
