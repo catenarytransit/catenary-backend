@@ -25,15 +25,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "U-Bahn München",
         "Österreichische Bundesbahnen",
         "FlixBus-de",
-        "Kölner VB",
-        //f-u281z9-mvv
-        "MVV-Regionalbus",
-        "Straßenbahn München",
-        "Regionalverkehr Oberbayer (überregional)",
-        "Bus München",
-        "NachtTram München",
-        "NachtBus München",
-        "MVV-Ruftaxi",
+        //other agencies
         "SNCF",
         "SBB",
         "Hochbahn U-Bahn",

@@ -242,6 +242,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             "f-u0z-vgn",
             //deduplicate spanish data
             "f-renfe~media~larga~distancia~y~ave",
+            // Covered by realtime data from f-gtfs~de
+            "f-münchner~verkehrsgesellschaft~mvg",
+            "f-u281z9-mvv",
+            "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn",
         ]
         .into_iter()
         .map(String::from),

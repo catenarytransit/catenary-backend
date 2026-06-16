@@ -326,16 +326,6 @@ pub async fn gtfs_process_feed(
                     "Straßenbahn München",
                     "Österreichische Bundesbahnen",
                     "ÖBB",
-                    "Kölner VB",
-                    // f-u281z9-mvv
-                    "Bus München",
-                    "MVV-Regionalbus",
-                    // f-münchner~verkehrsgesellschaft~mvg
-                    "Straßenbahn München",
-                    // covered in f-u0z-vgn
-                    "VGN",
-                    "Bus Nürnberg",
-                    "U-Bahn Nürnberg",
                     "Berliner Verkehrsbetriebe",
                     "Karlsruher Verkehrsverbund",
                     "Hochbahn U-Bahn",
@@ -1256,7 +1246,8 @@ pub async fn gtfs_process_feed(
             gtfs,
             &Vec::from([String::from("FlixBus")]),
         ),
-        "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
+    /*
+            "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
             &Vec::from([
                 String::from("DB AG"),
@@ -1280,6 +1271,7 @@ pub async fn gtfs_process_feed(
                 String::from("Nahreisezug"),
             ]),
         ),
+        */
         "f-ahverkehrsverbund~schleswig~holstein~nah" => {
             crate::gtfs_handlers::remove_agencies::remove_agencies(
                 gtfs,
