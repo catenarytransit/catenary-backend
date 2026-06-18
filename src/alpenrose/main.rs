@@ -70,8 +70,19 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long, value_delimiter = ',', num_args = 1..)]
+    rogue_fetch_ids: Option<Vec<String>>,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
+    let args = Args::parse();
+    let is_rogue = args.rogue_fetch_ids.is_some();
     let alpenrose_config = &catenaryconfig::config().alpenrose;
     let restrict_to_feed_ids: Option<HashSet<String>> = match std::env::var("ONLY_FEED_IDS") {
         Ok(feed_ids) => Some(feed_ids.split(',').map(|s| s.trim().to_string()).collect()),
@@ -126,6 +137,22 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let assignments_for_this_worker: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>> =
         Arc::new(RwLock::new(HashMap::new()));
+
+    if let Some(rogue_ids) = &args.rogue_fetch_ids {
+        let all_feeds = get_feed_metadata::get_feed_metadata(Arc::clone(&arc_conn_pool)).await?;
+        let rogue_ids_set: HashSet<String> = rogue_ids.iter().cloned().collect();
+        let rogue_feeds: HashMap<String, RealtimeFeedFetch> = all_feeds
+            .into_iter()
+            .filter(|feed| rogue_ids_set.contains(&feed.feed_id))
+            .map(|feed| (feed.feed_id.clone(), feed))
+            .collect();
+        for id in &rogue_ids_set {
+            if !rogue_feeds.contains_key(id) {
+                println!("Warning: Rogue feed ID '{}' not found in PostgreSQL metadata.", id);
+            }
+        }
+        *assignments_for_this_worker.write().await = rogue_feeds;
+    }
 
     let mut previously_known_updated_ms_for_this_worker: Option<u64> = None;
 
@@ -235,19 +262,20 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
         let mut etcd = etcd.clone();
 
         if is_online {
-            //renew the etcd lease
+            if !is_rogue {
+                //renew the etcd lease
 
-            let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
+                let _ = etcd.lease_keep_alive(etcd_lease_id).await?;
 
-            // create this worker as an ephemeral node
+                // create this worker as an ephemeral node
 
-            let etcd_this_worker_assignment = etcd
-                .put(
-                    format!("/alpenrose_workers/{}", this_worker_id).as_str(),
-                    bincode_serialize(&etcd_lease_id).unwrap(),
-                    Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
-                )
-                .await?;
+                let etcd_this_worker_assignment = etcd
+                    .put(
+                        format!("/alpenrose_workers/{}", this_worker_id).as_str(),
+                        bincode_serialize(&etcd_lease_id).unwrap(),
+                        Some(etcd_client::PutOptions::new().with_lease(etcd_lease_id)),
+                    )
+                    .await?;
 
             //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
 
@@ -384,6 +412,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                     *assignments_for_this_worker_lock = assignments;
                 }
+            }
             }
 
             // Spawn a background task to renew the etcd lease
@@ -676,6 +705,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             if let Err(e) = tokio_checker.0 {
                 eprintln!("Error in tokio checker: {}", e);
                 Err(e)?;
+            }
+
+            if is_rogue {
+                tokio::time::sleep(Duration::from_millis(500)).await;
             }
         } else {
             println!("Not connected to the internet!");
