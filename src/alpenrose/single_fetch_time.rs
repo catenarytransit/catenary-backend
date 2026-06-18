@@ -104,8 +104,6 @@ pub async fn single_fetch_time(
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
     amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
-    chicago_text_str: Arc<RwLock<Option<String>>>,
-    chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
@@ -193,8 +191,6 @@ pub async fn single_fetch_time(
                 let amtrak_gtfs = Arc::clone(&amtrak_gtfs);
                 let rtcquebec_gtfs = rtcquebec_gtfs.clone();
                 let bridgeport_gtfs = bridgeport_gtfs.clone();
-                let chicago_text_str = chicago_text_str.clone();
-                let chicago_gtfs = chicago_gtfs.clone();
                 let mnr_gtfs = mnr_gtfs.clone();
                 let via_gtfs = via_gtfs.clone();
                 let cta_bus_gtfs = cta_bus_gtfs.clone();
@@ -637,25 +633,7 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-                            /*
-                            "f-dp3-cta~rt" => {
-                                let chicago_text_lock = chicago_text_str.read().await;
-                                let chicago_gtfs_lock = chicago_gtfs.read().await;
-                                if let Some(chicago_text_str) = chicago_text_lock.as_ref() {
-                                    if let Some(chicago_gtfs) = chicago_gtfs_lock.as_ref() {
-                                        custom_rt_feeds::chicagotransit::fetch_chicago_data(
-                                            &mut kv_client,
-                                            &feed_id,
-                                            &client,
-                                            chicago_text_str.as_str(),
-                                            chicago_gtfs,
-                                            &assignment,
-                                        )
-                                        .await;
-                                    }
-                                }
-                            },
-                            */
+
                              "f-rtcquebec~rt" => {
                                 let rtc_lock = rtcquebec_gtfs.read().await;
                                 if let Some(gtfs) = rtc_lock.as_ref() {

@@ -95,14 +95,12 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
-    let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
     let flixbus_eu_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
-    let chicago_trips_str: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(None));
 
     let mut downloads_started: HashSet<String> = HashSet::new();
 
@@ -484,58 +482,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 // Chicago & MNR & Flixbus need the client
                 let client_dl = client.clone();
 
-                if assigned_feeds.contains("f-dp3-cta~rt") && !downloads_started.contains("chicago")
-                {
-                    println!("Spawning Chicago download task...");
-                    downloads_started.insert("chicago".to_string());
-                    let chicago_gtfs = chicago_gtfs.clone();
-                    let chicago_trips_str = chicago_trips_str.clone();
-                    let client_dl = client_dl.clone();
-                    tokio::spawn(async move {
-                        let url = "https://github.com/catenarytransit/pfaedled-gtfs-actions/releases/download/latest/cta_gtfs_railonly.zip";
-                        println!("Downloading Chicago GTFS...");
-                        match client_dl
-                            .get(url)
-                            .timeout(Duration::from_secs(120))
-                            .send()
-                            .await
-                        {
-                            Ok(resp) => {
-                                match resp.bytes().await {
-                                    Ok(bytes) => {
-                                        println!("Chicago GTFS downloaded, parsing...");
-                                        // Parse GTFS
-                                        let gtfs = gtfs_structures::Gtfs::from_reader(
-                                            io::Cursor::new(bytes.clone()),
-                                        );
-                                        if let Ok(gtfs) = gtfs {
-                                            *chicago_gtfs.write().await = Some(gtfs);
-                                        } else {
-                                            eprintln!("Failed to parse Chicago GTFS");
-                                        }
-
-                                        // Parse trips.txt
-                                        let mut archive = ZipArchive::new(io::Cursor::new(bytes));
-                                        if let Ok(mut archive) = archive {
-                                            if let Ok(mut trips_file) = archive.by_name("trips.txt")
-                                            {
-                                                let mut buffer = Vec::new();
-                                                if io::copy(&mut trips_file, &mut buffer).is_ok() {
-                                                    if let Ok(s) = String::from_utf8(buffer) {
-                                                        *chicago_trips_str.write().await = Some(s);
-                                                        println!("Chicago trips.txt loaded.");
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => eprintln!("Failed to get bytes for Chicago: {}", e),
-                                }
-                            }
-                            Err(e) => eprintln!("Failed to download Chicago: {}", e),
-                        }
-                    });
-                }
 
                 // VIA Rail
                 if assigned_feeds.contains("f-viarail~rt") && !downloads_started.contains("viarail")
@@ -708,8 +654,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&assignments_for_this_worker),
                 Arc::clone(&last_fetch_per_feed),
                 Arc::clone(&amtrak_gtfs),
-                Arc::clone(&chicago_trips_str),
-                Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&bridgeport_gtfs),
                 Arc::clone(&mnr_gtfs),
