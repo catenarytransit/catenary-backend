@@ -607,6 +607,11 @@ pub async fn get_trajectories(
                             }
                         ],
                         "mode": route_type_str,
+                        "color": route.color,
+                        "text_color": route.text_color,
+                        "route_short_name": route.short_name,
+                        "route_long_name": route.long_name,
+                        "route_type": route.route_type,
                         "distance": distance_meters,
                         "from": from_json,
                         "to": to_json,
