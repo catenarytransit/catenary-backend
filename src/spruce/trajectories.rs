@@ -225,18 +225,23 @@ pub async fn get_trajectories(
         }
 
         let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
-        let stops_raw: Vec<(String, Option<postgis_diesel::types::Point>)> = catenary::schema::gtfs::stops::dsl::stops
+        let stops_raw: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Option<String>)> = catenary::schema::gtfs::stops::dsl::stops
             .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(&chateau))
             .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_vec))
-            .select((catenary::schema::gtfs::stops::dsl::gtfs_id, catenary::schema::gtfs::stops::dsl::point))
+            .select((
+                catenary::schema::gtfs::stops::dsl::gtfs_id,
+                catenary::schema::gtfs::stops::dsl::point,
+                catenary::schema::gtfs::stops::dsl::name,
+                catenary::schema::gtfs::stops::dsl::platform_code,
+            ))
             .load(&mut conn)
             .await
             .unwrap_or_default();
 
         let mut stops_map = HashMap::new();
-        for (sid, pt_opt) in stops_raw {
+        for (sid, pt_opt, name_opt, plat_opt) in stops_raw {
             if let Some(pt) = pt_opt {
-                stops_map.insert(sid, (pt.x, pt.y));
+                stops_map.insert(sid, (pt.x, pt.y, name_opt.unwrap_or_default(), plat_opt.unwrap_or_default()));
             }
         }
 
@@ -319,18 +324,6 @@ pub async fn get_trajectories(
             continue;
         }
 
-        let mut min_lon = f64::MAX;
-        let mut min_lat = f64::MAX;
-        let mut max_lon = f64::MIN;
-        let mut max_lat = f64::MIN;
-        for &(lon, lat) in &shape_coords {
-            if lon < min_lon { min_lon = lon; }
-            if lon > max_lon { max_lon = lon; }
-            if lat < min_lat { min_lat = lat; }
-            if lat > max_lat { max_lat = lat; }
-        }
-        let bounds = vec![min_lon, min_lat, max_lon, max_lat];
-
         let Some(trips) = chateau_trips.get(chateau) else { continue; };
         let Some(itins) = chateau_itineraries.get(chateau) else { continue; };
         let Some(itin_meta) = chateau_itin_meta.get(chateau) else { continue; };
@@ -410,39 +403,21 @@ pub async fn get_trajectories(
 
             for date in dates {
                 let start_of_trip_timestamp = date.1.timestamp();
-                let mut time_intervals = Vec::new();
                 let mut max_offset = 0;
+                let mut stops_have_coords = true;
 
                 for row in &itin_rows {
-                    let stop_coord = match stops_map.get(row.stop_id.as_str()) {
-                        Some(&coords) => coords,
-                        None => continue,
-                    };
-
-                    let fraction = find_closest_fraction(&shape_coords, stop_coord);
-
-                    let arrival_offset = row.arrival_time_since_start
-                        .or(row.interpolated_time_since_start)
-                        .unwrap_or(0);
+                    if !stops_map.contains_key(row.stop_id.as_str()) {
+                        stops_have_coords = false;
+                        break;
+                    }
                     let departure_offset = row.departure_time_since_start
                         .or(row.interpolated_time_since_start)
                         .unwrap_or(0);
-
                     max_offset = max_offset.max(departure_offset);
-
-                    time_intervals.push(serde_json::json!([
-                        (start_of_trip_timestamp + arrival_offset as i64) * 1000,
-                        fraction,
-                        serde_json::Value::Null
-                    ]));
-                    time_intervals.push(serde_json::json!([
-                        (start_of_trip_timestamp + departure_offset as i64) * 1000,
-                        fraction,
-                        serde_json::Value::Null
-                    ]));
                 }
 
-                if time_intervals.is_empty() {
+                if !stops_have_coords {
                     continue;
                 }
 
@@ -465,61 +440,93 @@ pub async fn get_trajectories(
                         _ => "other"
                     };
 
-                    let line_id = route.route_id.parse::<i64>().unwrap_or_else(|_| {
-                        let mut h = std::collections::hash_map::DefaultHasher::new();
-                        route.route_id.hash(&mut h);
-                        (h.finish() % 100000000) as i64
+                    let unique_trip_id = format!("{}_{}", chateau, trip.trip_id);
+                    let display_name = route.short_name.clone().unwrap_or_else(|| route.route_id.clone());
+
+                    let mut distance_meters = 0.0;
+                    for i in 1..shape_coords.len() {
+                        let dx = shape_coords[i].0 - shape_coords[i - 1].0;
+                        let dy = shape_coords[i].1 - shape_coords[i - 1].1;
+                        distance_meters += (dx * dx + dy * dy).sqrt() * 111_111.0;
+                    }
+
+                    let first_itin = &itin_rows[0];
+                    let last_itin = &itin_rows[itin_rows.len() - 1];
+
+                    let (from_coords, from_name, from_track) = stops_map.get(first_itin.stop_id.as_str())
+                        .map(|&(x, y, ref name, ref plat)| ((x, y), name.clone(), plat.clone()))
+                        .unwrap_or(((0.0, 0.0), "".to_string(), "".to_string()));
+
+                    let (to_coords, to_name, to_track) = stops_map.get(last_itin.stop_id.as_str())
+                        .map(|&(x, y, ref name, ref plat)| ((x, y), name.clone(), plat.clone()))
+                        .unwrap_or(((0.0, 0.0), "".to_string(), "".to_string()));
+
+                    let departure_offset = first_itin.departure_time_since_start
+                        .or(first_itin.interpolated_time_since_start)
+                        .unwrap_or(0);
+                    let arrival_offset = last_itin.arrival_time_since_start
+                        .or(last_itin.interpolated_time_since_start)
+                        .unwrap_or(0);
+
+                    let departure_str = chrono::DateTime::from_timestamp(start_of_trip_timestamp + departure_offset as i64, 0)
+                        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                        .unwrap_or_default();
+                    let arrival_str = chrono::DateTime::from_timestamp(start_of_trip_timestamp + arrival_offset as i64, 0)
+                        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                        .unwrap_or_default();
+
+                    let from_json = serde_json::json!({
+                        "name": from_name,
+                        "stopId": first_itin.stop_id,
+                        "importance": 0.0,
+                        "lat": from_coords.1,
+                        "lon": from_coords.0,
+                        "level": 0.0,
+                        "scheduledTrack": from_track,
+                        "track": from_track,
+                        "description": from_name,
+                        "vertexType": "TRANSIT",
+                        "modes": [route_type_motis]
                     });
 
-                    let unique_trip_id = format!("{}_{}", chateau, trip.trip_id);
+                    let to_json = serde_json::json!({
+                        "name": to_name,
+                        "stopId": last_itin.stop_id,
+                        "importance": 0.0,
+                        "lat": to_coords.1,
+                        "lon": to_coords.0,
+                        "level": 0.0,
+                        "scheduledTrack": to_track,
+                        "track": to_track,
+                        "description": to_name,
+                        "vertexType": "TRANSIT",
+                        "modes": [route_type_motis]
+                    });
 
-                    let feature = serde_json::json!({
-                        "type": "Feature",
-                        "id": unique_trip_id,
-                        "geometry": {
-                            "type": "LineString",
-                            "coordinates": geojson_coordinates
-                        },
-                        "properties": {
-                            "train_number": serde_json::Value::Null,
-                            "rake": serde_json::Value::Null,
-                            "raw_time": serde_json::Value::Null,
-                            "variants": [],
-                            "bounds": bounds,
-                            "gen_level": serde_json::Value::Null,
-                            "gen_range": [150, 32767],
-                            "graph": "osm",
-                            "tenant": chateau,
-                            "type": route_type_str,
-                            "time_intervals": time_intervals,
-                            "train_id": unique_trip_id,
-                            "event_timestamp": current_timestamp * 1000,
-                            "line": {
-                                "id": line_id,
-                                "name": route.short_name.clone().unwrap_or_else(|| route.route_id.clone()),
-                                "color": route.color,
-                                "text_color": route.text_color,
-                                "stroke": serde_json::Value::Null,
-                                "tags": []
-                            },
-                            "timestamp": current_timestamp * 1000,
-                            "state": "DRIVING",
-                            "time_since_update": serde_json::Value::Null,
-                            "has_journey": true,
-                            "route_identifier": trip.trip_id,
-                            "delay": 0,
-                            "has_realtime": false,
-                            "has_stopped_since": serde_json::Value::Null,
-                            "has_realtime_journey": false,
-                            "operator_provides_realtime_journey": "no"
-                        }
+                    let content_obj = serde_json::json!({
+                        "trips": [
+                            {
+                                "tripId": unique_trip_id,
+                                "displayName": display_name
+                            }
+                        ],
+                        "mode": route_type_motis,
+                        "distance": distance_meters,
+                        "from": from_json,
+                        "to": to_json,
+                        "departure": departure_str,
+                        "arrival": arrival_str,
+                        "scheduledDeparture": departure_str,
+                        "scheduledArrival": arrival_str,
+                        "realTime": false,
+                        "coordinates": geojson_coordinates
                     });
 
                     trajectories.push(TrajectoryWrapper {
                         source: "trajectory".to_string(),
                         timestamp: current_timestamp as u64 * 1000,
                         client_reference: params.client_reference.clone(),
-                        content: feature,
+                        content: content_obj,
                     });
 
                     if trajectories.len() >= 800 {
@@ -539,63 +546,6 @@ pub async fn get_trajectories(
     }
 
     Ok(trajectories)
-}
-
-fn find_closest_fraction(shape_coords: &[(f64, f64)], stop_coord: (f64, f64)) -> f64 {
-    if shape_coords.is_empty() {
-        return 0.0;
-    }
-    if shape_coords.len() == 1 {
-        return 0.0;
-    }
-
-    let mut cum_dist = Vec::with_capacity(shape_coords.len());
-    let mut total_dist = 0.0;
-    cum_dist.push(0.0);
-    for i in 1..shape_coords.len() {
-        let dx = shape_coords[i].0 - shape_coords[i - 1].0;
-        let dy = shape_coords[i].1 - shape_coords[i - 1].1;
-        let d = (dx * dx + dy * dy).sqrt();
-        total_dist += d;
-        cum_dist.push(total_dist);
-    }
-
-    if total_dist == 0.0 {
-        return 0.0;
-    }
-
-    let mut best_fraction = 0.0;
-    let mut min_sq_dist = f64::MAX;
-
-    for i in 0..shape_coords.len() - 1 {
-        let p1 = shape_coords[i];
-        let p2 = shape_coords[i + 1];
-
-        let dx = p2.0 - p1.0;
-        let dy = p2.1 - p1.1;
-        let len_sq = dx * dx + dy * dy;
-        if len_sq == 0.0 {
-            continue;
-        }
-
-        let t = ((stop_coord.0 - p1.0) * dx + (stop_coord.1 - p1.1) * dy) / len_sq;
-        let t_clamped = t.clamp(0.0, 1.0);
-
-        let proj_x = p1.0 + t_clamped * dx;
-        let proj_y = p1.1 + t_clamped * dy;
-
-        let diff_x = stop_coord.0 - proj_x;
-        let diff_y = stop_coord.1 - proj_y;
-        let sq_dist = diff_x * diff_x + diff_y * diff_y;
-
-        if sq_dist < min_sq_dist {
-            min_sq_dist = sq_dist;
-            let segment_dist = cum_dist[i] + t_clamped * len_sq.sqrt();
-            best_fraction = segment_dist / total_dist;
-        }
-    }
-
-    best_fraction.clamp(0.0, 1.0)
 }
 
 async fn get_aspen_socket(
