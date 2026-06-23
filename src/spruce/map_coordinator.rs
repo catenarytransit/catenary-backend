@@ -652,7 +652,7 @@ impl BulkFetchCoordinator {
                                     );
                                 }
                                 Ok(Ok(None)) => {
-                                    println!("DEBUG: Response Ok(None) for {}", chateau_id);
+                                    //println!("DEBUG: Response Ok(None) for {}", chateau_id);
                                     return FetchResultMsg(chateau_id, None);
                                 }
                                 Ok(Err(e)) => {

@@ -615,10 +615,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         ctx.spawn(fut);
                     }
                     Ok(ClientMessage::UpdateMap { params }) => {
-                        println!(
-                            "DEBUG: TripWebSocket received UpdateMap (chateaus: {:?})",
-                            params.chateaus
-                        );
+                        //println!(
+                        //    "DEBUG: TripWebSocket received UpdateMap (chateaus: {:?})",
+                        //    params.chateaus
+                        //);
                         let new_chateaus: HashSet<String> =
                             params.chateaus.iter().cloned().collect();
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);

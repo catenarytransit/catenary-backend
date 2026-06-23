@@ -81,7 +81,9 @@ pub async fn get_trajectories(
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     params: TrajectorySubscriptionParams,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
+    println!("[DEBUGTrajectories] Entered get_trajectories with params: bbox={:?}, zoom={}, modes={:?}, client_ref={}", params.bbox, params.zoom, params.modes, params.client_reference);
     if params.bbox.len() < 4 {
+        println!("[DEBUGTrajectories] Returning early: bbox length < 4");
         return Err("Invalid bounding box size".to_string());
     }
 
@@ -99,6 +101,8 @@ pub async fn get_trajectories(
             "bus" => {
                 if params.zoom >= 9 {
                     route_types.push(3);
+                } else {
+                    println!("[DEBUGTrajectories] Bus mode skipped because zoom is {} (< 9)", params.zoom);
                 }
             }
             "ferry" => route_types.push(4),
@@ -119,9 +123,11 @@ pub async fn get_trajectories(
                 route_types = vec![0, 1, 2, 4, 5, 6, 7, 11, 12];
             }
         } else {
+            println!("[DEBUGTrajectories] Returning early: route_types is empty and params.modes is not empty");
             return Ok(vec![]);
         }
     }
+    println!("[DEBUGTrajectories] route_types resolved to: {:?}", route_types);
 
     let mut conn = pool.get().await.map_err(|e| format!("DB connection error: {:?}", e))?;
 
@@ -174,14 +180,17 @@ pub async fn get_trajectories(
 
         shapes.append(&mut group_shapes);
     }
+    println!("[DEBUGTrajectories] DB shape query complete. Found {} shapes", shapes.len());
 
     let unique_chateaus: HashSet<String> = shapes.iter().map(|s| s.chateau.clone()).collect();
+    println!("[DEBUGTrajectories] unique_chateaus found in shapes: {:?}", unique_chateaus);
     let mut realtime_routes = HashSet::new();
 
     for ch_id in unique_chateaus {
         if let Some(socket) = get_aspen_socket(&ch_id, &etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await {
+            println!("[DEBUGTrajectories] Chateau {}: found aspen socket: {:?}", ch_id, socket);
             if let Some(mut client) = aspen_client_manager.get_client(socket.clone()).await {
-                if let Ok(Ok(Some(routes))) = tokio::time::timeout(
+                match tokio::time::timeout(
                     std::time::Duration::from_secs(2),
                     client.get_active_routes_in_bbox(
                         tarpc::context::current(),
@@ -192,14 +201,26 @@ pub async fn get_trajectories(
                         max_lat,
                     ),
                 ).await {
-                    for r_id in routes {
-                        realtime_routes.insert((ch_id.clone(), r_id));
+                    Ok(Ok(Some(routes))) => {
+                        println!("[DEBUGTrajectories] Chateau {}: active routes from existing client: {:?}", ch_id, routes);
+                        for r_id in routes {
+                            realtime_routes.insert((ch_id.clone(), r_id));
+                        }
+                    }
+                    Ok(Ok(None)) => {
+                        println!("[DEBUGTrajectories] Chateau {}: client.get_active_routes_in_bbox returned None", ch_id);
+                    }
+                    Ok(Err(e)) => {
+                        println!("[DEBUGTrajectories] Chateau {}: client.get_active_routes_in_bbox RPC error: {:?}", ch_id, e);
+                    }
+                    Err(e) => {
+                        println!("[DEBUGTrajectories] Chateau {}: client.get_active_routes_in_bbox timed out: {:?}", ch_id, e);
                     }
                 }
             } else {
                 if let Ok(new_client) = spawn_aspen_client_from_ip(&socket).await {
                     aspen_client_manager.insert_client(socket, new_client.clone()).await;
-                    if let Ok(Ok(Some(routes))) = tokio::time::timeout(
+                    match tokio::time::timeout(
                         std::time::Duration::from_secs(2),
                         new_client.get_active_routes_in_bbox(
                             tarpc::context::current(),
@@ -210,14 +231,31 @@ pub async fn get_trajectories(
                             max_lat,
                         ),
                     ).await {
-                        for r_id in routes {
-                            realtime_routes.insert((ch_id.clone(), r_id));
+                        Ok(Ok(Some(routes))) => {
+                            println!("[DEBUGTrajectories] Chateau {}: active routes from new client: {:?}", ch_id, routes);
+                            for r_id in routes {
+                                realtime_routes.insert((ch_id.clone(), r_id));
+                            }
+                        }
+                        Ok(Ok(None)) => {
+                            println!("[DEBUGTrajectories] Chateau {}: new client.get_active_routes_in_bbox returned None", ch_id);
+                        }
+                        Ok(Err(e)) => {
+                            println!("[DEBUGTrajectories] Chateau {}: new client.get_active_routes_in_bbox RPC error: {:?}", ch_id, e);
+                        }
+                        Err(e) => {
+                            println!("[DEBUGTrajectories] Chateau {}: new client.get_active_routes_in_bbox timed out: {:?}", ch_id, e);
                         }
                     }
+                } else {
+                    println!("[DEBUGTrajectories] Chateau {}: Failed to spawn new aspen client from IP {:?}", ch_id, socket);
                 }
             }
+        } else {
+            println!("[DEBUGTrajectories] Chateau {}: get_aspen_socket returned None (no active aspen server assigned)", ch_id);
         }
     }
+    println!("[DEBUGTrajectories] realtime_routes to exclude: {:?}", realtime_routes);
 
     let mut shapes_to_process = Vec::new();
     let mut routes_to_query: HashMap<String, HashSet<String>> = HashMap::new();
@@ -238,6 +276,7 @@ pub async fn get_trajectories(
             shapes_to_process.push((shape, non_realtime_routes));
         }
     }
+    println!("[DEBUGTrajectories] shapes_to_process count: {}, routes_to_query chateaus count: {}", shapes_to_process.len(), routes_to_query.len());
 
     let mut chateau_trips = HashMap::new();
     let mut chateau_itineraries = HashMap::new();
@@ -265,7 +304,10 @@ pub async fn get_trajectories(
             .unwrap_or_default();
 
         if trips_raw.is_empty() {
+            println!("[DEBUGTrajectories] Chateau {}: loaded 0 trips_compressed for route_ids {:?}", chateau, r_ids_vec);
             continue;
+        } else {
+            println!("[DEBUGTrajectories] Chateau {}: loaded {} trips_compressed for route_ids {:?}", chateau, trips_raw.len(), r_ids_vec);
         }
 
         let itinerary_ids: Vec<String> = trips_raw.iter().map(|t| t.itinerary_pattern_id.clone()).collect::<HashSet<_>>().into_iter().collect();
@@ -403,6 +445,7 @@ pub async fn get_trajectories(
         let chateau = &shape.chateau;
         let norm_chateau = chateau.strip_prefix("f-").unwrap_or(chateau);
         if BANNED_CHATEAUX.contains(&norm_chateau) {
+            println!("[DEBUGTrajectories] Chateau {} is banned", chateau);
             continue;
         }
 
@@ -413,10 +456,12 @@ pub async fn get_trajectories(
 
         let shape_coords: Vec<(f64, f64)> = geo_linestring.points().map(|p| (p.x(), p.y())).collect();
         if shape_coords.len() < 2 {
+            println!("[DEBUGTrajectories] Shape {} has less than 2 coordinates", shape.shape_id);
             continue;
         }
 
         if !EUROPE_POLYGON.contains(&Point::new(shape_coords[0].0, shape_coords[0].1)) {
+            println!("[DEBUGTrajectories] Shape {} skipped: coordinates not in Europe ({:?})", shape.shape_id, shape_coords[0]);
             continue;
         }
 
@@ -434,7 +479,10 @@ pub async fn get_trajectories(
 
             let meta = match itin_meta.get(&trip.itinerary_pattern_id) {
                 Some(m) => m,
-                None => continue,
+                None => {
+                    println!("[DEBUGTrajectories] Shape {} trip {} itinerary {} not found in itin_meta", shape.shape_id, trip.trip_id, trip.itinerary_pattern_id);
+                    continue;
+                }
             };
 
             if meta.shape_id.as_ref() != Some(&shape.shape_id) {
@@ -443,15 +491,22 @@ pub async fn get_trajectories(
 
             let route = match routes_map.get(&trip.route_id) {
                 Some(r) => r,
-                None => continue,
+                None => {
+                    println!("[DEBUGTrajectories] Shape {} trip {} route_id {} not found in routes_map", shape.shape_id, trip.trip_id, trip.route_id);
+                    continue;
+                }
             };
 
             let mut itin_rows = match itins.get(&trip.itinerary_pattern_id) {
                 Some(r) => r.clone(),
-                None => continue,
+                None => {
+                    println!("[DEBUGTrajectories] Shape {} trip {} itinerary {} not found in itins", shape.shape_id, trip.trip_id, trip.itinerary_pattern_id);
+                    continue;
+                }
             };
 
             if itin_rows.is_empty() {
+                println!("[DEBUGTrajectories] Shape {} trip {} itinerary {} has 0 itin_rows", shape.shape_id, trip.trip_id, trip.itinerary_pattern_id);
                 continue;
             }
 
@@ -459,7 +514,10 @@ pub async fn get_trajectories(
 
             let service = match service_map.get(trip.service_id.as_str()) {
                 Some(s) => s,
-                None => continue,
+                None => {
+                    println!("[DEBUGTrajectories] Shape {} trip {} service_id {} not found in service_map", shape.shape_id, trip.trip_id, trip.service_id);
+                    continue;
+                }
             };
 
             let tz = chrono_tz::Tz::from_str(&meta.timezone).unwrap_or(chrono_tz::UTC);
@@ -505,6 +563,7 @@ pub async fn get_trajectories(
                 for row in &itin_rows {
                     if !stops_map.contains_key(row.stop_id.as_str()) {
                         stops_have_coords = false;
+                        println!("[DEBUGTrajectories] Stop id {} not found in stops_map", row.stop_id);
                         break;
                     }
                     let departure_offset = row.departure_time_since_start
@@ -623,6 +682,7 @@ pub async fn get_trajectories(
                         "coordinates": geojson_coordinates
                     });
 
+                    println!("[DEBUGTrajectories] Trajectory wrapper generated successfully for trip_id={}", unique_trip_id);
                     trajectories.push(TrajectoryWrapper {
                         source: "trajectory".to_string(),
                         timestamp: current_timestamp as u64 * 1000,
@@ -631,8 +691,11 @@ pub async fn get_trajectories(
                     });
 
                     if trajectories.len() >= 800 {
+                        println!("[DEBUGTrajectories] Reached limit of 800 trajectories, stopping loop");
                         break;
                     }
+                } else {
+                    println!("[DEBUGTrajectories] Shape {} trip {} skipped: current time {} not within trip bounds [{} - 300, {} + 300]", shape.shape_id, trip.trip_id, current_timestamp, start_of_trip_timestamp, trip_end_timestamp);
                 }
             }
 
@@ -646,6 +709,7 @@ pub async fn get_trajectories(
         }
     }
 
+    println!("[DEBUGTrajectories] get_trajectories finished. Generated {} trajectories", trajectories.len());
     Ok(trajectories)
 }
 
