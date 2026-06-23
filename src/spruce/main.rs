@@ -13,6 +13,7 @@ use trip_websocket::TripWebSocket;
 mod departures_shared;
 mod map_coordinator;
 mod nearby_departures;
+pub mod trajectories;
 
 use catenary::trip_logic::{
     GtfsRtRefreshData, QueryTripInformationParams, TripIntroductionInformation,
@@ -51,6 +52,14 @@ pub enum ClientMessage {
         params: nearby_departures::NearbyFromCoordsV3,
         request_id: String,
     },
+
+    #[serde(rename = "subscribe_trajectories")]
+    SubscribeTrajectories {
+        #[serde(flatten)]
+        params: trajectories::TrajectorySubscriptionParams,
+    },
+    #[serde(rename = "unsubscribe_trajectories")]
+    UnsubscribeTrajectories,
 }
 
 #[derive(Deserialize, Clone)]
@@ -78,6 +87,12 @@ pub enum ServerMessage {
         total_chunks: usize,
         is_hydration: bool,
         data: nearby_departures::NearbyDeparturesV3Response,
+    },
+    #[serde(rename = "buffer")]
+    Buffer {
+        timestamp: u64,
+        client_reference: String,
+        content: Vec<trajectories::TrajectoryWrapper>,
     },
 }
 

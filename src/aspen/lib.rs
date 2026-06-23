@@ -125,6 +125,14 @@ pub trait AspenRpc {
         route_ids: Option<Vec<String>>,
     ) -> Option<GetVehicleLocationsResponse>;
 
+    async fn get_active_routes_in_bbox(
+        chateau_id: String,
+        min_lon: f64,
+        min_lat: f64,
+        max_lon: f64,
+        max_lat: f64,
+    ) -> Option<Vec<String>>;
+
     async fn get_gtfs_rt(
         realtime_feed_id: String,
         feed_type: crate::aspen_dataset::GtfsRtType,

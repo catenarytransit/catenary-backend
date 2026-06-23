@@ -38,7 +38,7 @@ enum MapBuildEvent {
     Finished,
 }
 
-use crate::{ClientMessage, MapViewportUpdate, ServerMessage, nearby_departures};
+use crate::{ClientMessage, MapViewportUpdate, ServerMessage, nearby_departures, trajectories};
 use futures::StreamExt;
 
 // Messages moved to main.rs
@@ -64,6 +64,10 @@ pub struct TripWebSocket {
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
+
+    // Trajectory fields
+    pub trajectory_subscription: Option<trajectories::TrajectorySubscriptionParams>,
+    pub last_trajectory_sent_time: Option<Instant>,
 }
 
 impl TripWebSocket {
@@ -92,6 +96,8 @@ impl TripWebSocket {
             etcd_reuser,
             aspen_endpoint_cache: HashMap::new(),
             in_progress_trip_fetches: HashMap::new(),
+            trajectory_subscription: None,
+            last_trajectory_sent_time: None,
         }
     }
 
@@ -481,6 +487,56 @@ impl TripWebSocket {
         self.pending_map_updates
             .insert(chateau_id.clone(), response.clone());
     }
+
+    fn start_trajectory_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
+        ctx.run_interval(Duration::from_secs(30), |act, ctx| {
+            if act.trajectory_subscription.is_none() {
+                return;
+            }
+            act.trigger_trajectory_update(ctx);
+        });
+    }
+
+    fn trigger_trajectory_update(&self, ctx: &mut ws::WebsocketContext<Self>) {
+        let Some(params) = self.trajectory_subscription.clone() else { return; };
+        let pool = self.pool.clone();
+        let etcd_ips = self.etcd_connection_ips.clone();
+        let etcd_opts = self.etcd_connection_options.clone();
+        let manager = self.aspen_client_manager.clone();
+        let etcd_reuser = self.etcd_reuser.clone();
+
+        let fut = async move {
+            trajectories::get_trajectories(
+                pool,
+                etcd_ips,
+                etcd_opts,
+                manager,
+                etcd_reuser,
+                params,
+            ).await
+        };
+
+        let fut = actix::fut::wrap_future(fut).map(
+            |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| match result {
+                Ok(trajectories) => {
+                    let client_ref = act.trajectory_subscription.as_ref().map_or("".to_string(), |s| s.client_reference.clone());
+                    let msg = ServerMessage::Buffer {
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                        client_reference: client_ref,
+                        content: trajectories,
+                    };
+                    if let Ok(text) = serde_json::to_string(&msg) {
+                        ctx.text(text);
+                    }
+                    act.last_trajectory_sent_time = Some(Instant::now());
+                }
+                Err(err) => {
+                    eprintln!("Error fetching trajectories: {}", err);
+                }
+            }
+        );
+        ctx.spawn(fut);
+    }
 }
 
 impl Actor for TripWebSocket {
@@ -490,6 +546,7 @@ impl Actor for TripWebSocket {
         self.hb(ctx);
         self.start_periodic_updates(ctx);
         self.start_map_update_coalescer(ctx);
+        self.start_trajectory_updates(ctx);
     }
 
     fn stopping(&mut self, ctx: &mut Self::Context) -> actix::Running {
@@ -623,6 +680,13 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         );
 
                         ctx.spawn(fut);
+                    }
+                    Ok(ClientMessage::SubscribeTrajectories { params }) => {
+                        self.trajectory_subscription = Some(params);
+                        self.trigger_trajectory_update(ctx);
+                    }
+                    Ok(ClientMessage::UnsubscribeTrajectories) => {
+                        self.trajectory_subscription = None;
                     }
                     Err(e) => {
                         let msg = ServerMessage::Error {

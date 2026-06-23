@@ -1350,6 +1350,38 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_active_routes_in_bbox(
+        self,
+        _: tarpc::context::Context,
+        chateau_id: String,
+        min_lon: f64,
+        min_lat: f64,
+        max_lon: f64,
+        max_lat: f64,
+    ) -> Option<Vec<String>> {
+        match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(aspenised_data) => {
+                let aspenised_data = aspenised_data.get();
+                let mut active_routes = std::collections::HashSet::new();
+                for vehicle_pos in aspenised_data.vehicle_positions.values() {
+                    if let Some(pos) = &vehicle_pos.position {
+                        let lon = pos.longitude as f64;
+                        let lat = pos.latitude as f64;
+                        if lon >= min_lon && lon <= max_lon && lat >= min_lat && lat <= max_lat {
+                            if let Some(trip) = &vehicle_pos.trip {
+                                if let Some(route_id) = &trip.route_id {
+                                    active_routes.insert(route_id.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(active_routes.into_iter().collect())
+            }
+            None => None,
+        }
+    }
+
     async fn get_single_vehicle_location_from_gtfsid(
         self,
         _: context::Context,
