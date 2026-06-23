@@ -5,7 +5,9 @@ pub struct TrajectorySubscriptionParams {
     pub bbox: Vec<f64>,
     pub zoom: u8,
     pub modes: Vec<String>,
-    #[serde(default)]
+    pub start_time_ms: i64,
+    pub end_time_ms: i64,
+    pub precision: Option<u8>,
     pub client_reference: String,
 }
 

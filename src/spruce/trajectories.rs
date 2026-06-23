@@ -6,6 +6,15 @@ use std::sync::Arc;
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
 pub use catenary::pasque::lib::TrajectoryWrapper;
 
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct ClientTrajectorySubscriptionParams {
+    pub bbox: Vec<f64>,
+    pub zoom: u8,
+    pub modes: Vec<String>,
+    pub precision: Option<u8>,
+    pub client_reference: String,
+}
+
 pub async fn get_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
     _etcd_connection_ips: Arc<EtcdConnectionIps>,

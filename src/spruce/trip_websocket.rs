@@ -66,7 +66,7 @@ pub struct TripWebSocket {
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 
     // Trajectory fields
-    pub trajectory_subscription: Option<trajectories::TrajectorySubscriptionParams>,
+    pub trajectory_subscription: Option<trajectories::ClientTrajectorySubscriptionParams>,
     pub last_trajectory_sent_time: Option<Instant>,
 }
 
@@ -498,12 +498,28 @@ impl TripWebSocket {
     }
 
     fn trigger_trajectory_update(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        let Some(params) = self.trajectory_subscription.clone() else { return; };
+        let Some(client_params) = self.trajectory_subscription.clone() else { return; };
         let pool = self.pool.clone();
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
         let manager = self.aspen_client_manager.clone();
         let etcd_reuser = self.etcd_reuser.clone();
+        
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let look_ahead_ms = 90000;
+        let latency_buffer_ms = 15000;
+        let start_time_ms = now_ms - latency_buffer_ms;
+        let end_time_ms = now_ms + look_ahead_ms + latency_buffer_ms;
+
+        let params = trajectories::TrajectorySubscriptionParams {
+            bbox: client_params.bbox,
+            zoom: client_params.zoom,
+            modes: client_params.modes,
+            start_time_ms,
+            end_time_ms,
+            precision: client_params.precision,
+            client_reference: client_params.client_reference,
+        };
 
         let fut = async move {
             trajectories::get_trajectories(

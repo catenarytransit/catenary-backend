@@ -56,7 +56,7 @@ pub enum ClientMessage {
     #[serde(rename = "subscribe_trajectories")]
     SubscribeTrajectories {
         #[serde(flatten)]
-        params: trajectories::TrajectorySubscriptionParams,
+        params: trajectories::ClientTrajectorySubscriptionParams,
     },
     #[serde(rename = "unsubscribe_trajectories")]
     UnsubscribeTrajectories,

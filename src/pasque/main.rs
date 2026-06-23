@@ -14,7 +14,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use geo::Simplify;
 use geo::coord;
-use geo::{Point, Contains};
+use geo::{Point, Contains, Intersects};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -63,6 +63,20 @@ static BANNED_CHATEAUX: &[&str] = &[
     "keolis~dijon~fr",
     "przedsiębiorstwousługkomunalnychkomornikispzoo",
 ];
+
+fn is_banned_chateau(chateau: &str) -> bool {
+    let norm_chateau = chateau.strip_prefix("f-").unwrap_or(chateau);
+    BANNED_CHATEAUX.contains(&norm_chateau)
+}
+
+fn chateau_overlaps_europe(ch: &catenary::models::Chateau) -> bool {
+    if let Some(hull_diesel) = &ch.hull {
+        let hull_geo = catenary::postgis_to_diesel::diesel_multi_polygon_to_geo(hull_diesel.clone());
+        hull_geo.intersects(&*EUROPE_POLYGON)
+    } else {
+        true
+    }
+}
 
 fn min_zoom_level(route_type: i16, distance: f64) -> u8 {
     match route_type {
@@ -148,9 +162,11 @@ impl PasqueRpc for PasqueServer {
             }
         }
 
+        let start_secs = params.start_time_ms / 1000;
+        let end_secs = params.end_time_ms / 1000;
         let now_utc = Utc::now();
-        let seek_back = chrono::TimeDelta::new(1800, 0).unwrap();
-        let seek_forward = chrono::TimeDelta::new(1800, 0).unwrap();
+        let seek_back = chrono::TimeDelta::new((now_utc.timestamp() - start_secs).max(0), 0).unwrap();
+        let seek_forward = chrono::TimeDelta::new((end_secs - now_utc.timestamp()).max(0), 0).unwrap();
 
         let tolerance_meters = match params.zoom {
             z if z <= 5 => 2000.0,
@@ -342,7 +358,7 @@ impl PasqueRpc for PasqueServer {
 
                         let trip_end_timestamp = start_of_trip_timestamp + max_offset as i64;
 
-                        if current_timestamp >= start_of_trip_timestamp - 300 && current_timestamp <= trip_end_timestamp + 300 {
+                        if start_of_trip_timestamp <= end_secs && trip_end_timestamp >= start_secs {
                             let geojson_coordinates: Vec<Vec<f64>> = shape_coords.iter().map(|&(lon, lat)| vec![lon, lat]).collect();
 
                             let route_type_str = match route.route_type {
@@ -785,9 +801,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             .await?
     };
 
-    println!("Loading timetables for {} chateaux...", list_of_chateaux.len());
+    let filtered_chateaux: Vec<_> = list_of_chateaux
+        .into_iter()
+        .filter(|ch| {
+            if is_banned_chateau(&ch.chateau) {
+                println!("Skipping banned chateau before static index load: {}", ch.chateau);
+                return false;
+            }
+            if !chateau_overlaps_europe(ch) {
+                println!("Skipping out-of-scope chateau before static index load: {}", ch.chateau);
+                return false;
+            }
+            true
+        })
+        .collect();
+
+    println!("Loading timetables for {} filtered chateaux...", filtered_chateaux.len());
     let mut tasks = Vec::new();
-    for ch in list_of_chateaux {
+    for ch in filtered_chateaux {
         let pool_inner = pool_clone.clone();
         tasks.push(tokio::spawn(async move {
             println!("Indexing static timetable for: {}", ch.chateau);
@@ -858,8 +889,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 }
             };
             if let Ok(chateaux_list) = chateaux_res {
+                let filtered_chateaux: Vec<_> = chateaux_list
+                    .into_iter()
+                    .filter(|ch| {
+                        if is_banned_chateau(&ch.chateau) || !chateau_overlaps_europe(ch) {
+                            return false;
+                        }
+                        true
+                    })
+                    .collect();
                 let mut static_tasks = Vec::new();
-                for ch in chateaux_list {
+                for ch in filtered_chateaux {
                     let p = pool_static.clone();
                     static_tasks.push(tokio::spawn(async move {
                         load_static_snapshot(&ch.chateau, &p).await
