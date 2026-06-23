@@ -43,6 +43,7 @@ extern crate serde;
 
 pub mod agency_secret;
 pub mod aspen;
+pub mod pasque;
 pub mod cholla;
 pub mod custom_pg_types;
 pub mod enum_to_int;
