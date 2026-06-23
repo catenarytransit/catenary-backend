@@ -135,10 +135,16 @@ pub async fn get_trajectories(
     use diesel::sql_types::Bool;
     let envelope_wkt = format!("ST_MakeEnvelope({}, {}, {}, {}, 4326)", min_lon, min_lat, max_lon, max_lat);
 
-    let banned_sql: Vec<String> = BANNED_CHATEAUX
+    let banned_sql_str = BANNED_CHATEAUX
         .iter()
-        .flat_map(|c| vec![c.to_string(), format!("f-{}", c)])
-        .collect();
+        .flat_map(|c| {
+            vec![
+                format!("'{}'", c.replace('\'', "''")),
+                format!("'f-{}'", c.replace('\'', "''")),
+            ]
+        })
+        .collect::<Vec<String>>()
+        .join(", ");
 
     let mut query_groups = Vec::new();
     let groups: [Vec<i16>; 4] = [
@@ -167,8 +173,8 @@ pub async fn get_trajectories(
     let mut shapes = Vec::new();
     for group in query_groups {
         let where_clause = format!(
-            "allowed_spatial_query = TRUE AND route_type = ANY(ARRAY{:?}::smallint[]) AND chateau != ALL(ARRAY{:?}::text[]) AND ST_Intersects(linestring, {})",
-            group, banned_sql, envelope_wkt
+            "allowed_spatial_query = TRUE AND route_type = ANY(ARRAY{:?}::smallint[]) AND chateau != ALL(ARRAY[{}]::text[]) AND ST_Intersects(linestring, {})",
+            group, banned_sql_str, envelope_wkt
         );
 
         let mut group_shapes: Vec<catenary::models::Shape> = catenary::schema::gtfs::shapes::dsl::shapes
