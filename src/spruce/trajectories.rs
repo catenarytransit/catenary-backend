@@ -7,6 +7,8 @@ use catenary::bincode_deserialize;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use geo::Simplify;
 use geo::coord;
+use geo::{Point, Contains};
+use std::sync::LazyLock;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,6 +16,45 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::str::FromStr;
 use std::hash::{Hash, Hasher};
+
+static EUROPE_POLYGON: LazyLock<geo::Polygon<f64>> = LazyLock::new(|| {
+    geo::Polygon::new(
+        geo::LineString::new(vec![
+            coord! { x: -6.9577265, y: 35.7735188 },
+            coord! { x: -4.472695, y: 36.0682729 },
+            coord! { x: 9.5479145, y: 38.0235985 },
+            coord! { x: 15.459828, y: 35.2890947 },
+            coord! { x: 25.1050641, y: 33.7013718 },
+            coord! { x: 35.1575203, y: 34.6120495 },
+            coord! { x: 36.5640077, y: 44.6851189 },
+            coord! { x: 38.0711869, y: 47.1609364 },
+            coord! { x: 39.888879, y: 47.9735878 },
+            coord! { x: 41.3628672, y: 50.7690019 },
+            coord! { x: 31.6409946, y: 53.1759916 },
+            coord! { x: 27.8371204, y: 60.3704502 },
+            coord! { x: 32.3087008, y: 62.8257686 },
+            coord! { x: 30.4287406, y: 65.0451756 },
+            coord! { x: 32.0558875, y: 71.360447 },
+            coord! { x: 19.4236301, y: 72.3830125 },
+            coord! { x: -10.920437, y: 60.9601853 },
+            coord! { x: -12.3662517, y: 41.0365698 },
+            coord! { x: -9.9168203, y: 35.4084132 },
+            coord! { x: -6.9577265, y: 35.7735188 },
+        ]),
+        vec![],
+    )
+});
+
+static BANNED_CHATEAUX: &[&str] = &[
+    "bus~dft~gov~uk",
+    "pražskáintegrovanádoprava",
+    "ztp~krakow",
+    "ztmwarszawa",
+    "atac",
+    "delijn",
+    "keolis~dijon~fr",
+    "przedsiębiorstwousługkomunalnychkomornikispzoo",
+];
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct TrajectorySubscriptionParams {
@@ -55,7 +96,11 @@ pub async fn get_trajectories(
             "tram" | "light_rail" | "light-rail" => route_types.push(0),
             "subway" | "metro" => route_types.push(1),
             "rail" | "train" => route_types.push(2),
-            "bus" => route_types.push(3),
+            "bus" => {
+                if params.zoom >= 9 {
+                    route_types.push(3);
+                }
+            }
             "ferry" => route_types.push(4),
             "cable_car" | "cable-car" => route_types.push(5),
             "gondola" => route_types.push(6),
@@ -67,7 +112,15 @@ pub async fn get_trajectories(
     }
 
     if route_types.is_empty() {
-        route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+        if params.modes.is_empty() {
+            if params.zoom >= 9 {
+                route_types = vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12];
+            } else {
+                route_types = vec![0, 1, 2, 4, 5, 6, 7, 11, 12];
+            }
+        } else {
+            return Ok(vec![]);
+        }
     }
 
     let mut conn = pool.get().await.map_err(|e| format!("DB connection error: {:?}", e))?;
@@ -75,17 +128,52 @@ pub async fn get_trajectories(
     use diesel::dsl::sql;
     use diesel::sql_types::Bool;
     let envelope_wkt = format!("ST_MakeEnvelope({}, {}, {}, {}, 4326)", min_lon, min_lat, max_lon, max_lat);
-    let where_clause = format!(
-        "allowed_spatial_query = TRUE AND route_type = ANY(ARRAY{:?}::smallint[]) AND ST_Intersects(linestring, {})",
-        route_types, envelope_wkt
-    );
 
-    let shapes: Vec<catenary::models::Shape> = catenary::schema::gtfs::shapes::dsl::shapes
-        .filter(sql::<Bool>(&where_clause))
-        .select(catenary::models::Shape::as_select())
-        .load(&mut conn)
-        .await
-        .map_err(|e| format!("Failed to load shapes: {:?}", e))?;
+    let banned_sql: Vec<String> = BANNED_CHATEAUX
+        .iter()
+        .flat_map(|c| vec![c.to_string(), format!("f-{}", c)])
+        .collect();
+
+    let mut query_groups = Vec::new();
+    let groups: [Vec<i16>; 4] = [
+        vec![2],
+        vec![0, 1, 5, 7, 11, 12],
+        vec![4],
+        vec![3],
+    ];
+
+    let mut remaining: std::collections::HashSet<i16> = route_types.iter().cloned().collect();
+
+    for g in &groups {
+        let intersection: Vec<i16> = g.iter().filter(|x| remaining.contains(x)).cloned().collect();
+        if !intersection.is_empty() {
+            query_groups.push(intersection);
+            for x in g {
+                remaining.remove(x);
+            }
+        }
+    }
+
+    if !remaining.is_empty() {
+        query_groups.push(remaining.into_iter().collect());
+    }
+
+    let mut shapes = Vec::new();
+    for group in query_groups {
+        let where_clause = format!(
+            "allowed_spatial_query = TRUE AND route_type = ANY(ARRAY{:?}::smallint[]) AND chateau != ALL(ARRAY{:?}::text[]) AND ST_Intersects(linestring, {})",
+            group, banned_sql, envelope_wkt
+        );
+
+        let mut group_shapes: Vec<catenary::models::Shape> = catenary::schema::gtfs::shapes::dsl::shapes
+            .filter(sql::<Bool>(&where_clause))
+            .select(catenary::models::Shape::as_select())
+            .load(&mut conn)
+            .await
+            .map_err(|e| format!("Failed to load shapes: {:?}", e))?;
+
+        shapes.append(&mut group_shapes);
+    }
 
     let unique_chateaus: HashSet<String> = shapes.iter().map(|s| s.chateau.clone()).collect();
     let mut realtime_routes = HashSet::new();
@@ -313,6 +401,10 @@ pub async fn get_trajectories(
 
     for (shape, non_rt_routes) in shapes_to_process {
         let chateau = &shape.chateau;
+        let norm_chateau = chateau.strip_prefix("f-").unwrap_or(chateau);
+        if BANNED_CHATEAUX.contains(&norm_chateau) {
+            continue;
+        }
 
         let mut geo_linestring = geo::LineString::new(
             shape.linestring.points.iter().map(|p| coord! { x: p.x, y: p.y }).collect()
@@ -321,6 +413,10 @@ pub async fn get_trajectories(
 
         let shape_coords: Vec<(f64, f64)> = geo_linestring.points().map(|p| (p.x(), p.y())).collect();
         if shape_coords.len() < 2 {
+            continue;
+        }
+
+        if !EUROPE_POLYGON.contains(&Point::new(shape_coords[0].0, shape_coords[0].1)) {
             continue;
         }
 
@@ -486,7 +582,7 @@ pub async fn get_trajectories(
                         "track": from_track,
                         "description": from_name,
                         "vertexType": "TRANSIT",
-                        "modes": [route_type_motis]
+                        "modes": [route_type_str]
                     });
 
                     let to_json = serde_json::json!({
@@ -500,7 +596,7 @@ pub async fn get_trajectories(
                         "track": to_track,
                         "description": to_name,
                         "vertexType": "TRANSIT",
-                        "modes": [route_type_motis]
+                        "modes": [route_type_str]
                     });
 
                     let content_obj = serde_json::json!({
@@ -510,7 +606,7 @@ pub async fn get_trajectories(
                                 "displayName": display_name
                             }
                         ],
-                        "mode": route_type_motis,
+                        "mode": route_type_str,
                         "distance": distance_meters,
                         "from": from_json,
                         "to": to_json,
