@@ -102,6 +102,8 @@ mod tests {
     use super::*;
     use i24::I24;
 
+    use std::sync::Arc;
+
     fn make_update(
         arrival: Option<i64>,
         departure: Option<i64>,
@@ -110,7 +112,7 @@ mod tests {
     ) -> CompactStopTimeUpdate {
         CompactStopTimeUpdate {
             stop_sequence: None,
-            stop_id: Some(id.to_string()),
+            stop_id: Some(Arc::from(id)),
             arrival: arrival.map(|t| {
                 Box::new(CompactStopTimeEvent {
                     delay: None,
@@ -143,7 +145,7 @@ mod tests {
         // Time 105 is inside "1"
         let res = find_closest_stop_time_update(&updates, 105, ref_epoch);
         assert!(res.is_some());
-        assert_eq!(res.unwrap().stop_id.unwrap(), "1");
+        assert_eq!(res.unwrap().stop_id.as_deref(), Some("1"));
     }
 
     #[test]
@@ -157,7 +159,7 @@ mod tests {
         // Time 115 is after 1, before 2 and 3. Closest future is 2 (120).
         let res = find_closest_stop_time_update(&updates, 115, ref_epoch);
         assert!(res.is_some());
-        assert_eq!(res.unwrap().stop_id.unwrap(), "2");
+        assert_eq!(res.unwrap().stop_id.as_deref(), Some("2"));
     }
 
     #[test]
@@ -170,7 +172,7 @@ mod tests {
         // Time 200 is after all. Should return last one ("2").
         let res = find_closest_stop_time_update(&updates, 200, ref_epoch);
         assert!(res.is_some());
-        assert_eq!(res.unwrap().stop_id.unwrap(), "2");
+        assert_eq!(res.unwrap().stop_id.as_deref(), Some("2"));
     }
 
     #[test]
@@ -187,6 +189,6 @@ mod tests {
         // Time 115. "skipped" is at 120 but should be ignored. Closest future is 3.
         let res = find_closest_stop_time_update(&updates, 115, ref_epoch);
         assert!(res.is_some());
-        assert_eq!(res.unwrap().stop_id.unwrap(), "3");
+        assert_eq!(res.unwrap().stop_id.as_deref(), Some("3"));
     }
 }

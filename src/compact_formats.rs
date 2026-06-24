@@ -7,6 +7,7 @@ use gtfs_realtime::{
 };
 use i24::I24;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactFeedMessage {
@@ -48,7 +49,7 @@ pub struct CompactTripUpdate {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactStopTimeUpdate {
     pub stop_sequence: Option<u16>,
-    pub stop_id: Option<String>,
+    pub stop_id: Option<Arc<str>>,
     pub arrival: Option<Box<CompactStopTimeEvent>>,
     pub departure: Option<Box<CompactStopTimeEvent>>,
     pub departure_occupancy_status: Option<u8>,
@@ -71,10 +72,12 @@ impl CompactFeedMessage {
         let timestamp = message.header.timestamp.unwrap_or(0);
         let reference_epoch = (timestamp / 65536) * 65536;
 
+        let mut stop_id_cache = ahash::AHashSet::new();
+
         let entity = message
             .entity
             .into_iter()
-            .map(|e| CompactFeedEntity::from_feed_entity(e, reference_epoch))
+            .map(|e| CompactFeedEntity::from_feed_entity(e, reference_epoch, &mut stop_id_cache))
             .collect();
 
         CompactFeedMessage {
@@ -119,13 +122,17 @@ impl CompactFeedHeader {
 }
 
 impl CompactFeedEntity {
-    fn from_feed_entity(entity: FeedEntity, ref_epoch: u64) -> Self {
+    fn from_feed_entity(
+        entity: FeedEntity,
+        ref_epoch: u64,
+        stop_id_cache: &mut ahash::AHashSet<Arc<str>>,
+    ) -> Self {
         CompactFeedEntity {
             id: entity.id,
             is_deleted: entity.is_deleted,
             trip_update: entity
                 .trip_update
-                .map(|tu| CompactTripUpdate::from_trip_update(tu, ref_epoch)),
+                .map(|tu| CompactTripUpdate::from_trip_update(tu, ref_epoch, stop_id_cache)),
             vehicle: entity.vehicle,
             alert: entity.alert.map(Box::new),
             shape: entity.shape.map(Box::new),
@@ -155,14 +162,18 @@ impl CompactFeedEntity {
 }
 
 impl CompactTripUpdate {
-    fn from_trip_update(tu: TripUpdate, ref_epoch: u64) -> Self {
+    fn from_trip_update(
+        tu: TripUpdate,
+        ref_epoch: u64,
+        stop_id_cache: &mut ahash::AHashSet<Arc<str>>,
+    ) -> Self {
         CompactTripUpdate {
             trip: tu.trip,
             vehicle: tu.vehicle,
             stop_time_update: tu
                 .stop_time_update
                 .into_iter()
-                .map(|stu| CompactStopTimeUpdate::from_stop_time_update(stu, ref_epoch))
+                .map(|stu| CompactStopTimeUpdate::from_stop_time_update(stu, ref_epoch, stop_id_cache))
                 .collect(),
             timestamp: tu.timestamp,
             delay: tu.delay,
@@ -187,10 +198,24 @@ impl CompactTripUpdate {
 }
 
 impl CompactStopTimeUpdate {
-    fn from_stop_time_update(stu: StopTimeUpdate, ref_epoch: u64) -> Self {
+    fn from_stop_time_update(
+        stu: StopTimeUpdate,
+        ref_epoch: u64,
+        stop_id_cache: &mut ahash::AHashSet<Arc<str>>,
+    ) -> Self {
+        let stop_id = stu.stop_id.map(|sid| {
+            if let Some(existing) = stop_id_cache.get(sid.as_str()) {
+                existing.clone()
+            } else {
+                let arc: Arc<str> = Arc::from(sid);
+                stop_id_cache.insert(arc.clone());
+                arc
+            }
+        });
+
         CompactStopTimeUpdate {
             stop_sequence: stu.stop_sequence.map(|s| s as u16),
-            stop_id: stu.stop_id,
+            stop_id,
             arrival: stu
                 .arrival
                 .map(|a| Box::new(CompactStopTimeEvent::from_stop_time_event(a, ref_epoch))),
@@ -208,7 +233,7 @@ impl CompactStopTimeUpdate {
     fn to_stop_time_update(&self, ref_epoch: u64) -> StopTimeUpdate {
         StopTimeUpdate {
             stop_sequence: self.stop_sequence.map(|s| s as u32),
-            stop_id: self.stop_id.clone(),
+            stop_id: self.stop_id.as_ref().map(|x| (**x).to_owned()),
             arrival: self
                 .arrival
                 .as_ref()

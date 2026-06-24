@@ -1090,7 +1090,7 @@ pub async fn new_rt_data(
                                     .and_then(|x| x.stop_id.clone());
 
                                 if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
-                                    stop_ids_to_lookup.insert(last_non_skipped_stop_id.clone());
+                                    stop_ids_to_lookup.insert(last_non_skipped_stop_id.to_string());
                                 }
                             }
                         }
@@ -1748,7 +1748,7 @@ pub async fn new_rt_data(
                             for trip_update in trip_update.stop_time_update.iter() {
                                 if let Some(stop_id) = &trip_update.stop_id {
                                     stop_id_to_non_scheduled_trip_ids
-                                        .entry(stop_id.clone().into())
+                                        .entry(stop_id.as_ref().into())
                                         .and_modify(|x| {
                                             x.push(trip_update_entity.id.clone().into())
                                         })
@@ -1769,7 +1769,7 @@ pub async fn new_rt_data(
                                 true => match last_non_cancelled_stop_id {
                                     Some(last_non_cancelled_stop_id) => {
                                         stop_id_to_stop_from_postgres
-                                            .get(&last_non_cancelled_stop_id)
+                                            .get(last_non_cancelled_stop_id.as_ref())
                                             .map(|s| {
                                                 s.name
                                                     .as_ref()
@@ -2003,7 +2003,7 @@ pub async fn new_rt_data(
                                         rt_stu_map.insert(seq as i32, stu_item.clone());
                                     } else if let Some(ref sid) = stu_item.stop_id {
                                         if let Some(r) =
-                                            rows.iter().find(|x| x.stop_id.as_str() == sid)
+                                            rows.iter().find(|x| x.stop_id.as_str() == sid.as_ref())
                                         {
                                             rt_stu_map.insert(r.stop_sequence, stu_item.clone());
                                         }
@@ -2016,7 +2016,7 @@ pub async fn new_rt_data(
                                         temp.push(
                                             catenary::compact_formats::CompactStopTimeUpdate {
                                                 stop_sequence: Some(row.stop_sequence as u16),
-                                                stop_id: Some(row.stop_id.to_string()),
+                                                stop_id: Some(std::sync::Arc::from(row.stop_id.as_str())),
                                                 arrival: None,
                                                 departure: None,
                                                 departure_occupancy_status: None,
@@ -2045,7 +2045,7 @@ pub async fn new_rt_data(
                         };
 
                         for stu in stus_iter {
-                            let mut resolved_stop_id: Option<String> = stu.stop_id.clone();
+                            let mut resolved_stop_id: Option<std::sync::Arc<str>> = stu.stop_id.clone();
                             let mut sched_arr_computed: Option<i64> = None;
                             let mut sched_dep_computed: Option<i64> = None;
 
@@ -2056,7 +2056,7 @@ pub async fn new_rt_data(
                                     {
                                         if resolved_stop_id.is_none() {
                                             resolved_stop_id =
-                                                Some(matching_row.stop_id.to_string());
+                                                Some(std::sync::Arc::from(matching_row.stop_id.as_str()));
                                         }
                                         if let Some(base_ms) = base_midnight_ts {
                                             if let Some(arr) = matching_row.arrival_time_since_start
@@ -2147,7 +2147,7 @@ pub async fn new_rt_data(
                                         {
                                             if let Some(stop_id) = &stu.stop_id {
                                                 if let Some(train_and_stop_scax) =
-                                                    train_data.get(stop_id)
+                                                    train_data.get(stop_id.as_ref())
                                                 {
                                                     platform_resp = Some(
                                                         train_and_stop_scax
@@ -2181,7 +2181,7 @@ pub async fn new_rt_data(
                                             {
                                                 if let Some(stop_id) = &stu.stop_id {
                                                     if let Some(train_and_stop_scax) =
-                                                        train_data.get(stop_id)
+                                                        train_data.get(stop_id.as_ref())
                                                     {
                                                         platform_resp = Some(
                                                             train_and_stop_scax
@@ -2206,7 +2206,7 @@ pub async fn new_rt_data(
                                                             .get(trip_short_name.as_str())
                                                         {
                                                             if let Some(track) =
-                                                                train_data.get(stop_id.as_str())
+                                                                train_data.get(stop_id.as_ref())
                                                             {
                                                                 platform_resp =
                                                                     Some(track.clone().into());
@@ -2228,7 +2228,7 @@ pub async fn new_rt_data(
                                             {
                                                 if let Some(platform_info) = trip_platforms
                                                     .iter()
-                                                    .find(|p| p.stop_id == *stop_id)
+                                                    .find(|p| p.stop_id == stop_id.as_ref())
                                                 {
                                                     platform_resp =
                                                         Some(platform_info.platform.clone().into());
@@ -2250,7 +2250,7 @@ pub async fn new_rt_data(
                                                 .map(|scheduled| {
                                                     scheduled.contains(parent_part)
                                                         || stop_id_to_parent_id
-                                                            .get(stop_id.as_str())
+                                                            .get(stop_id.as_ref())
                                                             .map(|rt_parent| {
                                                                 scheduled
                                                                     .contains(rt_parent.as_str())
@@ -2323,7 +2323,7 @@ pub async fn new_rt_data(
                                                         .get(trip_short_name.as_str())
                                                     {
                                                         if let Some(platform) =
-                                                            train_data.get(stop_id.as_str())
+                                                            train_data.get(stop_id.as_ref())
                                                         {
                                                             platform_resp =
                                                                 Some(platform.clone().into());
@@ -2346,7 +2346,7 @@ pub async fn new_rt_data(
                                                         .get(trip_short_name.as_str())
                                                     {
                                                         if let Some(track) =
-                                                            train_data.get(stop_id.as_str())
+                                                            train_data.get(stop_id.as_ref())
                                                         {
                                                             platform_resp =
                                                                 Some(track.clone().into());
@@ -2369,7 +2369,7 @@ pub async fn new_rt_data(
                                                         .get(trip_short_name.as_str())
                                                     {
                                                         if let Some(track) =
-                                                            train_data.get(stop_id.as_str())
+                                                            train_data.get(stop_id.as_ref())
                                                         {
                                                             platform_resp =
                                                                 Some(track.clone().into());
@@ -2392,8 +2392,8 @@ pub async fn new_rt_data(
 
                                         let matching_nyct_protobuf_stu =
                                             nyct_stus_copied.iter().find(|x| {
-                                                x.stop_id.as_ref().map(|x| x.as_str())
-                                                    == stu.stop_id.as_ref().map(|x| x.as_str())
+                                                x.stop_id.as_deref()
+                                                    == stu.stop_id.as_deref()
                                                     && stu.stop_id.is_some()
                                             });
 
@@ -2442,7 +2442,7 @@ pub async fn new_rt_data(
                                     "metra" => None,
                                     _ => stu.stop_sequence.map(|x| x as u16),
                                 },
-                                stop_id: resolved_stop_id.as_ref().map(|x| x.into()),
+                                stop_id: resolved_stop_id.as_deref().map(Into::into),
                                 old_rt_data: false,
                                 platform_info: platform,
                                 arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
