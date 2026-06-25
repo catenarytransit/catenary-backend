@@ -447,7 +447,7 @@ impl From<gtfs_realtime::TripDescriptor> for AspenRawTripInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AspenisedStopTimeUpdate {
     pub stop_sequence: Option<u16>,
-    pub stop_id: Option<ecow::EcoString>,
+    pub stop_id: Option<Arc<str>>,
     pub arrival: Option<AspenStopTimeEvent>,
     pub departure: Option<AspenStopTimeEvent>,
     pub departure_occupancy_status: Option<AspenisedOccupancyStatus>,

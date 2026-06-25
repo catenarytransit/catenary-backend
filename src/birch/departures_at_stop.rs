@@ -977,10 +977,13 @@ pub async fn departures_at_stop(
                                         } else {
                                             let relevant_stop_time_update =
                                                 trip_update.stop_time_update.iter().find(|x| {
-                                                    x.stop_id
-                                                        .as_ref()
-                                                        .map(|compare| compare.as_str())
-                                                        == Some(&itin_option.stop_id)
+
+                                                    match &x.stop_id {
+                                                        None => false,
+                                                        Some(stop_id_compare) => {
+                                                            stop_id_compare.as_ref() == itin_option.stop_id.as_str()
+                                                        }
+                                                    }
                                                 });
 
                                             if let Some(relevant_stop_time_update) =
@@ -1243,8 +1246,12 @@ pub async fn departures_at_stop(
                                                     .stop_time_update
                                                     .iter()
                                                     .find(|x| {
-                                                        x.stop_id.as_ref().map(|compare| compare.as_str())
-                                                            == Some(&itin_option.stop_id)
+                                                        match &x.stop_id {
+                                                            Some(stop_id_compare) => {
+                                                                &itin_option.stop_id.as_str() == &stop_id_compare.as_ref()
+                                                            },
+                                                            None => false
+                                                        }
                                                     });
 
                                                 if let Some(relevant_stop_time_update) =
@@ -1447,7 +1454,7 @@ pub async fn departures_at_stop(
                     .iter()
                     .find(|stu| match &stu.stop_id {
                         Some(stu_stop_id) => {
-                            stu_stop_id.as_str() == stop.gtfs_id.as_str()
+                            stu_stop_id.as_ref() == &stop.gtfs_id
                                 || match matching_stop_ids {
                                     None => false,
                                     Some(matching_stop_ids) => {

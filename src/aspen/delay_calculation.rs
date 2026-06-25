@@ -6,11 +6,12 @@ use catenary::models::{CompressedTrip, ItineraryPatternMeta};
 use chrono::{Datelike, TimeZone, Utc};
 use chrono_tz::Tz;
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 pub fn calculate_delay(
     trip_update_delay: Option<i32>,
     trip_start_date: &Option<String>,
-    scheduled_stop_ids_hashset: &Option<AHashSet<String>>,
+    scheduled_stop_ids_hashset: &Option<AHashSet<Arc<str>>>,
     itinerary_rows: Option<&Vec<CompactItineraryPatternRow>>,
     itinerary_meta: Option<&ItineraryPatternMeta>,
     stop_time_update: &Vec<AspenisedStopTimeUpdate>,
@@ -28,7 +29,7 @@ pub fn calculate_delay(
                     .into_iter()
                     .filter(|stu| stu.arrival.is_some() || stu.departure.is_some())
                     .filter(|stu| match &stu.stop_id {
-                        Some(stop_id) => scheduled_stop_ids_hashset.contains(stop_id.as_str()),
+                        Some(stop_id) => scheduled_stop_ids_hashset.contains(stop_id),
                         None => false,
                     })
                     .collect::<Vec<AspenisedStopTimeUpdate>>();
@@ -69,7 +70,7 @@ pub fn calculate_delay(
                         let relevant_stop_rows = itinerary_rows
                             .iter()
                             .filter(|itinerary_row| match &stu.stop_id {
-                                Some(stu_stop_id) => itinerary_row.stop_id == stu_stop_id.as_str(),
+                                Some(stu_stop_id) => itinerary_row.stop_id == stu_stop_id,
                                 _ => false,
                             })
                             .collect::<Vec<&_>>();

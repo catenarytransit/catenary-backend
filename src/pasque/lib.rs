@@ -21,13 +21,16 @@ pub struct TrajectoryWrapper {
 
 #[tarpc::service]
 pub trait PasqueRpc {
-    async fn get_trajectories(params: TrajectorySubscriptionParams) -> Result<Vec<TrajectoryWrapper>, String>;
+    async fn get_trajectories(
+        params: TrajectorySubscriptionParams,
+    ) -> Result<Vec<TrajectoryWrapper>, String>;
 }
 
 pub async fn spawn_pasque_client_from_ip(
     addr: &std::net::SocketAddr,
 ) -> Result<PasqueRpcClient, Box<dyn std::error::Error + Sync + Send>> {
-    let mut transport_builder = tarpc::serde_transport::tcp::connect(addr, tarpc::tokio_serde::formats::Bincode::default);
+    let mut transport_builder =
+        tarpc::serde_transport::tcp::connect(addr, tarpc::tokio_serde::formats::Bincode::default);
     transport_builder
         .config_mut()
         .max_frame_length(1024 * 1024 * 128);

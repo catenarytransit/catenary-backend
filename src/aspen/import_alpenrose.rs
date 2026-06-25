@@ -1068,7 +1068,7 @@ pub async fn new_rt_data(
             .as_secs();
 
         // Used for cache fallback
-        let empty_scheduled_stops_option: Option<AHashSet<String>> = None;
+        let empty_scheduled_stops_option: Option<AHashSet<std::sync::Arc<str>>> = None;
 
         if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
             .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
@@ -1354,10 +1354,13 @@ pub async fn new_rt_data(
 
         let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
             String,
-            Option<AHashSet<String>>,
+            Option<AHashSet<std::sync::Arc<str>>>,
         > = AHashMap::new();
         for (id, (_, rows)) in &accumulated_itinerary_patterns {
-            let set: AHashSet<String> = rows.iter().map(|x| x.stop_id.to_string()).collect();
+            let set: AHashSet<std::sync::Arc<str>> = rows
+                .iter()
+                .map(|x| std::sync::Arc::from(x.stop_id.as_str()))
+                .collect();
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
 
@@ -2016,7 +2019,9 @@ pub async fn new_rt_data(
                                         temp.push(
                                             catenary::compact_formats::CompactStopTimeUpdate {
                                                 stop_sequence: Some(row.stop_sequence as u16),
-                                                stop_id: Some(std::sync::Arc::from(row.stop_id.as_str())),
+                                                stop_id: Some(std::sync::Arc::from(
+                                                    row.stop_id.as_str(),
+                                                )),
                                                 arrival: None,
                                                 departure: None,
                                                 departure_occupancy_status: None,
@@ -2045,7 +2050,8 @@ pub async fn new_rt_data(
                         };
 
                         for stu in stus_iter {
-                            let mut resolved_stop_id: Option<std::sync::Arc<str>> = stu.stop_id.clone();
+                            let mut resolved_stop_id: Option<std::sync::Arc<str>> =
+                                stu.stop_id.clone();
                             let mut sched_arr_computed: Option<i64> = None;
                             let mut sched_dep_computed: Option<i64> = None;
 
@@ -2055,8 +2061,9 @@ pub async fn new_rt_data(
                                         rows.iter().find(|r| r.stop_sequence == (seq as i32))
                                     {
                                         if resolved_stop_id.is_none() {
-                                            resolved_stop_id =
-                                                Some(std::sync::Arc::from(matching_row.stop_id.as_str()));
+                                            resolved_stop_id = Some(std::sync::Arc::from(
+                                                matching_row.stop_id.as_str(),
+                                            ));
                                         }
                                         if let Some(base_ms) = base_midnight_ts {
                                             if let Some(arr) = matching_row.arrival_time_since_start
@@ -2392,8 +2399,7 @@ pub async fn new_rt_data(
 
                                         let matching_nyct_protobuf_stu =
                                             nyct_stus_copied.iter().find(|x| {
-                                                x.stop_id.as_deref()
-                                                    == stu.stop_id.as_deref()
+                                                x.stop_id.as_deref() == stu.stop_id.as_deref()
                                                     && stu.stop_id.is_some()
                                             });
 
@@ -2442,7 +2448,7 @@ pub async fn new_rt_data(
                                     "metra" => None,
                                     _ => stu.stop_sequence.map(|x| x as u16),
                                 },
-                                stop_id: resolved_stop_id.as_deref().map(Into::into),
+                                stop_id: resolved_stop_id.clone(),
                                 old_rt_data: false,
                                 platform_info: platform,
                                 arrival: arr_clone.map(|arrival| AspenStopTimeEvent {
@@ -2523,7 +2529,7 @@ pub async fn new_rt_data(
                             .iter()
                             .map(|stu| stu.stop_id.clone())
                             .flatten()
-                            .collect::<BTreeSet<EcoString>>();
+                            .collect::<BTreeSet<Arc<str>>>();
 
                         let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
                             match &trip_id {
@@ -2569,8 +2575,7 @@ pub async fn new_rt_data(
                                                                     match &old_stu.stop_id {
                                                                         Some(old_stu_stop_id) => {
                                                                             !new_stop_ids.contains(
-                                                                                old_stu_stop_id
-                                                                                    .as_str(),
+                                                                                old_stu_stop_id,
                                                                             )
                                                                         }
                                                                         None => false,

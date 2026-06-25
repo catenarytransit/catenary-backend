@@ -173,7 +173,9 @@ impl CompactTripUpdate {
             stop_time_update: tu
                 .stop_time_update
                 .into_iter()
-                .map(|stu| CompactStopTimeUpdate::from_stop_time_update(stu, ref_epoch, stop_id_cache))
+                .map(|stu| {
+                    CompactStopTimeUpdate::from_stop_time_update(stu, ref_epoch, stop_id_cache)
+                })
                 .collect(),
             timestamp: tu.timestamp,
             delay: tu.delay,

@@ -150,7 +150,10 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
             .collect();
         for id in &rogue_ids_set {
             if !rogue_feeds.contains_key(id) {
-                println!("Warning: Rogue feed ID '{}' not found in PostgreSQL metadata.", id);
+                println!(
+                    "Warning: Rogue feed ID '{}' not found in PostgreSQL metadata.",
+                    id
+                );
             }
         }
         *assignments_for_this_worker.write().await = rogue_feeds;
@@ -279,142 +282,149 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     )
                     .await?;
 
-            //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
+                //each feed id ephemeral id contains the last time updated, with none meaning the data has not been assigned to the node yet
 
-            let mut election_client = etcd.election_client();
+                let mut election_client = etcd.election_client();
 
-            let current_leader_election = election_client.leader("/alpenrose_leader").await;
+                let current_leader_election = election_client.leader("/alpenrose_leader").await;
 
-            match current_leader_election {
-                Ok(current_leader_election) => {
-                    let leader_kv = current_leader_election.kv();
+                match current_leader_election {
+                    Ok(current_leader_election) => {
+                        let leader_kv = current_leader_election.kv();
 
-                    match leader_kv {
-                        None => {
-                            let attempt_to_become_leader = election_client
-                                .campaign(
-                                    "/alpenrose_leader",
-                                    bincode_serialize(this_worker_id.as_ref()).unwrap(),
-                                    etcd_lease_id,
-                                )
-                                .await;
+                        match leader_kv {
+                            None => {
+                                let attempt_to_become_leader = election_client
+                                    .campaign(
+                                        "/alpenrose_leader",
+                                        bincode_serialize(this_worker_id.as_ref()).unwrap(),
+                                        etcd_lease_id,
+                                    )
+                                    .await;
 
-                            println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
-                        }
-                        Some(leader_kv) => {
-                            let leader_id: String = bincode_deserialize(leader_kv.value()).unwrap();
+                                println!(
+                                    "attempt_to_become_leader: {:#?}",
+                                    attempt_to_become_leader
+                                );
+                            }
+                            Some(leader_kv) => {
+                                let leader_id: String =
+                                    bincode_deserialize(leader_kv.value()).unwrap();
 
-                            if &leader_id == this_worker_id.as_ref() {
-                                // I AM THE LEADER!!!
+                                if &leader_id == this_worker_id.as_ref() {
+                                    // I AM THE LEADER!!!
 
-                                println!("I AM THE LEADER!!!");
+                                    println!("I AM THE LEADER!!!");
 
-                                leader_job::perform_leader_job(
-                                    &mut etcd,
-                                    Arc::clone(&arc_conn_pool),
-                                    &mut last_set_of_active_nodes_hash,
-                                    &mut last_updated_feeds_hash,
-                                )
-                                .await?;
+                                    leader_job::perform_leader_job(
+                                        &mut etcd,
+                                        Arc::clone(&arc_conn_pool),
+                                        &mut last_set_of_active_nodes_hash,
+                                        &mut last_updated_feeds_hash,
+                                    )
+                                    .await?;
+                                }
                             }
                         }
                     }
-                }
-                Err(leader_election_err) => {
-                    let attempt_to_become_leader = election_client
-                        .campaign(
-                            "/alpenrose_leader",
-                            bincode_serialize(this_worker_id.as_ref()).unwrap(),
-                            etcd_lease_id,
-                        )
-                        .await;
-
-                    println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
-
-                    eprintln!("{:#?}", leader_election_err);
-
-                    //fetch again and see if leader
-
-                    let current_leader_election = election_client.leader("/alpenrose_leader").await;
-
-                    if let Ok(current_leader_resp) = current_leader_election {
-                        if let Some(leader_kv) = current_leader_resp.kv() {
-                            let leader_id: String = bincode_deserialize(leader_kv.value()).unwrap();
-
-                            if &leader_id == this_worker_id.as_ref() {
-                                // I AM THE LEADER!!!
-
-                                println!("I AM THE LEADER on first try!!!");
-
-                                leader_job::perform_leader_job(
-                                    &mut etcd,
-                                    Arc::clone(&arc_conn_pool),
-                                    &mut last_set_of_active_nodes_hash,
-                                    &mut last_updated_feeds_hash,
-                                )
-                                .await?;
-                            }
-                        }
-                    }
-                }
-            }
-
-            //read from etcd to get the current assignments for this node
-
-            let fetch_last_updated_assignments_for_this_worker_resp = etcd
-                .get(
-                    format!("/alpenrose_assignments_last_updated/{}", this_worker_id),
-                    None,
-                )
-                .await?;
-
-            let last_updated_worker_time_kv =
-                fetch_last_updated_assignments_for_this_worker_resp.kvs();
-
-            if let Some(last_updated_worker_time) = last_updated_worker_time_kv.first() {
-                let last_updated_worker_time_value =
-                    bincode_deserialize::<u64>(last_updated_worker_time.value()).unwrap();
-
-                if Some(last_updated_worker_time_value)
-                    != previously_known_updated_ms_for_this_worker
-                {
-                    previously_known_updated_ms_for_this_worker =
-                        Some(last_updated_worker_time_value);
-
-                    let mut assignments_for_this_worker_lock =
-                        assignments_for_this_worker.write().await;
-
-                    //fetch all the assignments
-
-                    let prefix_search = format!("/alpenrose_assignments/{}/", this_worker_id);
-
-                    let mut assignments = etcd
-                        .get(
-                            prefix_search.clone(),
-                            Some(etcd_client::GetOptions::new().with_prefix()),
-                        )
-                        .await?
-                        .take_kvs()
-                        .into_iter()
-                        .map(|each_kv| {
-                            (
-                                each_kv
-                                    .key_str()
-                                    .unwrap()
-                                    .to_string()
-                                    .replace(&prefix_search, ""),
-                                bincode_deserialize::<RealtimeFeedFetch>(each_kv.value()).unwrap(),
+                    Err(leader_election_err) => {
+                        let attempt_to_become_leader = election_client
+                            .campaign(
+                                "/alpenrose_leader",
+                                bincode_serialize(this_worker_id.as_ref()).unwrap(),
+                                etcd_lease_id,
                             )
-                        })
-                        .collect::<HashMap<String, RealtimeFeedFetch>>();
+                            .await;
 
-                    if let Some(allowed_feeds) = &restrict_to_feed_ids {
-                        assignments.retain(|feed_id, _| allowed_feeds.contains(feed_id));
+                        println!("attempt_to_become_leader: {:#?}", attempt_to_become_leader);
+
+                        eprintln!("{:#?}", leader_election_err);
+
+                        //fetch again and see if leader
+
+                        let current_leader_election =
+                            election_client.leader("/alpenrose_leader").await;
+
+                        if let Ok(current_leader_resp) = current_leader_election {
+                            if let Some(leader_kv) = current_leader_resp.kv() {
+                                let leader_id: String =
+                                    bincode_deserialize(leader_kv.value()).unwrap();
+
+                                if &leader_id == this_worker_id.as_ref() {
+                                    // I AM THE LEADER!!!
+
+                                    println!("I AM THE LEADER on first try!!!");
+
+                                    leader_job::perform_leader_job(
+                                        &mut etcd,
+                                        Arc::clone(&arc_conn_pool),
+                                        &mut last_set_of_active_nodes_hash,
+                                        &mut last_updated_feeds_hash,
+                                    )
+                                    .await?;
+                                }
+                            }
+                        }
                     }
-
-                    *assignments_for_this_worker_lock = assignments;
                 }
-            }
+
+                //read from etcd to get the current assignments for this node
+
+                let fetch_last_updated_assignments_for_this_worker_resp = etcd
+                    .get(
+                        format!("/alpenrose_assignments_last_updated/{}", this_worker_id),
+                        None,
+                    )
+                    .await?;
+
+                let last_updated_worker_time_kv =
+                    fetch_last_updated_assignments_for_this_worker_resp.kvs();
+
+                if let Some(last_updated_worker_time) = last_updated_worker_time_kv.first() {
+                    let last_updated_worker_time_value =
+                        bincode_deserialize::<u64>(last_updated_worker_time.value()).unwrap();
+
+                    if Some(last_updated_worker_time_value)
+                        != previously_known_updated_ms_for_this_worker
+                    {
+                        previously_known_updated_ms_for_this_worker =
+                            Some(last_updated_worker_time_value);
+
+                        let mut assignments_for_this_worker_lock =
+                            assignments_for_this_worker.write().await;
+
+                        //fetch all the assignments
+
+                        let prefix_search = format!("/alpenrose_assignments/{}/", this_worker_id);
+
+                        let mut assignments = etcd
+                            .get(
+                                prefix_search.clone(),
+                                Some(etcd_client::GetOptions::new().with_prefix()),
+                            )
+                            .await?
+                            .take_kvs()
+                            .into_iter()
+                            .map(|each_kv| {
+                                (
+                                    each_kv
+                                        .key_str()
+                                        .unwrap()
+                                        .to_string()
+                                        .replace(&prefix_search, ""),
+                                    bincode_deserialize::<RealtimeFeedFetch>(each_kv.value())
+                                        .unwrap(),
+                                )
+                            })
+                            .collect::<HashMap<String, RealtimeFeedFetch>>();
+
+                        if let Some(allowed_feeds) = &restrict_to_feed_ids {
+                            assignments.retain(|feed_id, _| allowed_feeds.contains(feed_id));
+                        }
+
+                        *assignments_for_this_worker_lock = assignments;
+                    }
+                }
             }
 
             // Spawn a background task to renew the etcd lease

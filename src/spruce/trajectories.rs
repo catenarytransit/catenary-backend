@@ -1,6 +1,6 @@
-use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::postgres_tools::CatenaryPostgresPool;
 use std::sync::Arc;
 
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
@@ -26,7 +26,7 @@ pub async fn get_trajectories(
     let addr: std::net::SocketAddr = "127.0.0.1:52775"
         .parse()
         .map_err(|e| format!("Invalid Pasque address: {:?}", e))?;
-    
+
     let client = catenary::pasque::lib::spawn_pasque_client_from_ip(&addr)
         .await
         .map_err(|e| format!("Failed to connect to Pasque: {:?}", e))?;

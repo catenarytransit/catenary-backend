@@ -1,26 +1,26 @@
-use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::aspen::lib::spawn_aspen_client_from_ip;
-use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::bincode_deserialize;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::pasque::lib::{PasqueRpc, TrajectorySubscriptionParams, TrajectoryWrapper};
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use chrono::Utc;
 use chrono_tz::Tz;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
-use futures::future::join_all;
 use futures::StreamExt;
+use futures::future::join_all;
 use geo::Simplify;
 use geo::coord;
-use geo::{Point, Contains, Intersects};
+use geo::{Contains, Intersects, Point};
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
 use std::time::Duration;
-use std::str::FromStr;
 use tarpc::server::{self, Channel};
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -71,7 +71,8 @@ fn is_banned_chateau(chateau: &str) -> bool {
 
 fn chateau_overlaps_europe(ch: &catenary::models::Chateau) -> bool {
     if let Some(hull_diesel) = &ch.hull {
-        let hull_geo = catenary::postgis_to_diesel::diesel_multi_polygon_to_geo(hull_diesel.clone());
+        let hull_geo =
+            catenary::postgis_to_diesel::diesel_multi_polygon_to_geo(hull_diesel.clone());
         hull_geo.intersects(&*EUROPE_POLYGON)
     } else {
         true
@@ -80,11 +81,37 @@ fn chateau_overlaps_europe(ch: &catenary::models::Chateau) -> bool {
 
 fn min_zoom_level(route_type: i16, distance: f64) -> u8 {
     match route_type {
-        0 => if distance > 10000.0 { 9 } else { 10 },
+        0 => {
+            if distance > 10000.0 {
+                9
+            } else {
+                10
+            }
+        }
         1 => 9,
-        2 => if distance > 50000.0 { 4 } else { 7 },
-        3 => if distance > 10000.0 { 9 } else { 10 },
-        4 => if distance > 100000.0 { 5 } else if distance > 10000.0 { 8 } else { 10 },
+        2 => {
+            if distance > 50000.0 {
+                4
+            } else {
+                7
+            }
+        }
+        3 => {
+            if distance > 10000.0 {
+                9
+            } else {
+                10
+            }
+        }
+        4 => {
+            if distance > 100000.0 {
+                5
+            } else if distance > 10000.0 {
+                8
+            } else {
+                10
+            }
+        }
         5 | 6 | 7 | 11 | 12 => 11,
         _ => 11,
     }
@@ -105,8 +132,25 @@ struct ChateauSnapshot {
     routes: HashMap<String, catenary::models::Route>,
     stops: HashMap<String, (f64, f64, String, String)>,
     service_map: std::collections::BTreeMap<String, catenary::CalendarUnified>,
-    static_index: HashMap<i16, rstar::RTree<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, String>>>,
-    realtime_index: Arc<RwLock<HashMap<i16, rstar::RTree<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, RealtimeVehicleInfo>>>>>,
+    static_index: HashMap<
+        i16,
+        rstar::RTree<
+            rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, String>,
+        >,
+    >,
+    realtime_index: Arc<
+        RwLock<
+            HashMap<
+                i16,
+                rstar::RTree<
+                    rstar::primitives::GeomWithData<
+                        rstar::primitives::Rectangle<[f64; 2]>,
+                        RealtimeVehicleInfo,
+                    >,
+                >,
+            >,
+        >,
+    >,
 }
 
 #[derive(Clone)]
@@ -165,8 +209,10 @@ impl PasqueRpc for PasqueServer {
         let start_secs = params.start_time_ms / 1000;
         let end_secs = params.end_time_ms / 1000;
         let now_utc = Utc::now();
-        let seek_back = chrono::TimeDelta::new((now_utc.timestamp() - start_secs).max(0), 0).unwrap();
-        let seek_forward = chrono::TimeDelta::new((end_secs - now_utc.timestamp()).max(0), 0).unwrap();
+        let seek_back =
+            chrono::TimeDelta::new((now_utc.timestamp() - start_secs).max(0), 0).unwrap();
+        let seek_forward =
+            chrono::TimeDelta::new((end_secs - now_utc.timestamp()).max(0), 0).unwrap();
 
         let tolerance_meters = match params.zoom {
             z if z <= 5 => 2000.0,
@@ -212,13 +258,22 @@ impl PasqueRpc for PasqueServer {
                             let mut max_x = f64::MIN;
                             let mut max_y = f64::MIN;
                             for p in &shape.linestring.points {
-                                if p.x < min_x { min_x = p.x; }
-                                if p.x > max_x { max_x = p.x; }
-                                if p.y < min_y { min_y = p.y; }
-                                if p.y > max_y { max_y = p.y; }
+                                if p.x < min_x {
+                                    min_x = p.x;
+                                }
+                                if p.x > max_x {
+                                    max_x = p.x;
+                                }
+                                if p.y < min_y {
+                                    min_y = p.y;
+                                }
+                                if p.y > max_y {
+                                    max_y = p.y;
+                                }
                             }
                             let diagonal = if min_x <= max_x {
-                                ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt() * 111_111.0
+                                ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt()
+                                    * 111_111.0
                             } else {
                                 0.0
                             };
@@ -253,11 +308,17 @@ impl PasqueRpc for PasqueServer {
                 }
 
                 let mut geo_linestring = geo::LineString::new(
-                    shape.linestring.points.iter().map(|p| coord! { x: p.x, y: p.y }).collect()
+                    shape
+                        .linestring
+                        .points
+                        .iter()
+                        .map(|p| coord! { x: p.x, y: p.y })
+                        .collect(),
                 );
                 geo_linestring = geo_linestring.simplify(tolerance_deg);
 
-                let shape_coords: Vec<(f64, f64)> = geo_linestring.points().map(|p| (p.x(), p.y())).collect();
+                let shape_coords: Vec<(f64, f64)> =
+                    geo_linestring.points().map(|p| (p.x(), p.y())).collect();
                 if shape_coords.len() < 2 {
                     continue;
                 }
@@ -313,7 +374,8 @@ impl PasqueRpc for PasqueServer {
                     let freq_converted = frequency.map(|x| protobuf_to_frequencies(&x));
 
                     let first_row = &itin_rows[0];
-                    let first_offset = first_row.departure_time_since_start
+                    let first_offset = first_row
+                        .departure_time_since_start
                         .or(first_row.arrival_time_since_start)
                         .or(first_row.interpolated_time_since_start)
                         .unwrap_or(0);
@@ -322,7 +384,11 @@ impl PasqueRpc for PasqueServer {
                         trip_id: trip.trip_id.clone(),
                         chateau: chateau.clone(),
                         timezone: tz,
-                        time_since_start_of_service_date: chrono::TimeDelta::new(first_offset.into(), 0).unwrap(),
+                        time_since_start_of_service_date: chrono::TimeDelta::new(
+                            first_offset.into(),
+                            0,
+                        )
+                        .unwrap(),
                         frequency: freq_converted.clone(),
                         itinerary_id: trip.itinerary_pattern_id.clone(),
                         direction_id: meta.direction_pattern_id.clone().unwrap_or_default(),
@@ -346,7 +412,8 @@ impl PasqueRpc for PasqueServer {
                                 stops_have_coords = false;
                                 break;
                             }
-                            let departure_offset = row.departure_time_since_start
+                            let departure_offset = row
+                                .departure_time_since_start
                                 .or(row.interpolated_time_since_start)
                                 .unwrap_or(0);
                             max_offset = max_offset.max(departure_offset);
@@ -359,7 +426,10 @@ impl PasqueRpc for PasqueServer {
                         let trip_end_timestamp = start_of_trip_timestamp + max_offset as i64;
 
                         if start_of_trip_timestamp <= end_secs && trip_end_timestamp >= start_secs {
-                            let geojson_coordinates: Vec<Vec<f64>> = shape_coords.iter().map(|&(lon, lat)| vec![lon, lat]).collect();
+                            let geojson_coordinates: Vec<Vec<f64>> = shape_coords
+                                .iter()
+                                .map(|&(lon, lat)| vec![lon, lat])
+                                .collect();
 
                             let route_type_str = match route.route_type {
                                 0 => "tram",
@@ -372,11 +442,14 @@ impl PasqueRpc for PasqueServer {
                                 7 => "funicular",
                                 11 => "trolleybus",
                                 12 => "monorail",
-                                _ => "other"
+                                _ => "other",
                             };
 
                             let unique_trip_id = format!("{}_{}", chateau, trip.trip_id);
-                            let display_name = route.short_name.clone().unwrap_or_else(|| route.route_id.clone());
+                            let display_name = route
+                                .short_name
+                                .clone()
+                                .unwrap_or_else(|| route.route_id.clone());
 
                             let mut distance_meters = 0.0;
                             for i in 1..shape_coords.len() {
@@ -388,27 +461,43 @@ impl PasqueRpc for PasqueServer {
                             let first_itin = &itin_rows[0];
                             let last_itin = &itin_rows[itin_rows.len() - 1];
 
-                            let (from_coords, from_name, from_track) = snapshot.stops.get(first_itin.stop_id.as_str())
-                                .map(|&(x, y, ref name, ref plat)| ((x, y), name.clone(), plat.clone()))
+                            let (from_coords, from_name, from_track) = snapshot
+                                .stops
+                                .get(first_itin.stop_id.as_str())
+                                .map(|&(x, y, ref name, ref plat)| {
+                                    ((x, y), name.clone(), plat.clone())
+                                })
                                 .unwrap_or(((0.0, 0.0), "".to_string(), "".to_string()));
 
-                            let (to_coords, to_name, to_track) = snapshot.stops.get(last_itin.stop_id.as_str())
-                                .map(|&(x, y, ref name, ref plat)| ((x, y), name.clone(), plat.clone()))
+                            let (to_coords, to_name, to_track) = snapshot
+                                .stops
+                                .get(last_itin.stop_id.as_str())
+                                .map(|&(x, y, ref name, ref plat)| {
+                                    ((x, y), name.clone(), plat.clone())
+                                })
                                 .unwrap_or(((0.0, 0.0), "".to_string(), "".to_string()));
 
-                            let departure_offset = first_itin.departure_time_since_start
+                            let departure_offset = first_itin
+                                .departure_time_since_start
                                 .or(first_itin.interpolated_time_since_start)
                                 .unwrap_or(0);
-                            let arrival_offset = last_itin.arrival_time_since_start
+                            let arrival_offset = last_itin
+                                .arrival_time_since_start
                                 .or(last_itin.interpolated_time_since_start)
                                 .unwrap_or(0);
 
-                            let departure_str = chrono::DateTime::from_timestamp(start_of_trip_timestamp + departure_offset as i64, 0)
-                                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-                                .unwrap_or_default();
-                            let arrival_str = chrono::DateTime::from_timestamp(start_of_trip_timestamp + arrival_offset as i64, 0)
-                                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-                                .unwrap_or_default();
+                            let departure_str = chrono::DateTime::from_timestamp(
+                                start_of_trip_timestamp + departure_offset as i64,
+                                0,
+                            )
+                            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                            .unwrap_or_default();
+                            let arrival_str = chrono::DateTime::from_timestamp(
+                                start_of_trip_timestamp + arrival_offset as i64,
+                                0,
+                            )
+                            .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                            .unwrap_or_default();
 
                             let from_json = serde_json::json!({
                                 "name": from_name,
@@ -498,7 +587,10 @@ async fn load_static_snapshot(
     chateau: &str,
     pool: &CatenaryPostgresPool,
 ) -> Result<ChateauSnapshot, String> {
-    let mut conn = pool.get().await.map_err(|e| format!("DB connection error: {:?}", e))?;
+    let mut conn = pool
+        .get()
+        .await
+        .map_err(|e| format!("DB connection error: {:?}", e))?;
 
     let routes_raw: Vec<catenary::models::Route> = catenary::schema::gtfs::routes::dsl::routes
         .filter(catenary::schema::gtfs::routes::chateau.eq(chateau))
@@ -506,7 +598,7 @@ async fn load_static_snapshot(
         .load(&mut conn)
         .await
         .map_err(|e| format!("Failed to load routes: {:?}", e))?;
-    
+
     let mut routes = HashMap::new();
     for r in routes_raw {
         routes.insert(r.route_id.clone(), r);
@@ -525,33 +617,40 @@ async fn load_static_snapshot(
         shapes.insert(s.shape_id.clone(), s);
     }
 
-    let trips: Vec<catenary::models::CompressedTrip> = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-        .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau))
-        .select(catenary::models::CompressedTrip::as_select())
-        .load(&mut conn)
-        .await
-        .map_err(|e| format!("Failed to load trips: {:?}", e))?;
+    let trips: Vec<catenary::models::CompressedTrip> =
+        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau))
+            .select(catenary::models::CompressedTrip::as_select())
+            .load(&mut conn)
+            .await
+            .map_err(|e| format!("Failed to load trips: {:?}", e))?;
 
-    let itins_raw: Vec<catenary::models::ItineraryPatternRow> = catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-        .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau))
-        .select(catenary::models::ItineraryPatternRow::as_select())
-        .load(&mut conn)
-        .await
-        .map_err(|e| format!("Failed to load itinerary patterns: {:?}", e))?;
+    let itins_raw: Vec<catenary::models::ItineraryPatternRow> =
+        catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+            .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau))
+            .select(catenary::models::ItineraryPatternRow::as_select())
+            .load(&mut conn)
+            .await
+            .map_err(|e| format!("Failed to load itinerary patterns: {:?}", e))?;
 
-    let mut itineraries: HashMap<String, Vec<catenary::models::ItineraryPatternRow>> = HashMap::new();
+    let mut itineraries: HashMap<String, Vec<catenary::models::ItineraryPatternRow>> =
+        HashMap::new();
     let mut stop_ids = HashSet::new();
     for row in itins_raw {
         stop_ids.insert(row.stop_id.to_string());
-        itineraries.entry(row.itinerary_pattern_id.clone()).or_default().push(row);
+        itineraries
+            .entry(row.itinerary_pattern_id.clone())
+            .or_default()
+            .push(row);
     }
 
-    let itin_meta_raw: Vec<catenary::models::ItineraryPatternMeta> = catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-        .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau))
-        .select(catenary::models::ItineraryPatternMeta::as_select())
-        .load(&mut conn)
-        .await
-        .map_err(|e| format!("Failed to load itinerary pattern metas: {:?}", e))?;
+    let itin_meta_raw: Vec<catenary::models::ItineraryPatternMeta> =
+        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau))
+            .select(catenary::models::ItineraryPatternMeta::as_select())
+            .load(&mut conn)
+            .await
+            .map_err(|e| format!("Failed to load itinerary pattern metas: {:?}", e))?;
 
     let mut itin_meta = HashMap::new();
     for meta in itin_meta_raw {
@@ -559,7 +658,12 @@ async fn load_static_snapshot(
     }
 
     let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
-    let stops_raw: Vec<(String, Option<postgis_diesel::types::Point>, Option<String>, Option<String>)> = catenary::schema::gtfs::stops::dsl::stops
+    let stops_raw: Vec<(
+        String,
+        Option<postgis_diesel::types::Point>,
+        Option<String>,
+        Option<String>,
+    )> = catenary::schema::gtfs::stops::dsl::stops
         .filter(catenary::schema::gtfs::stops::dsl::chateau.eq(chateau))
         .filter(catenary::schema::gtfs::stops::dsl::gtfs_id.eq_any(&stop_ids_vec))
         .select((
@@ -575,7 +679,15 @@ async fn load_static_snapshot(
     let mut stops = HashMap::new();
     for (sid, pt_opt, name_opt, plat_opt) in stops_raw {
         if let Some(pt) = pt_opt {
-            stops.insert(sid, (pt.x, pt.y, name_opt.unwrap_or_default(), plat_opt.unwrap_or_default()));
+            stops.insert(
+                sid,
+                (
+                    pt.x,
+                    pt.y,
+                    name_opt.unwrap_or_default(),
+                    plat_opt.unwrap_or_default(),
+                ),
+            );
         }
     }
 
@@ -586,35 +698,48 @@ async fn load_static_snapshot(
         .await
         .unwrap_or_default();
 
-    let calendar_dates: Vec<catenary::models::CalendarDate> = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-        .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau))
-        .select(catenary::models::CalendarDate::as_select())
-        .load(&mut conn)
-        .await
-        .unwrap_or_default();
+    let calendar_dates: Vec<catenary::models::CalendarDate> =
+        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+            .filter(catenary::schema::gtfs::calendar_dates::chateau.eq(chateau))
+            .select(catenary::models::CalendarDate::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default();
 
-    let calendar_struct = catenary::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates]).unwrap_or_default();
+    let calendar_struct =
+        catenary::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates])
+            .unwrap_or_default();
     let service_map = calendar_struct.get(chateau).cloned().unwrap_or_default();
 
     let mut static_index = HashMap::new();
-    let mut shapes_by_type: HashMap<i16, Vec<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, String>>> = HashMap::new();
+    let mut shapes_by_type: HashMap<
+        i16,
+        Vec<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, String>>,
+    > = HashMap::new();
     for shape in shapes.values() {
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
         let mut max_x = f64::MIN;
         let mut max_y = f64::MIN;
         for p in &shape.linestring.points {
-            if p.x < min_x { min_x = p.x; }
-            if p.x > max_x { max_x = p.x; }
-            if p.y < min_y { min_y = p.y; }
-            if p.y > max_y { max_y = p.y; }
+            if p.x < min_x {
+                min_x = p.x;
+            }
+            if p.x > max_x {
+                max_x = p.x;
+            }
+            if p.y < min_y {
+                min_y = p.y;
+            }
+            if p.y > max_y {
+                max_y = p.y;
+            }
         }
         if min_x <= max_x && min_y <= max_y {
             let rect = rstar::primitives::Rectangle::from_corners([min_x, min_y], [max_x, max_y]);
-            shapes_by_type
-                .entry(shape.route_type)
-                .or_default()
-                .push(rstar::primitives::GeomWithData::new(rect, shape.shape_id.clone()));
+            shapes_by_type.entry(shape.route_type).or_default().push(
+                rstar::primitives::GeomWithData::new(rect, shape.shape_id.clone()),
+            );
         }
     }
     for (route_type, geom_items) in shapes_by_type {
@@ -641,12 +766,20 @@ async fn get_aspen_socket(
     etcd_opts: &Option<etcd_client::ConnectOptions>,
     etcd_reuser: &tokio::sync::RwLock<Option<etcd_client::Client>>,
 ) -> Option<std::net::SocketAddr> {
-    let mut etcd = catenary::get_etcd_client(etcd_ips, etcd_opts, etcd_reuser).await.ok()?;
-    let resp = etcd.get(format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(), None).await.ok()?;
+    let mut etcd = catenary::get_etcd_client(etcd_ips, etcd_opts, etcd_reuser)
+        .await
+        .ok()?;
+    let resp = etcd
+        .get(
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+            None,
+        )
+        .await
+        .ok()?;
     if !resp.kvs().is_empty() {
-        if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
-            resp.kvs().first().unwrap().value(),
-        ) {
+        if let Ok(assigned_chateau_data) =
+            bincode_deserialize::<ChateauMetadataEtcd>(resp.kvs().first().unwrap().value())
+        {
             return Some(assigned_chateau_data.socket);
         }
     }
@@ -660,20 +793,40 @@ async fn update_realtime_for_chateau(
     etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     aspen_manager: Arc<AspenClientManager>,
 ) {
-    if let Some(socket) = get_aspen_socket(&snapshot.chateau_id, &etcd_ips, &etcd_opts, &etcd_reuser).await {
+    if let Some(socket) =
+        get_aspen_socket(&snapshot.chateau_id, &etcd_ips, &etcd_opts, &etcd_reuser).await
+    {
         if let Some(mut client) = aspen_manager.get_client(socket.clone()).await {
             if let Ok(Ok(Some(rt_data))) = tokio::time::timeout(
                 Duration::from_secs(2),
-                client.get_vehicle_locations(tarpc::context::current(), snapshot.chateau_id.clone(), None, None)
-            ).await {
-                let mut vehicles_by_type: HashMap<i16, Vec<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, RealtimeVehicleInfo>>> = HashMap::new();
+                client.get_vehicle_locations(
+                    tarpc::context::current(),
+                    snapshot.chateau_id.clone(),
+                    None,
+                    None,
+                ),
+            )
+            .await
+            {
+                let mut vehicles_by_type: HashMap<
+                    i16,
+                    Vec<
+                        rstar::primitives::GeomWithData<
+                            rstar::primitives::Rectangle<[f64; 2]>,
+                            RealtimeVehicleInfo,
+                        >,
+                    >,
+                > = HashMap::new();
                 for (vehicle_id, vehicle_pos) in rt_data.vehicle_positions {
                     if let Some(pos) = &vehicle_pos.position {
                         let lon = pos.longitude as f64;
                         let lat = pos.latitude as f64;
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                let rect = rstar::primitives::Rectangle::from_corners([lon, lat], [lon, lat]);
+                                let rect = rstar::primitives::Rectangle::from_corners(
+                                    [lon, lat],
+                                    [lon, lat],
+                                );
                                 let info = RealtimeVehicleInfo {
                                     route_id: route_id.clone(),
                                     vehicle_id: vehicle_id.clone(),
@@ -696,19 +849,39 @@ async fn update_realtime_for_chateau(
                 *rt_lock = new_realtime_index;
             }
         } else if let Ok(new_client) = spawn_aspen_client_from_ip(&socket).await {
-            aspen_manager.insert_client(socket.clone(), new_client.clone()).await;
+            aspen_manager
+                .insert_client(socket.clone(), new_client.clone())
+                .await;
             if let Ok(Ok(Some(rt_data))) = tokio::time::timeout(
                 Duration::from_secs(2),
-                new_client.get_vehicle_locations(tarpc::context::current(), snapshot.chateau_id.clone(), None, None)
-            ).await {
-                let mut vehicles_by_type: HashMap<i16, Vec<rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, RealtimeVehicleInfo>>> = HashMap::new();
+                new_client.get_vehicle_locations(
+                    tarpc::context::current(),
+                    snapshot.chateau_id.clone(),
+                    None,
+                    None,
+                ),
+            )
+            .await
+            {
+                let mut vehicles_by_type: HashMap<
+                    i16,
+                    Vec<
+                        rstar::primitives::GeomWithData<
+                            rstar::primitives::Rectangle<[f64; 2]>,
+                            RealtimeVehicleInfo,
+                        >,
+                    >,
+                > = HashMap::new();
                 for (vehicle_id, vehicle_pos) in rt_data.vehicle_positions {
                     if let Some(pos) = &vehicle_pos.position {
                         let lon = pos.longitude as f64;
                         let lat = pos.latitude as f64;
                         if let Some(trip) = &vehicle_pos.trip {
                             if let Some(route_id) = &trip.route_id {
-                                let rect = rstar::primitives::Rectangle::from_corners([lon, lat], [lon, lat]);
+                                let rect = rstar::primitives::Rectangle::from_corners(
+                                    [lon, lat],
+                                    [lon, lat],
+                                );
                                 let info = RealtimeVehicleInfo {
                                     route_id: route_id.clone(),
                                     vehicle_id: vehicle_id.clone(),
@@ -746,16 +919,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     println!("Initializing Pasque Timetable & Spatial Index Server...");
-    
+
     let pool = Arc::new(make_async_pool().await?);
     let catenary_config = catenary::catenaryconfig::config();
 
     let etcd_urls_original = std::env::var("ETCD_URLS")
         .ok()
-        .or_else(|| catenary_config.spruce.etcd_urls.as_ref().map(|urls| urls.join(",")))
-        .or_else(|| catenary_config.aspen.etcd_urls.as_ref().map(|urls| urls.join(",")))
+        .or_else(|| {
+            catenary_config
+                .spruce
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
+        .or_else(|| {
+            catenary_config
+                .aspen
+                .etcd_urls
+                .as_ref()
+                .map(|urls| urls.join(","))
+        })
         .unwrap_or_else(|| "localhost:2379".to_string());
-    
+
     let etcd_urls_vec: Vec<String> = etcd_urls_original
         .split(',')
         .map(|x| x.to_string())
@@ -805,18 +990,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .into_iter()
         .filter(|ch| {
             if is_banned_chateau(&ch.chateau) {
-                println!("Skipping banned chateau before static index load: {}", ch.chateau);
+                println!(
+                    "Skipping banned chateau before static index load: {}",
+                    ch.chateau
+                );
                 return false;
             }
             if !chateau_overlaps_europe(ch) {
-                println!("Skipping out-of-scope chateau before static index load: {}", ch.chateau);
+                println!(
+                    "Skipping out-of-scope chateau before static index load: {}",
+                    ch.chateau
+                );
                 return false;
             }
             true
         })
         .collect();
 
-    println!("Loading timetables for {} filtered chateaux...", filtered_chateaux.len());
+    println!(
+        "Loading timetables for {} filtered chateaux...",
+        filtered_chateaux.len()
+    );
     let mut tasks = Vec::new();
     for ch in filtered_chateaux {
         let pool_inner = pool_clone.clone();
@@ -840,8 +1034,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     }
 
     let total_shapes: usize = loaded_snapshots.values().map(|s| s.shapes.len()).sum();
-    println!("Static indexing complete. Indexed {} chateaux, {} total shapes.", loaded_snapshots.len(), total_shapes);
-    
+    println!(
+        "Static indexing complete. Indexed {} chateaux, {} total shapes.",
+        loaded_snapshots.len(),
+        total_shapes
+    );
+
     {
         let mut write_lock = snapshots.write().await;
         *write_lock = loaded_snapshots;
@@ -883,7 +1081,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             let chateaux_res = {
                 if let Ok(mut conn) = pool_static.get().await {
                     use catenary::schema::gtfs::chateaus::dsl::*;
-                    chateaus.select(catenary::models::Chateau::as_select()).load(&mut conn).await
+                    chateaus
+                        .select(catenary::models::Chateau::as_select())
+                        .load(&mut conn)
+                        .await
                 } else {
                     continue;
                 }

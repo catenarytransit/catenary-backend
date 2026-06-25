@@ -498,13 +498,15 @@ impl TripWebSocket {
     }
 
     fn trigger_trajectory_update(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        let Some(client_params) = self.trajectory_subscription.clone() else { return; };
+        let Some(client_params) = self.trajectory_subscription.clone() else {
+            return;
+        };
         let pool = self.pool.clone();
         let etcd_ips = self.etcd_connection_ips.clone();
         let etcd_opts = self.etcd_connection_options.clone();
         let manager = self.aspen_client_manager.clone();
         let etcd_reuser = self.etcd_reuser.clone();
-        
+
         let now_ms = chrono::Utc::now().timestamp_millis();
         let look_ahead_ms = 90000;
         let latency_buffer_ms = 15000;
@@ -522,20 +524,17 @@ impl TripWebSocket {
         };
 
         let fut = async move {
-            trajectories::get_trajectories(
-                pool,
-                etcd_ips,
-                etcd_opts,
-                manager,
-                etcd_reuser,
-                params,
-            ).await
+            trajectories::get_trajectories(pool, etcd_ips, etcd_opts, manager, etcd_reuser, params)
+                .await
         };
 
         let fut = actix::fut::wrap_future(fut).map(
             |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| match result {
                 Ok(trajectories) => {
-                    let client_ref = act.trajectory_subscription.as_ref().map_or("".to_string(), |s| s.client_reference.clone());
+                    let client_ref = act
+                        .trajectory_subscription
+                        .as_ref()
+                        .map_or("".to_string(), |s| s.client_reference.clone());
                     let msg = ServerMessage::Buffer {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         client_reference: client_ref,
@@ -549,7 +548,7 @@ impl TripWebSocket {
                 Err(err) => {
                     eprintln!("Error fetching trajectories: {}", err);
                 }
-            }
+            },
         );
         ctx.spawn(fut);
     }

@@ -428,7 +428,10 @@ pub async fn fetch_trip_rt_update(
                             .stop_time_update
                             .iter()
                             .map(|stop_time_update| StopTimeRefresh {
-                                stop_id: stop_time_update.stop_id.clone(),
+                                stop_id: stop_time_update
+                                    .stop_id
+                                    .clone()
+                                    .map(|x| x.to_string().into()),
                                 rt_arrival: stop_time_update.arrival.clone(),
                                 rt_departure: stop_time_update.departure.clone(),
                                 schedule_relationship: stop_time_update
@@ -646,8 +649,7 @@ pub async fn fetch_trip_information(
                     let stop_ids_to_lookup: Vec<String> = trip
                         .stop_time_update
                         .iter()
-                        .map(|y| y.stop_id.clone())
-                        .map(|x| x.map(|x| x.as_str().into()))
+                        .map(|y| y.stop_id.as_ref().map(|x| x.to_string()))
                         .flatten()
                         .collect::<Vec<_>>();
 
@@ -705,7 +707,10 @@ pub async fn fetch_trip_information(
                         .filter(|x| x.stop_id.is_some())
                         .enumerate()
                         .map(|(i, stu)| {
-                            let stop = stops_hashmap.get((&stu.stop_id).as_ref().unwrap().as_str());
+                            let stop = stu
+                                .stop_id
+                                .as_deref()
+                                .and_then(|sid| stops_hashmap.get(sid));
 
                             StopTimeIntroduction {
                                 stop_id: stu
