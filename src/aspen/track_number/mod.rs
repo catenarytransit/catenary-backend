@@ -5,6 +5,7 @@ use std::collections::HashMap;
 pub mod lirr_mnr;
 pub mod metrolinx_platforms;
 pub mod nyct_subway;
+pub mod sncf_siri;
 pub mod viarail;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -24,6 +25,7 @@ pub enum TrackData {
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     NyctSubway(Option<nyct_subway::NyctSubwayTrackData>),
+    Sncf(Option<sncf_siri::SncfTrackData>),
     None,
 }
 
@@ -289,6 +291,26 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             lirr_mnr::fetch_lirr_mnr_track_data(chateau_id, pool).await,
         ),
         "nyct" => TrackData::NyctSubway(nyct_subway::fetch_nyct_subway_track_data().await),
+        "sncf" => {
+            let url =
+                "https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable";
+            match reqwest::get(url).await {
+                Ok(r) => match r.text().await {
+                    Ok(body) => {
+                        let parsed = sncf_siri::parse_sncf_siri(&body);
+                        TrackData::Sncf(Some(parsed))
+                    }
+                    Err(e) => {
+                        println!("Error reading SNCF Siri data: {}", e);
+                        TrackData::Sncf(None)
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching SNCF Siri data: {}", e);
+                    TrackData::Sncf(None)
+                }
+            }
+        }
         _ => TrackData::None,
     }
 }

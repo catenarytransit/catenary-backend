@@ -309,14 +309,23 @@ pub async fn gtfs_process_feed(
 
             writeln!(file, "37200,Tampoi,1.515891,103.741847")?;
         }
-        "f-gtfs~de" | "f-gtfs~de~bayern" | 
-        "f-gtfs~de~berlin" | "f-gtfs~de~brandenburg" |
-        "f-gtfs~de~bremen" |"f-gtfs~de~hamburg" | 
-        "f-gtfs~de~hessen" | "f-gtfs~de~mecklenburg~vorpommern" |
-        "f-gtfs~de~baden~württemberg" |
-        "f-gtfs~de~niedersachsen" | "f-gtfs~de~nordrhein~westfalen" |
-        "f-gtfs~de~rheinland~pfalz" | "f-gtfs~de~saarland" | "f-gtfs~de~sachsen~anhalt" |
-        "f-gtfs~de~schleswig~holstein" | "f-gtfs~de~thüringen" | "f-gtfs~de~deutsche~bahn" => {
+        "f-gtfs~de"
+        | "f-gtfs~de~bayern"
+        | "f-gtfs~de~berlin"
+        | "f-gtfs~de~brandenburg"
+        | "f-gtfs~de~bremen"
+        | "f-gtfs~de~hamburg"
+        | "f-gtfs~de~hessen"
+        | "f-gtfs~de~mecklenburg~vorpommern"
+        | "f-gtfs~de~baden~württemberg"
+        | "f-gtfs~de~niedersachsen"
+        | "f-gtfs~de~nordrhein~westfalen"
+        | "f-gtfs~de~rheinland~pfalz"
+        | "f-gtfs~de~saarland"
+        | "f-gtfs~de~sachsen~anhalt"
+        | "f-gtfs~de~schleswig~holstein"
+        | "f-gtfs~de~thüringen"
+        | "f-gtfs~de~deutsche~bahn" => {
             // Remove banned agencies (duplicates from other feeds) before processing
             crate::raw_file_agency_remover::remove_banned_agencies(
                 path.as_str(),

@@ -2341,6 +2341,38 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
+                                "sncf" => {
+                                    if let TrackData::Sncf(Some(sncf_data)) = &fetched_track_data {
+                                        if let Some(trip) = compressed_trip {
+                                            if let Some(trip_short_name) = &trip.trip_short_name {
+                                                if let Some(stop_id) = &stu.stop_id {
+                                                    let normalized_trip = crate::track_number::sncf_siri::normalize_train_num(trip_short_name);
+                                                    if let Some(train_data) =
+                                                        sncf_data.track_lookup.get(&normalized_trip)
+                                                    {
+                                                        if let Some(code) = crate::track_number::sncf_siri::extract_station_code(stop_id.as_ref()) {
+                                                            if let Some(track) = train_data.get(&code) {
+                                                                let platform_name = track.departure_platform
+                                                                    .clone()
+                                                                    .or_else(|| track.arrival_platform.clone());
+                                                                
+                                                                if let Some(platform_val) = platform_name {
+                                                                    platform_resp = Some(platform_val.clone().into());
+                                                                    platform = Some(catenary::formation_v1::AspenisedPlatformInfo {
+                                                                        aimed: None,
+                                                                        expected: Some(platform_val.into()),
+                                                                        platform_sectors: None,
+                                                                        is_changed: false,
+                                                                    });
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 "metro~northrailroad" => {
                                     if let TrackData::MetroNorthRailroad(Some(mnr_data)) =
                                         &fetched_track_data
