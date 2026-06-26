@@ -309,7 +309,13 @@ pub async fn gtfs_process_feed(
 
             writeln!(file, "37200,Tampoi,1.515891,103.741847")?;
         }
-        "f-gtfs~de" => {
+        "f-gtfs~de" | "f-gtfs~de~bayern" | 
+        "f-gtfs~de~berlin" | "f-gtfs~de~brandenburg" |
+        "f-gtfs~de~bremen" |"f-gtfs~de~hamburg" | 
+        "f-gtfs~de~hessen" | "f-gtfs~de~mecklenburg~vorpommern" |
+        "f-gtfs~de~niedersachsen" | "f-gtfs~de~nordrhein~westfalen" |
+        "f-gtfs~de~rheinland~pfalz" | "f-gtfs~de~saarland" | "f-gtfs~de~sachsen~anhalt" |
+        "f-gtfs~de~schleswig~holstein" | "f-gtfs~de~thüringen" | "f-gtfs~de~deutsche~bahn" => {
             // Remove banned agencies (duplicates from other feeds) before processing
             crate::raw_file_agency_remover::remove_banned_agencies(
                 path.as_str(),
@@ -321,9 +327,9 @@ pub async fn gtfs_process_feed(
                     "FlixTrain-de",
                     "SBB",
                     // f-münchner~verkehrsgesellschaft~mvg
-                    "U-Bahn München",
-                    "Stadtwerke München",
-                    "Straßenbahn München",
+                    //"U-Bahn München",
+                    //"Stadtwerke München",
+                    //"Straßenbahn München",
                     "Österreichische Bundesbahnen",
                     "ÖBB",
                     "Berliner Verkehrsbetriebe",
@@ -771,19 +777,6 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    if feed_id == "f-gtfs~de" {
-        return crate::large_gtfs_insertion::gtfs_process_large_feed(
-            gtfs_unzipped_path,
-            feed_id,
-            arc_conn_pool,
-            chateau_id,
-            attempt_id,
-            this_download_data,
-            elasticclient,
-        )
-        .await;
-    }
-
     println!("starting GTFS read for feed {}", feed_id);
 
     let gtfs = gtfs_structures::GtfsReader::default()
@@ -1163,7 +1156,7 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
-        "f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
+        //"f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
         "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
         "f-bus~dft~gov~uk~england" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,

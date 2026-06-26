@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
     let to_delete_agencies = [
         "Flixbus",
-        "Stadtwerke München",
+        //"Stadtwerke München",
         "Berliner Verkehrsbetriebe",
         "Karlsruher Verkehrsverbund",
         "Hamburger Verkehrsverbund",
@@ -22,7 +22,7 @@ pub fn gtfs_de_cleanup(gtfs: Gtfs) -> Gtfs {
         "ÖBB",
         "erixx",
         "Flixtrain-de",
-        "U-Bahn München",
+        //"U-Bahn München",
         "Österreichische Bundesbahnen",
         "FlixBus-de",
         //other agencies
