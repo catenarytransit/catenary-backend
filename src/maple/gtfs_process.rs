@@ -313,6 +313,7 @@ pub async fn gtfs_process_feed(
         "f-gtfs~de~berlin" | "f-gtfs~de~brandenburg" |
         "f-gtfs~de~bremen" |"f-gtfs~de~hamburg" | 
         "f-gtfs~de~hessen" | "f-gtfs~de~mecklenburg~vorpommern" |
+        "f-gtfs~de~baden~württemberg" |
         "f-gtfs~de~niedersachsen" | "f-gtfs~de~nordrhein~westfalen" |
         "f-gtfs~de~rheinland~pfalz" | "f-gtfs~de~saarland" | "f-gtfs~de~sachsen~anhalt" |
         "f-gtfs~de~schleswig~holstein" | "f-gtfs~de~thüringen" | "f-gtfs~de~deutsche~bahn" => {
