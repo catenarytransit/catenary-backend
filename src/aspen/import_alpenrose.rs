@@ -2781,7 +2781,7 @@ pub async fn new_rt_data(
                             stop_time_update: stop_time_update,
                             timestamp: trip_update.timestamp,
                             delay: delay,
-                            trip_properties: trip_update.trip_properties.clone().map(|x| x.into()),
+                            trip_properties: trip_update.trip_properties.clone().map(|x| (*x).into()),
                             last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
                             consist,
                         };

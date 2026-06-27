@@ -43,7 +43,7 @@ pub struct CompactTripUpdate {
     pub stop_time_update: Vec<CompactStopTimeUpdate>,
     pub timestamp: Option<u64>,
     pub delay: Option<i32>,
-    pub trip_properties: Option<TripProperties>,
+    pub trip_properties: Option<Box<TripProperties>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -179,7 +179,7 @@ impl CompactTripUpdate {
                 .collect(),
             timestamp: tu.timestamp,
             delay: tu.delay,
-            trip_properties: tu.trip_properties,
+            trip_properties: tu.trip_properties.map(Box::new),
         }
     }
 
@@ -194,7 +194,7 @@ impl CompactTripUpdate {
                 .collect(),
             timestamp: self.timestamp,
             delay: self.delay,
-            trip_properties: self.trip_properties.clone(),
+            trip_properties: self.trip_properties.as_ref().map(|b| (**b).clone()),
         }
     }
 }
