@@ -967,6 +967,20 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-u09-île~de~france~mobilités" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                //delete trip_headsign that are "RATP"
+                if let Some(trip_headsign) = trip.trip_headsign.as_deref() {
+                    if trip_headsign == "RATP" {
+                        trip.trip_headsign = None;
+                    }
+                }
+            }
+
+            gtfs
+        }
         "f-sf~bay~area~rg" => {
             let mut gtfs = gtfs;
 
