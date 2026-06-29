@@ -772,64 +772,6 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
 
-        // matches missing foothill transit trip ids like t474-b283A-sl7-XX-XX where XX-XX is the section that could be changed
-        // and maps them onto the scheduled trip metadata from Postgres.
-        if chateau_id == "foothilltransit" {
-            let missing_ft_trip_ids = trip_ids_to_lookup
-                .iter()
-                .filter(|x| !trip_id_to_trip.contains_key(x.as_str()))
-                .cloned()
-                .collect::<Vec<String>>();
-
-            println!(
-                "Missing foothill transit trip ids count: {:?}",
-                missing_ft_trip_ids.len()
-            );
-
-            let mut fixed_id_count: usize = 0;
-
-            if !missing_ft_trip_ids.is_empty() {
-                if let Ok(all_ft_trips) =
-                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                        .filter(
-                            catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id),
-                        )
-                        .load::<catenary::models::CompressedTrip>(conn)
-                        .await
-                {
-                    let mut prefix_map = AHashMap::new();
-                    for trip in all_ft_trips {
-                        let parts: Vec<&str> = trip.trip_id.split('-').collect();
-                        if parts.len() >= 3 {
-                            let prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
-                            prefix_map.insert(prefix, trip);
-                        }
-                    }
-
-                    for missing_id in missing_ft_trip_ids {
-                        let parts: Vec<&str> = missing_id.split('-').collect();
-                        if parts.len() >= 3 {
-                            let prefix = format!("{}-{}-{}", parts[0], parts[1], parts[2]);
-                            if let Some(matched_trip) = prefix_map.get(&prefix) {
-                                // Keep the canonical trip_id from the database, but index the
-                                // metadata under the realtime trip_id so downstream lookups by
-                                // realtime ID can still resolve schedule data.
-                                let cloned_trip = matched_trip.clone();
-                                trip_id_to_trip.insert(missing_id.clone(), cloned_trip);
-
-                                fixed_id_count = fixed_id_count + 1;
-                            }
-                        }
-                    }
-                }
-
-                println!(
-                    "Fixed {} foothill transit trip ids via pattern matching",
-                    fixed_id_count
-                );
-            }
-        }
-
         let mut nyct_rt_trip_id_to_static_trip_ids: AHashMap<String, Vec<String>> = AHashMap::new();
 
         if chateau_id == "nyct" {
