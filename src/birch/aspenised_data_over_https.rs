@@ -1154,3 +1154,78 @@ async fn fetch_full_trip_updates_dataset(
         }
     }
 }
+
+#[actix_web::get("/get_all_trajectories")]
+pub async fn get_all_trajectories(
+    req: HttpRequest,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    query: web::Query<ChateauQueryOnly>,
+) -> impl Responder {
+    let chateau_id = query.into_inner().chateau;
+
+    let etcd =
+        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
+            .await;
+
+    if etcd.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Could not connect to etcd");
+    }
+
+    let mut etcd = etcd.unwrap();
+
+    let fetch_assigned_node_for_this_realtime_feed = etcd
+        .get(
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+            None,
+        )
+        .await;
+
+    let fetch_assigned_node_for_this_realtime_feed = match fetch_assigned_node_for_this_realtime_feed {
+        Ok(data) => data,
+        Err(_) => return HttpResponse::InternalServerError().body("Failed to connect to etcd"),
+    };
+    
+    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
+        return HttpResponse::NotFound().body("No assigned node found");
+    }
+
+    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
+        fetch_assigned_node_for_this_realtime_feed
+            .kvs()
+            .first()
+            .unwrap()
+            .value(),
+    )
+    .unwrap();
+
+    let aspen_client =
+        catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+    if aspen_client.is_err() {
+        return HttpResponse::InternalServerError()
+            .append_header(("Cache-Control", "no-cache"))
+            .body("Error connecting to assigned node. Failed to connect to tarpc");
+    }
+
+    let aspen_client = aspen_client.unwrap();
+
+    let full_aspen_dataset = aspen_client
+        .full_aspen_dataset(tarpc::context::current(), chateau_id)
+        .await;
+
+    match full_aspen_dataset {
+        Ok(Some(full_aspen_dataset)) => HttpResponse::Ok().body(
+            ron::ser::to_string_pretty(&full_aspen_dataset.trajectories, ron::ser::PrettyConfig::default())
+                .unwrap(),
+        ),
+        Ok(None) => HttpResponse::NotFound().body("No dataset found"),
+        Err(e) => {
+            eprintln!("Error fetching from aspen: {e}");
+            HttpResponse::InternalServerError().body("Error fetching from Aspen")
+        }
+    }
+}
