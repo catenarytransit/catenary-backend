@@ -582,6 +582,8 @@ impl TripWebSocket {
                 }
                 
                 let mut vehicles_by_tile = std::collections::BTreeMap::new();
+                let precomputed_count = precomputed.raw_vehicles.len();
+                let mut filtered_count = 0;
                 
                 if let Some((min_lon, min_lat, max_lon, max_lat)) = get_bounds_latlon(sub_params, zoom) {
                     for v in &precomputed.raw_vehicles {
@@ -589,10 +591,13 @@ impl TripWebSocket {
                             if pos.longitude >= min_lon && pos.longitude <= max_lon && pos.latitude >= min_lat && pos.latitude <= max_lat {
                                 let (x, y) = slippy_map_tiles::lat_lon_to_tile(pos.latitude, pos.longitude, zoom);
                                 vehicles_by_tile.entry(x).or_insert_with(std::collections::BTreeMap::new).entry(y).or_insert_with(std::collections::BTreeMap::new).insert(v.vehicle.as_ref().map_or("".to_string(), |x| x.id.clone().unwrap_or_default()), v.clone());
+                                filtered_count += 1;
                             }
                         }
                     }
                 }
+                
+                println!("DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.", chateau_id, cat_name, precomputed_count, filtered_count);
 
                 if replace_all && category_is_new && vehicles_by_tile.is_empty() {
                     continue;
@@ -925,7 +930,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         // Request updates for all subscribed chateaus
                         for ch in &self.subscribed_chateaus {
                             let coordinator = self.coordinator_pool.for_chateau(ch);
-                            println!("DEBUG: Sending Subscribe to coordinator for {}", ch);
+                            //println!("DEBUG: Sending Subscribe to coordinator for {}", ch);
                             coordinator.do_send(crate::map_coordinator::Subscribe {
                                 chateau_id: ch.clone(),
                                 recipient: ctx.address().recipient(),
