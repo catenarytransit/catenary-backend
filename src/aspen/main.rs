@@ -1678,42 +1678,78 @@ impl AspenRpc for AspenServer {
             }
         }
 
+        let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
+
         for traj in &aspenised_data.trajectories {
-            // Apply bounding box filter
-            if let Some(content) = traj.content.as_object() {
-                // Filter by mode
-                if let Some(mode_val) = content.get("route_type").and_then(|v| v.as_i64()) {
-                    if !route_types.contains(&(mode_val as i16)) {
-                        continue;
-                    }
-                }
+            if !route_types.contains(&(traj.route_type as i16)) {
+                continue;
+            }
 
-                if let Some(coords) = content.get("coordinates").and_then(|v| v.as_array()) {
-                    let mut in_bbox = false;
-                    for coord in coords {
-                        if let Some(c) = coord.as_array() {
-                            if c.len() >= 2 {
-                                let lon = c[0].as_f64().unwrap_or(0.0);
-                                let lat = c[1].as_f64().unwrap_or(0.0);
-                                if lon >= min_lon
-                                    && lon <= max_lon
-                                    && lat >= min_lat
-                                    && lat <= max_lat
-                                {
-                                    in_bbox = true;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if !in_bbox {
-                        continue;
-                    }
+            let mut in_bbox = false;
+            for coord in &traj.coordinates {
+                let lon = coord[0];
+                let lat = coord[1];
+                if lon >= min_lon
+                    && lon <= max_lon
+                    && lat >= min_lat
+                    && lat <= max_lat
+                {
+                    in_bbox = true;
+                    break;
                 }
             }
 
-            trajectories.push(traj.clone());
+            if !in_bbox {
+                continue;
+            }
+
+            let from_json = serde_json::json!({
+                "name": traj.from.name,
+                "stopId": traj.from.stop_id,
+                "lat": traj.from.lat,
+                "lon": traj.from.lon,
+                "track": traj.from.track,
+                "modes": traj.from.modes
+            });
+
+            let to_json = serde_json::json!({
+                "name": traj.to.name,
+                "stopId": traj.to.stop_id,
+                "lat": traj.to.lat,
+                "lon": traj.to.lon,
+                "track": traj.to.track,
+                "modes": traj.to.modes
+            });
+
+            let content_obj = serde_json::json!({
+                "trips": [
+                    {
+                        "tripId": traj.unique_trip_id,
+                        "displayName": traj.display_name
+                    }
+                ],
+                "mode": traj.mode,
+                "color": traj.color,
+                "text_color": traj.text_color,
+                "route_short_name": traj.route_short_name,
+                "route_long_name": traj.route_long_name,
+                "route_type": traj.route_type,
+                "distance": traj.distance,
+                "from": from_json,
+                "to": to_json,
+                "departure": traj.departure,
+                "arrival": traj.arrival,
+                "realTime": traj.real_time,
+                "coordinates": traj.coordinates
+            });
+
+            trajectories.push(catenary::pasque::lib::TrajectoryWrapper {
+                source: "trajectory".to_string(),
+                timestamp: current_timestamp,
+                client_reference: params.client_reference.clone(),
+                content: content_obj,
+            });
+
             if trajectories.len() >= 800 {
                 break;
             }

@@ -3234,11 +3234,6 @@ pub async fn new_rt_data(
                 distance_meters += (dx * dx + dy * dy).sqrt() * 111_111.0;
             }
 
-            let geojson_coordinates: Vec<Vec<f64>> = shape_coords
-                .iter()
-                .map(|&(lon, lat)| vec![lon, lat])
-                .collect();
-
             let first_stop = &trajectory_stops[0].0;
             let last_stop = &trajectory_stops[trajectory_stops.len() - 1].0;
 
@@ -3280,51 +3275,36 @@ pub async fn new_rt_data(
                     .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
                     .unwrap_or_default();
 
-            let from_json = serde_json::json!({
-                "name": from_name,
-                "stopId": first_stop.stop_id,
-                "lat": shape_coords[0].1,
-                "lon": shape_coords[0].0,
-                "track": first_stop.platform_string,
-                "modes": [route_type_str]
-            });
-
-            let to_json = serde_json::json!({
-                "name": to_name,
-                "stopId": last_stop.stop_id,
-                "lat": shape_coords[shape_coords.len() - 1].1,
-                "lon": shape_coords[shape_coords.len() - 1].0,
-                "track": last_stop.platform_string,
-                "modes": [route_type_str]
-            });
-
-            let content_obj = serde_json::json!({
-                "trips": [
-                    {
-                        "tripId": unique_trip_id,
-                        "displayName": display_name
-                    }
-                ],
-                "mode": route_type_str,
-                "color": route.route_colour,
-                "text_color": route.route_text_colour,
-                "route_short_name": route.route_short_name,
-                "route_long_name": route.route_long_name,
-                "route_type": route.route_type,
-                "distance": distance_meters,
-                "from": from_json,
-                "to": to_json,
-                "departure": departure_str,
-                "arrival": arrival_str,
-                "realTime": true,
-                "coordinates": geojson_coordinates
-            });
-
-            trajectories.push(catenary::pasque::lib::TrajectoryWrapper {
-                source: "trajectory".to_string(),
-                timestamp: current_timestamp,
-                client_reference: "railviz".to_string(),
-                content: content_obj,
+            trajectories.push(AspenisedTrajectory {
+                unique_trip_id,
+                display_name,
+                mode: route_type_str.to_string(),
+                color: route.route_colour.clone(),
+                text_color: route.route_text_colour.clone(),
+                route_short_name: route.route_short_name.clone(),
+                route_long_name: route.route_long_name.clone(),
+                route_type: route.route_type as i32,
+                distance: distance_meters,
+                from: AspenisedTrajectoryStop {
+                    name: from_name,
+                    stop_id: first_stop.stop_id.clone().map(|s| s.to_string()),
+                    lat: shape_coords[0].1,
+                    lon: shape_coords[0].0,
+                    track: first_stop.platform_string.clone().map(|s| s.to_string()),
+                    modes: vec![route_type_str.to_string()],
+                },
+                to: AspenisedTrajectoryStop {
+                    name: to_name,
+                    stop_id: last_stop.stop_id.clone().map(|s| s.to_string()),
+                    lat: shape_coords[shape_coords.len() - 1].1,
+                    lon: shape_coords[shape_coords.len() - 1].0,
+                    track: last_stop.platform_string.clone().map(|s| s.to_string()),
+                    modes: vec![route_type_str.to_string()],
+                },
+                departure: departure_str,
+                arrival: arrival_str,
+                real_time: true,
+                coordinates: shape_coords.into_iter().map(|(lon, lat)| [lon, lat]).collect(),
             });
         }
     }

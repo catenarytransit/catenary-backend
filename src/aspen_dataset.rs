@@ -76,7 +76,36 @@ pub struct AspenisedData {
     pub stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>>,
     pub stop_id_to_parent_id: AHashMap<CompactString, CompactString>,
     pub parent_id_to_children_ids: AHashMap<CompactString, Vec<CompactString>>,
-    pub trajectories: Vec<crate::pasque::lib::TrajectoryWrapper>,
+    pub trajectories: Vec<AspenisedTrajectory>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenisedTrajectory {
+    pub unique_trip_id: String,
+    pub display_name: String,
+    pub mode: String,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+    pub route_short_name: Option<String>,
+    pub route_long_name: Option<String>,
+    pub route_type: i32,
+    pub distance: f64,
+    pub from: AspenisedTrajectoryStop,
+    pub to: AspenisedTrajectoryStop,
+    pub departure: String,
+    pub arrival: String,
+    pub real_time: bool,
+    pub coordinates: Vec<[f64; 2]>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenisedTrajectoryStop {
+    pub name: String,
+    pub stop_id: Option<String>,
+    pub lat: f64,
+    pub lon: f64,
+    pub track: Option<String>,
+    pub modes: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
