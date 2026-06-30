@@ -1218,10 +1218,12 @@ pub async fn get_all_trajectories(
         .await;
 
     match full_aspen_dataset {
-        Ok(Some(full_aspen_dataset)) => HttpResponse::Ok().body(
-            ron::ser::to_string_pretty(&full_aspen_dataset.trajectories, ron::ser::PrettyConfig::default())
-                .unwrap(),
-        ),
+        Ok(Some(full_aspen_dataset)) => {
+            let all_trajectories: Vec<_> = full_aspen_dataset.trajectories_by_route_type.values().flat_map(|rtree| rtree.into_iter().map(|item| item.trajectory.clone())).collect();
+            HttpResponse::Ok().body(
+                ron::ser::to_string_pretty(&all_trajectories, ron::ser::PrettyConfig::default()).unwrap()
+            )
+        },
         Ok(None) => HttpResponse::NotFound().body("No dataset found"),
         Err(e) => {
             eprintln!("Error fetching from aspen: {e}");

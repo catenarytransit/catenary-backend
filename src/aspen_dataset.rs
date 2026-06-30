@@ -76,10 +76,10 @@ pub struct AspenisedData {
     pub stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>>,
     pub stop_id_to_parent_id: AHashMap<CompactString, CompactString>,
     pub parent_id_to_children_ids: AHashMap<CompactString, Vec<CompactString>>,
-    pub trajectories: Vec<AspenisedTrajectory>,
+    pub trajectories_by_route_type: AHashMap<i16, rstar::RTree<AspenisedTrajectoryBBox>>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AspenisedTrajectory {
     pub unique_trip_id: String,
     pub display_name: String,
@@ -90,15 +90,19 @@ pub struct AspenisedTrajectory {
     pub route_long_name: Option<String>,
     pub route_type: i32,
     pub distance: f64,
-    pub from: AspenisedTrajectoryStop,
-    pub to: AspenisedTrajectoryStop,
-    pub departure: String,
-    pub arrival: String,
+    pub segments: Vec<AspenisedTrajectorySegment>,
+    pub stops: Vec<AspenisedTrajectoryStop>,
     pub real_time: bool,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct AspenisedTrajectorySegment {
+    pub from_stop_index: usize,
+    pub to_stop_index: usize,
     pub coordinates: Vec<[f64; 2]>,
 }
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AspenisedTrajectoryStop {
     pub name: String,
     pub stop_id: Option<String>,
@@ -106,6 +110,28 @@ pub struct AspenisedTrajectoryStop {
     pub lon: f64,
     pub track: Option<String>,
     pub modes: Vec<String>,
+    pub arrival: String,
+    pub departure: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct AspenisedTrajectoryBBox {
+    pub trajectory: AspenisedTrajectory,
+    pub min_lon: f64,
+    pub min_lat: f64,
+    pub max_lon: f64,
+    pub max_lat: f64,
+}
+
+impl rstar::RTreeObject for AspenisedTrajectoryBBox {
+    type Envelope = rstar::AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        rstar::AABB::from_corners(
+            [self.min_lon, self.min_lat],
+            [self.max_lon, self.max_lat],
+        )
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]

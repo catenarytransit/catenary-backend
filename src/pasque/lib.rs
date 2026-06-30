@@ -23,7 +23,7 @@ pub struct TrajectoryWrapper {
 pub trait PasqueRpc {
     async fn get_trajectories(
         params: TrajectorySubscriptionParams,
-    ) -> Result<Vec<TrajectoryWrapper>, String>;
+    ) -> Result<Vec<crate::aspen_dataset::AspenisedTrajectory>, String>;
 }
 
 pub async fn spawn_pasque_client_from_ip(

@@ -191,7 +191,7 @@ pub trait AspenRpc {
     async fn get_trajectories(
         chateau_id: String,
         params: crate::pasque::lib::TrajectorySubscriptionParams,
-    ) -> Result<Vec<crate::pasque::lib::TrajectoryWrapper>, String>;
+    ) -> Result<Vec<crate::aspen_dataset::AspenisedTrajectory>, String>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -1608,7 +1608,7 @@ impl AspenRpc for AspenServer {
         _: tarpc::context::Context,
         chateau_id: String,
         params: catenary::pasque::lib::TrajectorySubscriptionParams,
-    ) -> Result<Vec<catenary::pasque::lib::TrajectoryWrapper>, String> {
+    ) -> Result<Vec<catenary::aspen_dataset::AspenisedTrajectory>, String> {
         let aspenised_data = match self.authoritative_data_store.get_async(&chateau_id).await {
             Some(data) => data,
             None => {
@@ -1626,6 +1626,7 @@ impl AspenRpc for AspenServer {
         let min_lat = params.bbox[1];
         let max_lon = params.bbox[2];
         let max_lat = params.bbox[3];
+        let search_envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
         let mut route_types: std::collections::HashSet<i16> = std::collections::HashSet::new();
         for mode in &params.modes {
@@ -1678,78 +1679,16 @@ impl AspenRpc for AspenServer {
             }
         }
 
-        let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
-
-        for traj in &aspenised_data.trajectories {
-            if !route_types.contains(&(traj.route_type as i16)) {
-                continue;
-            }
-
-            let mut in_bbox = false;
-            for coord in &traj.coordinates {
-                let lon = coord[0];
-                let lat = coord[1];
-                if lon >= min_lon
-                    && lon <= max_lon
-                    && lat >= min_lat
-                    && lat <= max_lat
-                {
-                    in_bbox = true;
-                    break;
+        for (route_type, rtree) in &aspenised_data.trajectories_by_route_type {
+            if route_types.contains(route_type) {
+                let iter = rtree.locate_in_envelope_intersecting(&search_envelope);
+                for bbox_item in iter {
+                    trajectories.push(bbox_item.trajectory.clone());
+                    if trajectories.len() >= 800 {
+                        break;
+                    }
                 }
             }
-
-            if !in_bbox {
-                continue;
-            }
-
-            let from_json = serde_json::json!({
-                "name": traj.from.name,
-                "stopId": traj.from.stop_id,
-                "lat": traj.from.lat,
-                "lon": traj.from.lon,
-                "track": traj.from.track,
-                "modes": traj.from.modes
-            });
-
-            let to_json = serde_json::json!({
-                "name": traj.to.name,
-                "stopId": traj.to.stop_id,
-                "lat": traj.to.lat,
-                "lon": traj.to.lon,
-                "track": traj.to.track,
-                "modes": traj.to.modes
-            });
-
-            let content_obj = serde_json::json!({
-                "trips": [
-                    {
-                        "tripId": traj.unique_trip_id,
-                        "displayName": traj.display_name
-                    }
-                ],
-                "mode": traj.mode,
-                "color": traj.color,
-                "text_color": traj.text_color,
-                "route_short_name": traj.route_short_name,
-                "route_long_name": traj.route_long_name,
-                "route_type": traj.route_type,
-                "distance": traj.distance,
-                "from": from_json,
-                "to": to_json,
-                "departure": traj.departure,
-                "arrival": traj.arrival,
-                "realTime": traj.real_time,
-                "coordinates": traj.coordinates
-            });
-
-            trajectories.push(catenary::pasque::lib::TrajectoryWrapper {
-                source: "trajectory".to_string(),
-                timestamp: current_timestamp,
-                client_reference: params.client_reference.clone(),
-                content: content_obj,
-            });
-
             if trajectories.len() >= 800 {
                 break;
             }
