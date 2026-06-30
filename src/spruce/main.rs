@@ -108,6 +108,8 @@ pub enum ServerMessage {
         timestamp: u64,
         client_reference: String,
         content: Vec<trajectories::TrajectoryWrapper>,
+        chunk_index: usize,
+        total_chunks: usize,
     },
 }
 
