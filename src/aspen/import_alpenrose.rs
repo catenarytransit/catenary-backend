@@ -1038,7 +1038,10 @@ pub async fn new_rt_data(
                         }
 
                         // Also add ALL stop_ids to lookup so we have their coordinates for trajectories
-                        if chateau_id == "sncf" || chateau_id == "deutschland" || chateau_id == "nationalrailuk" {
+                        if chateau_id == "sncf"
+                            || chateau_id == "deutschland"
+                            || chateau_id == "nationalrailuk"
+                        {
                             for stu in &trip_update.stop_time_update {
                                 if let Some(stop_id) = &stu.stop_id {
                                     stop_ids_to_lookup.insert(stop_id.to_string());
@@ -1221,24 +1224,59 @@ pub async fn new_rt_data(
 
         // Populate stop_id_to_stop with fetched stops so trajectory calculation has coordinates
         for (stop_id, stop) in &stop_id_to_stop_from_postgres {
-            stop_id_to_stop.entry(stop_id.as_str().into()).or_insert_with(|| {
-                AspenisedStop {
+            stop_id_to_stop
+                .entry(stop_id.as_str().into())
+                .or_insert_with(|| AspenisedStop {
                     stop_id: Some(stop_id.clone()),
-                    stop_name: stop.name.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
-                    stop_code: stop.code.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
+                    stop_name: stop.name.clone().map(|x| {
+                        catenary::aspen_dataset::AspenTranslatedString {
+                            translation: vec![catenary::aspen_dataset::AspenTranslation {
+                                text: x,
+                                language: None,
+                            }],
+                        }
+                    }),
+                    stop_code: stop.code.clone().map(|x| {
+                        catenary::aspen_dataset::AspenTranslatedString {
+                            translation: vec![catenary::aspen_dataset::AspenTranslation {
+                                text: x,
+                                language: None,
+                            }],
+                        }
+                    }),
                     tts_stop_name: None,
-                    stop_desc: stop.gtfs_desc.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
+                    stop_desc: stop.gtfs_desc.clone().map(|x| {
+                        catenary::aspen_dataset::AspenTranslatedString {
+                            translation: vec![catenary::aspen_dataset::AspenTranslation {
+                                text: x,
+                                language: None,
+                            }],
+                        }
+                    }),
                     stop_lat: stop.point.clone().map(|p| p.y as f32),
                     stop_lon: stop.point.clone().map(|p| p.x as f32),
                     zone_id: stop.zone_id.clone(),
-                    stop_url: stop.url.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
+                    stop_url: stop.url.clone().map(|x| {
+                        catenary::aspen_dataset::AspenTranslatedString {
+                            translation: vec![catenary::aspen_dataset::AspenTranslation {
+                                text: x,
+                                language: None,
+                            }],
+                        }
+                    }),
                     parent_station: stop.parent_station.clone(),
                     stop_timezone: stop.timezone.clone(),
                     wheelchair_boarding: None,
                     level_id: stop.level_id.clone(),
-                    platform_code: stop.platform_code.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
-                }
-            });
+                    platform_code: stop.platform_code.clone().map(|x| {
+                        catenary::aspen_dataset::AspenTranslatedString {
+                            translation: vec![catenary::aspen_dataset::AspenTranslation {
+                                text: x,
+                                language: None,
+                            }],
+                        }
+                    }),
+                });
         }
 
         let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
@@ -3166,7 +3204,10 @@ pub async fn new_rt_data(
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
-    let mut trajectories_by_route_type: AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>> = AHashMap::new();
+    let mut trajectories_by_route_type: AHashMap<
+        i16,
+        rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>,
+    > = AHashMap::new();
     let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
     let current_secs = (current_timestamp / 1000) as i64;
 
@@ -3179,21 +3220,24 @@ pub async fn new_rt_data(
             }
         }
     }
-    
+
     let mut shape_linestrings = std::collections::HashMap::new();
     if let Ok(mut conn_pre) = pool.get().await {
         use catenary::schema::gtfs::shapes::dsl::*;
-        use diesel_async::RunQueryDsl;
-        use diesel::QueryDsl;
         use diesel::ExpressionMethods;
-        
+        use diesel::QueryDsl;
+        use diesel_async::RunQueryDsl;
+
         let shape_ids: Vec<String> = shape_ids_to_fetch.into_iter().collect();
         for chunk in shape_ids.chunks(500) {
             if let Ok(shapes_result) = shapes
                 .filter(onestop_feed_id.eq(chateau_id))
                 .filter(shape_id.eq_any(chunk))
                 .select((shape_id, linestring))
-                .load::<(String, postgis_diesel::types::LineString<postgis_diesel::types::Point>)>(&mut conn_pre)
+                .load::<(
+                    String,
+                    postgis_diesel::types::LineString<postgis_diesel::types::Point>,
+                )>(&mut conn_pre)
                 .await
             {
                 for (s_id, ls) in shapes_result {
@@ -3205,7 +3249,6 @@ pub async fn new_rt_data(
 
     let allowed_chateaux = vec!["deutschland", "sncf", "nationalrailuk"];
     if allowed_chateaux.contains(&chateau_id) {
-
         println!("Starting trajectory processing for {}", &chateau_id);
 
         let mut skipped_no_stops = 0;
@@ -3259,10 +3302,14 @@ pub async fn new_rt_data(
                 _ => "other",
             };
 
-                        let mut trajectory_stops = Vec::new();
+            let mut trajectory_stops = Vec::new();
             for stu in &trip_update.stop_time_update {
                 let arrival_time = stu.arrival.as_ref().and_then(|a| a.time).unwrap_or(0);
-                let departure_time = stu.departure.as_ref().and_then(|d| d.time).unwrap_or(arrival_time);
+                let departure_time = stu
+                    .departure
+                    .as_ref()
+                    .and_then(|d| d.time)
+                    .unwrap_or(arrival_time);
                 if arrival_time != 0 || departure_time != 0 {
                     trajectory_stops.push((stu, arrival_time, departure_time));
                 }
@@ -3280,19 +3327,23 @@ pub async fn new_rt_data(
                 let mut lon = 0.0;
                 if let Some(stop_id) = &stu.stop_id {
                     if let Some(stop) = stop_id_to_stop.get(stop_id.as_ref()) {
-                        name = stop.stop_name.as_ref().and_then(|ts| ts.translation.get(0).map(|t| t.text.clone())).unwrap_or_default();
+                        name = stop
+                            .stop_name
+                            .as_ref()
+                            .and_then(|ts| ts.translation.get(0).map(|t| t.text.clone()))
+                            .unwrap_or_default();
                         lat = stop.stop_lat.unwrap_or(0.0) as f64;
                         lon = stop.stop_lon.unwrap_or(0.0) as f64;
                     }
                 }
-                
+
                 let arr_str = chrono::DateTime::from_timestamp(*arr, 0)
                     .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
                     .unwrap_or_default();
                 let dep_str = chrono::DateTime::from_timestamp(*dep, 0)
                     .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
                     .unwrap_or_default();
-                    
+
                 stops.push(catenary::aspen_dataset::AspenisedTrajectoryStop {
                     name,
                     stop_id: stu.stop_id.clone().map(|s| s.to_string()),
@@ -3307,7 +3358,7 @@ pub async fn new_rt_data(
 
             let mut segments = Vec::new();
             let mut total_distance = 0.0;
-            
+
             // Try to find the linestring for this trip's shape
             let mut trip_shape_coords = None;
             if let Some(props) = &trip_update.trip_properties {
@@ -3326,7 +3377,7 @@ pub async fn new_rt_data(
                     [stops[i].lon, stops[i].lat],
                     [stops[i + 1].lon, stops[i + 1].lat],
                 ];
-                
+
                 // If shape is available, find the closest points to stops[i] and stops[i+1]
                 if let Some(ref coords) = trip_shape_coords {
                     // Simple distance function
@@ -3335,12 +3386,12 @@ pub async fn new_rt_data(
                         let dy = a[1] - b[1];
                         dx * dx + dy * dy
                     }
-                    
+
                     let mut best_start = 0;
                     let mut best_end = coords.len() - 1;
                     let mut min_start_dist = f64::MAX;
                     let mut min_end_dist = f64::MAX;
-                    
+
                     for (idx, p) in coords.iter().enumerate() {
                         let d_start = dist_sq(p, &seg_coords[0]);
                         if d_start < min_start_dist {
@@ -3353,14 +3404,14 @@ pub async fn new_rt_data(
                             best_end = idx;
                         }
                     }
-                    
+
                     if best_start <= best_end {
                         seg_coords = coords[best_start..=best_end].to_vec();
                     } else {
                         // The bus might have looped or direction is weird, just fallback to straight line
                     }
                 }
-                
+
                 segments.push(catenary::aspen_dataset::AspenisedTrajectorySegment {
                     from_stop_index: i,
                     to_stop_index: i + 1,
@@ -3373,12 +3424,12 @@ pub async fn new_rt_data(
                 .route_short_name
                 .clone()
                 .unwrap_or_else(|| route_id.to_string());
-                
+
             let mut min_lon = f64::MAX;
             let mut min_lat = f64::MAX;
             let mut max_lon = f64::MIN;
             let mut max_lat = f64::MIN;
-            
+
             for seg in &segments {
                 for coord in &seg.coordinates {
                     min_lon = min_lon.min(coord[0]);
@@ -3402,14 +3453,17 @@ pub async fn new_rt_data(
                 stops,
                 real_time: true,
             };
-            
-            trajectories_by_route_type.entry(route.route_type).or_insert_with(|| rstar::RTree::new()).insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                trajectory: traj,
-                min_lon,
-                min_lat,
-                max_lon,
-                max_lat,
-            });
+
+            trajectories_by_route_type
+                .entry(route.route_type)
+                .or_insert_with(|| rstar::RTree::new())
+                .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
+                    trajectory: traj,
+                    min_lon,
+                    min_lat,
+                    max_lon,
+                    max_lat,
+                });
         }
         println!(
             "Trajectory computation for chateau {}: \
@@ -3429,7 +3483,10 @@ pub async fn new_rt_data(
             skipped_no_route_cache,
             skipped_too_few_trajectory_stops,
             skipped_too_few_shape_coords,
-            trajectories_by_route_type.values().map(|t| t.size()).sum::<usize>()
+            trajectories_by_route_type
+                .values()
+                .map(|t| t.size())
+                .sum::<usize>()
         );
     }
 

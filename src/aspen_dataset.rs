@@ -127,10 +127,7 @@ impl rstar::RTreeObject for AspenisedTrajectoryBBox {
     type Envelope = rstar::AABB<[f64; 2]>;
 
     fn envelope(&self) -> Self::Envelope {
-        rstar::AABB::from_corners(
-            [self.min_lon, self.min_lat],
-            [self.max_lon, self.max_lat],
-        )
+        rstar::AABB::from_corners([self.min_lon, self.min_lat], [self.max_lon, self.max_lat])
     }
 }
 

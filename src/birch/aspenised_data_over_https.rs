@@ -1184,11 +1184,12 @@ pub async fn get_all_trajectories(
         )
         .await;
 
-    let fetch_assigned_node_for_this_realtime_feed = match fetch_assigned_node_for_this_realtime_feed {
-        Ok(data) => data,
-        Err(_) => return HttpResponse::InternalServerError().body("Failed to connect to etcd"),
-    };
-    
+    let fetch_assigned_node_for_this_realtime_feed =
+        match fetch_assigned_node_for_this_realtime_feed {
+            Ok(data) => data,
+            Err(_) => return HttpResponse::InternalServerError().body("Failed to connect to etcd"),
+        };
+
     if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
         return HttpResponse::NotFound().body("No assigned node found");
     }
@@ -1219,11 +1220,16 @@ pub async fn get_all_trajectories(
 
     match full_aspen_dataset {
         Ok(Some(full_aspen_dataset)) => {
-            let all_trajectories: Vec<_> = full_aspen_dataset.trajectories_by_route_type.values().flat_map(|rtree| rtree.into_iter().map(|item| item.trajectory.clone())).collect();
+            let all_trajectories: Vec<_> = full_aspen_dataset
+                .trajectories_by_route_type
+                .values()
+                .flat_map(|rtree| rtree.into_iter().map(|item| item.trajectory.clone()))
+                .collect();
             HttpResponse::Ok().body(
-                ron::ser::to_string_pretty(&all_trajectories, ron::ser::PrettyConfig::default()).unwrap()
+                ron::ser::to_string_pretty(&all_trajectories, ron::ser::PrettyConfig::default())
+                    .unwrap(),
             )
-        },
+        }
         Ok(None) => HttpResponse::NotFound().body("No dataset found"),
         Err(e) => {
             eprintln!("Error fetching from aspen: {e}");

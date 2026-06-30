@@ -87,16 +87,15 @@ pub async fn get_trajectories(
                     .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
                     .await
                 {
-                    Ok(Ok(trajectories)) => {
-                        trajectories.into_iter().map(|traj| {
-                            TrajectoryWrapper {
-                                source: "trajectory".to_string(),
-                                timestamp: catenary::duration_since_unix_epoch().as_millis() as u64,
-                                client_reference: client_reference.clone(),
-                                content: serde_json::to_value(traj).unwrap_or(serde_json::Value::Null)
-                            }
-                        }).collect()
-                    },
+                    Ok(Ok(trajectories)) => trajectories
+                        .into_iter()
+                        .map(|traj| TrajectoryWrapper {
+                            source: "trajectory".to_string(),
+                            timestamp: catenary::duration_since_unix_epoch().as_millis() as u64,
+                            client_reference: client_reference.clone(),
+                            content: serde_json::to_value(traj).unwrap_or(serde_json::Value::Null),
+                        })
+                        .collect(),
                     Ok(Err(e)) => {
                         eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
                         vec![]
