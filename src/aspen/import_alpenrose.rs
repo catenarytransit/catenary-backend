@@ -3264,9 +3264,21 @@ pub async fn new_rt_data(
     // For trajectories, we need to look at the schedules instead.
     let mut shape_ids_to_fetch = std::collections::HashSet::new();
     for (_, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
-        if let Some(props) = &trip_update.trip_properties {
-            if let Some(shape_id) = &props.shape_id {
-                shape_ids_to_fetch.insert(shape_id.clone());
+        if let Some(trip_id) = &trip_update.trip.trip_id {
+            if let Some(compressed_trip) = aspenised_data_for_persist
+                .compressed_trip_internal_cache
+                .compressed_trips
+                .get(trip_id.as_str())
+            {
+                if let Some((meta, _)) = aspenised_data_for_persist
+                    .itinerary_pattern_internal_cache
+                    .itinerary_patterns
+                    .get(&compressed_trip.itinerary_pattern_id)
+                {
+                    if let Some(shape_id) = &meta.shape_id {
+                        shape_ids_to_fetch.insert(shape_id.clone());
+                    }
+                }
             }
         }
     }
@@ -3424,12 +3436,22 @@ pub async fn new_rt_data(
 
             // Try to find the linestring for this trip's shape
             let mut trip_shape_coords = None;
-            if let Some(props) = &trip_update.trip_properties {
-                if let Some(shape_id) = &props.shape_id {
-                    if let Some(ls) = shape_linestrings.get(shape_id) {
-                        let coords: Vec<[f64; 2]> = ls.points.iter().map(|p| [p.x, p.y]).collect();
-                        if !coords.is_empty() {
-                            trip_shape_coords = Some(coords);
+            if let Some(compressed_trip) = aspenised_data_for_persist
+                .compressed_trip_internal_cache
+                .compressed_trips
+                .get(trip_id.as_str())
+            {
+                if let Some((meta, _)) = aspenised_data_for_persist
+                    .itinerary_pattern_internal_cache
+                    .itinerary_patterns
+                    .get(&compressed_trip.itinerary_pattern_id)
+                {
+                    if let Some(shape_id) = &meta.shape_id {
+                        if let Some(ls) = shape_linestrings.get(shape_id) {
+                            let coords: Vec<[f64; 2]> = ls.points.iter().map(|p| [p.x, p.y]).collect();
+                            if !coords.is_empty() {
+                                trip_shape_coords = Some(coords);
+                            }
                         }
                     }
                 }

@@ -113,7 +113,7 @@ pub async fn get_trajectories(
                 else if min_dim_km > 10.0 {
                     100.0
                 }
-                if min_dim_km > 5.0 {
+                else if min_dim_km > 5.0 {
                     20.0
                 }
                 else {
