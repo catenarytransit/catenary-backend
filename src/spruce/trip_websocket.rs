@@ -527,13 +527,9 @@ impl TripWebSocket {
         &mut self,
         chateau_id: &String,
         response: &Arc<PrecomputedChateauMap>,
-        ctx: &mut ws::WebsocketContext<Self>,
+        _ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        let Some(params) = self.client_viewport.clone() else {
-            return;
-        };
-
-        if !params.chateaus.contains(chateau_id) {
+        if !self.subscribed_chateaus.contains(chateau_id) {
             return;
         }
 
@@ -877,12 +873,7 @@ impl Handler<MapBuildEvent> for TripWebSocket {
                 text,
                 new_state,
             } => {
-                let still_requested = self
-                    .client_viewport
-                    .as_ref()
-                    .map_or(false, |params| params.chateaus.contains(&chateau_id));
-
-                if !still_requested {
+                if !self.subscribed_chateaus.contains(&chateau_id) {
                     return;
                 }
 
