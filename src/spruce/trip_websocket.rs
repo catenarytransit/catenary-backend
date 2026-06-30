@@ -125,16 +125,17 @@ impl TripWebSocket {
 
             let is_v1 = act.client_viewport.is_some();
             let is_v2 = act.client_viewport_v2.is_some();
-            
+
             if !is_v1 && !is_v2 {
                 return;
             }
 
             act.map_build_in_progress = true;
 
-            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> = act.pending_map_updates.drain().collect();
+            let updates: Vec<(String, Arc<PrecomputedChateauMap>)> =
+                act.pending_map_updates.drain().collect();
             let sent_state = act.sent_state.clone();
-            
+
             let v1_params = act.client_viewport.clone();
             let v2_params = act.client_viewport_v2.clone();
 
@@ -147,9 +148,19 @@ impl TripWebSocket {
                     async move {
                         match tokio::task::spawn_blocking(move || {
                             if let Some(params) = v1_params_clone {
-                                Self::build_map_update_message(chateau_id, response, params, state_entry)
+                                Self::build_map_update_message(
+                                    chateau_id,
+                                    response,
+                                    params,
+                                    state_entry,
+                                )
                             } else if let Some(params) = v2_params_clone {
-                                Self::build_map_update_message_v2(chateau_id, response, params, state_entry)
+                                Self::build_map_update_message_v2(
+                                    chateau_id,
+                                    response,
+                                    params,
+                                    state_entry,
+                                )
                             } else {
                                 None
                             }
@@ -630,7 +641,7 @@ impl TripWebSocket {
                     }
                 }
             }
-            
+
             let mut filtered_count = 0;
             for y_map in vehicles_by_tile.values() {
                 for vehicles in y_map.values() {
@@ -638,7 +649,10 @@ impl TripWebSocket {
                 }
             }
             let precomputed_count = precomputed_category.raw_vehicles.len();
-            println!("DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.", chateau_id, category_str, precomputed_count, filtered_count);
+            println!(
+                "DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.",
+                chateau_id, category_str, precomputed_count, filtered_count
+            );
 
             let list_of_agency_ids = precomputed_category.agency_ids.clone();
 
@@ -921,20 +935,42 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         self.client_viewport_v2 = Some(params.clone());
                         let mut new_chateaus = HashSet::new();
 
-                        let get_bounds =
-                            |bounds: &crate::map_coordinator::BoundsInputPerLevel,
-                             zoom: u8|
-                             -> Option<(f64, f64, f64, f64)> {
-                                let top_left = slippy_map_tiles::Tile::new(zoom, bounds.min_x, bounds.min_y)?;
-                                let bottom_right = slippy_map_tiles::Tile::new(zoom, bounds.max_x, bounds.max_y)?;
-                                
-                                Some((top_left.left() as f64, bottom_right.bottom() as f64, bottom_right.right() as f64, top_left.top() as f64))
-                            };
+                        let get_bounds = |bounds: &crate::map_coordinator::BoundsInputPerLevel,
+                                          zoom: u8|
+                         -> Option<(f64, f64, f64, f64)> {
+                            let top_left =
+                                slippy_map_tiles::Tile::new(zoom, bounds.min_x, bounds.min_y)?;
+                            let bottom_right =
+                                slippy_map_tiles::Tile::new(zoom, bounds.max_x, bounds.max_y)?;
 
-                        let bounds_bus = if params.categories.contains(&"bus".to_string()) { get_bounds(&params.bounds_input.level12, 12) } else { None };
-                        let bounds_metro = if params.categories.contains(&"metro".to_string()) { get_bounds(&params.bounds_input.level8, 8) } else { None };
-                        let bounds_rail = if params.categories.contains(&"rail".to_string()) { get_bounds(&params.bounds_input.level7, 7) } else { None };
-                        let bounds_other = if params.categories.contains(&"other".to_string()) { get_bounds(&params.bounds_input.level5, 5) } else { None };
+                            Some((
+                                top_left.left() as f64,
+                                bottom_right.bottom() as f64,
+                                bottom_right.right() as f64,
+                                top_left.top() as f64,
+                            ))
+                        };
+
+                        let bounds_bus = if params.categories.contains(&"bus".to_string()) {
+                            get_bounds(&params.bounds_input.level12, 12)
+                        } else {
+                            None
+                        };
+                        let bounds_metro = if params.categories.contains(&"metro".to_string()) {
+                            get_bounds(&params.bounds_input.level8, 8)
+                        } else {
+                            None
+                        };
+                        let bounds_rail = if params.categories.contains(&"rail".to_string()) {
+                            get_bounds(&params.bounds_input.level7, 7)
+                        } else {
+                            None
+                        };
+                        let bounds_other = if params.categories.contains(&"other".to_string()) {
+                            get_bounds(&params.bounds_input.level5, 5)
+                        } else {
+                            None
+                        };
 
                         for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other]
                             .into_iter()

@@ -3247,7 +3247,13 @@ pub async fn new_rt_data(
         }
     }
 
-    let allowed_chateaux = vec!["deutschland", "sncf", "nationalrailuk"];
+    let allowed_chateaux = vec![
+        "deutschland",
+        "sncf",
+        "nationalrailuk",
+        "schweiz",
+        "île~de~france~mobilités",
+    ];
     if allowed_chateaux.contains(&chateau_id) {
         println!("Starting trajectory processing for {}", &chateau_id);
 

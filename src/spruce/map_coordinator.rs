@@ -187,7 +187,7 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
     let mut bus_tiles = BTreeMap::new();
     let mut rail_tiles = BTreeMap::new();
     let mut other_tiles = BTreeMap::new();
-    
+
     let mut metro_raw = Vec::new();
     let mut bus_raw = Vec::new();
     let mut rail_raw = Vec::new();
