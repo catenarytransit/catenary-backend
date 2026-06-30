@@ -290,6 +290,8 @@ impl TripWebSocket {
             .difference(&self.subscribed_chateaus)
             .cloned()
             .collect();
+            
+        let chateaus_changed = !to_unsubscribe.is_empty() || !to_subscribe.is_empty();
 
         for ch in to_unsubscribe {
             let coordinator = self.coordinator_pool.for_chateau(&ch);
@@ -309,6 +311,10 @@ impl TripWebSocket {
         }
 
         self.subscribed_chateaus = new_chateaus;
+        
+        if chateaus_changed && self.trajectory_subscription.is_some() {
+            self.trigger_trajectory_update(ctx);
+        }
     }
 
     fn build_map_update_message(
