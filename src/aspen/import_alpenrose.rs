@@ -3441,6 +3441,8 @@ pub async fn new_rt_data(
 
             let traj = catenary::aspen_dataset::AspenisedTrajectory {
                 unique_trip_id,
+                chateau_id: chateau_id.to_string(),
+                trip_id: trip_id.to_string(),
                 display_name,
                 mode: route_type_str.to_string(),
                 color: route.route_colour.clone(),

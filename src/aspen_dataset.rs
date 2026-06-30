@@ -82,6 +82,8 @@ pub struct AspenisedData {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AspenisedTrajectory {
     pub unique_trip_id: String,
+    pub chateau_id: String,
+    pub trip_id: String,
     pub display_name: String,
     pub mode: String,
     pub color: Option<String>,
