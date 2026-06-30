@@ -123,9 +123,48 @@ impl TripWebSocket {
                 return;
             }
 
-            let Some(params) = act.client_viewport.clone() else {
+            let params = if let Some(v1_params) = act.client_viewport.clone() {
+                Some(v1_params)
+            } else if let Some(v2_params) = act.client_viewport_v2.clone() {
+                let mut categories = Vec::new();
+                let mut bounds_input = BoundsInputV3 {
+                    level5: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level7: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level8: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level12: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                };
+                
+                let mut populate = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, name: &str, target_bbox: &mut catenary::compact_formats::Bbox| {
+                    if let Some(s) = sub {
+                        categories.push(name.to_string());
+                        if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
+                            target_bbox.min_x = min_x;
+                            target_bbox.max_x = max_x;
+                            target_bbox.min_y = min_y;
+                            target_bbox.max_y = max_y;
+                        }
+                    }
+                };
+
+                populate(&v2_params.bus, "bus", &mut bounds_input.level12);
+                populate(&v2_params.metro, "metro", &mut bounds_input.level8);
+                populate(&v2_params.rail, "rail", &mut bounds_input.level7);
+                populate(&v2_params.other, "other", &mut bounds_input.level5);
+
+                Some(crate::MapViewportUpdate {
+                    chateaus: act.subscribed_chateaus.iter().cloned().collect(),
+                    categories,
+                    bounds_input,
+                })
+            } else {
+                None
+            };
+
+            let Some(params) = params else {
                 return;
             };
+
+            println!("DEBUG: start_map_update_coalescer running with chateaus: {:?}, updates pending: {}", params.chateaus, act.pending_map_updates.len());
 
             act.map_build_in_progress = true;
 
@@ -299,7 +338,9 @@ impl TripWebSocket {
         params: MapViewportUpdate,
         sent_state_entry: Option<SentMapState>,
     ) -> Option<(String, String, SentMapState)> {
+        println!("DEBUG: build_map_update_message started for chateau {}", chateau_id);
         if !params.chateaus.contains(&chateau_id) {
+            println!("DEBUG: build_map_update_message dropped chateau {} (not in params.chateaus)", chateau_id);
             return None;
         }
 
@@ -749,10 +790,14 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         let bounds_rail = get_bounds(&params.rail, 7);
                         let bounds_other = get_bounds(&params.other, 5);
                         
+                        println!("DEBUG: SubscribeMapV2 received! Bounds: Bus={:?}, Metro={:?}, Rail={:?}, Other={:?}", bounds_bus, bounds_metro, bounds_rail, bounds_other);
+                        
                         for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other].into_iter().flatten() {
                             let chateaus = self.chateau_rtree.locate_in_envelope(bounds.0, bounds.1, bounds.2, bounds.3);
                             new_chateaus.extend(chateaus);
                         }
+                        
+                        println!("DEBUG: SubscribeMapV2 resolved to {} chateaus: {:?}", new_chateaus.len(), new_chateaus);
                         
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);
                         self.update_map_subscriptions(ctx, new_chateaus);
@@ -760,6 +805,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         // Request updates for all subscribed chateaus
                         for ch in &self.subscribed_chateaus {
                             let coordinator = self.coordinator_pool.for_chateau(ch);
+                            println!("DEBUG: Sending Subscribe to coordinator for {}", ch);
                             coordinator.do_send(crate::map_coordinator::Subscribe {
                                 chateau_id: ch.clone(),
                                 recipient: ctx.address().recipient(),
