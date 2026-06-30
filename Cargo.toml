@@ -247,9 +247,6 @@ path = "src/lib.rs"
 name = "spruce"
 path = "src/spruce/main.rs"
 
-[[bin]]
-name = "pasque"
-path = "src/pasque/main.rs"
 
 [[bin]]
 name = "alpenrose"

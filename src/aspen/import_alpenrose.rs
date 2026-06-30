@@ -2723,7 +2723,10 @@ pub async fn new_rt_data(
                             stop_time_update: stop_time_update,
                             timestamp: trip_update.timestamp,
                             delay: delay,
-                            trip_properties: trip_update.trip_properties.clone().map(|x| (*x).into()),
+                            trip_properties: trip_update
+                                .trip_properties
+                                .clone()
+                                .map(|x| (*x).into()),
                             last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
                             consist,
                         };
@@ -3130,6 +3133,202 @@ pub async fn new_rt_data(
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
+    let mut trajectories = Vec::new();
+    let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
+    let current_secs = (current_timestamp / 1000) as i64;
+    let horizon_secs = current_secs + 20 * 60;
+
+    let allowed_chateaux = vec!["deutschland", "sncf", "nationalrailuk"];
+    if allowed_chateaux.contains(&chateau_id) {
+        for (trip_update_id, trip_update) in trip_updates.iter() {
+            if trip_update.stop_time_update.is_empty() {
+                continue;
+            }
+
+            let trip_id = match &trip_update.trip.trip_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let route_id = match &trip_update.trip.route_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let route = match vehicle_routes_cache.get(route_id) {
+                Some(r) => r,
+                None => continue,
+            };
+
+            let route_type_str = match route.route_type {
+                0 => "tram",
+                1 => "subway",
+                2 => "rail",
+                3 => "bus",
+                4 => "ferry",
+                5 => "cable_car",
+                6 => "gondola",
+                7 => "funicular",
+                11 => "trolleybus",
+                12 => "monorail",
+                _ => "other",
+            };
+
+            let mut past_stops = Vec::new();
+            let mut future_stops = Vec::new();
+
+            for stu in &trip_update.stop_time_update {
+                let arrival_time = stu.arrival.as_ref().and_then(|a| a.time).unwrap_or(0);
+                let departure_time = stu
+                    .departure
+                    .as_ref()
+                    .and_then(|d| d.time)
+                    .unwrap_or(arrival_time);
+
+                if arrival_time == 0 && departure_time == 0 {
+                    continue;
+                }
+
+                if departure_time < current_secs {
+                    past_stops.push((stu, arrival_time, departure_time));
+                } else {
+                    future_stops.push((stu, arrival_time, departure_time));
+                    if arrival_time > horizon_secs {
+                        break;
+                    }
+                }
+            }
+
+            let mut trajectory_stops = Vec::new();
+            if let Some(last_past) = past_stops.last() {
+                trajectory_stops.push(last_past.clone());
+            } else if let Some(first_future) = future_stops.get(0) {
+                // Include a previous stop if possible, but we don't have it here if not in stop_time_update.
+            }
+
+            trajectory_stops.extend(future_stops.into_iter());
+
+            if trajectory_stops.len() < 2 {
+                continue;
+            }
+
+            let mut shape_coords = Vec::new();
+            for (stu, _arr, _dep) in &trajectory_stops {
+                if let Some(stop_id) = &stu.stop_id {
+                    if let Some(stop) = stop_id_to_stop.get(stop_id.as_ref()) {
+                        if let (Some(lat), Some(lon)) = (stop.stop_lat, stop.stop_lon) {
+                            shape_coords.push((lon as f64, lat as f64));
+                        }
+                    }
+                }
+            }
+
+            if shape_coords.len() < 2 {
+                continue;
+            }
+
+            let mut distance_meters = 0.0;
+            for i in 1..shape_coords.len() {
+                let dx = shape_coords[i].0 - shape_coords[i - 1].0;
+                let dy = shape_coords[i].1 - shape_coords[i - 1].1;
+                distance_meters += (dx * dx + dy * dy).sqrt() * 111_111.0;
+            }
+
+            let geojson_coordinates: Vec<Vec<f64>> = shape_coords
+                .iter()
+                .map(|&(lon, lat)| vec![lon, lat])
+                .collect();
+
+            let first_stop = &trajectory_stops[0].0;
+            let last_stop = &trajectory_stops[trajectory_stops.len() - 1].0;
+
+            let from_stop_obj = first_stop
+                .stop_id
+                .as_ref()
+                .and_then(|s| stop_id_to_stop.get(s.as_ref()));
+            let to_stop_obj = last_stop
+                .stop_id
+                .as_ref()
+                .and_then(|s| stop_id_to_stop.get(s.as_ref()));
+
+            let from_name = from_stop_obj
+                .and_then(|s| {
+                    s.stop_name
+                        .as_ref()
+                        .and_then(|ts| ts.translation.get(0).map(|t| t.text.clone()))
+                })
+                .unwrap_or_default();
+            let to_name = to_stop_obj
+                .and_then(|s| {
+                    s.stop_name
+                        .as_ref()
+                        .and_then(|ts| ts.translation.get(0).map(|t| t.text.clone()))
+                })
+                .unwrap_or_default();
+
+            let unique_trip_id = format!("{}_{}", chateau_id, trip_id);
+            let display_name = route
+                .route_short_name
+                .clone()
+                .unwrap_or_else(|| route_id.to_string());
+
+            let departure_str = chrono::DateTime::from_timestamp(trajectory_stops[0].2, 0)
+                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                .unwrap_or_default();
+            let arrival_str =
+                chrono::DateTime::from_timestamp(trajectory_stops[trajectory_stops.len() - 1].1, 0)
+                    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                    .unwrap_or_default();
+
+            let from_json = serde_json::json!({
+                "name": from_name,
+                "stopId": first_stop.stop_id,
+                "lat": shape_coords[0].1,
+                "lon": shape_coords[0].0,
+                "track": first_stop.platform_string,
+                "modes": [route_type_str]
+            });
+
+            let to_json = serde_json::json!({
+                "name": to_name,
+                "stopId": last_stop.stop_id,
+                "lat": shape_coords[shape_coords.len() - 1].1,
+                "lon": shape_coords[shape_coords.len() - 1].0,
+                "track": last_stop.platform_string,
+                "modes": [route_type_str]
+            });
+
+            let content_obj = serde_json::json!({
+                "trips": [
+                    {
+                        "tripId": unique_trip_id,
+                        "displayName": display_name
+                    }
+                ],
+                "mode": route_type_str,
+                "color": route.route_colour,
+                "text_color": route.route_text_colour,
+                "route_short_name": route.route_short_name,
+                "route_long_name": route.route_long_name,
+                "route_type": route.route_type,
+                "distance": distance_meters,
+                "from": from_json,
+                "to": to_json,
+                "departure": departure_str,
+                "arrival": arrival_str,
+                "realTime": true,
+                "coordinates": geojson_coordinates
+            });
+
+            trajectories.push(catenary::pasque::lib::TrajectoryWrapper {
+                source: "trajectory".to_string(),
+                timestamp: current_timestamp,
+                client_reference: "railviz".to_string(),
+                content: content_obj,
+            });
+        }
+    }
+
     let aspenised_data = AspenisedData {
         vehicle_positions: aspenised_vehicle_positions,
         vehicle_routes_cache: vehicle_routes_cache,
@@ -3159,6 +3358,7 @@ pub async fn new_rt_data(
         stop_id_to_non_scheduled_trip_ids,
         stop_id_to_parent_id,
         parent_id_to_children_ids,
+        trajectories,
     };
 
     // Insert the aspenised data - clone only for persistence, move into map when possible

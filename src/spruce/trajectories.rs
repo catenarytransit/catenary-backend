@@ -1,5 +1,7 @@
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::bincode_deserialize;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use std::sync::Arc;
 
@@ -15,26 +17,98 @@ pub struct ClientTrajectorySubscriptionParams {
     pub client_reference: String,
 }
 
+async fn get_aspen_socket(
+    chateau_id: &str,
+    etcd_ips: &EtcdConnectionIps,
+    etcd_opts: &Option<etcd_client::ConnectOptions>,
+    etcd_reuser: &tokio::sync::RwLock<Option<etcd_client::Client>>,
+) -> Option<std::net::SocketAddr> {
+    let mut etcd = catenary::get_etcd_client(etcd_ips, etcd_opts, etcd_reuser)
+        .await
+        .ok()?;
+    let resp = etcd
+        .get(
+            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
+            None,
+        )
+        .await
+        .ok()?;
+    if !resp.kvs().is_empty() {
+        if let Ok(assigned_chateau_data) =
+            bincode_deserialize::<ChateauMetadataEtcd>(resp.kvs().first().unwrap().value())
+        {
+            return Some(assigned_chateau_data.socket);
+        }
+    }
+    None
+}
+
 pub async fn get_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
-    _etcd_connection_ips: Arc<EtcdConnectionIps>,
-    _etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
-    _aspen_client_manager: Arc<AspenClientManager>,
-    _etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+    etcd_connection_ips: Arc<EtcdConnectionIps>,
+    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_client_manager: Arc<AspenClientManager>,
+    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     params: TrajectorySubscriptionParams,
+    chateaus: std::collections::HashSet<String>,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
-    let addr: std::net::SocketAddr = "127.0.0.1:52775"
-        .parse()
-        .map_err(|e| format!("Invalid Pasque address: {:?}", e))?;
+    let mut futures = Vec::new();
 
-    let client = catenary::pasque::lib::spawn_pasque_client_from_ip(&addr)
-        .await
-        .map_err(|e| format!("Failed to connect to Pasque: {:?}", e))?;
+    for ch in chateaus {
+        let ips = etcd_connection_ips.clone();
+        let opts = etcd_connection_options.clone();
+        let reuser = etcd_reuser.clone();
+        let manager = aspen_client_manager.clone();
+        let params_clone = params.clone();
+        let ch_clone = ch.clone();
 
-    let result = client
-        .get_trajectories(tarpc::context::current(), params)
-        .await
-        .map_err(|e| format!("Pasque RPC error: {:?}", e))?;
+        futures.push(tokio::spawn(async move {
+            let socket = match get_aspen_socket(&ch_clone, &ips, &opts, &reuser).await {
+                Some(s) => s,
+                None => return vec![],
+            };
 
-    result
+            let client_res = if let Some(client) = manager.get_client(socket.clone()).await {
+                Some(client)
+            } else if let Ok(new_client) =
+                catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
+            {
+                manager
+                    .insert_client(socket.clone(), new_client.clone())
+                    .await;
+                Some(new_client)
+            } else {
+                None
+            };
+
+            if let Some(mut client) = client_res {
+                match client
+                    .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
+                    .await
+                {
+                    Ok(Ok(trajectories)) => trajectories,
+                    Ok(Err(e)) => {
+                        eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
+                        vec![]
+                    }
+                    Err(e) => {
+                        eprintln!("Aspen RPC transport error for {}: {:?}", ch_clone, e);
+                        vec![]
+                    }
+                }
+            } else {
+                vec![]
+            }
+        }));
+    }
+
+    let results = futures::future::join_all(futures).await;
+    let mut merged = Vec::new();
+    for res in results {
+        if let Ok(trajectories) = res {
+            merged.extend(trajectories);
+        }
+    }
+
+    Ok(merged)
 }

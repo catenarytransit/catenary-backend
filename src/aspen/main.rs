@@ -1602,6 +1602,125 @@ impl AspenRpc for AspenServer {
             None => None,
         }
     }
+
+    async fn get_trajectories(
+        self,
+        _: tarpc::context::Context,
+        chateau_id: String,
+        params: catenary::pasque::lib::TrajectorySubscriptionParams,
+    ) -> Result<Vec<catenary::pasque::lib::TrajectoryWrapper>, String> {
+        let aspenised_data = match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(data) => data,
+            None => {
+                return Err(format!(
+                    "No AspenisedData found for chateau: {}",
+                    chateau_id
+                ));
+            }
+        };
+        let aspenised_data = aspenised_data.get();
+
+        let mut trajectories = Vec::new();
+
+        let min_lon = params.bbox[0];
+        let min_lat = params.bbox[1];
+        let max_lon = params.bbox[2];
+        let max_lat = params.bbox[3];
+
+        let mut route_types: std::collections::HashSet<i16> = std::collections::HashSet::new();
+        for mode in &params.modes {
+            match mode.to_lowercase().as_str() {
+                "tram" | "light_rail" | "light-rail" => {
+                    route_types.insert(0);
+                }
+                "subway" | "metro" => {
+                    route_types.insert(1);
+                }
+                "rail" | "train" => {
+                    route_types.insert(2);
+                }
+                "bus" => {
+                    if params.zoom >= 9 {
+                        route_types.insert(3);
+                    }
+                }
+                "ferry" => {
+                    route_types.insert(4);
+                }
+                "cable_car" | "cable-car" => {
+                    route_types.insert(5);
+                }
+                "gondola" => {
+                    route_types.insert(6);
+                }
+                "funicular" => {
+                    route_types.insert(7);
+                }
+                "trolleybus" => {
+                    route_types.insert(11);
+                }
+                "monorail" => {
+                    route_types.insert(12);
+                }
+                _ => {}
+            }
+        }
+
+        if route_types.is_empty() {
+            if params.modes.is_empty() {
+                if params.zoom >= 9 {
+                    route_types.extend(vec![0, 1, 2, 3, 4, 5, 6, 7, 11, 12]);
+                } else {
+                    route_types.extend(vec![0, 1, 2, 4, 5, 6, 7, 11, 12]);
+                }
+            } else {
+                return Ok(vec![]);
+            }
+        }
+
+        for traj in &aspenised_data.trajectories {
+            // Apply bounding box filter
+            if let Some(content) = traj.content.as_object() {
+                // Filter by mode
+                if let Some(mode_val) = content.get("route_type").and_then(|v| v.as_i64()) {
+                    if !route_types.contains(&(mode_val as i16)) {
+                        continue;
+                    }
+                }
+
+                if let Some(coords) = content.get("coordinates").and_then(|v| v.as_array()) {
+                    let mut in_bbox = false;
+                    for coord in coords {
+                        if let Some(c) = coord.as_array() {
+                            if c.len() >= 2 {
+                                let lon = c[0].as_f64().unwrap_or(0.0);
+                                let lat = c[1].as_f64().unwrap_or(0.0);
+                                if lon >= min_lon
+                                    && lon <= max_lon
+                                    && lat >= min_lat
+                                    && lat <= max_lat
+                                {
+                                    in_bbox = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if !in_bbox {
+                        continue;
+                    }
+                }
+            }
+
+            trajectories.push(traj.clone());
+            if trajectories.len() >= 800 {
+                break;
+            }
+        }
+
+        Ok(trajectories)
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {

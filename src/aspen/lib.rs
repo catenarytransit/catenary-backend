@@ -187,6 +187,11 @@ pub trait AspenRpc {
     async fn full_aspen_dataset_backup(chateau_id: String) -> Option<AspenisedData>;
 
     async fn last_updated_time_ms_for_chateau(chateau_id: String) -> Option<u64>;
+
+    async fn get_trajectories(
+        chateau_id: String,
+        params: crate::pasque::lib::TrajectorySubscriptionParams,
+    ) -> Result<Vec<crate::pasque::lib::TrajectoryWrapper>, String>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

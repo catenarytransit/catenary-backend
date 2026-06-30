@@ -523,9 +523,18 @@ impl TripWebSocket {
             client_reference: client_params.client_reference,
         };
 
+        let chateaus = self.subscribed_chateaus.clone();
         let fut = async move {
-            trajectories::get_trajectories(pool, etcd_ips, etcd_opts, manager, etcd_reuser, params)
-                .await
+            trajectories::get_trajectories(
+                pool,
+                etcd_ips,
+                etcd_opts,
+                manager,
+                etcd_reuser,
+                params,
+                chateaus,
+            )
+            .await
         };
 
         let fut = actix::fut::wrap_future(fut).map(
