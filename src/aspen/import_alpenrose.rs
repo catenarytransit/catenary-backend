@@ -1037,6 +1037,15 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        // Also add ALL stop_ids to lookup so we have their coordinates for trajectories
+                        if chateau_id == "sncf" || chateau_id == "deutschland" || chateau_id == "nationalrailuk" {
+                            for stu in &trip_update.stop_time_update {
+                                if let Some(stop_id) = &stu.stop_id {
+                                    stop_ids_to_lookup.insert(stop_id.to_string());
+                                }
+                            }
+                        }
+
                         // Determine the "active" stop time update for interpolation.
                         // Logic:
                         // 1. If a stop time update brackets the current time (arrival < now < departure), use it.
@@ -1209,6 +1218,28 @@ pub async fn new_rt_data(
             .into_iter()
             .map(|stop| (stop.gtfs_id.clone(), stop))
             .collect();
+
+        // Populate stop_id_to_stop with fetched stops so trajectory calculation has coordinates
+        for (stop_id, stop) in &stop_id_to_stop_from_postgres {
+            stop_id_to_stop.entry(stop_id.as_str().into()).or_insert_with(|| {
+                AspenisedStop {
+                    stop_id: stop_id.as_str().into(),
+                    stop_name: stop.name.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
+                    stop_code: stop.code.clone().map(|x| x.into()),
+                    tts_stop_name: None,
+                    stop_desc: stop.desc.clone().map(|x| x.into()),
+                    stop_lat: stop.lat.map(|x| x as f32),
+                    stop_lon: stop.lon.map(|x| x as f32),
+                    zone_id: stop.zone_id.clone(),
+                    stop_url: stop.url.clone().map(|x| x.into()),
+                    parent_station: stop.parent_station.clone(),
+                    stop_timezone: stop.timezone.clone(),
+                    wheelchair_boarding: None,
+                    level_id: stop.level_id.clone(),
+                    platform_code: stop.platform_code.clone().map(|x| x.into()),
+                }
+            });
+        }
 
         let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
             String,
