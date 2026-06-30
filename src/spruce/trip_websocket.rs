@@ -532,11 +532,11 @@ impl TripWebSocket {
         };
         let mut new_categories_sent = std::collections::HashSet::new();
 
-        let get_bounds_latlon = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, zoom: u8| -> Option<(f64, f64, f64, f64)> {
+        let get_bounds_latlon = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, zoom: u8| -> Option<(f32, f32, f32, f32)> {
             if let Some(s) = sub {
                 if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
                     if let (Some(top_left), Some(bottom_right)) = (slippy_map_tiles::Tile::new(zoom, min_x, min_y), slippy_map_tiles::Tile::new(zoom, max_x, max_y)) {
-                        return Some((top_left.left() as f64, bottom_right.bottom() as f64, bottom_right.right() as f64, top_left.top() as f64));
+                        return Some((top_left.left(), bottom_right.bottom(), bottom_right.right(), top_left.top()));
                     }
                 }
             }
@@ -588,7 +588,7 @@ impl TripWebSocket {
                         if let Some(pos) = &v.position {
                             if pos.longitude >= min_lon && pos.longitude <= max_lon && pos.latitude >= min_lat && pos.latitude <= max_lat {
                                 let (x, y) = slippy_map_tiles::lat_lon_to_tile(pos.latitude, pos.longitude, zoom);
-                                vehicles_by_tile.entry(x).or_insert_with(std::collections::BTreeMap::new).entry(y).or_insert_with(std::collections::BTreeMap::new).insert(v.vehicle.as_ref().map_or("".to_string(), |x| x.id.clone()), v.clone());
+                                vehicles_by_tile.entry(x).or_insert_with(std::collections::BTreeMap::new).entry(y).or_insert_with(std::collections::BTreeMap::new).insert(v.vehicle.as_ref().map_or("".to_string(), |x| x.id.clone().unwrap_or_default()), v.clone());
                             }
                         }
                     }
