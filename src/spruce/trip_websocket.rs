@@ -1,8 +1,8 @@
 use crate::map_coordinator::{
     AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchParamsV3,
-    BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
-    EachChateauResponseV2, PositionDataCategoryV2, PrecomputedChateauMap, Subscribe, Unsubscribe,
-    category_to_allowed_route_ids, convert_to_output, CategoryAskParamsV2,
+    BulkFetchResponseV2, CategoryAskParamsV2, CategoryOfRealtimeVehicleData, ChateauUpdate,
+    EachCategoryPayloadV2, EachChateauResponseV2, PositionDataCategoryV2, PrecomputedChateauMap,
+    Subscribe, Unsubscribe, category_to_allowed_route_ids, convert_to_output,
 };
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -128,13 +128,13 @@ impl TripWebSocket {
             } else if let Some(v2_params) = act.client_viewport_v2.clone() {
                 let mut categories = Vec::new();
                 let mut bounds_input = BoundsInputV3 {
-                    level5: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-                    level7: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-                    level8: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-                    level12: catenary::compact_formats::Bbox { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level5: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level7: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level8: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
+                    level12: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
                 };
                 
-                let mut populate = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, name: &str, target_bbox: &mut catenary::compact_formats::Bbox| {
+                let mut populate = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, name: &str, target_bbox: &mut crate::map_coordinator::BoundsInputPerLevel| {
                     if let Some(s) = sub {
                         categories.push(name.to_string());
                         if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
@@ -338,9 +338,15 @@ impl TripWebSocket {
         params: MapViewportUpdate,
         sent_state_entry: Option<SentMapState>,
     ) -> Option<(String, String, SentMapState)> {
-        println!("DEBUG: build_map_update_message started for chateau {}", chateau_id);
+        println!(
+            "DEBUG: build_map_update_message started for chateau {}",
+            chateau_id
+        );
         if !params.chateaus.contains(&chateau_id) {
-            println!("DEBUG: build_map_update_message dropped chateau {} (not in params.chateaus)", chateau_id);
+            println!(
+                "DEBUG: build_map_update_message dropped chateau {} (not in params.chateaus)",
+                chateau_id
+            );
             return None;
         }
 
@@ -763,45 +769,71 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         self.client_viewport_v2 = Some(params.clone());
                         let mut new_chateaus = HashSet::new();
 
-                        let get_bounds = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, zoom: u8| -> Option<(f64, f64, f64, f64)> {
-                            if let Some(s) = sub {
-                                if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
-                                    let n = f64::powi(2.0, zoom as i32);
-                                    let min_lon = (min_x as f64) / n * 360.0 - 180.0;
-                                    let max_lon = ((max_x + 1) as f64) / n * 360.0 - 180.0;
-                                    
-                                    let min_y_f64 = min_y as f64;
-                                    let max_y_f64 = (max_y + 1) as f64;
-                                    
-                                    let max_lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * min_y_f64 / n)).sinh().atan();
-                                    let max_lat = max_lat_rad * 180.0 / std::f64::consts::PI;
-                                    
-                                    let min_lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * max_y_f64 / n)).sinh().atan();
-                                    let min_lat = min_lat_rad * 180.0 / std::f64::consts::PI;
-                                    
-                                    return Some((min_lon, min_lat, max_lon, max_lat));
+                        let get_bounds =
+                            |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>,
+                             zoom: u8|
+                             -> Option<(f64, f64, f64, f64)> {
+                                if let Some(s) = sub {
+                                    if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (
+                                        s.prev_user_min_x,
+                                        s.prev_user_max_x,
+                                        s.prev_user_min_y,
+                                        s.prev_user_max_y,
+                                    ) {
+                                        let n = f64::powi(2.0, zoom as i32);
+                                        let min_lon = (min_x as f64) / n * 360.0 - 180.0;
+                                        let max_lon = ((max_x + 1) as f64) / n * 360.0 - 180.0;
+
+                                        let min_y_f64 = min_y as f64;
+                                        let max_y_f64 = (max_y + 1) as f64;
+
+                                        let max_lat_rad = (std::f64::consts::PI
+                                            * (1.0 - 2.0 * min_y_f64 / n))
+                                            .sinh()
+                                            .atan();
+                                        let max_lat = max_lat_rad * 180.0 / std::f64::consts::PI;
+
+                                        let min_lat_rad = (std::f64::consts::PI
+                                            * (1.0 - 2.0 * max_y_f64 / n))
+                                            .sinh()
+                                            .atan();
+                                        let min_lat = min_lat_rad * 180.0 / std::f64::consts::PI;
+
+                                        return Some((min_lon, min_lat, max_lon, max_lat));
+                                    }
                                 }
-                            }
-                            None
-                        };
+                                None
+                            };
 
                         let bounds_bus = get_bounds(&params.bus, 12);
                         let bounds_metro = get_bounds(&params.metro, 8);
                         let bounds_rail = get_bounds(&params.rail, 7);
                         let bounds_other = get_bounds(&params.other, 5);
-                        
-                        println!("DEBUG: SubscribeMapV2 received! Bounds: Bus={:?}, Metro={:?}, Rail={:?}, Other={:?}", bounds_bus, bounds_metro, bounds_rail, bounds_other);
-                        
-                        for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other].into_iter().flatten() {
-                            let chateaus = self.chateau_rtree.locate_in_envelope(bounds.0, bounds.1, bounds.2, bounds.3);
+
+                        println!(
+                            "DEBUG: SubscribeMapV2 received! Bounds: Bus={:?}, Metro={:?}, Rail={:?}, Other={:?}",
+                            bounds_bus, bounds_metro, bounds_rail, bounds_other
+                        );
+
+                        for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other]
+                            .into_iter()
+                            .flatten()
+                        {
+                            let chateaus = self
+                                .chateau_rtree
+                                .locate_in_envelope(bounds.0, bounds.1, bounds.2, bounds.3);
                             new_chateaus.extend(chateaus);
                         }
-                        
-                        println!("DEBUG: SubscribeMapV2 resolved to {} chateaus: {:?}", new_chateaus.len(), new_chateaus);
-                        
+
+                        println!(
+                            "DEBUG: SubscribeMapV2 resolved to {} chateaus: {:?}",
+                            new_chateaus.len(),
+                            new_chateaus
+                        );
+
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);
                         self.update_map_subscriptions(ctx, new_chateaus);
-                        
+
                         // Request updates for all subscribed chateaus
                         for ch in &self.subscribed_chateaus {
                             let coordinator = self.coordinator_pool.for_chateau(ch);
