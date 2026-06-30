@@ -21,7 +21,6 @@ use catenary::trip_logic::{
 };
 use map_coordinator::{
     BoundsInputV3, BulkFetchCoordinator, BulkFetchCoordinatorPool, BulkFetchResponseV2,
-    CategoryAskParamsV2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -66,10 +65,16 @@ pub enum ClientMessage {
     #[serde(rename = "subscribe_map_v2")]
     SubscribeMapV2 {
         #[serde(flatten)]
-        params: CategoryAskParamsV2,
+        params: SubscribeMapV2Params,
     },
     #[serde(rename = "unsubscribe_map_v2")]
     UnsubscribeMapV2,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct SubscribeMapV2Params {
+    pub categories: Vec<String>,
+    pub bounds_input: BoundsInputV3,
 }
 
 #[derive(Deserialize, Clone)]

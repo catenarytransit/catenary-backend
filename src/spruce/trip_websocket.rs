@@ -62,7 +62,7 @@ pub struct TripWebSocket {
     pub map_build_in_progress: bool,
 
     pub chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
-    pub client_viewport_v2: Option<CategoryAskParamsV2>,
+    pub client_viewport_v2: Option<crate::SubscribeMapV2Params>,
 
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
@@ -505,11 +505,10 @@ impl TripWebSocket {
             .insert(chateau_id.clone(), response.clone());
     }
 
-    
     fn build_map_update_message_v2(
         chateau_id: String,
         response: Arc<PrecomputedChateauMap>,
-        params: crate::map_coordinator::CategoryAskParamsV2,
+        params: crate::SubscribeMapV2Params,
         sent_state_entry: Option<SentMapState>,
     ) -> Option<(String, String, SentMapState)> {
         let mut each_chateau_response = EachChateauResponseV2 {
@@ -523,104 +522,149 @@ impl TripWebSocket {
 
         let is_new_feed = response.last_updated_time_ms != last_sent_time;
         let mut has_any_updates = false;
-        
-        let mut new_bounds_v1_equivalent = crate::map_coordinator::BoundsInputV3 {
-            level5: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-            level7: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-            level8: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-            level12: crate::map_coordinator::BoundsInputPerLevel { min_x: 0, min_y: 0, max_x: 0, max_y: 0 },
-        };
-        let mut new_categories_sent = std::collections::HashSet::new();
 
-        let get_bounds_latlon = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, zoom: u8| -> Option<(f32, f32, f32, f32)> {
-            if let Some(s) = sub {
-                if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
-                    if let (Some(top_left), Some(bottom_right)) = (slippy_map_tiles::Tile::new(zoom, min_x, min_y), slippy_map_tiles::Tile::new(zoom, max_x, max_y)) {
-                        return Some((top_left.left(), bottom_right.bottom(), bottom_right.right(), top_left.top()));
+        let categories_requested = params
+            .categories
+            .iter()
+            .filter_map(|category| match category.as_str() {
+                "metro" => Some(CategoryOfRealtimeVehicleData::Metro),
+                "bus" => Some(CategoryOfRealtimeVehicleData::Bus),
+                "rail" => Some(CategoryOfRealtimeVehicleData::Rail),
+                "other" => Some(CategoryOfRealtimeVehicleData::Other),
+                _ => None,
+            })
+            .collect::<Vec<CategoryOfRealtimeVehicleData>>();
+
+        for category in &categories_requested {
+            let category_str = match category {
+                CategoryOfRealtimeVehicleData::Metro => "metro",
+                CategoryOfRealtimeVehicleData::Bus => "bus",
+                CategoryOfRealtimeVehicleData::Rail => "rail",
+                CategoryOfRealtimeVehicleData::Other => "other",
+            };
+
+            let category_is_new = last_sent_categories
+                .as_ref()
+                .map_or(true, |c| !c.contains(category_str));
+
+            let zoom = match category {
+                CategoryOfRealtimeVehicleData::Metro => 8,
+                CategoryOfRealtimeVehicleData::Rail => 7,
+                CategoryOfRealtimeVehicleData::Bus => 12,
+                CategoryOfRealtimeVehicleData::Other => 5,
+            };
+
+            let bounds = match category {
+                CategoryOfRealtimeVehicleData::Metro => &params.bounds_input.level8,
+                CategoryOfRealtimeVehicleData::Rail => &params.bounds_input.level7,
+                CategoryOfRealtimeVehicleData::Bus => &params.bounds_input.level12,
+                CategoryOfRealtimeVehicleData::Other => &params.bounds_input.level5,
+            };
+
+            let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match category {
+                CategoryOfRealtimeVehicleData::Metro => &b.level8,
+                CategoryOfRealtimeVehicleData::Rail => &b.level7,
+                CategoryOfRealtimeVehicleData::Bus => &b.level12,
+                CategoryOfRealtimeVehicleData::Other => &b.level5,
+            });
+
+            let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
+
+            let bounds_changed = if let Some(pb) = prev_bounds_for_level {
+                pb.min_x != bounds.min_x
+                    || pb.max_x != bounds.max_x
+                    || pb.min_y != bounds.min_y
+                    || pb.max_y != bounds.max_y
+            } else {
+                true
+            };
+
+            if !replace_all && !bounds_changed {
+                continue;
+            }
+
+            has_any_updates = true;
+
+            let precomputed_category = match category {
+                CategoryOfRealtimeVehicleData::Metro => &response.metro,
+                CategoryOfRealtimeVehicleData::Bus => &response.bus,
+                CategoryOfRealtimeVehicleData::Rail => &response.rail,
+                CategoryOfRealtimeVehicleData::Other => &response.other,
+            };
+
+            let mut vehicles_by_tile: BTreeMap<
+                u32,
+                BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>,
+            > = BTreeMap::new();
+
+            if replace_all {
+                for (&x, y_map) in precomputed_category
+                    .tiles
+                    .range(bounds.min_x..=bounds.max_x)
+                {
+                    let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
+                    for (&y, vehicles) in in_bounds_y {
+                        vehicles_by_tile
+                            .entry(x)
+                            .or_default()
+                            .insert(y, vehicles.clone());
                     }
                 }
-            }
-            None
-        };
-
-        let categories = vec![
-            (CategoryOfRealtimeVehicleData::Bus, &params.bus, 12, "bus", &mut new_bounds_v1_equivalent.level12, &response.bus),
-            (CategoryOfRealtimeVehicleData::Metro, &params.metro, 8, "metro", &mut new_bounds_v1_equivalent.level8, &response.metro),
-            (CategoryOfRealtimeVehicleData::Rail, &params.rail, 7, "rail", &mut new_bounds_v1_equivalent.level7, &response.rail),
-            (CategoryOfRealtimeVehicleData::Other, &params.other, 5, "other", &mut new_bounds_v1_equivalent.level5, &response.other),
-        ];
-
-        for (cat, sub_params, zoom, cat_name, bounds_v1, precomputed) in categories {
-            if let Some(sub) = sub_params {
-                new_categories_sent.insert(cat_name.to_string());
-                
-                if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (sub.prev_user_min_x, sub.prev_user_max_x, sub.prev_user_min_y, sub.prev_user_max_y) {
-                    bounds_v1.min_x = min_x;
-                    bounds_v1.max_x = max_x;
-                    bounds_v1.min_y = min_y;
-                    bounds_v1.max_y = max_y;
-                }
-                
-                let category_is_new = last_sent_categories.as_ref().map_or(true, |c| !c.contains(cat_name));
-                
-                let prev_bounds_for_level = last_sent_bounds.as_ref().map(|b| match cat {
-                    CategoryOfRealtimeVehicleData::Metro => &b.level8,
-                    CategoryOfRealtimeVehicleData::Rail => &b.level7,
-                    CategoryOfRealtimeVehicleData::Bus => &b.level12,
-                    CategoryOfRealtimeVehicleData::Other => &b.level5,
-                });
-                
-                let replace_all = is_new_feed || prev_bounds_for_level.is_none() || category_is_new;
-                let bounds_changed = if let Some(pb) = prev_bounds_for_level {
-                    pb.min_x != bounds_v1.min_x || pb.max_x != bounds_v1.max_x || pb.min_y != bounds_v1.min_y || pb.max_y != bounds_v1.max_y
-                } else {
-                    true
-                };
-
-                if !replace_all && !bounds_changed {
-                    continue;
-                }
-                
-                let mut vehicles_by_tile = std::collections::BTreeMap::new();
-                let precomputed_count = precomputed.raw_vehicles.len();
-                let mut filtered_count = 0;
-                
-                if let Some((min_lon, min_lat, max_lon, max_lat)) = get_bounds_latlon(sub_params, zoom) {
-                    for v in &precomputed.raw_vehicles {
-                        if let Some(pos) = &v.position {
-                            if pos.longitude >= min_lon && pos.longitude <= max_lon && pos.latitude >= min_lat && pos.latitude <= max_lat {
-                                let (x, y) = slippy_map_tiles::lat_lon_to_tile(pos.latitude, pos.longitude, zoom);
-                                vehicles_by_tile.entry(x).or_insert_with(std::collections::BTreeMap::new).entry(y).or_insert_with(std::collections::BTreeMap::new).insert(v.vehicle.as_ref().map_or("".to_string(), |x| x.id.clone().unwrap_or_default()), v.clone());
-                                filtered_count += 1;
-                            }
+            } else if let Some(prev_bounds) = prev_bounds_for_level {
+                for (&x, y_map) in precomputed_category
+                    .tiles
+                    .range(bounds.min_x..=bounds.max_x)
+                {
+                    let in_bounds_y = y_map.range(bounds.min_y..=bounds.max_y);
+                    for (&y, vehicles) in in_bounds_y {
+                        let in_prev_bounds = x >= prev_bounds.min_x
+                            && x <= prev_bounds.max_x
+                            && y >= prev_bounds.min_y
+                            && y <= prev_bounds.max_y;
+                        if !in_prev_bounds {
+                            vehicles_by_tile
+                                .entry(x)
+                                .or_default()
+                                .insert(y, vehicles.clone());
                         }
                     }
                 }
-                
-                println!("DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.", chateau_id, cat_name, precomputed_count, filtered_count);
-
-                if replace_all && category_is_new && vehicles_by_tile.is_empty() {
-                    continue;
+            }
+            
+            let mut filtered_count = 0;
+            for y_map in vehicles_by_tile.values() {
+                for vehicles in y_map.values() {
+                    filtered_count += vehicles.len();
                 }
-                
-                has_any_updates = true;
-                
-                let payload = EachCategoryPayloadV2 {
-                    vehicle_positions: match vehicles_by_tile.is_empty() {
-                        false => Some(vehicles_by_tile),
-                        true => None,
-                    },
-                    last_updated_time_ms: response.last_updated_time_ms,
-                    replaces_all: replace_all,
-                    z_level: zoom,
-                    list_of_agency_ids: precomputed.agency_ids.clone(),
-                };
-                
-                match cat {
-                    CategoryOfRealtimeVehicleData::Metro => each_chateau_response.categories.as_mut().unwrap().metro = Some(payload),
-                    CategoryOfRealtimeVehicleData::Bus => each_chateau_response.categories.as_mut().unwrap().bus = Some(payload),
-                    CategoryOfRealtimeVehicleData::Rail => each_chateau_response.categories.as_mut().unwrap().rail = Some(payload),
-                    CategoryOfRealtimeVehicleData::Other => each_chateau_response.categories.as_mut().unwrap().other = Some(payload),
+            }
+            let precomputed_count = precomputed_category.raw_vehicles.len();
+            println!("DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.", chateau_id, category_str, precomputed_count, filtered_count);
+
+            let list_of_agency_ids = precomputed_category.agency_ids.clone();
+
+            let payload = EachCategoryPayloadV2 {
+                vehicle_positions: match vehicles_by_tile.is_empty() {
+                    false => Some(vehicles_by_tile),
+                    true => None,
+                },
+                last_updated_time_ms: response.last_updated_time_ms,
+                replaces_all: replace_all,
+                z_level: zoom,
+                list_of_agency_ids,
+            };
+
+            match category {
+                CategoryOfRealtimeVehicleData::Metro => {
+                    each_chateau_response.categories.as_mut().unwrap().metro = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Rail => {
+                    each_chateau_response.categories.as_mut().unwrap().rail = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Other => {
+                    each_chateau_response.categories.as_mut().unwrap().other = Some(payload);
+                }
+                CategoryOfRealtimeVehicleData::Bus => {
+                    each_chateau_response.categories.as_mut().unwrap().bus = Some(payload);
                 }
             }
         }
@@ -630,16 +674,20 @@ impl TripWebSocket {
         }
 
         let mut bulk_fetch_response = BulkFetchResponseV2 {
-            chateaus: std::collections::BTreeMap::new(),
+            chateaus: BTreeMap::new(),
         };
-        bulk_fetch_response.chateaus.insert(chateau_id.clone(), each_chateau_response);
+        bulk_fetch_response
+            .chateaus
+            .insert(chateau_id.clone(), each_chateau_response);
+
         let msg = ServerMessage::MapUpdate(bulk_fetch_response);
         let text = serde_json::to_string(&msg).ok()?;
 
+        let categories_sent: HashSet<String> = params.categories.iter().cloned().collect();
         let new_state = (
             response.last_updated_time_ms,
-            new_bounds_v1_equivalent,
-            new_categories_sent,
+            params.bounds_input.clone(),
+            categories_sent,
         );
 
         Some((chateau_id, text, new_state))
@@ -874,39 +922,19 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         let mut new_chateaus = HashSet::new();
 
                         let get_bounds =
-                            |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>,
+                            |bounds: &crate::map_coordinator::BoundsInputPerLevel,
                              zoom: u8|
                              -> Option<(f64, f64, f64, f64)> {
-                                if let Some(s) = sub {
-                                    if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (
-                                        s.prev_user_min_x,
-                                        s.prev_user_max_x,
-                                        s.prev_user_min_y,
-                                        s.prev_user_max_y,
-                                    ) {
-                                        let top_left = slippy_map_tiles::Tile::new(zoom, min_x, min_y)?;
-                                        let bottom_right = slippy_map_tiles::Tile::new(zoom, max_x, max_y)?;
-                                        
-                                        return Some((top_left.left() as f64, bottom_right.bottom() as f64, bottom_right.right() as f64, top_left.top() as f64));
-                                    }
-                                }
-                                None
+                                let top_left = slippy_map_tiles::Tile::new(zoom, bounds.min_x, bounds.min_y)?;
+                                let bottom_right = slippy_map_tiles::Tile::new(zoom, bounds.max_x, bounds.max_y)?;
+                                
+                                Some((top_left.left() as f64, bottom_right.bottom() as f64, bottom_right.right() as f64, top_left.top() as f64))
                             };
 
-                        let bounds_bus = get_bounds(&params.bus, 12);
-                        let bounds_metro = get_bounds(&params.metro, 8);
-                        let bounds_rail = get_bounds(&params.rail, 7);
-                        let bounds_other = get_bounds(&params.other, 5);
-
-                        println!(
-                            "DEBUG: SubscribeMapV2 received! Raw params: {}",
-                            serde_json::to_string(&params).unwrap_or_else(|_| "err".into())
-                        );
-
-                        println!(
-                            "DEBUG: SubscribeMapV2 received! Bounds: Bus={:?}, Metro={:?}, Rail={:?}, Other={:?}",
-                            bounds_bus, bounds_metro, bounds_rail, bounds_other
-                        );
+                        let bounds_bus = if params.categories.contains(&"bus".to_string()) { get_bounds(&params.bounds_input.level12, 12) } else { None };
+                        let bounds_metro = if params.categories.contains(&"metro".to_string()) { get_bounds(&params.bounds_input.level8, 8) } else { None };
+                        let bounds_rail = if params.categories.contains(&"rail".to_string()) { get_bounds(&params.bounds_input.level7, 7) } else { None };
+                        let bounds_other = if params.categories.contains(&"other".to_string()) { get_bounds(&params.bounds_input.level5, 5) } else { None };
 
                         for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other]
                             .into_iter()
@@ -918,19 +946,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             new_chateaus.extend(chateaus);
                         }
 
-                        println!(
-                            "DEBUG: SubscribeMapV2 resolved to {} chateaus: {:?}",
-                            new_chateaus.len(),
-                            new_chateaus
-                        );
-
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);
                         self.update_map_subscriptions(ctx, new_chateaus);
 
-                        // Request updates for all subscribed chateaus
                         for ch in &self.subscribed_chateaus {
                             let coordinator = self.coordinator_pool.for_chateau(ch);
-                            //println!("DEBUG: Sending Subscribe to coordinator for {}", ch);
                             coordinator.do_send(crate::map_coordinator::Subscribe {
                                 chateau_id: ch.clone(),
                                 recipient: ctx.address().recipient(),
