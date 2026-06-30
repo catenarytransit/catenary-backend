@@ -763,13 +763,27 @@ impl TripWebSocket {
                         .trajectory_subscription
                         .as_ref()
                         .map_or("".to_string(), |s| s.client_reference.clone());
-                    let msg = ServerMessage::Buffer {
-                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                        client_reference: client_ref,
-                        content: trajectories,
-                    };
-                    if let Ok(text) = serde_json::to_string(&msg) {
-                        ctx.text(text);
+                    let chunks: Vec<_> = trajectories.chunks(500).collect();
+                    if chunks.is_empty() {
+                        let msg = ServerMessage::Buffer {
+                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                            client_reference: client_ref.clone(),
+                            content: vec![],
+                        };
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            ctx.text(text);
+                        }
+                    } else {
+                        for chunk in chunks {
+                            let msg = ServerMessage::Buffer {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                client_reference: client_ref.clone(),
+                                content: chunk.to_vec(),
+                            };
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                ctx.text(text);
+                            }
+                        }
                     }
                     act.last_trajectory_sent_time = Some(Instant::now());
                 }

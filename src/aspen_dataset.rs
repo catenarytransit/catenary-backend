@@ -76,7 +76,6 @@ pub struct AspenisedData {
     pub stop_id_to_non_scheduled_trip_ids: AHashMap<CompactString, Vec<EcoString>>,
     pub stop_id_to_parent_id: AHashMap<CompactString, CompactString>,
     pub parent_id_to_children_ids: AHashMap<CompactString, Vec<CompactString>>,
-    pub trajectories_by_route_type: AHashMap<i16, rstar::RTree<AspenisedTrajectoryBBox>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]

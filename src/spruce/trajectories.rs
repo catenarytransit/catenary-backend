@@ -5,6 +5,16 @@ use catenary::bincode_deserialize;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use std::sync::Arc;
 
+fn haversine_distance_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
+    let earth_radius_km = 6371.0;
+    let d_lat = (lat2 - lat1).to_radians();
+    let d_lon = (lon2 - lon1).to_radians();
+    let a = (d_lat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
+    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
+    earth_radius_km * c * 1000.0
+}
+
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
 pub use catenary::pasque::lib::TrajectoryWrapper;
 
@@ -83,19 +93,72 @@ pub async fn get_trajectories(
 
             if let Some(mut client) = client_res {
                 let client_reference = params_clone.client_reference.clone();
+                let min_lon = params_clone.bbox.get(0).copied().unwrap_or(0.0);
+                let min_lat = params_clone.bbox.get(1).copied().unwrap_or(0.0);
+                let max_lon = params_clone.bbox.get(2).copied().unwrap_or(0.0);
+                let max_lat = params_clone.bbox.get(3).copied().unwrap_or(0.0);
+
+                let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
+                let avg_lat = (min_lat + max_lat) / 2.0;
+                let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
+                let min_dim_km = lat_diff_km.min(lon_diff_km);
+
+                let simplify_meters = if min_dim_km > 200.0 {
+                    1000.0
+                } else if min_dim_km > 100.0 {
+                    500.0
+                } else if min_dim_km > 50.0 {
+                    250.0
+                } 
+                else if min_dim_km > 10.0 {
+                    100.0
+                }
+                if min_dim_km > 5.0 {
+                    20.0
+                }
+                else {
+                    5.0
+                };
+
                 match client
                     .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
                     .await
                 {
-                    Ok(Ok(trajectories)) => trajectories
-                        .into_iter()
-                        .map(|traj| TrajectoryWrapper {
-                            source: "trajectory".to_string(),
-                            timestamp: catenary::duration_since_unix_epoch().as_millis() as u64,
-                            client_reference: client_reference.clone(),
-                            content: serde_json::to_value(traj).unwrap_or(serde_json::Value::Null),
-                        })
-                        .collect(),
+                    Ok(Ok(mut trajectories)) => {
+                        if simplify_meters > 0.0 {
+                            for traj in &mut trajectories {
+                                for seg in &mut traj.segments {
+                                    if seg.coordinates.len() > 2 {
+                                        let mut simplified = Vec::with_capacity(seg.coordinates.len());
+                                        simplified.push(seg.coordinates[0]);
+                                        let mut last_kept = seg.coordinates[0];
+                                        
+                                        for i in 1..seg.coordinates.len() - 1 {
+                                            let pt = seg.coordinates[i];
+                                            let dist = haversine_distance_meters(last_kept[0], last_kept[1], pt[0], pt[1]);
+                                            if dist >= simplify_meters {
+                                                simplified.push(pt);
+                                                last_kept = pt;
+                                            }
+                                        }
+                                        
+                                        simplified.push(seg.coordinates[seg.coordinates.len() - 1]);
+                                        seg.coordinates = simplified;
+                                    }
+                                }
+                            }
+                        }
+
+                        trajectories
+                            .into_iter()
+                            .map(|traj| TrajectoryWrapper {
+                                source: "trajectory".to_string(),
+                                timestamp: catenary::duration_since_unix_epoch().as_millis() as u64,
+                                client_reference: client_reference.clone(),
+                                content: serde_json::to_value(traj).unwrap_or(serde_json::Value::Null),
+                            })
+                            .collect()
+                    }
                     Ok(Err(e)) => {
                         eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
                         vec![]

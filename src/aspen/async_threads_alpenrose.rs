@@ -4,6 +4,7 @@ use catenary::compact_formats::CompactFeedMessage;
 use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
+use ahash::AHashMap;
 use scc::HashMap as SccHashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -26,6 +27,12 @@ pub async fn alpenrose_process_threads(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_trajectory_data_store: Arc<
+        SccHashMap<
+            String,
+            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
+        >,
+    >,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
@@ -48,6 +55,7 @@ pub async fn alpenrose_process_threads(
         let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
         let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
         let authoritative_data_store = Arc::clone(&authoritative_data_store);
+        let authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
         let conn_pool = Arc::clone(&conn_pool);
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
         let redis_client = redis_client.clone();
@@ -61,6 +69,7 @@ pub async fn alpenrose_process_threads(
                     alpenrose_to_process_queue.clone(),
                     authoritative_gtfs_rt_store.clone(),
                     authoritative_data_store.clone(),
+                    authoritative_trajectory_data_store.clone(),
                     conn_pool.clone(),
                     chateau_queue_list.clone(),
                     redis_client.clone(),
@@ -87,6 +96,8 @@ pub async fn alpenrose_process_threads(
             let alpenrose_to_process_queue = Arc::clone(&alpenrose_to_process_queue);
             let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
             let authoritative_data_store = Arc::clone(&authoritative_data_store);
+            let authoritative_trajectory_data_store =
+                Arc::clone(&authoritative_trajectory_data_store);
             let conn_pool = Arc::clone(&conn_pool);
             let chateau_queue_list = Arc::clone(&chateau_queue_list);
             let redis_client = redis_client.clone();
@@ -98,6 +109,7 @@ pub async fn alpenrose_process_threads(
                         alpenrose_to_process_queue.clone(),
                         authoritative_gtfs_rt_store.clone(),
                         authoritative_data_store.clone(),
+                        authoritative_trajectory_data_store.clone(),
                         conn_pool.clone(),
                         chateau_queue_list.clone(),
                         redis_client.clone(),
@@ -131,6 +143,12 @@ pub async fn alpenrose_loop_process_thread(
     alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
     authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_trajectory_data_store: Arc<
+        SccHashMap<
+            String,
+            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
+        >,
+    >,
     conn_pool: Arc<CatenaryPostgresPool>,
     chateau_queue_list: Arc<Mutex<HashSet<String>>>,
     redis_client: redis::Client,
@@ -153,6 +171,7 @@ pub async fn alpenrose_loop_process_thread(
 
                 let rt_processed_status = new_rt_data(
                     Arc::clone(&authoritative_data_store),
+                    Arc::clone(&authoritative_trajectory_data_store),
                     Arc::clone(&authoritative_gtfs_rt_store),
                     new_ingest_task.chateau_id.as_str(),
                     new_ingest_task.realtime_feed_id.as_str(),

@@ -175,6 +175,12 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 //then we write some indexes, so that way the realtime data can quickly be found by certain IDs
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_trajectory_data_store: Arc<
+        SccHashMap<
+            String,
+            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
+        >,
+    >,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     chateau_id: &str,
     realtime_feed_id: &str,
@@ -3207,6 +3213,44 @@ pub async fn new_rt_data(
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
+    let aspenised_data = AspenisedData {
+        vehicle_positions: aspenised_vehicle_positions,
+        vehicle_routes_cache: vehicle_routes_cache,
+        vehicle_routes_cache_hash: fast_hash_of_routes,
+        trip_updates: trip_updates,
+        trip_updates_lookup_by_trip_id_to_trip_update_ids:
+            trip_updates_lookup_by_trip_id_to_trip_update_ids,
+        aspenised_alerts: alerts,
+        impacted_routes_alerts: impacted_route_id_to_alert_ids,
+        impacted_stops_alerts: AHashMap::new(),
+        vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
+        impacted_trips_alerts: impact_trip_id_to_alert_ids,
+        compressed_trip_internal_cache,
+        itinerary_pattern_internal_cache: ItineraryPatternInternalCache {
+            itinerary_patterns: accumulated_itinerary_patterns,
+            last_time_full_refreshed: chrono::Utc::now(),
+        },
+        last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
+        trip_updates_lookup_by_route_id_to_trip_update_ids:
+            trip_updates_lookup_by_route_id_to_trip_update_ids,
+        trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
+        stop_id_to_stop,
+        shape_id_to_shape,
+        trip_modifications: trip_modifications,
+        trip_id_to_trip_modification_ids,
+        stop_id_to_trip_modification_ids,
+        stop_id_to_non_scheduled_trip_ids,
+        stop_id_to_parent_id,
+        parent_id_to_children_ids,
+    };
+
+    // Insert the aspenised data - clone only for persistence, move into map when possible
+    let aspenised_data_for_persist = aspenised_data.clone();
+    authoritative_data_store
+        .entry_async(chateau_id.to_string())
+        .await
+        .and_modify(|d| *d = aspenised_data_for_persist.clone())
+        .or_insert(aspenised_data);
     let mut trajectories_by_route_type: AHashMap<
         i16,
         rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>,
@@ -3215,8 +3259,11 @@ pub async fn new_rt_data(
     let current_secs = (current_timestamp / 1000) as i64;
 
     // Fetch shapes for all trips
+    // Note: The shape IDs sent in the GTFS realtime dataset are only used for detours.
+    // They are not related to the shape IDs required for timetable analysis and trajectory computation.
+    // For trajectories, we need to look at the schedules instead.
     let mut shape_ids_to_fetch = std::collections::HashSet::new();
-    for (_, trip_update) in trip_updates.iter() {
+    for (_, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
         if let Some(props) = &trip_update.trip_properties {
             if let Some(shape_id) = &props.shape_id {
                 shape_ids_to_fetch.insert(shape_id.clone());
@@ -3268,7 +3315,7 @@ pub async fn new_rt_data(
         let mut skipped_too_few_trajectory_stops = 0;
         let mut skipped_too_few_shape_coords = 0;
 
-        for (trip_update_id, trip_update) in trip_updates.iter() {
+        for (trip_update_id, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
             if trip_update.stop_time_update.is_empty() {
                 skipped_no_stops += 1;
                 continue;
@@ -3290,7 +3337,10 @@ pub async fn new_rt_data(
                 }
             };
 
-            let route = match vehicle_routes_cache.get(route_id) {
+            let route = match aspenised_data_for_persist
+                .vehicle_routes_cache
+                .get(route_id)
+            {
                 Some(r) => r,
                 None => {
                     skipped_no_route_cache += 1;
@@ -3336,7 +3386,10 @@ pub async fn new_rt_data(
                 let mut lat = 0.0;
                 let mut lon = 0.0;
                 if let Some(stop_id) = &stu.stop_id {
-                    if let Some(stop) = stop_id_to_stop.get(stop_id.as_ref()) {
+                    if let Some(stop) = aspenised_data_for_persist
+                        .stop_id_to_stop
+                        .get(stop_id.as_ref())
+                    {
                         name = stop
                             .stop_name
                             .as_ref()
@@ -3382,6 +3435,7 @@ pub async fn new_rt_data(
                 }
             }
 
+            let mut last_shape_idx = 0;
             for i in 0..stops.len() - 1 {
                 let mut seg_coords = vec![
                     [stops[i].lon, stops[i].lat],
@@ -3397,23 +3451,29 @@ pub async fn new_rt_data(
                         dx * dx + dy * dy
                     }
 
-                    let mut best_start = 0;
-                    let mut best_end = coords.len() - 1;
+                    let mut best_start = last_shape_idx;
                     let mut min_start_dist = f64::MAX;
-                    let mut min_end_dist = f64::MAX;
 
-                    for (idx, p) in coords.iter().enumerate() {
+                    for (idx, p) in coords.iter().enumerate().skip(last_shape_idx) {
                         let d_start = dist_sq(p, &seg_coords[0]);
                         if d_start < min_start_dist {
                             min_start_dist = d_start;
                             best_start = idx;
                         }
+                    }
+
+                    let mut best_end = best_start;
+                    let mut min_end_dist = f64::MAX;
+
+                    for (idx, p) in coords.iter().enumerate().skip(best_start) {
                         let d_end = dist_sq(p, &seg_coords[1]);
                         if d_end < min_end_dist {
                             min_end_dist = d_end;
                             best_end = idx;
                         }
                     }
+
+                    last_shape_idx = best_end;
 
                     if best_start <= best_end {
                         seg_coords = coords[best_start..=best_end].to_vec();
@@ -3488,7 +3548,7 @@ pub async fn new_rt_data(
              skipped_too_few_shape_coords={}, \
              built_trajectories={}",
             chateau_id,
-            trip_updates.len(),
+            aspenised_data_for_persist.trip_updates.len(),
             skipped_no_stops,
             skipped_no_trip_id,
             skipped_no_route_id,
@@ -3502,45 +3562,11 @@ pub async fn new_rt_data(
         );
     }
 
-    let aspenised_data = AspenisedData {
-        vehicle_positions: aspenised_vehicle_positions,
-        vehicle_routes_cache: vehicle_routes_cache,
-        vehicle_routes_cache_hash: fast_hash_of_routes,
-        trip_updates: trip_updates,
-        trip_updates_lookup_by_trip_id_to_trip_update_ids:
-            trip_updates_lookup_by_trip_id_to_trip_update_ids,
-        aspenised_alerts: alerts,
-        impacted_routes_alerts: impacted_route_id_to_alert_ids,
-        impacted_stops_alerts: AHashMap::new(),
-        vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-        impacted_trips_alerts: impact_trip_id_to_alert_ids,
-        compressed_trip_internal_cache,
-        itinerary_pattern_internal_cache: ItineraryPatternInternalCache {
-            itinerary_patterns: accumulated_itinerary_patterns,
-            last_time_full_refreshed: chrono::Utc::now(),
-        },
-        last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
-        trip_updates_lookup_by_route_id_to_trip_update_ids:
-            trip_updates_lookup_by_route_id_to_trip_update_ids,
-        trip_id_to_vehicle_gtfs_rt_id: trip_id_to_vehicle_gtfs_rt_id,
-        stop_id_to_stop,
-        shape_id_to_shape,
-        trip_modifications: trip_modifications,
-        trip_id_to_trip_modification_ids,
-        stop_id_to_trip_modification_ids,
-        stop_id_to_non_scheduled_trip_ids,
-        stop_id_to_parent_id,
-        parent_id_to_children_ids,
-        trajectories_by_route_type,
-    };
-
-    // Insert the aspenised data - clone only for persistence, move into map when possible
-    let aspenised_data_for_persist = aspenised_data.clone();
-    authoritative_data_store
+    authoritative_trajectory_data_store
         .entry_async(chateau_id.to_string())
         .await
-        .and_modify(|d| *d = aspenised_data_for_persist.clone())
-        .or_insert(aspenised_data);
+        .and_modify(|d| *d = trajectories_by_route_type.clone())
+        .or_insert(trajectories_by_route_type);
 
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,

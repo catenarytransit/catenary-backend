@@ -1214,25 +1214,42 @@ pub async fn get_all_trajectories(
 
     let aspen_client = aspen_client.unwrap();
 
-    let full_aspen_dataset = aspen_client
-        .full_aspen_dataset(tarpc::context::current(), chateau_id)
+    let params = catenary::pasque::lib::TrajectorySubscriptionParams {
+        bbox: vec![-180.0, -90.0, 180.0, 90.0],
+        zoom: 20,
+        modes: vec![
+            "tram".to_string(),
+            "subway".to_string(),
+            "rail".to_string(),
+            "bus".to_string(),
+            "ferry".to_string(),
+            "cable_car".to_string(),
+            "gondola".to_string(),
+            "funicular".to_string(),
+            "trolleybus".to_string(),
+            "monorail".to_string(),
+            "other".to_string(),
+        ],
+        precision: None,
+        client_reference: "ron_dump".to_string(),
+        start_time_ms: 0,
+        end_time_ms: i64::MAX,
+    };
+
+    let trajectories_res = aspen_client
+        .get_trajectories(tarpc::context::current(), chateau_id, params)
         .await;
 
-    match full_aspen_dataset {
-        Ok(Some(full_aspen_dataset)) => {
-            let all_trajectories: Vec<_> = full_aspen_dataset
-                .trajectories_by_route_type
-                .values()
-                .flat_map(|rtree| rtree.into_iter().map(|item| item.trajectory.clone()))
-                .collect();
-            HttpResponse::Ok().body(
-                ron::ser::to_string_pretty(&all_trajectories, ron::ser::PrettyConfig::default())
-                    .unwrap(),
-            )
+    match trajectories_res {
+        Ok(Ok(trajectories)) => HttpResponse::Ok().body(
+            ron::ser::to_string_pretty(&trajectories, ron::ser::PrettyConfig::default()).unwrap(),
+        ),
+        Ok(Err(e)) => {
+            eprintln!("Error fetching trajectories from aspen: {e}");
+            HttpResponse::InternalServerError().body(format!("Error fetching from Aspen: {e}"))
         }
-        Ok(None) => HttpResponse::NotFound().body("No dataset found"),
         Err(e) => {
-            eprintln!("Error fetching from aspen: {e}");
+            eprintln!("Error connecting to aspen: {e}");
             HttpResponse::InternalServerError().body("Error fetching from Aspen")
         }
     }

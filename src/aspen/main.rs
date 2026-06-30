@@ -112,6 +112,12 @@ pub struct AspenServer {
     pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
     pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    pub authoritative_trajectory_data_store: Arc<
+        SccHashMap<
+            String,
+            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
+        >,
+    >,
     // Backed up in redis as well, program can be shut down and restarted without data loss
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
@@ -1609,16 +1615,20 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         params: catenary::pasque::lib::TrajectorySubscriptionParams,
     ) -> Result<Vec<catenary::aspen_dataset::AspenisedTrajectory>, String> {
-        let aspenised_data = match self.authoritative_data_store.get_async(&chateau_id).await {
+        let trajectory_data = match self
+            .authoritative_trajectory_data_store
+            .get_async(&chateau_id)
+            .await
+        {
             Some(data) => data,
             None => {
                 return Err(format!(
-                    "No AspenisedData found for chateau: {}",
+                    "No TrajectoryData found for chateau: {}",
                     chateau_id
                 ));
             }
         };
-        let aspenised_data = aspenised_data.get();
+        let trajectories_by_route_type = trajectory_data.get();
 
         let mut trajectories = Vec::new();
 
@@ -1679,7 +1689,7 @@ impl AspenRpc for AspenServer {
             }
         }
 
-        for (route_type, rtree) in &aspenised_data.trajectories_by_route_type {
+        for (route_type, rtree) in trajectories_by_route_type {
             if route_types.contains(route_type) {
                 let iter = rtree.locate_in_envelope_intersecting(&search_envelope);
                 for bbox_item in iter {
@@ -1847,6 +1857,12 @@ async fn main() -> anyhow::Result<()> {
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
+    let authoritative_trajectory_data_store: Arc<
+        SccHashMap<
+            String,
+            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
+        >,
+    > = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashSet::new()));
@@ -1861,6 +1877,7 @@ async fn main() -> anyhow::Result<()> {
     let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
+    let b_authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
 
@@ -1917,6 +1934,7 @@ async fn main() -> anyhow::Result<()> {
         b_alpenrose_to_process_queue,
         b_authoritative_gtfs_rt_store,
         b_authoritative_data_store,
+        b_authoritative_trajectory_data_store,
         b_conn_pool,
         b_thread_count,
         Arc::clone(&alpenrose_to_process_queue_chateaux),
@@ -2041,6 +2059,9 @@ async fn main() -> anyhow::Result<()> {
                             addr: channel.transport().peer_addr().unwrap(),
                             worker_id: worker_id_for_this_thread.clone(),
                             authoritative_data_store: Arc::clone(&authoritative_data_store),
+                            authoritative_trajectory_data_store: Arc::clone(
+                                &authoritative_trajectory_data_store,
+                            ),
                             conn_pool: conn_pool_arced.clone(),
                             alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
