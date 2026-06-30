@@ -169,6 +169,7 @@ pub struct EachCategoryPayloadV2 {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PrecomputedCategoryTiles {
     pub tiles: BTreeMap<u32, BTreeMap<u32, BTreeMap<String, AspenisedVehiclePositionOutput>>>,
+    pub raw_vehicles: Vec<AspenisedVehiclePositionOutput>,
     pub agency_ids: Option<Vec<String>>,
 }
 
@@ -186,6 +187,11 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
     let mut bus_tiles = BTreeMap::new();
     let mut rail_tiles = BTreeMap::new();
     let mut other_tiles = BTreeMap::new();
+    
+    let mut metro_raw = Vec::new();
+    let mut bus_raw = Vec::new();
+    let mut rail_raw = Vec::new();
+    let mut other_raw = Vec::new();
 
     let route_types_metro = category_to_allowed_route_ids(&CategoryOfRealtimeVehicleData::Metro);
     let route_types_bus = category_to_allowed_route_ids(&CategoryOfRealtimeVehicleData::Bus);
@@ -222,6 +228,7 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
 
                     match cat {
                         CategoryOfRealtimeVehicleData::Metro => {
+                            metro_raw.push(output.clone());
                             metro_tiles
                                 .entry(x)
                                 .or_insert_with(BTreeMap::new)
@@ -230,6 +237,7 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
                                 .insert(vehicle_id.clone(), output);
                         }
                         CategoryOfRealtimeVehicleData::Bus => {
+                            bus_raw.push(output.clone());
                             bus_tiles
                                 .entry(x)
                                 .or_insert_with(BTreeMap::new)
@@ -238,6 +246,7 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
                                 .insert(vehicle_id.clone(), output);
                         }
                         CategoryOfRealtimeVehicleData::Rail => {
+                            rail_raw.push(output.clone());
                             rail_tiles
                                 .entry(x)
                                 .or_insert_with(BTreeMap::new)
@@ -246,6 +255,7 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
                                 .insert(vehicle_id.clone(), output);
                         }
                         CategoryOfRealtimeVehicleData::Other => {
+                            other_raw.push(output.clone());
                             other_tiles
                                 .entry(x)
                                 .or_insert_with(BTreeMap::new)
@@ -280,18 +290,22 @@ pub fn precompute_chateau_map(response: &GetVehicleLocationsResponse) -> Precomp
         last_updated_time_ms: response.last_updated_time_ms,
         metro: PrecomputedCategoryTiles {
             tiles: metro_tiles,
+            raw_vehicles: metro_raw,
             agency_ids: get_agencies(&route_types_metro),
         },
         bus: PrecomputedCategoryTiles {
             tiles: bus_tiles,
+            raw_vehicles: bus_raw,
             agency_ids: get_agencies(&route_types_bus),
         },
         rail: PrecomputedCategoryTiles {
             tiles: rail_tiles,
+            raw_vehicles: rail_raw,
             agency_ids: get_agencies(&route_types_rail),
         },
         other: PrecomputedCategoryTiles {
             tiles: other_tiles,
+            raw_vehicles: other_raw,
             agency_ids: get_agencies(&route_types_other),
         },
     }
