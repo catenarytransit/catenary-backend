@@ -2793,6 +2793,8 @@ pub async fn new_rt_data(
                             }
 
                             if let Some(route_id) = &trip_update.trip.route_id {
+                                route_ids_to_insert.insert(route_id.clone());
+
                                 trip_updates_lookup_by_route_id_to_trip_update_ids
                                     .entry(route_id.into())
                                     .and_modify(|x| {
