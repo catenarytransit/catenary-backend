@@ -1223,20 +1223,20 @@ pub async fn new_rt_data(
         for (stop_id, stop) in &stop_id_to_stop_from_postgres {
             stop_id_to_stop.entry(stop_id.as_str().into()).or_insert_with(|| {
                 AspenisedStop {
-                    stop_id: stop_id.as_str().into(),
+                    stop_id: Some(stop_id.clone()),
                     stop_name: stop.name.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
-                    stop_code: stop.code.clone().map(|x| x.into()),
+                    stop_code: stop.code.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
                     tts_stop_name: None,
-                    stop_desc: stop.desc.clone().map(|x| x.into()),
-                    stop_lat: stop.lat.map(|x| x as f32),
-                    stop_lon: stop.lon.map(|x| x as f32),
+                    stop_desc: stop.gtfs_desc.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
+                    stop_lat: stop.point.clone().map(|p| p.y as f32),
+                    stop_lon: stop.point.clone().map(|p| p.x as f32),
                     zone_id: stop.zone_id.clone(),
-                    stop_url: stop.url.clone().map(|x| x.into()),
+                    stop_url: stop.url.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
                     parent_station: stop.parent_station.clone(),
                     stop_timezone: stop.timezone.clone(),
                     wheelchair_boarding: None,
                     level_id: stop.level_id.clone(),
-                    platform_code: stop.platform_code.clone().map(|x| x.into()),
+                    platform_code: stop.platform_code.clone().map(|x| catenary::aspen_dataset::AspenTranslatedString { translation: vec![catenary::aspen_dataset::AspenTranslation { text: x, language: None }] }),
                 }
             });
         }
