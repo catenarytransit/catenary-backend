@@ -2,7 +2,7 @@ use crate::map_coordinator::{
     AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchParamsV3,
     BulkFetchResponseV2, CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2,
     EachChateauResponseV2, PositionDataCategoryV2, PrecomputedChateauMap, Subscribe, Unsubscribe,
-    category_to_allowed_route_ids, convert_to_output,
+    category_to_allowed_route_ids, convert_to_output, CategoryAskParamsV2,
 };
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -61,6 +61,9 @@ pub struct TripWebSocket {
     pub pending_map_updates: HashMap<String, Arc<PrecomputedChateauMap>>,
     pub map_build_in_progress: bool,
 
+    pub chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
+    pub client_viewport_v2: Option<CategoryAskParamsV2>,
+
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
@@ -78,6 +81,7 @@ impl TripWebSocket {
         aspen_client_manager: Arc<AspenClientManager>,
         coordinator_pool: Arc<BulkFetchCoordinatorPool>,
         etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+        chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
     ) -> Self {
         Self {
             pool,
@@ -93,6 +97,8 @@ impl TripWebSocket {
             map_update_generation: 0,
             pending_map_updates: HashMap::new(),
             map_build_in_progress: false,
+            chateau_rtree,
+            client_viewport_v2: None,
             etcd_reuser,
             aspen_endpoint_cache: HashMap::new(),
             in_progress_trip_fetches: HashMap::new(),
@@ -711,6 +717,59 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                     }
                     Ok(ClientMessage::UnsubscribeTrajectories) => {
                         self.trajectory_subscription = None;
+                    }
+                    Ok(ClientMessage::SubscribeMapV2 { params }) => {
+                        self.client_viewport_v2 = Some(params.clone());
+                        let mut new_chateaus = HashSet::new();
+
+                        let get_bounds = |sub: &Option<crate::map_coordinator::SubCategoryAskParamsV2>, zoom: u8| -> Option<(f64, f64, f64, f64)> {
+                            if let Some(s) = sub {
+                                if let (Some(min_x), Some(max_x), Some(min_y), Some(max_y)) = (s.prev_user_min_x, s.prev_user_max_x, s.prev_user_min_y, s.prev_user_max_y) {
+                                    let n = f64::powi(2.0, zoom as i32);
+                                    let min_lon = (min_x as f64) / n * 360.0 - 180.0;
+                                    let max_lon = ((max_x + 1) as f64) / n * 360.0 - 180.0;
+                                    
+                                    let min_y_f64 = min_y as f64;
+                                    let max_y_f64 = (max_y + 1) as f64;
+                                    
+                                    let max_lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * min_y_f64 / n)).sinh().atan();
+                                    let max_lat = max_lat_rad * 180.0 / std::f64::consts::PI;
+                                    
+                                    let min_lat_rad = (std::f64::consts::PI * (1.0 - 2.0 * max_y_f64 / n)).sinh().atan();
+                                    let min_lat = min_lat_rad * 180.0 / std::f64::consts::PI;
+                                    
+                                    return Some((min_lon, min_lat, max_lon, max_lat));
+                                }
+                            }
+                            None
+                        };
+
+                        let bounds_bus = get_bounds(&params.bus, 12);
+                        let bounds_metro = get_bounds(&params.metro, 8);
+                        let bounds_rail = get_bounds(&params.rail, 7);
+                        let bounds_other = get_bounds(&params.other, 5);
+                        
+                        for bounds in [bounds_bus, bounds_metro, bounds_rail, bounds_other].into_iter().flatten() {
+                            let chateaus = self.chateau_rtree.locate_in_envelope(bounds.0, bounds.1, bounds.2, bounds.3);
+                            new_chateaus.extend(chateaus);
+                        }
+                        
+                        self.map_update_generation = self.map_update_generation.wrapping_add(1);
+                        self.update_map_subscriptions(ctx, new_chateaus);
+                        
+                        // Request updates for all subscribed chateaus
+                        for ch in &self.subscribed_chateaus {
+                            let coordinator = self.coordinator_pool.for_chateau(ch);
+                            coordinator.do_send(crate::map_coordinator::Subscribe {
+                                chateau_id: ch.clone(),
+                                recipient: ctx.address().recipient(),
+                            });
+                        }
+                    }
+                    Ok(ClientMessage::UnsubscribeMapV2) => {
+                        self.client_viewport_v2 = None;
+                        self.map_update_generation = self.map_update_generation.wrapping_add(1);
+                        self.update_map_subscriptions(ctx, HashSet::new());
                     }
                     Err(e) => {
                         let msg = ServerMessage::Error {

@@ -10,6 +10,7 @@ use std::sync::Arc;
 mod trip_websocket;
 use trip_websocket::TripWebSocket;
 
+mod chateau_rtree;
 mod departures_shared;
 mod map_coordinator;
 mod nearby_departures;
@@ -20,6 +21,7 @@ use catenary::trip_logic::{
 };
 use map_coordinator::{
     BoundsInputV3, BulkFetchCoordinator, BulkFetchCoordinatorPool, BulkFetchResponseV2,
+    CategoryAskParamsV2,
 };
 use serde::{Deserialize, Serialize};
 
@@ -60,6 +62,14 @@ pub enum ClientMessage {
     },
     #[serde(rename = "unsubscribe_trajectories")]
     UnsubscribeTrajectories,
+
+    #[serde(rename = "subscribe_map_v2")]
+    SubscribeMapV2 {
+        #[serde(flatten)]
+        params: CategoryAskParamsV2,
+    },
+    #[serde(rename = "unsubscribe_map_v2")]
+    UnsubscribeMapV2,
 }
 
 #[derive(Deserialize, Clone)]
@@ -105,6 +115,7 @@ async fn index(
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     coordinator_pool: web::Data<Arc<BulkFetchCoordinatorPool>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    chateau_rtree: web::Data<Arc<chateau_rtree::ChateauRTree>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         TripWebSocket::new(
@@ -114,6 +125,7 @@ async fn index(
             aspen_client_manager.as_ref().clone(),
             coordinator_pool.get_ref().clone(),
             etcd_reuser.get_ref().clone(),
+            chateau_rtree.get_ref().clone(),
         ),
         &req,
         stream,
@@ -133,6 +145,10 @@ async fn main() -> std::io::Result<()> {
     // env_logger::init();
 
     let pool = Arc::new(make_async_pool().await.unwrap());
+
+    // Load Chateau RTree once at startup
+    let chateau_rtree = Arc::new(chateau_rtree::ChateauRTree::load(&pool).await);
+
     let catenary_config = catenary::catenaryconfig::config();
 
     let etcd_urls_original = std::env::var("ETCD_URLS")
@@ -246,6 +262,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(aspen_client_manager.clone()))
             .app_data(web::Data::new(coordinator_pool.clone()))
             .app_data(web::Data::new(etcd_reuser.clone()))
+            .app_data(web::Data::new(chateau_rtree.clone()))
             .route("/ws/", web::get().to(index))
             .service(nearby_departures::nearby_from_coords_v3)
             .route("/", web::get().to(index_root))
