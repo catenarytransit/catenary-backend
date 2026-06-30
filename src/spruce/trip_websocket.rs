@@ -776,26 +776,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                         s.prev_user_min_y,
                                         s.prev_user_max_y,
                                     ) {
-                                        let n = f64::powi(2.0, zoom as i32);
-                                        let min_lon = (min_x as f64) / n * 360.0 - 180.0;
-                                        let max_lon = ((max_x + 1) as f64) / n * 360.0 - 180.0;
-
-                                        let min_y_f64 = min_y as f64;
-                                        let max_y_f64 = (max_y + 1) as f64;
-
-                                        let max_lat_rad = (std::f64::consts::PI
-                                            * (1.0 - 2.0 * min_y_f64 / n))
-                                            .sinh()
-                                            .atan();
-                                        let max_lat = max_lat_rad * 180.0 / std::f64::consts::PI;
-
-                                        let min_lat_rad = (std::f64::consts::PI
-                                            * (1.0 - 2.0 * max_y_f64 / n))
-                                            .sinh()
-                                            .atan();
-                                        let min_lat = min_lat_rad * 180.0 / std::f64::consts::PI;
-
-                                        return Some((min_lon, min_lat, max_lon, max_lat));
+                                        let top_left = slippy_map_tiles::Tile::new(zoom, min_x, min_y)?;
+                                        let bottom_right = slippy_map_tiles::Tile::new(zoom, max_x, max_y)?;
+                                        
+                                        return Some((top_left.left() as f64, bottom_right.bottom() as f64, bottom_right.right() as f64, top_left.top() as f64));
                                     }
                                 }
                                 None
