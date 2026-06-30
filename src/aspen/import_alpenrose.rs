@@ -3140,24 +3140,41 @@ pub async fn new_rt_data(
 
     let allowed_chateaux = vec!["deutschland", "sncf", "nationalrailuk"];
     if allowed_chateaux.contains(&chateau_id) {
+        let mut skipped_no_stops = 0;
+        let mut skipped_no_trip_id = 0;
+        let mut skipped_no_route_id = 0;
+        let mut skipped_no_route_cache = 0;
+        let mut skipped_too_few_trajectory_stops = 0;
+        let mut skipped_too_few_shape_coords = 0;
+
         for (trip_update_id, trip_update) in trip_updates.iter() {
             if trip_update.stop_time_update.is_empty() {
+                skipped_no_stops += 1;
                 continue;
             }
 
             let trip_id = match &trip_update.trip.trip_id {
                 Some(id) => id,
-                None => continue,
+                None => {
+                    skipped_no_trip_id += 1;
+                    continue;
+                }
             };
 
             let route_id = match &trip_update.trip.route_id {
                 Some(id) => id,
-                None => continue,
+                None => {
+                    skipped_no_route_id += 1;
+                    continue;
+                }
             };
 
             let route = match vehicle_routes_cache.get(route_id) {
                 Some(r) => r,
-                None => continue,
+                None => {
+                    skipped_no_route_cache += 1;
+                    continue;
+                }
             };
 
             let route_type_str = match route.route_type {
@@ -3209,6 +3226,7 @@ pub async fn new_rt_data(
             trajectory_stops.extend(future_stops.into_iter());
 
             if trajectory_stops.len() < 2 {
+                skipped_too_few_trajectory_stops += 1;
                 continue;
             }
 
@@ -3224,6 +3242,7 @@ pub async fn new_rt_data(
             }
 
             if shape_coords.len() < 2 {
+                skipped_too_few_shape_coords += 1;
                 continue;
             }
 
@@ -3307,6 +3326,26 @@ pub async fn new_rt_data(
                 coordinates: shape_coords.into_iter().map(|(lon, lat)| [lon, lat]).collect(),
             });
         }
+        println!(
+            "Trajectory computation for chateau {}: \
+             total_trip_updates={}, \
+             skipped_no_stops={}, \
+             skipped_no_trip_id={}, \
+             skipped_no_route_id={}, \
+             skipped_no_route_cache={}, \
+             skipped_too_few_trajectory_stops={}, \
+             skipped_too_few_shape_coords={}, \
+             built_trajectories={}",
+            chateau_id,
+            trip_updates.len(),
+            skipped_no_stops,
+            skipped_no_trip_id,
+            skipped_no_route_id,
+            skipped_no_route_cache,
+            skipped_too_few_trajectory_stops,
+            skipped_too_few_shape_coords,
+            trajectories.len()
+        );
     }
 
     let aspenised_data = AspenisedData {
