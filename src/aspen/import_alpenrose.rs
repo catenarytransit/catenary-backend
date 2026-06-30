@@ -1041,6 +1041,9 @@ pub async fn new_rt_data(
                         if chateau_id == "sncf"
                             || chateau_id == "deutschland"
                             || chateau_id == "nationalrailuk"
+                            || chateau_id == "schweiz"
+                            || chateau_id == "sncb" ||  
+                            chateau_id == "île~de~france~mobilités"
                         {
                             for stu in &trip_update.stop_time_update {
                                 if let Some(stop_id) = &stu.stop_id {
@@ -3253,6 +3256,7 @@ pub async fn new_rt_data(
         "nationalrailuk",
         "schweiz",
         "île~de~france~mobilités",
+        "sncb"
     ];
     if allowed_chateaux.contains(&chateau_id) {
         println!("Starting trajectory processing for {}", &chateau_id);
