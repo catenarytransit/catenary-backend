@@ -317,10 +317,6 @@ impl TripWebSocket {
         params: MapViewportUpdate,
         sent_state_entry: Option<SentMapState>,
     ) -> Option<(String, String, SentMapState)> {
-        println!(
-            "DEBUG: build_map_update_message started for chateau {}",
-            chateau_id
-        );
         if !params.chateaus.contains(&chateau_id) {
             println!(
                 "DEBUG: build_map_update_message dropped chateau {} (not in params.chateaus)",
@@ -649,10 +645,6 @@ impl TripWebSocket {
                 }
             }
             let precomputed_count = precomputed_category.raw_vehicles.len();
-            println!(
-                "DEBUG: Chateau {} category {}: {} vehicles precomputed, {} filtered through.",
-                chateau_id, category_str, precomputed_count, filtered_count
-            );
 
             let list_of_agency_ids = precomputed_category.agency_ids.clone();
 
