@@ -807,6 +807,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         let bounds_other = get_bounds(&params.other, 5);
 
                         println!(
+                            "DEBUG: SubscribeMapV2 received! Raw params: {}",
+                            serde_json::to_string(&params).unwrap_or_else(|_| "err".into())
+                        );
+
+                        println!(
                             "DEBUG: SubscribeMapV2 received! Bounds: Bus={:?}, Metro={:?}, Rail={:?}, Other={:?}",
                             bounds_bus, bounds_metro, bounds_rail, bounds_other
                         );

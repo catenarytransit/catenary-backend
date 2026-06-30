@@ -112,6 +112,7 @@ pub struct SubCategoryAskParamsV2 {
     pub prev_user_max_x: Option<u32>,
     pub prev_user_min_y: Option<u32>,
     pub prev_user_max_y: Option<u32>,
+    pub z_level: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
