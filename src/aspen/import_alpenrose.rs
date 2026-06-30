@@ -3142,6 +3142,9 @@ pub async fn new_rt_data(
 
     let allowed_chateaux = vec!["deutschland", "sncf", "nationalrailuk"];
     if allowed_chateaux.contains(&chateau_id) {
+
+        println!("Starting trajectory processing for {}", &chateau_id);
+
         let mut skipped_no_stops = 0;
         let mut skipped_no_trip_id = 0;
         let mut skipped_no_route_id = 0;
