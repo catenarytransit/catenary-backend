@@ -1694,13 +1694,7 @@ impl AspenRpc for AspenServer {
                 let iter = rtree.locate_in_envelope_intersecting(&search_envelope);
                 for bbox_item in iter {
                     trajectories.push(bbox_item.trajectory.clone());
-                    if trajectories.len() >= 800 {
-                        break;
-                    }
                 }
-            }
-            if trajectories.len() >= 800 {
-                break;
             }
         }
 
