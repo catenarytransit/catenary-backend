@@ -761,7 +761,7 @@ impl TripWebSocket {
                         .trajectory_subscription
                         .as_ref()
                         .map_or("".to_string(), |s| s.client_reference.clone());
-                    let chunks: Vec<_> = trajectories.chunks(500).collect();
+                    let chunks: Vec<_> = trajectories.chunks(100).collect();
                     let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
                     let total_chunks = chunks.len();
 
