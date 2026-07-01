@@ -3,7 +3,18 @@ use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::bincode_deserialize;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use rayon::prelude::*;
 use std::sync::Arc;
+
+const ALLOWED_CHATEAUX: &[&str] = &[
+    "deutschland",
+    "sncf",
+    "nationalrailuk",
+    "schweiz",
+    "île~de~france~mobilités",
+    "sncb",
+    "tisséo",
+];
 
 fn haversine_distance_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
     let earth_radius_km = 6371.0;
@@ -65,6 +76,9 @@ pub async fn get_trajectories(
     let mut futures = Vec::new();
 
     for ch in chateaus {
+        if !ALLOWED_CHATEAUX.contains(&ch.as_str()) {
+            continue;
+        }
         let ips = etcd_connection_ips.clone();
         let opts = etcd_connection_options.clone();
         let reuser = etcd_reuser.clone();
@@ -73,103 +87,131 @@ pub async fn get_trajectories(
         let ch_clone = ch.clone();
 
         futures.push(tokio::spawn(async move {
-            let socket = match get_aspen_socket(&ch_clone, &ips, &opts, &reuser).await {
-                Some(s) => s,
-                None => return vec![],
-            };
-
-            let client_res = if let Some(client) = manager.get_client(socket.clone()).await {
-                Some(client)
-            } else if let Ok(new_client) =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
-            {
-                manager
-                    .insert_client(socket.clone(), new_client.clone())
-                    .await;
-                Some(new_client)
-            } else {
-                None
-            };
-
-            if let Some(mut client) = client_res {
-                let client_reference = params_clone.client_reference.clone();
-                let min_lon = params_clone.bbox.get(0).copied().unwrap_or(0.0);
-                let min_lat = params_clone.bbox.get(1).copied().unwrap_or(0.0);
-                let max_lon = params_clone.bbox.get(2).copied().unwrap_or(0.0);
-                let max_lat = params_clone.bbox.get(3).copied().unwrap_or(0.0);
-
-                let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
-                let avg_lat = (min_lat + max_lat) / 2.0;
-                let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
-                let min_dim_km = lat_diff_km.min(lon_diff_km);
-
-                let simplify_meters = if min_dim_km > 200.0 {
-                    1000.0
-                } else if min_dim_km > 100.0 {
-                    500.0
-                } else if min_dim_km > 50.0 {
-                    250.0
-                } 
-                else if min_dim_km > 10.0 {
-                    100.0
-                }
-                else if min_dim_km > 5.0 {
-                    20.0
-                }
-                else {
-                    5.0
+            let fetch_task = async {
+                let socket = match get_aspen_socket(&ch_clone, &ips, &opts, &reuser).await {
+                    Some(s) => s,
+                    None => return vec![],
                 };
 
-                match client
-                    .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
-                    .await
+                let client_res = if let Some(client) = manager.get_client(socket.clone()).await {
+                    Some(client)
+                } else if let Ok(new_client) =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
                 {
-                    Ok(Ok(mut trajectories)) => {
-                        if simplify_meters > 0.0 {
-                            for traj in &mut trajectories {
-                                for seg in &mut traj.segments {
-                                    if seg.coordinates.len() > 2 {
-                                        let mut simplified = Vec::with_capacity(seg.coordinates.len());
-                                        simplified.push(seg.coordinates[0]);
-                                        let mut last_kept = seg.coordinates[0];
-                                        
-                                        for i in 1..seg.coordinates.len() - 1 {
-                                            let pt = seg.coordinates[i];
-                                            let dist = haversine_distance_meters(last_kept[0], last_kept[1], pt[0], pt[1]);
-                                            if dist >= simplify_meters {
-                                                simplified.push(pt);
-                                                last_kept = pt;
+                    manager
+                        .insert_client(socket.clone(), new_client.clone())
+                        .await;
+                    Some(new_client)
+                } else {
+                    None
+                };
+
+                if let Some(mut client) = client_res {
+                    let client_reference = params_clone.client_reference.clone();
+                    let min_lon = params_clone.bbox.get(0).copied().unwrap_or(0.0);
+                    let min_lat = params_clone.bbox.get(1).copied().unwrap_or(0.0);
+                    let max_lon = params_clone.bbox.get(2).copied().unwrap_or(0.0);
+                    let max_lat = params_clone.bbox.get(3).copied().unwrap_or(0.0);
+
+                    let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
+                    let avg_lat = (min_lat + max_lat) / 2.0;
+                    let lon_diff_km =
+                        (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
+                    let min_dim_km = lat_diff_km.min(lon_diff_km);
+
+                    let simplify_meters = if min_dim_km > 200.0 {
+                        1000.0
+                    } else if min_dim_km > 100.0 {
+                        500.0
+                    } else if min_dim_km > 50.0 {
+                        250.0
+                    } else if min_dim_km > 10.0 {
+                        100.0
+                    } else if min_dim_km > 5.0 {
+                        20.0
+                    } else {
+                        5.0
+                    };
+
+                    match client
+                        .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
+                        .await
+                    {
+                        Ok(Ok(trajectories)) => {
+                            let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
+                            tokio::task::spawn_blocking(move || {
+                                trajectories
+                                    .into_par_iter()
+                                    .map(|mut traj| {
+                                        for seg in &mut traj.segments {
+                                            seg.coordinates
+                                                .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                        }
+
+                                        if simplify_meters > 0.0 {
+                                            for seg in &mut traj.segments {
+                                                if seg.coordinates.len() > 2 {
+                                                    let mut simplified =
+                                                        Vec::with_capacity(seg.coordinates.len());
+                                                    simplified.push(seg.coordinates[0]);
+                                                    let mut last_kept = seg.coordinates[0];
+
+                                                    for i in 1..seg.coordinates.len() - 1 {
+                                                        let pt = seg.coordinates[i];
+                                                        let dist = haversine_distance_meters(
+                                                            last_kept[0],
+                                                            last_kept[1],
+                                                            pt[0],
+                                                            pt[1],
+                                                        );
+                                                        if dist >= simplify_meters {
+                                                            simplified.push(pt);
+                                                            last_kept = pt;
+                                                        }
+                                                    }
+
+                                                    simplified.push(
+                                                        seg.coordinates[seg.coordinates.len() - 1],
+                                                    );
+                                                    seg.coordinates = simplified;
+                                                }
                                             }
                                         }
-                                        
-                                        simplified.push(seg.coordinates[seg.coordinates.len() - 1]);
-                                        seg.coordinates = simplified;
-                                    }
-                                }
-                            }
-                        }
 
-                        trajectories
-                            .into_iter()
-                            .map(|traj| TrajectoryWrapper {
-                                source: "trajectory".to_string(),
-                                timestamp: catenary::duration_since_unix_epoch().as_millis() as u64,
-                                client_reference: client_reference.clone(),
-                                content: serde_json::to_value(traj).unwrap_or(serde_json::Value::Null),
+                                        TrajectoryWrapper {
+                                            source: "trajectory".to_string(),
+                                            timestamp: now_ms,
+                                            client_reference: client_reference.clone(),
+                                            content: serde_json::to_value(traj)
+                                                .unwrap_or(serde_json::Value::Null),
+                                        }
+                                    })
+                                    .collect()
                             })
-                            .collect()
+                            .await
+                            .unwrap_or_else(|_| vec![])
+                        }
+                        Ok(Err(e)) => {
+                            eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
+                            vec![]
+                        }
+                        Err(e) => {
+                            eprintln!("Aspen RPC transport error for {}: {:?}", ch_clone, e);
+                            vec![]
+                        }
                     }
-                    Ok(Err(e)) => {
-                        eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
-                        vec![]
-                    }
-                    Err(e) => {
-                        eprintln!("Aspen RPC transport error for {}: {:?}", ch_clone, e);
-                        vec![]
-                    }
+                } else {
+                    vec![]
                 }
-            } else {
-                vec![]
+            };
+
+            // Prevent slow or hanging etcd/RPC connections from blocking the entire response.
+            match tokio::time::timeout(std::time::Duration::from_secs(5), fetch_task).await {
+                Ok(res) => res,
+                Err(_) => {
+                    eprintln!("Timeout fetching trajectories for chateau {}", ch_clone);
+                    vec![]
+                }
             }
         }));
     }

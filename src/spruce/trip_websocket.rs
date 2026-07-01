@@ -290,7 +290,7 @@ impl TripWebSocket {
             .difference(&self.subscribed_chateaus)
             .cloned()
             .collect();
-            
+
         let chateaus_changed = !to_unsubscribe.is_empty() || !to_subscribe.is_empty();
 
         for ch in to_unsubscribe {
@@ -311,7 +311,7 @@ impl TripWebSocket {
         }
 
         self.subscribed_chateaus = new_chateaus;
-        
+
         if chateaus_changed && self.trajectory_subscription.is_some() {
             self.trigger_trajectory_update(ctx);
         }
@@ -764,7 +764,7 @@ impl TripWebSocket {
                     let chunks: Vec<_> = trajectories.chunks(500).collect();
                     let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
                     let total_chunks = chunks.len();
-                    
+
                     if chunks.is_empty() {
                         let msg = ServerMessage::Buffer {
                             timestamp: update_timestamp,

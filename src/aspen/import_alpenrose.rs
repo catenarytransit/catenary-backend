@@ -3444,7 +3444,8 @@ pub async fn new_rt_data(
                 {
                     if let Some(shape_id) = &meta.shape_id {
                         if let Some(ls) = shape_linestrings.get(shape_id) {
-                            let coords: Vec<[f64; 2]> = ls.points.iter().map(|p| [p.x, p.y]).collect();
+                            let coords: Vec<[f64; 2]> =
+                                ls.points.iter().map(|p| [p.x, p.y]).collect();
                             if !coords.is_empty() {
                                 trip_shape_coords = Some(coords);
                             }
@@ -3533,7 +3534,10 @@ pub async fn new_rt_data(
                 trip_id: trip_id.to_string(),
                 route_id: trip_update.trip.route_id.clone(),
                 start_time: trip_update.trip.start_time.clone(),
-                start_date: trip_update.trip.start_date.map(|d| d.format("%Y%m%d").to_string()),
+                start_date: trip_update
+                    .trip
+                    .start_date
+                    .map(|d| d.format("%Y%m%d").to_string()),
                 display_name,
                 mode: route_type_str.to_string(),
                 color: route.route_colour.clone(),
