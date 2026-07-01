@@ -137,8 +137,62 @@ pub async fn get_single_chateau_trajectories(
                 Ok(Ok(trajectories)) => {
                     let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                     tokio::task::spawn_blocking(move || {
+                        let now = chrono::Utc::now();
+                        let t_start_str = (now - chrono::Duration::minutes(15)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                        let t_end_str = (now + chrono::Duration::minutes(25)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
                         trajectories
                             .into_par_iter()
+                            .filter(|traj| {
+                                let mut keep = false;
+                                if traj.segments.is_empty() {
+                                    for stop in &traj.stops {
+                                        let stop_time = if stop.arrival.is_empty() { &stop.departure } else { &stop.arrival };
+                                        let is_active = stop_time.is_empty() || (stop_time.as_str() >= t_start_str.as_str() && stop_time.as_str() <= t_end_str.as_str());
+                                        if is_active {
+                                            if stop.lon >= min_lon && stop.lon <= max_lon && stop.lat >= min_lat && stop.lat <= max_lat {
+                                                keep = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    for seg in &traj.segments {
+                                        if seg.from_stop_index >= traj.stops.len() || seg.to_stop_index >= traj.stops.len() {
+                                            continue;
+                                        }
+                                        let from_stop = &traj.stops[seg.from_stop_index];
+                                        let to_stop = &traj.stops[seg.to_stop_index];
+
+                                        let seg_departure = if from_stop.departure.is_empty() { &from_stop.arrival } else { &from_stop.departure };
+                                        let seg_arrival = if to_stop.arrival.is_empty() { &to_stop.departure } else { &to_stop.arrival };
+
+                                        let is_active = if seg_departure.is_empty() || seg_arrival.is_empty() {
+                                            true
+                                        } else {
+                                            seg_departure.as_str() <= t_end_str.as_str() && seg_arrival.as_str() >= t_start_str.as_str()
+                                        };
+
+                                        if is_active {
+                                            let mut seg_min_lon = f64::MAX;
+                                            let mut seg_min_lat = f64::MAX;
+                                            let mut seg_max_lon = f64::MIN;
+                                            let mut seg_max_lat = f64::MIN;
+                                            for coord in &seg.coordinates {
+                                                seg_min_lon = seg_min_lon.min(coord[0]);
+                                                seg_min_lat = seg_min_lat.min(coord[1]);
+                                                seg_max_lon = seg_max_lon.max(coord[0]);
+                                                seg_max_lat = seg_max_lat.max(coord[1]);
+                                            }
+                                            if seg_min_lon <= max_lon && seg_max_lon >= min_lon && seg_min_lat <= max_lat && seg_max_lat >= min_lat {
+                                                keep = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                keep
+                            })
                             .map(|mut traj| {
                                 for seg in &mut traj.segments {
                                     seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
@@ -287,8 +341,62 @@ pub async fn get_trajectories(
                         Ok(Ok(trajectories)) => {
                             let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                             tokio::task::spawn_blocking(move || {
+                                let now = chrono::Utc::now();
+                                let t_start_str = (now - chrono::Duration::minutes(15)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+                                let t_end_str = (now + chrono::Duration::minutes(25)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
                                 trajectories
                                     .into_par_iter()
+                                    .filter(|traj| {
+                                        let mut keep = false;
+                                        if traj.segments.is_empty() {
+                                            for stop in &traj.stops {
+                                                let stop_time = if stop.arrival.is_empty() { &stop.departure } else { &stop.arrival };
+                                                let is_active = stop_time.is_empty() || (stop_time.as_str() >= t_start_str.as_str() && stop_time.as_str() <= t_end_str.as_str());
+                                                if is_active {
+                                                    if stop.lon >= min_lon && stop.lon <= max_lon && stop.lat >= min_lat && stop.lat <= max_lat {
+                                                        keep = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        } else {
+                                            for seg in &traj.segments {
+                                                if seg.from_stop_index >= traj.stops.len() || seg.to_stop_index >= traj.stops.len() {
+                                                    continue;
+                                                }
+                                                let from_stop = &traj.stops[seg.from_stop_index];
+                                                let to_stop = &traj.stops[seg.to_stop_index];
+
+                                                let seg_departure = if from_stop.departure.is_empty() { &from_stop.arrival } else { &from_stop.departure };
+                                                let seg_arrival = if to_stop.arrival.is_empty() { &to_stop.departure } else { &to_stop.arrival };
+
+                                                let is_active = if seg_departure.is_empty() || seg_arrival.is_empty() {
+                                                    true
+                                                } else {
+                                                    seg_departure.as_str() <= t_end_str.as_str() && seg_arrival.as_str() >= t_start_str.as_str()
+                                                };
+
+                                                if is_active {
+                                                    let mut seg_min_lon = f64::MAX;
+                                                    let mut seg_min_lat = f64::MAX;
+                                                    let mut seg_max_lon = f64::MIN;
+                                                    let mut seg_max_lat = f64::MIN;
+                                                    for coord in &seg.coordinates {
+                                                        seg_min_lon = seg_min_lon.min(coord[0]);
+                                                        seg_min_lat = seg_min_lat.min(coord[1]);
+                                                        seg_max_lon = seg_max_lon.max(coord[0]);
+                                                        seg_max_lat = seg_max_lat.max(coord[1]);
+                                                    }
+                                                    if seg_min_lon <= max_lon && seg_max_lon >= min_lon && seg_min_lat <= max_lat && seg_max_lat >= min_lat {
+                                                        keep = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        keep
+                                    })
                                     .map(|mut traj| {
                                         for seg in &mut traj.segments {
                                             seg.coordinates
