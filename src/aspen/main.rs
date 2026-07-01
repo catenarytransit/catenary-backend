@@ -1732,6 +1732,11 @@ async fn main() -> anyhow::Result<()> {
         // Don't display the event's target (module path)
         .with_target(false)
         // Build the subscriber
+            .with_env_filter(
+        tracing_subscriber::EnvFilter::from_default_env()
+            .add_directive("tarpc=warn".parse().unwrap())
+            .add_directive("aspen=info".parse().unwrap())
+             )
         .finish();
 
     let tracing_result = tracing::subscriber::set_global_default(subscriber);
