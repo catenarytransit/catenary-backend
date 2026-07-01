@@ -325,6 +325,13 @@ pub async fn get_trajectories(
                                             }
                                         }
 
+                                        for seg in &mut traj.segments {
+                                            for pt in &mut seg.coordinates {
+                                                pt[0] = (pt[0] * 1_000_000.0).round() / 1_000_000.0;
+                                                pt[1] = (pt[1] * 1_000_000.0).round() / 1_000_000.0;
+                                            }
+                                        }
+
                                         TrajectoryWrapper {
                                             source: "trajectory".to_string(),
                                             timestamp: now_ms,
