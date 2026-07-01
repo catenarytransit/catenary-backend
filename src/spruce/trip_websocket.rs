@@ -282,7 +282,11 @@ impl TripWebSocket {
         ctx: &mut ws::WebsocketContext<Self>,
         new_chateaus: HashSet<String>,
     ) {
-        let removed: Vec<_> = self.subscribed_chateaus.difference(&new_chateaus).cloned().collect();
+        let removed: Vec<_> = self
+            .subscribed_chateaus
+            .difference(&new_chateaus)
+            .cloned()
+            .collect();
         for chateau_id in &removed {
             let coordinator = self.coordinator_pool.for_chateau(chateau_id);
             coordinator.do_send(Unsubscribe {
@@ -727,7 +731,7 @@ impl TripWebSocket {
         let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
 
         let chateaus = self.subscribed_chateaus.clone();
-        
+
         for ch in chateaus {
             let ch_clone = ch.clone();
             let pool_clone = pool.clone();
@@ -752,11 +756,13 @@ impl TripWebSocket {
             };
 
             let fut = actix::fut::wrap_future(fut).map(
-                move |trajectories, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                move |trajectories,
+                      act: &mut TripWebSocket,
+                      ctx: &mut ws::WebsocketContext<Self>| {
                     if current_gen != act.trajectory_request_generation {
                         return; // newer request was sent
                     }
-                    
+
                     let chunks: Vec<_> = trajectories.chunks(100).collect();
                     let total_chunks = chunks.len();
 

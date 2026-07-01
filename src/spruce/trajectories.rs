@@ -78,12 +78,20 @@ pub async fn get_single_chateau_trajectories(
     }
 
     let fetch_task = async {
-        let socket = match get_aspen_socket(&chateau, &etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await {
+        let socket = match get_aspen_socket(
+            &chateau,
+            &etcd_connection_ips,
+            &etcd_connection_options,
+            &etcd_reuser,
+        )
+        .await
+        {
             Some(s) => s,
             None => return vec![],
         };
 
-        let client_res = if let Some(client) = aspen_client_manager.get_client(socket.clone()).await {
+        let client_res = if let Some(client) = aspen_client_manager.get_client(socket.clone()).await
+        {
             Some(client)
         } else if let Ok(new_client) =
             catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
@@ -105,8 +113,7 @@ pub async fn get_single_chateau_trajectories(
 
             let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
             let avg_lat = (min_lat + max_lat) / 2.0;
-            let lon_diff_km =
-                (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
+            let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
             let min_dim_km = lat_diff_km.min(lon_diff_km);
 
             let simplify_meters = if min_dim_km > 200.0 {
@@ -134,8 +141,7 @@ pub async fn get_single_chateau_trajectories(
                             .into_par_iter()
                             .map(|mut traj| {
                                 for seg in &mut traj.segments {
-                                    seg.coordinates
-                                        .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                    seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
                                 }
 
                                 if simplify_meters > 0.0 {
@@ -160,9 +166,8 @@ pub async fn get_single_chateau_trajectories(
                                                 }
                                             }
 
-                                            simplified.push(
-                                                seg.coordinates[seg.coordinates.len() - 1],
-                                            );
+                                            simplified
+                                                .push(seg.coordinates[seg.coordinates.len() - 1]);
                                             seg.coordinates = simplified;
                                         }
                                     }
@@ -205,7 +210,6 @@ pub async fn get_single_chateau_trajectories(
         }
     }
 }
-
 
 pub async fn get_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
