@@ -92,6 +92,7 @@ pub struct AspenisedTrajectory {
     pub text_color: Option<String>,
     pub route_short_name: Option<String>,
     pub route_long_name: Option<String>,
+    pub trip_short_name: Option<String>,
     pub route_type: i32,
     pub distance: f64,
     pub segments: Vec<AspenisedTrajectorySegment>,
@@ -109,7 +110,7 @@ pub struct AspenisedTrajectorySegment {
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AspenisedTrajectoryStop {
     pub name: String,
-    pub stop_id: Option<String>,
+    pub stop_id: Option<Arc<str>>,
     pub lat: f64,
     pub lon: f64,
     pub track: Option<String>,

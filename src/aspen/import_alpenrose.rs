@@ -3569,6 +3569,12 @@ pub async fn new_rt_data(
                 }
             }
 
+            let trip_short_name = trip_update.trip_properties.as_ref().and_then(|p| p.trip_short_name.clone())
+                .or_else(|| {
+                    aspenised_data_for_persist.compressed_trip_internal_cache.compressed_trips.get(trip_id.as_str())
+                        .and_then(|t| t.trip_short_name.clone().map(|s| s.to_string()))
+                });
+
             let traj = catenary::aspen_dataset::AspenisedTrajectory {
                 unique_trip_id,
                 chateau_id: chateau_id.to_string(),
@@ -3585,6 +3591,7 @@ pub async fn new_rt_data(
                 text_color: route.route_text_colour.clone(),
                 route_short_name: route.route_short_name.clone(),
                 route_long_name: route.route_long_name.clone(),
+                trip_short_name,
                 route_type: route.route_type as i32,
                 distance: total_distance,
                 segments,
