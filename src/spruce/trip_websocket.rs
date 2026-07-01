@@ -68,8 +68,8 @@ pub struct TripWebSocket {
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 
-    // Trajectory fields
-    pub trajectory_subscription: Option<trajectories::ClientTrajectorySubscriptionParams>,
+    pub trajectory_subscription: Option<crate::SubscribeTrajectoriesParams>,
+    pub trajectory_request_generation: u64,
     pub last_trajectory_sent_time: Option<Instant>,
 }
 
@@ -103,6 +103,7 @@ impl TripWebSocket {
             aspen_endpoint_cache: HashMap::new(),
             in_progress_trip_fetches: HashMap::new(),
             trajectory_subscription: None,
+            trajectory_request_generation: 0,
             last_trajectory_sent_time: None,
         }
     }
@@ -281,30 +282,10 @@ impl TripWebSocket {
         ctx: &mut ws::WebsocketContext<Self>,
         new_chateaus: HashSet<String>,
     ) {
-        let to_unsubscribe: Vec<String> = self
-            .subscribed_chateaus
-            .difference(&new_chateaus)
-            .cloned()
-            .collect();
-        let to_subscribe: Vec<String> = new_chateaus
-            .difference(&self.subscribed_chateaus)
-            .cloned()
-            .collect();
-
-        let chateaus_changed = !to_unsubscribe.is_empty() || !to_subscribe.is_empty();
-
-        for ch in to_unsubscribe {
-            let coordinator = self.coordinator_pool.for_chateau(&ch);
+        let removed: Vec<_> = self.subscribed_chateaus.difference(&new_chateaus).cloned().collect();
+        for chateau_id in &removed {
+            let coordinator = self.coordinator_pool.for_chateau(chateau_id);
             coordinator.do_send(Unsubscribe {
-                chateau_id: ch.clone(),
-                recipient: ctx.address().recipient(),
-            });
-            self.sent_state.remove(&ch);
-        }
-
-        for ch in to_subscribe {
-            let coordinator = self.coordinator_pool.for_chateau(&ch);
-            coordinator.do_send(Subscribe {
                 chateau_id: ch,
                 recipient: ctx.address().recipient(),
             });
@@ -714,7 +695,7 @@ impl TripWebSocket {
         });
     }
 
-    fn trigger_trajectory_update(&self, ctx: &mut ws::WebsocketContext<Self>) {
+    fn trigger_trajectory_update(&mut self, ctx: &mut ws::WebsocketContext<Self>) {
         let Some(client_params) = self.trajectory_subscription.clone() else {
             return;
         };
@@ -737,38 +718,52 @@ impl TripWebSocket {
             start_time_ms,
             end_time_ms,
             precision: client_params.precision,
-            client_reference: client_params.client_reference,
+            client_reference: client_params.client_reference.clone(),
         };
+
+        self.trajectory_request_generation = self.trajectory_request_generation.wrapping_add(1);
+        let current_gen = self.trajectory_request_generation;
+        let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
 
         let chateaus = self.subscribed_chateaus.clone();
-        let fut = async move {
-            trajectories::get_trajectories(
-                pool,
-                etcd_ips,
-                etcd_opts,
-                manager,
-                etcd_reuser,
-                params,
-                chateaus,
-            )
-            .await
-        };
+        
+        for ch in chateaus {
+            let ch_clone = ch.clone();
+            let pool_clone = pool.clone();
+            let ips_clone = etcd_ips.clone();
+            let opts_clone = etcd_opts.clone();
+            let manager_clone = manager.clone();
+            let reuser_clone = etcd_reuser.clone();
+            let params_clone = params.clone();
+            let client_ref = client_params.client_reference.clone();
 
-        let fut = actix::fut::wrap_future(fut).map(
-            |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| match result {
-                Ok(trajectories) => {
-                    let client_ref = act
-                        .trajectory_subscription
-                        .as_ref()
-                        .map_or("".to_string(), |s| s.client_reference.clone());
+            let fut = async move {
+                trajectories::get_single_chateau_trajectories(
+                    pool_clone,
+                    ips_clone,
+                    opts_clone,
+                    manager_clone,
+                    reuser_clone,
+                    params_clone,
+                    ch_clone,
+                )
+                .await
+            };
+
+            let fut = actix::fut::wrap_future(fut).map(
+                move |trajectories, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                    if current_gen != act.trajectory_request_generation {
+                        return; // newer request was sent
+                    }
+                    
                     let chunks: Vec<_> = trajectories.chunks(100).collect();
-                    let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
                     let total_chunks = chunks.len();
 
                     if chunks.is_empty() {
                         let msg = ServerMessage::Buffer {
                             timestamp: update_timestamp,
                             client_reference: client_ref.clone(),
+                            chateau: ch.clone(),
                             content: vec![],
                             chunk_index: 0,
                             total_chunks: 0,
@@ -781,6 +776,7 @@ impl TripWebSocket {
                             let msg = ServerMessage::Buffer {
                                 timestamp: update_timestamp,
                                 client_reference: client_ref.clone(),
+                                chateau: ch.clone(),
                                 content: chunk.to_vec(),
                                 chunk_index: i,
                                 total_chunks,
@@ -791,13 +787,10 @@ impl TripWebSocket {
                         }
                     }
                     act.last_trajectory_sent_time = Some(Instant::now());
-                }
-                Err(err) => {
-                    eprintln!("Error fetching trajectories: {}", err);
-                }
-            },
-        );
-        ctx.spawn(fut);
+                },
+            );
+            ctx.spawn(fut);
+        }
     }
 }
 

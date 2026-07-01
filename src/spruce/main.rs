@@ -107,6 +107,7 @@ pub enum ServerMessage {
     Buffer {
         timestamp: u64,
         client_reference: String,
+        chateau: String,
         content: Vec<trajectories::TrajectoryWrapper>,
         chunk_index: usize,
         total_chunks: usize,
