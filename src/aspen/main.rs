@@ -112,12 +112,7 @@ pub struct AspenServer {
     pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
     pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
-    pub authoritative_trajectory_data_store: Arc<
-        SccHashMap<
-            String,
-            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
-        >,
-    >,
+    pub authoritative_trajectory_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
@@ -1628,7 +1623,8 @@ impl AspenRpc for AspenServer {
                 ));
             }
         };
-        let trajectories_by_route_type = trajectory_data.get();
+        let store = trajectory_data.get();
+        let trajectories_by_route_type = &store.rtree_by_route_type;
 
         let mut trajectories = Vec::new();
 
@@ -1689,11 +1685,23 @@ impl AspenRpc for AspenServer {
             }
         }
 
+        let mut pattern_ids: AHashSet<&String> = AHashSet::new();
+
         for (route_type, rtree) in trajectories_by_route_type {
             if route_types.contains(route_type) {
                 let iter = rtree.locate_in_envelope_intersecting(&search_envelope);
                 for bbox_item in iter {
-                    trajectories.push(bbox_item.trajectory.clone());
+                    pattern_ids.insert(&bbox_item.pattern_id);
+                }
+            }
+        }
+
+        for pattern_id in pattern_ids {
+            if let Some(trip_ids) = store.pattern_to_trajectories.get(pattern_id) {
+                for trip_id in trip_ids {
+                    if let Some(traj) = store.trajectories.get(trip_id) {
+                        trajectories.push(traj.clone());
+                    }
                 }
             }
         }
@@ -1856,12 +1864,7 @@ async fn main() -> anyhow::Result<()> {
     let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
-    let authoritative_trajectory_data_store: Arc<
-        SccHashMap<
-            String,
-            AHashMap<i16, rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>>,
-        >,
-    > = Arc::new(SccHashMap::new());
+    let authoritative_trajectory_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>> = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
     let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashSet::new()));

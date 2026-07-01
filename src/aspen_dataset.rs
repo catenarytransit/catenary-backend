@@ -121,11 +121,18 @@ pub struct AspenisedTrajectoryStop {
 
 #[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
 pub struct AspenisedTrajectoryBBox {
-    pub trajectory: AspenisedTrajectory,
+    pub pattern_id: String,
     pub min_lon: f64,
     pub min_lat: f64,
     pub max_lon: f64,
     pub max_lat: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenTrajectoryStore {
+    pub rtree_by_route_type: AHashMap<i16, rstar::RTree<AspenisedTrajectoryBBox>>,
+    pub pattern_to_trajectories: AHashMap<String, Vec<String>>,
+    pub trajectories: AHashMap<String, AspenisedTrajectory>,
 }
 
 impl rstar::RTreeObject for AspenisedTrajectoryBBox {
