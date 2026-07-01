@@ -68,7 +68,7 @@ pub struct TripWebSocket {
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 
-    pub trajectory_subscription: Option<crate::SubscribeTrajectoriesParams>,
+    pub trajectory_subscription: Option<crate::trajectories::ClientTrajectorySubscriptionParams>,
     pub trajectory_request_generation: u64,
     pub last_trajectory_sent_time: Option<Instant>,
 }
@@ -286,11 +286,12 @@ impl TripWebSocket {
         for chateau_id in &removed {
             let coordinator = self.coordinator_pool.for_chateau(chateau_id);
             coordinator.do_send(Unsubscribe {
-                chateau_id: ch,
+                chateau_id: chateau_id.clone(),
                 recipient: ctx.address().recipient(),
             });
         }
 
+        let chateaus_changed = self.subscribed_chateaus != new_chateaus;
         self.subscribed_chateaus = new_chateaus;
 
         if chateaus_changed && self.trajectory_subscription.is_some() {
