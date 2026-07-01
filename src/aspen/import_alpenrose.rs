@@ -3454,7 +3454,7 @@ pub async fn new_rt_data(
 
                 stops.push(catenary::aspen_dataset::AspenisedTrajectoryStop {
                     name,
-                    stop_id: stu.stop_id.clone().map(|s| s.to_string()),
+                    stop_id: stu.stop_id.clone(),
                     lat,
                     lon,
                     track: stu.platform_string.clone().map(|s| s.to_string()),
