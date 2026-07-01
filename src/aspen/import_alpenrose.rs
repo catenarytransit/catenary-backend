@@ -3288,28 +3288,61 @@ pub async fn new_rt_data(
     }
 
     let mut shape_linestrings = std::collections::HashMap::new();
-    if let Ok(mut conn_pre) = pool.get().await {
-        use catenary::schema::gtfs::shapes::dsl::*;
-        use diesel::ExpressionMethods;
-        use diesel::QueryDsl;
-        use diesel_async::RunQueryDsl;
+    let shape_ids: Vec<String> = shape_ids_to_fetch.into_iter().collect();
+    println!(
+        "Chateau {}: Attempting to fetch {} unique shapes from DB",
+        chateau_id,
+        shape_ids.len()
+    );
+    match pool.get().await {
+        Ok(mut conn_pre) => {
+            use catenary::schema::gtfs::shapes::dsl::*;
+            use diesel::ExpressionMethods;
+            use diesel::QueryDsl;
+            use diesel_async::RunQueryDsl;
 
-        let shape_ids: Vec<String> = shape_ids_to_fetch.into_iter().collect();
-        for chunk in shape_ids.chunks(500) {
-            if let Ok(shapes_result) = shapes
-                .filter(onestop_feed_id.eq(chateau_id))
-                .filter(shape_id.eq_any(chunk))
-                .select((shape_id, linestring))
-                .load::<(
-                    String,
-                    postgis_diesel::types::LineString<postgis_diesel::types::Point>,
-                )>(&mut conn_pre)
-                .await
-            {
-                for (s_id, ls) in shapes_result {
-                    shape_linestrings.insert(s_id, ls);
+            for chunk in shape_ids.chunks(500) {
+                println!(
+                    "Chateau {}: Querying database for chunk of {} shapes. filter: onestop_feed_id = {}",
+                    chateau_id,
+                    chunk.len(),
+                    chateau_id
+                );
+                match shapes
+                    .filter(onestop_feed_id.eq(chateau_id))
+                    .filter(shape_id.eq_any(chunk))
+                    .select((shape_id, linestring))
+                    .load::<(
+                        String,
+                        postgis_diesel::types::LineString<postgis_diesel::types::Point>,
+                    )>(&mut conn_pre)
+                    .await
+                {
+                    Ok(shapes_result) => {
+                        println!(
+                            "Chateau {}: Successfully retrieved {}/{} shapes for this chunk",
+                            chateau_id,
+                            shapes_result.len(),
+                            chunk.len()
+                        );
+                        for (s_id, ls) in shapes_result {
+                            shape_linestrings.insert(s_id, ls);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Chateau {}: Error fetching shapes from database: {:?}",
+                            chateau_id, e
+                        );
+                    }
                 }
             }
+        }
+        Err(e) => {
+            eprintln!(
+                "Chateau {}: Failed to get database connection from pool: {:?}",
+                chateau_id, e
+            );
         }
     }
 
@@ -3452,6 +3485,10 @@ pub async fn new_rt_data(
                         }
                     }
                 }
+            }
+
+            if trip_shape_coords.is_none() {
+                skipped_too_few_shape_coords += 1;
             }
 
             let mut last_shape_idx = 0;
