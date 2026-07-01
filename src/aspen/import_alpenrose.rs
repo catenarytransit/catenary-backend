@@ -185,7 +185,9 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 //then we write some indexes, so that way the realtime data can quickly be found by certain IDs
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
-    authoritative_trajectory_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
+    authoritative_trajectory_data_store: Arc<
+        SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
+    >,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
     chateau_id: &str,
     realtime_feed_id: &str,
@@ -3255,7 +3257,8 @@ pub async fn new_rt_data(
         rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>,
     > = AHashMap::new();
     let mut pattern_to_trajectories: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut trajectories: AHashMap<String, catenary::aspen_dataset::AspenisedTrajectory> = AHashMap::new();
+    let mut trajectories: AHashMap<String, catenary::aspen_dataset::AspenisedTrajectory> =
+        AHashMap::new();
     let mut indexed_bboxes: AHashSet<(String, u64, u64, u64, u64)> = AHashSet::new();
     let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
     let current_secs = (current_timestamp / 1000) as i64;
@@ -3553,9 +3556,15 @@ pub async fn new_rt_data(
                 .clone()
                 .unwrap_or_else(|| route_id.to_string());
 
-            let trip_short_name = trip_update.trip_properties.as_ref().and_then(|p| p.trip_short_name.clone())
+            let trip_short_name = trip_update
+                .trip_properties
+                .as_ref()
+                .and_then(|p| p.trip_short_name.clone())
                 .or_else(|| {
-                    aspenised_data_for_persist.compressed_trip_internal_cache.compressed_trips.get(trip_id.as_str())
+                    aspenised_data_for_persist
+                        .compressed_trip_internal_cache
+                        .compressed_trips
+                        .get(trip_id.as_str())
                         .and_then(|t| t.trip_short_name.clone().map(|s| s.to_string()))
                 });
 
@@ -3583,17 +3592,27 @@ pub async fn new_rt_data(
                 real_time: true,
             };
 
-            let pattern_id = if let Some(compressed_trip) = aspenised_data_for_persist.compressed_trip_internal_cache.compressed_trips.get(trip_id.as_str()) {
+            let pattern_id = if let Some(compressed_trip) = aspenised_data_for_persist
+                .compressed_trip_internal_cache
+                .compressed_trips
+                .get(trip_id.as_str())
+            {
                 compressed_trip.itinerary_pattern_id.to_string()
             } else {
-                format!("{}_dir_{}", route_id, trip_update.trip.direction_id.unwrap_or(0))
+                format!(
+                    "{}_dir_{}",
+                    route_id,
+                    trip_update.trip.direction_id.unwrap_or(0)
+                )
             };
 
             let is_train = route.route_type == 1 || route.route_type == 2;
 
             if is_train {
                 for seg in &segments {
-                    if seg.coordinates.is_empty() { continue; }
+                    if seg.coordinates.is_empty() {
+                        continue;
+                    }
                     let mut min_lon = f64::MAX;
                     let mut min_lat = f64::MAX;
                     let mut max_lon = f64::MIN;
@@ -3604,16 +3623,25 @@ pub async fn new_rt_data(
                         max_lon = max_lon.max(coord[0]);
                         max_lat = max_lat.max(coord[1]);
                     }
-                    
-                    let bbox_key = (pattern_id.clone(), min_lon.to_bits(), min_lat.to_bits(), max_lon.to_bits(), max_lat.to_bits());
+
+                    let bbox_key = (
+                        pattern_id.clone(),
+                        min_lon.to_bits(),
+                        min_lat.to_bits(),
+                        max_lon.to_bits(),
+                        max_lat.to_bits(),
+                    );
                     if indexed_bboxes.insert(bbox_key) {
-                        trajectories_by_route_type.entry(route.route_type).or_insert_with(|| rstar::RTree::new()).insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                            pattern_id: pattern_id.clone(),
-                            min_lon,
-                            min_lat,
-                            max_lon,
-                            max_lat,
-                        });
+                        trajectories_by_route_type
+                            .entry(route.route_type)
+                            .or_insert_with(|| rstar::RTree::new())
+                            .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
+                                pattern_id: pattern_id.clone(),
+                                min_lon,
+                                min_lat,
+                                max_lon,
+                                max_lat,
+                            });
                     }
                 }
             } else {
@@ -3630,24 +3658,33 @@ pub async fn new_rt_data(
                         current_min_lat = current_min_lat.min(coord[1]);
                         current_max_lon = current_max_lon.max(coord[0]);
                         current_max_lat = current_max_lat.max(coord[1]);
-                        
+
                         if let Some(last) = last_coord {
                             let dx = (coord[0] - last[0]) * 111320.0 * (last[1].to_radians().cos());
                             let dy = (coord[1] - last[1]) * 111320.0;
-                            current_dist += (dx*dx + dy*dy).sqrt();
+                            current_dist += (dx * dx + dy * dy).sqrt();
                         }
                         last_coord = Some(*coord);
-                        
+
                         if current_dist >= 10000.0 {
-                            let bbox_key = (pattern_id.clone(), current_min_lon.to_bits(), current_min_lat.to_bits(), current_max_lon.to_bits(), current_max_lat.to_bits());
+                            let bbox_key = (
+                                pattern_id.clone(),
+                                current_min_lon.to_bits(),
+                                current_min_lat.to_bits(),
+                                current_max_lon.to_bits(),
+                                current_max_lat.to_bits(),
+                            );
                             if indexed_bboxes.insert(bbox_key) {
-                                trajectories_by_route_type.entry(route.route_type).or_insert_with(|| rstar::RTree::new()).insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                                    pattern_id: pattern_id.clone(),
-                                    min_lon: current_min_lon,
-                                    min_lat: current_min_lat,
-                                    max_lon: current_max_lon,
-                                    max_lat: current_max_lat,
-                                });
+                                trajectories_by_route_type
+                                    .entry(route.route_type)
+                                    .or_insert_with(|| rstar::RTree::new())
+                                    .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
+                                        pattern_id: pattern_id.clone(),
+                                        min_lon: current_min_lon,
+                                        min_lat: current_min_lat,
+                                        max_lon: current_max_lon,
+                                        max_lat: current_max_lat,
+                                    });
                             }
                             current_min_lon = f64::MAX;
                             current_min_lat = f64::MAX;
@@ -3658,20 +3695,32 @@ pub async fn new_rt_data(
                     }
                 }
                 if current_dist > 0.0 || (current_min_lon != f64::MAX) {
-                    let bbox_key = (pattern_id.clone(), current_min_lon.to_bits(), current_min_lat.to_bits(), current_max_lon.to_bits(), current_max_lat.to_bits());
+                    let bbox_key = (
+                        pattern_id.clone(),
+                        current_min_lon.to_bits(),
+                        current_min_lat.to_bits(),
+                        current_max_lon.to_bits(),
+                        current_max_lat.to_bits(),
+                    );
                     if indexed_bboxes.insert(bbox_key) {
-                        trajectories_by_route_type.entry(route.route_type).or_insert_with(|| rstar::RTree::new()).insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                            pattern_id: pattern_id.clone(),
-                            min_lon: current_min_lon,
-                            min_lat: current_min_lat,
-                            max_lon: current_max_lon,
-                            max_lat: current_max_lat,
-                        });
+                        trajectories_by_route_type
+                            .entry(route.route_type)
+                            .or_insert_with(|| rstar::RTree::new())
+                            .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
+                                pattern_id: pattern_id.clone(),
+                                min_lon: current_min_lon,
+                                min_lat: current_min_lat,
+                                max_lon: current_max_lon,
+                                max_lat: current_max_lat,
+                            });
                     }
                 }
             }
 
-            pattern_to_trajectories.entry(pattern_id).or_insert_with(Vec::new).push(unique_trip_id.clone());
+            pattern_to_trajectories
+                .entry(pattern_id)
+                .or_insert_with(Vec::new)
+                .push(unique_trip_id.clone());
             trajectories.insert(unique_trip_id, traj);
         }
         println!(
