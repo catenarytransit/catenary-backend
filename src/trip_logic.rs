@@ -419,10 +419,10 @@ pub async fn fetch_trip_rt_update(
                             }
                         };
 
-                        println!(
-                            "rt data contains {} stop updates",
-                            rt_trip_update.stop_time_update.len()
-                        );
+                        //println!(
+                        //    "rt data contains {} stop updates",
+                        //    rt_trip_update.stop_time_update.len()
+                        //);
 
                         let stop_data: Vec<StopTimeRefresh> = rt_trip_update
                             .stop_time_update
@@ -1798,10 +1798,10 @@ pub async fn fetch_trip_information(
 
                                     vehicle = rt_trip_update.vehicle.clone();
 
-                                    println!(
-                                        "rt data contains {} stop updates",
-                                        rt_trip_update.stop_time_update.len()
-                                    );
+                                    //println!(
+                                    //    "rt data contains {} stop updates",
+                                    //    rt_trip_update.stop_time_update.len()
+                                    //);
 
                                     for stop_time_update in &rt_trip_update.stop_time_update {
                                         let stop_time =
