@@ -16,7 +16,6 @@ pub const ALLOWED_CHATEAUX: &[&str] = &[
     "tisséo",
 ];
 
-
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
 pub use catenary::pasque::lib::TrajectoryWrapper;
 
@@ -235,7 +234,9 @@ pub async fn get_single_chateau_trajectories(
                                                 let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
                                                 let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
                                                 let x = d_lon * cos_factor;
-                                                let dist_sq = earth_radius_m * earth_radius_m * (x * x + d_lat * d_lat);
+                                                let dist_sq = earth_radius_m
+                                                    * earth_radius_m
+                                                    * (x * x + d_lat * d_lat);
 
                                                 if dist_sq >= simplify_meters_sq {
                                                     simplified.push(pt);
@@ -458,7 +459,8 @@ pub async fn get_trajectories(
                                         }
 
                                         if simplify_meters > 0.0 {
-                                            let simplify_meters_sq = simplify_meters * simplify_meters;
+                                            let simplify_meters_sq =
+                                                simplify_meters * simplify_meters;
                                             let earth_radius_m = 6371000.0_f64;
                                             let rad_per_deg = std::f64::consts::PI / 180.0;
 
@@ -468,15 +470,20 @@ pub async fn get_trajectories(
                                                         Vec::with_capacity(seg.coordinates.len());
                                                     simplified.push(seg.coordinates[0]);
                                                     let mut last_kept = seg.coordinates[0];
-                                                    let cos_factor = (last_kept[1] * rad_per_deg).cos();
+                                                    let cos_factor =
+                                                        (last_kept[1] * rad_per_deg).cos();
 
                                                     for i in 1..seg.coordinates.len() - 1 {
                                                         let pt = seg.coordinates[i];
-                                                        let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
-                                                        let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
+                                                        let d_lat =
+                                                            (pt[1] - last_kept[1]) * rad_per_deg;
+                                                        let d_lon =
+                                                            (pt[0] - last_kept[0]) * rad_per_deg;
                                                         let x = d_lon * cos_factor;
-                                                        let dist_sq = earth_radius_m * earth_radius_m * (x * x + d_lat * d_lat);
-                                                        
+                                                        let dist_sq = earth_radius_m
+                                                            * earth_radius_m
+                                                            * (x * x + d_lat * d_lat);
+
                                                         if dist_sq >= simplify_meters_sq {
                                                             simplified.push(pt);
                                                             last_kept = pt;

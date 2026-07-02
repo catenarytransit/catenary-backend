@@ -730,7 +730,12 @@ impl TripWebSocket {
         let current_gen = self.trajectory_request_generation;
         let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
 
-        let chateaus = self.subscribed_chateaus.clone().into_iter().filter(|x| crate::trajectories::ALLOWED_CHATEAUX.contains(&x.as_str())).collect::<Vec<_>>();
+        let chateaus = self
+            .subscribed_chateaus
+            .clone()
+            .into_iter()
+            .filter(|x| crate::trajectories::ALLOWED_CHATEAUX.contains(&x.as_str()))
+            .collect::<Vec<_>>();
 
         for ch in chateaus {
             let ch_clone = ch.clone();
@@ -796,9 +801,7 @@ impl TripWebSocket {
             };
 
             let fut = actix::fut::wrap_future(fut).map(
-                move |messages,
-                      act: &mut TripWebSocket,
-                      ctx: &mut ws::WebsocketContext<Self>| {
+                move |messages, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
                     if current_gen != act.trajectory_request_generation {
                         return; // newer request was sent
                     }
