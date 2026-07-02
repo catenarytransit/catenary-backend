@@ -730,7 +730,7 @@ impl TripWebSocket {
         let current_gen = self.trajectory_request_generation;
         let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
 
-        let chateaus = self.subscribed_chateaus.clone();
+        let chateaus = self.subscribed_chateaus.clone().into_iter().filter(|x| crate::trajectories::ALLOWED_CHATEAUX.contains(&x.as_str())).collect::<Vec<_>>();
 
         for ch in chateaus {
             let ch_clone = ch.clone();
@@ -742,8 +742,11 @@ impl TripWebSocket {
             let params_clone = params.clone();
             let client_ref = client_params.client_reference.clone();
 
+            let client_ref_clone = client_ref.clone();
+            let ch_clone2 = ch.clone();
+
             let fut = async move {
-                trajectories::get_single_chateau_trajectories(
+                let trajectories = trajectories::get_single_chateau_trajectories(
                     pool_clone,
                     ips_clone,
                     opts_clone,
@@ -752,46 +755,56 @@ impl TripWebSocket {
                     params_clone,
                     ch_clone,
                 )
+                .await;
+
+                tokio::task::spawn_blocking(move || {
+                    let chunks: Vec<_> = trajectories.chunks(100).collect();
+                    let total_chunks = chunks.len();
+                    let mut serialized_messages = Vec::new();
+
+                    if chunks.is_empty() {
+                        let msg = ServerMessage::Buffer {
+                            timestamp: update_timestamp,
+                            client_reference: client_ref_clone.clone(),
+                            chateau: ch_clone2.clone(),
+                            content: vec![],
+                            chunk_index: 0,
+                            total_chunks: 0,
+                        };
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            serialized_messages.push(text);
+                        }
+                    } else {
+                        for (i, chunk) in chunks.into_iter().enumerate() {
+                            let msg = ServerMessage::Buffer {
+                                timestamp: update_timestamp,
+                                client_reference: client_ref_clone.clone(),
+                                chateau: ch_clone2.clone(),
+                                content: chunk.to_vec(),
+                                chunk_index: i,
+                                total_chunks,
+                            };
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                serialized_messages.push(text);
+                            }
+                        }
+                    }
+                    serialized_messages
+                })
                 .await
+                .unwrap_or_default()
             };
 
             let fut = actix::fut::wrap_future(fut).map(
-                move |trajectories,
+                move |messages,
                       act: &mut TripWebSocket,
                       ctx: &mut ws::WebsocketContext<Self>| {
                     if current_gen != act.trajectory_request_generation {
                         return; // newer request was sent
                     }
 
-                    let chunks: Vec<_> = trajectories.chunks(100).collect();
-                    let total_chunks = chunks.len();
-
-                    if chunks.is_empty() {
-                        let msg = ServerMessage::Buffer {
-                            timestamp: update_timestamp,
-                            client_reference: client_ref.clone(),
-                            chateau: ch.clone(),
-                            content: vec![],
-                            chunk_index: 0,
-                            total_chunks: 0,
-                        };
-                        if let Ok(text) = serde_json::to_string(&msg) {
-                            ctx.text(text);
-                        }
-                    } else {
-                        for (i, chunk) in chunks.into_iter().enumerate() {
-                            let msg = ServerMessage::Buffer {
-                                timestamp: update_timestamp,
-                                client_reference: client_ref.clone(),
-                                chateau: ch.clone(),
-                                content: chunk.to_vec(),
-                                chunk_index: i,
-                                total_chunks,
-                            };
-                            if let Ok(text) = serde_json::to_string(&msg) {
-                                ctx.text(text);
-                            }
-                        }
+                    for text in messages {
+                        ctx.text(text);
                     }
                     act.last_trajectory_sent_time = Some(Instant::now());
                 },

@@ -6,7 +6,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use rayon::prelude::*;
 use std::sync::Arc;
 
-const ALLOWED_CHATEAUX: &[&str] = &[
+pub const ALLOWED_CHATEAUX: &[&str] = &[
     "deutschland",
     "sncf",
     "nationalrailuk",
