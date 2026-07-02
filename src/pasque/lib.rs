@@ -16,7 +16,7 @@ pub struct TrajectoryWrapper {
     pub source: String,
     pub timestamp: u64,
     pub client_reference: String,
-    pub content: serde_json::Value,
+    pub content: crate::aspen_dataset::AspenisedTrajectory,
 }
 
 #[tarpc::service]

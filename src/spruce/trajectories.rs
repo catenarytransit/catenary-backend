@@ -16,15 +16,6 @@ const ALLOWED_CHATEAUX: &[&str] = &[
     "tisséo",
 ];
 
-fn haversine_distance_meters(lon1: f64, lat1: f64, lon2: f64, lat2: f64) -> f64 {
-    let earth_radius_km = 6371.0;
-    let d_lat = (lat2 - lat1).to_radians();
-    let d_lon = (lon2 - lon1).to_radians();
-    let a = (d_lat / 2.0).sin().powi(2)
-        + lat1.to_radians().cos() * lat2.to_radians().cos() * (d_lon / 2.0).sin().powi(2);
-    let c = 2.0 * a.sqrt().atan2((1.0 - a).sqrt());
-    earth_radius_km * c * 1000.0
-}
 
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
 pub use catenary::pasque::lib::TrajectoryWrapper;
@@ -227,22 +218,26 @@ pub async fn get_single_chateau_trajectories(
                                 }
 
                                 if simplify_meters > 0.0 {
+                                    let simplify_meters_sq = simplify_meters * simplify_meters;
+                                    let earth_radius_m = 6371000.0_f64;
+                                    let rad_per_deg = std::f64::consts::PI / 180.0;
+
                                     for seg in &mut traj.segments {
                                         if seg.coordinates.len() > 2 {
                                             let mut simplified =
                                                 Vec::with_capacity(seg.coordinates.len());
                                             simplified.push(seg.coordinates[0]);
                                             let mut last_kept = seg.coordinates[0];
+                                            let cos_factor = (last_kept[1] * rad_per_deg).cos();
 
                                             for i in 1..seg.coordinates.len() - 1 {
                                                 let pt = seg.coordinates[i];
-                                                let dist = haversine_distance_meters(
-                                                    last_kept[0],
-                                                    last_kept[1],
-                                                    pt[0],
-                                                    pt[1],
-                                                );
-                                                if dist >= simplify_meters {
+                                                let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
+                                                let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
+                                                let x = d_lon * cos_factor;
+                                                let dist_sq = earth_radius_m * earth_radius_m * (x * x + d_lat * d_lat);
+
+                                                if dist_sq >= simplify_meters_sq {
                                                     simplified.push(pt);
                                                     last_kept = pt;
                                                 }
@@ -259,8 +254,7 @@ pub async fn get_single_chateau_trajectories(
                                     source: "trajectory".to_string(),
                                     timestamp: now_ms,
                                     client_reference: client_reference.clone(),
-                                    content: serde_json::to_value(traj)
-                                        .unwrap_or(serde_json::Value::Null),
+                                    content: traj,
                                 }
                             })
                             .collect()
@@ -464,22 +458,26 @@ pub async fn get_trajectories(
                                         }
 
                                         if simplify_meters > 0.0 {
+                                            let simplify_meters_sq = simplify_meters * simplify_meters;
+                                            let earth_radius_m = 6371000.0_f64;
+                                            let rad_per_deg = std::f64::consts::PI / 180.0;
+
                                             for seg in &mut traj.segments {
                                                 if seg.coordinates.len() > 2 {
                                                     let mut simplified =
                                                         Vec::with_capacity(seg.coordinates.len());
                                                     simplified.push(seg.coordinates[0]);
                                                     let mut last_kept = seg.coordinates[0];
+                                                    let cos_factor = (last_kept[1] * rad_per_deg).cos();
 
                                                     for i in 1..seg.coordinates.len() - 1 {
                                                         let pt = seg.coordinates[i];
-                                                        let dist = haversine_distance_meters(
-                                                            last_kept[0],
-                                                            last_kept[1],
-                                                            pt[0],
-                                                            pt[1],
-                                                        );
-                                                        if dist >= simplify_meters {
+                                                        let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
+                                                        let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
+                                                        let x = d_lon * cos_factor;
+                                                        let dist_sq = earth_radius_m * earth_radius_m * (x * x + d_lat * d_lat);
+                                                        
+                                                        if dist_sq >= simplify_meters_sq {
                                                             simplified.push(pt);
                                                             last_kept = pt;
                                                         }
@@ -504,8 +502,7 @@ pub async fn get_trajectories(
                                             source: "trajectory".to_string(),
                                             timestamp: now_ms,
                                             client_reference: client_reference.clone(),
-                                            content: serde_json::to_value(traj)
-                                                .unwrap_or(serde_json::Value::Null),
+                                            content: traj,
                                         }
                                     })
                                     .collect()
