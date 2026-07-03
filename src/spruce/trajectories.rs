@@ -128,14 +128,14 @@ pub async fn get_single_chateau_trajectories(
                     let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                     tokio::task::spawn_blocking(move || {
                         let now = chrono::Utc::now();
-                        let t_start_str = (now - chrono::Duration::minutes(15))
+                        let t_start_str = (now - chrono::Duration::minutes(2))
                             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                        let t_end_str = (now + chrono::Duration::minutes(25))
+                        let t_end_str = (now + chrono::Duration::minutes(3))
                             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
                         trajectories
                             .into_par_iter()
-                            .filter(|traj| {
+                            .filter_map(|mut traj| {
                                 let mut keep = false;
                                 if traj.segments.is_empty() {
                                     for stop in &traj.stops {
@@ -159,11 +159,11 @@ pub async fn get_single_chateau_trajectories(
                                         }
                                     }
                                 } else {
-                                    for seg in &traj.segments {
+                                    traj.segments.retain(|seg| {
                                         if seg.from_stop_index >= traj.stops.len()
                                             || seg.to_stop_index >= traj.stops.len()
                                         {
-                                            continue;
+                                            return false;
                                         }
                                         let from_stop = &traj.stops[seg.from_stop_index];
                                         let to_stop = &traj.stops[seg.to_stop_index];
@@ -204,58 +204,62 @@ pub async fn get_single_chateau_trajectories(
                                                 && seg_max_lat >= min_lat
                                             {
                                                 keep = true;
-                                                break;
                                             }
+                                            true
+                                        } else {
+                                            false
                                         }
-                                    }
-                                }
-                                keep
-                            })
-                            .map(|mut traj| {
-                                for seg in &mut traj.segments {
-                                    seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                    });
                                 }
 
-                                if simplify_meters > 0.0 {
-                                    let simplify_meters_sq = simplify_meters * simplify_meters;
-                                    let earth_radius_m = 6371000.0_f64;
-                                    let rad_per_deg = std::f64::consts::PI / 180.0;
-
+                                if keep {
                                     for seg in &mut traj.segments {
-                                        if seg.coordinates.len() > 2 {
-                                            let mut simplified =
-                                                Vec::with_capacity(seg.coordinates.len());
-                                            simplified.push(seg.coordinates[0]);
-                                            let mut last_kept = seg.coordinates[0];
-                                            let cos_factor = (last_kept[1] * rad_per_deg).cos();
+                                        seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                    }
 
-                                            for i in 1..seg.coordinates.len() - 1 {
-                                                let pt = seg.coordinates[i];
-                                                let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
-                                                let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
-                                                let x = d_lon * cos_factor;
-                                                let dist_sq = earth_radius_m
-                                                    * earth_radius_m
-                                                    * (x * x + d_lat * d_lat);
+                                    if simplify_meters > 0.0 {
+                                        let simplify_meters_sq = simplify_meters * simplify_meters;
+                                        let earth_radius_m = 6371000.0_f64;
+                                        let rad_per_deg = std::f64::consts::PI / 180.0;
 
-                                                if dist_sq >= simplify_meters_sq {
-                                                    simplified.push(pt);
-                                                    last_kept = pt;
+                                        for seg in &mut traj.segments {
+                                            if seg.coordinates.len() > 2 {
+                                                let mut simplified =
+                                                    Vec::with_capacity(seg.coordinates.len());
+                                                simplified.push(seg.coordinates[0]);
+                                                let mut last_kept = seg.coordinates[0];
+                                                let cos_factor = (last_kept[1] * rad_per_deg).cos();
+
+                                                for i in 1..seg.coordinates.len() - 1 {
+                                                    let pt = seg.coordinates[i];
+                                                    let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
+                                                    let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
+                                                    let x = d_lon * cos_factor;
+                                                    let dist_sq = earth_radius_m
+                                                        * earth_radius_m
+                                                        * (x * x + d_lat * d_lat);
+
+                                                    if dist_sq >= simplify_meters_sq {
+                                                        simplified.push(pt);
+                                                        last_kept = pt;
+                                                    }
                                                 }
-                                            }
 
-                                            simplified
-                                                .push(seg.coordinates[seg.coordinates.len() - 1]);
-                                            seg.coordinates = simplified;
+                                                simplified
+                                                    .push(seg.coordinates[seg.coordinates.len() - 1]);
+                                                seg.coordinates = simplified;
+                                            }
                                         }
                                     }
-                                }
 
-                                TrajectoryWrapper {
-                                    source: "trajectory".to_string(),
-                                    timestamp: now_ms,
-                                    client_reference: client_reference.clone(),
-                                    content: traj,
+                                    Some(TrajectoryWrapper {
+                                        source: "trajectory".to_string(),
+                                        timestamp: now_ms,
+                                        client_reference: client_reference.clone(),
+                                        content: traj,
+                                    })
+                                } else {
+                                    None
                                 }
                             })
                             .collect()
@@ -365,14 +369,14 @@ pub async fn get_trajectories(
                             let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                             tokio::task::spawn_blocking(move || {
                                 let now = chrono::Utc::now();
-                                let t_start_str = (now - chrono::Duration::minutes(15))
+                                let t_start_str = (now - chrono::Duration::minutes(2))
                                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                                let t_end_str = (now + chrono::Duration::minutes(25))
+                                let t_end_str = (now + chrono::Duration::minutes(3))
                                     .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
                                 trajectories
                                     .into_par_iter()
-                                    .filter(|traj| {
+                                    .filter_map(|mut traj| {
                                         let mut keep = false;
                                         if traj.segments.is_empty() {
                                             for stop in &traj.stops {
@@ -397,11 +401,11 @@ pub async fn get_trajectories(
                                                 }
                                             }
                                         } else {
-                                            for seg in &traj.segments {
+                                            traj.segments.retain(|seg| {
                                                 if seg.from_stop_index >= traj.stops.len()
                                                     || seg.to_stop_index >= traj.stops.len()
                                                 {
-                                                    continue;
+                                                    return false;
                                                 }
                                                 let from_stop = &traj.stops[seg.from_stop_index];
                                                 let to_stop = &traj.stops[seg.to_stop_index];
@@ -445,71 +449,75 @@ pub async fn get_trajectories(
                                                         && seg_max_lat >= min_lat
                                                     {
                                                         keep = true;
-                                                        break;
+                                                    }
+                                                    true
+                                                } else {
+                                                    false
+                                                }
+                                            });
+                                        }
+
+                                        if keep {
+                                            for seg in &mut traj.segments {
+                                                seg.coordinates
+                                                    .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                            }
+
+                                            if simplify_meters > 0.0 {
+                                                let simplify_meters_sq =
+                                                    simplify_meters * simplify_meters;
+                                                let earth_radius_m = 6371000.0_f64;
+                                                let rad_per_deg = std::f64::consts::PI / 180.0;
+
+                                                for seg in &mut traj.segments {
+                                                    if seg.coordinates.len() > 2 {
+                                                        let mut simplified =
+                                                            Vec::with_capacity(seg.coordinates.len());
+                                                        simplified.push(seg.coordinates[0]);
+                                                        let mut last_kept = seg.coordinates[0];
+                                                        let cos_factor =
+                                                            (last_kept[1] * rad_per_deg).cos();
+
+                                                        for i in 1..seg.coordinates.len() - 1 {
+                                                            let pt = seg.coordinates[i];
+                                                            let d_lat =
+                                                                (pt[1] - last_kept[1]) * rad_per_deg;
+                                                            let d_lon =
+                                                                (pt[0] - last_kept[0]) * rad_per_deg;
+                                                            let x = d_lon * cos_factor;
+                                                            let dist_sq = earth_radius_m
+                                                                * earth_radius_m
+                                                                * (x * x + d_lat * d_lat);
+
+                                                            if dist_sq >= simplify_meters_sq {
+                                                                simplified.push(pt);
+                                                                last_kept = pt;
+                                                            }
+                                                        }
+
+                                                        simplified.push(
+                                                            seg.coordinates[seg.coordinates.len() - 1],
+                                                        );
+                                                        seg.coordinates = simplified;
                                                     }
                                                 }
                                             }
-                                        }
-                                        keep
-                                    })
-                                    .map(|mut traj| {
-                                        for seg in &mut traj.segments {
-                                            seg.coordinates
-                                                .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
-                                        }
-
-                                        if simplify_meters > 0.0 {
-                                            let simplify_meters_sq =
-                                                simplify_meters * simplify_meters;
-                                            let earth_radius_m = 6371000.0_f64;
-                                            let rad_per_deg = std::f64::consts::PI / 180.0;
 
                                             for seg in &mut traj.segments {
-                                                if seg.coordinates.len() > 2 {
-                                                    let mut simplified =
-                                                        Vec::with_capacity(seg.coordinates.len());
-                                                    simplified.push(seg.coordinates[0]);
-                                                    let mut last_kept = seg.coordinates[0];
-                                                    let cos_factor =
-                                                        (last_kept[1] * rad_per_deg).cos();
-
-                                                    for i in 1..seg.coordinates.len() - 1 {
-                                                        let pt = seg.coordinates[i];
-                                                        let d_lat =
-                                                            (pt[1] - last_kept[1]) * rad_per_deg;
-                                                        let d_lon =
-                                                            (pt[0] - last_kept[0]) * rad_per_deg;
-                                                        let x = d_lon * cos_factor;
-                                                        let dist_sq = earth_radius_m
-                                                            * earth_radius_m
-                                                            * (x * x + d_lat * d_lat);
-
-                                                        if dist_sq >= simplify_meters_sq {
-                                                            simplified.push(pt);
-                                                            last_kept = pt;
-                                                        }
-                                                    }
-
-                                                    simplified.push(
-                                                        seg.coordinates[seg.coordinates.len() - 1],
-                                                    );
-                                                    seg.coordinates = simplified;
+                                                for pt in &mut seg.coordinates {
+                                                    pt[0] = (pt[0] * 1_000_000.0).round() / 1_000_000.0;
+                                                    pt[1] = (pt[1] * 1_000_000.0).round() / 1_000_000.0;
                                                 }
                                             }
-                                        }
 
-                                        for seg in &mut traj.segments {
-                                            for pt in &mut seg.coordinates {
-                                                pt[0] = (pt[0] * 1_000_000.0).round() / 1_000_000.0;
-                                                pt[1] = (pt[1] * 1_000_000.0).round() / 1_000_000.0;
-                                            }
-                                        }
-
-                                        TrajectoryWrapper {
-                                            source: "trajectory".to_string(),
-                                            timestamp: now_ms,
-                                            client_reference: client_reference.clone(),
-                                            content: traj,
+                                            Some(TrajectoryWrapper {
+                                                source: "trajectory".to_string(),
+                                                timestamp: now_ms,
+                                                client_reference: client_reference.clone(),
+                                                content: traj,
+                                            })
+                                        } else {
+                                            None
                                         }
                                     })
                                     .collect()
