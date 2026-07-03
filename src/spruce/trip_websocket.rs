@@ -295,6 +295,24 @@ impl TripWebSocket {
             });
         }
 
+        if let Some(params) = &self.trajectory_subscription {
+            let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+            let client_ref = params.client_reference.clone();
+            for chateau_id in &removed {
+                let msg = ServerMessage::Buffer {
+                    timestamp: update_timestamp,
+                    client_reference: client_ref.clone(),
+                    chateau: chateau_id.clone(),
+                    content: vec![],
+                    chunk_index: 0,
+                    total_chunks: 0,
+                };
+                if let Ok(text) = serde_json::to_string(&msg) {
+                    ctx.text(text);
+                }
+            }
+        }
+
         let chateaus_changed = self.subscribed_chateaus != new_chateaus;
         self.subscribed_chateaus = new_chateaus;
 
@@ -964,6 +982,23 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         self.trigger_trajectory_update(ctx);
                     }
                     Ok(ClientMessage::UnsubscribeTrajectories) => {
+                        if let Some(params) = &self.trajectory_subscription {
+                            let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+                            let client_ref = params.client_reference.clone();
+                            for chateau in &self.subscribed_chateaus {
+                                let msg = ServerMessage::Buffer {
+                                    timestamp: update_timestamp,
+                                    client_reference: client_ref.clone(),
+                                    chateau: chateau.clone(),
+                                    content: vec![],
+                                    chunk_index: 0,
+                                    total_chunks: 0,
+                                };
+                                if let Ok(text) = serde_json::to_string(&msg) {
+                                    ctx.text(text);
+                                }
+                            }
+                        }
                         self.trajectory_subscription = None;
                     }
                     Ok(ClientMessage::SubscribeMapV2 { params }) => {
