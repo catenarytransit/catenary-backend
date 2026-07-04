@@ -3313,7 +3313,7 @@ pub async fn new_rt_data(
                         chateau_id
                     );
                     match shapes
-                        .filter(onestop_feed_id.eq(chateau_id))
+                        .filter(chateau.eq(chateau_id))
                         .filter(shape_id.eq_any(chunk))
                         .select((shape_id, linestring))
                         .load::<(
