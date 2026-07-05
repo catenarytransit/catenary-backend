@@ -53,6 +53,111 @@ async fn get_aspen_socket(
     }
     None
 }
+use std::io::Write;
+
+fn format_coordinate_precise(val: f64, zoom: u8) -> f64 {
+    let decimals = if zoom < 9 {
+        4
+    } else if zoom < 13 {
+        5
+    } else {
+        6
+    };
+
+    let factor = match decimals {
+        4 => 10_000.0,
+        5 => 100_000.0,
+        _ => 1_000_000.0,
+    };
+
+    // Extract the exact rounded decimal coefficient as an integer
+    let rounded = (val * factor).round() as i64;
+
+    // Construct a stack scratchpad for the scientific string representation
+    let mut buf = [0u8; 24];
+
+    // Format the integer using the ultra-fast `itoa` crate (bypasses core::fmt entirely)
+    let mut itoa_buf = itoa::Buffer::new();
+    let int_bytes = itoa_buf.format(rounded).as_bytes();
+
+    let len = int_bytes.len();
+    buf[..len].copy_from_slice(int_bytes);
+
+    // Append the scientific exponent to scale the value back down precisely
+    let exp_bytes = match decimals {
+        4 => b"e-4",
+        5 => b"e-5",
+        _ => b"e-6",
+    };
+    buf[len..len + 3].copy_from_slice(exp_bytes);
+    let total_len = len + 3;
+
+    // Parse via fast_float, which implements the Eisel-Lemire algorithm.
+    // This uses 128-bit integer multiplications against exact powers of 10,
+    // providing identical bitwise precision to a standard decimal parser.
+    fast_float::parse(&buf[..total_len]).unwrap_or(val)
+}
+
+fn perpendicular_distance_sq(pt: [f64; 2], line_start: [f64; 2], line_end: [f64; 2]) -> f64 {
+    let dx = line_end[0] - line_start[0];
+    let dy = line_end[1] - line_start[1];
+
+    let length_sq = dx * dx + dy * dy;
+    if length_sq == 0.0 {
+        let dx = pt[0] - line_start[0];
+        let dy = pt[1] - line_start[1];
+        return dx * dx + dy * dy;
+    }
+
+    let t = ((pt[0] - line_start[0]) * dx + (pt[1] - line_start[1]) * dy) / length_sq;
+    let t = t.clamp(0.0, 1.0);
+
+    let proj_x = line_start[0] + t * dx;
+    let proj_y = line_start[1] + t * dy;
+
+    let dx = pt[0] - proj_x;
+    let dy = pt[1] - proj_y;
+
+    dx * dx + dy * dy
+}
+
+fn rdp_indices(projected: &[[f64; 2]], epsilon_sq: f64) -> Vec<usize> {
+    if projected.len() <= 2 {
+        return (0..projected.len()).collect();
+    }
+
+    let mut stack = vec![(0, projected.len() - 1)];
+    let mut keep = vec![false; projected.len()];
+    keep[0] = true;
+    keep[projected.len() - 1] = true;
+
+    while let Some((start, end)) = stack.pop() {
+        let mut dmax_sq = 0.0;
+        let mut index = start;
+
+        let pt_start = projected[start];
+        let pt_end = projected[end];
+
+        for i in start + 1..end {
+            let d_sq = perpendicular_distance_sq(projected[i], pt_start, pt_end);
+            if d_sq > dmax_sq {
+                index = i;
+                dmax_sq = d_sq;
+            }
+        }
+
+        if dmax_sq > epsilon_sq {
+            keep[index] = true;
+            stack.push((start, index));
+            stack.push((index, end));
+        }
+    }
+
+    keep.into_iter()
+        .enumerate()
+        .filter_map(|(i, k)| if k { Some(i) } else { None })
+        .collect()
+}
 
 pub async fn get_single_chateau_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
@@ -95,6 +200,7 @@ pub async fn get_single_chateau_trajectories(
         };
 
         if let Some(mut client) = client_res {
+            let zoom = params.zoom;
             let client_reference = params.client_reference.clone();
             let min_lon = params.bbox.get(0).copied().unwrap_or(0.0);
             let min_lat = params.bbox.get(1).copied().unwrap_or(0.0);
@@ -106,12 +212,16 @@ pub async fn get_single_chateau_trajectories(
             let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
             let min_dim_km = lat_diff_km.min(lon_diff_km);
 
-            let simplify_meters = if min_dim_km > 200.0 {
+            let simplify_meters = if min_dim_km > 300.0 {
+                1500.0
+            } else if min_dim_km > 200.0 {
                 1000.0
             } else if min_dim_km > 100.0 {
                 500.0
             } else if min_dim_km > 50.0 {
                 250.0
+            } else if min_dim_km > 20.0 {
+                150.0
             } else if min_dim_km > 10.0 {
                 100.0
             } else if min_dim_km > 5.0 {
@@ -214,41 +324,52 @@ pub async fn get_single_chateau_trajectories(
 
                                 if keep {
                                     for seg in &mut traj.segments {
-                                        seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                        seg.coordinates
+                                            .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
                                     }
 
                                     if simplify_meters > 0.0 {
-                                        let simplify_meters_sq = simplify_meters * simplify_meters;
-                                        let earth_radius_m = 6371000.0_f64;
-                                        let rad_per_deg = std::f64::consts::PI / 180.0;
+                                        // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
+                                        let web_mercator_scale =
+                                            (1.0 / avg_lat.to_radians().cos()).abs();
+                                        let wm_simplify_meters =
+                                            simplify_meters * web_mercator_scale;
+                                        let simplify_meters_sq =
+                                            wm_simplify_meters * wm_simplify_meters;
 
                                         for seg in &mut traj.segments {
                                             if seg.coordinates.len() > 2 {
+                                                let projected: Vec<[f64; 2]> = seg
+                                                    .coordinates
+                                                    .iter()
+                                                    .map(|pt| {
+                                                        let r = 6378137.0;
+                                                        let x = pt[0].to_radians() * r;
+                                                        let y = ((std::f64::consts::PI / 4.0)
+                                                            + (pt[1].to_radians() / 2.0))
+                                                            .tan()
+                                                            .ln()
+                                                            * r;
+                                                        [x, y]
+                                                    })
+                                                    .collect();
+
+                                                let indices =
+                                                    rdp_indices(&projected, simplify_meters_sq);
                                                 let mut simplified =
-                                                    Vec::with_capacity(seg.coordinates.len());
-                                                simplified.push(seg.coordinates[0]);
-                                                let mut last_kept = seg.coordinates[0];
-                                                let cos_factor = (last_kept[1] * rad_per_deg).cos();
-
-                                                for i in 1..seg.coordinates.len() - 1 {
-                                                    let pt = seg.coordinates[i];
-                                                    let d_lat = (pt[1] - last_kept[1]) * rad_per_deg;
-                                                    let d_lon = (pt[0] - last_kept[0]) * rad_per_deg;
-                                                    let x = d_lon * cos_factor;
-                                                    let dist_sq = earth_radius_m
-                                                        * earth_radius_m
-                                                        * (x * x + d_lat * d_lat);
-
-                                                    if dist_sq >= simplify_meters_sq {
-                                                        simplified.push(pt);
-                                                        last_kept = pt;
-                                                    }
+                                                    Vec::with_capacity(indices.len());
+                                                for idx in indices {
+                                                    simplified.push(seg.coordinates[idx]);
                                                 }
-
-                                                simplified
-                                                    .push(seg.coordinates[seg.coordinates.len() - 1]);
                                                 seg.coordinates = simplified;
                                             }
+                                        }
+                                    }
+
+                                    for seg in &mut traj.segments {
+                                        for pt in &mut seg.coordinates {
+                                            pt[0] = format_coordinate_precise(pt[0], zoom);
+                                            pt[1] = format_coordinate_precise(pt[1], zoom);
                                         }
                                     }
 
@@ -301,6 +422,7 @@ pub async fn get_trajectories(
     params: TrajectorySubscriptionParams,
     chateaus: std::collections::HashSet<String>,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
+    let zoom = params.zoom;
     let mut futures = Vec::new();
 
     for ch in chateaus {
@@ -464,40 +586,41 @@ pub async fn get_trajectories(
                                             }
 
                                             if simplify_meters > 0.0 {
+                                                // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
+                                                let web_mercator_scale =
+                                                    (1.0 / avg_lat.to_radians().cos()).abs();
+                                                let wm_simplify_meters =
+                                                    simplify_meters * web_mercator_scale;
                                                 let simplify_meters_sq =
-                                                    simplify_meters * simplify_meters;
-                                                let earth_radius_m = 6371000.0_f64;
-                                                let rad_per_deg = std::f64::consts::PI / 180.0;
+                                                    wm_simplify_meters * wm_simplify_meters;
 
                                                 for seg in &mut traj.segments {
                                                     if seg.coordinates.len() > 2 {
-                                                        let mut simplified =
-                                                            Vec::with_capacity(seg.coordinates.len());
-                                                        simplified.push(seg.coordinates[0]);
-                                                        let mut last_kept = seg.coordinates[0];
-                                                        let cos_factor =
-                                                            (last_kept[1] * rad_per_deg).cos();
+                                                        let projected: Vec<[f64; 2]> = seg
+                                                            .coordinates
+                                                            .iter()
+                                                            .map(|pt| {
+                                                                let r = 6378137.0;
+                                                                let x = pt[0].to_radians() * r;
+                                                                let y = ((std::f64::consts::PI
+                                                                    / 4.0)
+                                                                    + (pt[1].to_radians() / 2.0))
+                                                                    .tan()
+                                                                    .ln()
+                                                                    * r;
+                                                                [x, y]
+                                                            })
+                                                            .collect();
 
-                                                        for i in 1..seg.coordinates.len() - 1 {
-                                                            let pt = seg.coordinates[i];
-                                                            let d_lat =
-                                                                (pt[1] - last_kept[1]) * rad_per_deg;
-                                                            let d_lon =
-                                                                (pt[0] - last_kept[0]) * rad_per_deg;
-                                                            let x = d_lon * cos_factor;
-                                                            let dist_sq = earth_radius_m
-                                                                * earth_radius_m
-                                                                * (x * x + d_lat * d_lat);
-
-                                                            if dist_sq >= simplify_meters_sq {
-                                                                simplified.push(pt);
-                                                                last_kept = pt;
-                                                            }
-                                                        }
-
-                                                        simplified.push(
-                                                            seg.coordinates[seg.coordinates.len() - 1],
+                                                        let indices = rdp_indices(
+                                                            &projected,
+                                                            simplify_meters_sq,
                                                         );
+                                                        let mut simplified =
+                                                            Vec::with_capacity(indices.len());
+                                                        for idx in indices {
+                                                            simplified.push(seg.coordinates[idx]);
+                                                        }
                                                         seg.coordinates = simplified;
                                                     }
                                                 }
@@ -505,8 +628,8 @@ pub async fn get_trajectories(
 
                                             for seg in &mut traj.segments {
                                                 for pt in &mut seg.coordinates {
-                                                    pt[0] = (pt[0] * 1_000_000.0).round() / 1_000_000.0;
-                                                    pt[1] = (pt[1] * 1_000_000.0).round() / 1_000_000.0;
+                                                    pt[0] = format_coordinate_precise(pt[0], zoom);
+                                                    pt[1] = format_coordinate_precise(pt[1], zoom);
                                                 }
                                             }
 

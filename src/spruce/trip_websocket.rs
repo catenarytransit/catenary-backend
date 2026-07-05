@@ -245,18 +245,25 @@ impl TripWebSocket {
 
                                 if response.found_data {
                                     if let Some(data) = response.data {
-                                        if let Some(ts) = data.timestamp {
-                                            let key = (chateau_clone.clone(), params_clone.clone());
-                                            if let Some(current_last_update) =
-                                                act.subscriptions.get_mut(&key)
-                                            {
-                                                if let Some(last) = current_last_update {
-                                                    if *last == ts {
-                                                        return;
-                                                    }
+                                        use std::collections::hash_map::DefaultHasher;
+                                        use std::hash::{Hash, Hasher};
+
+                                        let stoptimes_json = serde_json::to_string(&data.stoptimes)
+                                            .unwrap_or_default();
+                                        let mut hasher = DefaultHasher::new();
+                                        stoptimes_json.hash(&mut hasher);
+                                        let hash = hasher.finish();
+
+                                        let key = (chateau_clone.clone(), params_clone.clone());
+                                        if let Some(current_last_update) =
+                                            act.subscriptions.get_mut(&key)
+                                        {
+                                            if let Some(last) = current_last_update {
+                                                if *last == hash {
+                                                    return;
                                                 }
-                                                *current_last_update = Some(ts);
                                             }
+                                            *current_last_update = Some(hash);
                                         }
 
                                         let msg = ServerMessage::UpdateTrip { data };
