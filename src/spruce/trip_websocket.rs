@@ -306,6 +306,9 @@ impl TripWebSocket {
             let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
             let client_ref = params.client_reference.clone();
             for chateau_id in &removed {
+                if !crate::trajectories::ALLOWED_CHATEAUX.contains(&chateau_id.as_str()) {
+                    continue;
+                }
                 let msg = ServerMessage::Buffer {
                     timestamp: update_timestamp,
                     client_reference: client_ref.clone(),
@@ -788,7 +791,7 @@ impl TripWebSocket {
                 .await;
 
                 tokio::task::spawn_blocking(move || {
-                    let chunks: Vec<_> = trajectories.chunks(100).collect();
+                    let chunks: Vec<_> = trajectories.chunks(200).collect();
                     let total_chunks = chunks.len();
                     let mut serialized_messages = Vec::new();
 
