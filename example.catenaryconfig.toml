@@ -53,6 +53,13 @@ etcd_urls = ["localhost:2379"]
 etcd_username = ""
 etcd_password = ""
 
+[ramonda]
+worker_amount = 2
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+port = 52772
+
 [elasticsearch]
 urls = ["http://localhost:9200"]
 

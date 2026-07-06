@@ -21,6 +21,8 @@ pub struct CatenaryConfig {
     #[serde(default)]
     pub spruce: SpruceConfig,
     #[serde(default)]
+    pub ramonda: RamondaConfig,
+    #[serde(default)]
     pub postgres: PostgresConfig,
     #[serde(default)]
     pub elasticsearch: ElasticsearchConfig,
@@ -104,6 +106,15 @@ pub struct SpruceConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+pub struct RamondaConfig {
+    pub worker_amount: Option<usize>,
+    pub etcd_urls: Option<Vec<String>>,
+    pub etcd_username: Option<String>,
+    pub etcd_password: Option<String>,
+    pub port: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ElasticsearchConfig {
     pub url: Option<String>,
     pub urls: Option<Vec<String>>,
@@ -161,6 +172,7 @@ impl CatenaryConfig {
         self.alpenrose.apply_env_overrides();
         self.birch.apply_env_overrides();
         self.spruce.apply_env_overrides();
+        self.ramonda.apply_env_overrides();
         self.postgres.apply_env_overrides();
         self.elasticsearch.apply_env_overrides();
     }
@@ -365,6 +377,30 @@ impl SpruceConfig {
 
         if let Ok(value) = std::env::var("ETCD_PASSWORD") {
             self.etcd_password = Some(value);
+        }
+    }
+}
+
+impl RamondaConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Ok(value) = std::env::var("WORKER_AMOUNT") {
+            self.worker_amount = value.parse::<usize>().ok().or(self.worker_amount);
+        }
+
+        if let Ok(value) = std::env::var("ETCD_URLS") {
+            self.etcd_urls = Some(parse_comma_separated(&value));
+        }
+
+        if let Ok(value) = std::env::var("ETCD_USERNAME") {
+            self.etcd_username = Some(value);
+        }
+
+        if let Ok(value) = std::env::var("ETCD_PASSWORD") {
+            self.etcd_password = Some(value);
+        }
+
+        if let Ok(value) = std::env::var("PORT") {
+            self.port = value.parse::<u16>().ok().or(self.port);
         }
     }
 }
