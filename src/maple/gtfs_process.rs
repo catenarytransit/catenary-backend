@@ -474,6 +474,16 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-dpz-gotransit" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                true,
+                false,
+            )
+            .await?;
+        }
         "f-f25d-socitdetransportdemontral" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
