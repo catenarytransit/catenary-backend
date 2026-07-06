@@ -1,15 +1,15 @@
 use actix::prelude::*;
-use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, web};
 use actix_web_actors::ws;
-use catenary::postgres_tools::{make_async_pool, CatenaryPostgresPool};
-use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::EtcdConnectionIps;
+use catenary::aspen::lib::connection_manager::AspenClientManager;
+use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
 use chrono::Utc;
 use std::sync::Arc;
 
 use catenary::trip_logic::{
-    fetch_trip_information, fetch_trip_rt_update, GtfsRtRefreshData, QueryTripInformationParams,
-    TripIntroductionInformation,
+    GtfsRtRefreshData, QueryTripInformationParams, TripIntroductionInformation,
+    fetch_trip_information, fetch_trip_rt_update,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,10 +68,8 @@ pub struct RamondaWebSocket {
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache:
         std::collections::HashMap<String, (std::net::SocketAddr, std::time::Instant)>,
-    pub in_progress_trip_fetches: std::collections::HashMap<
-        (String, QueryTripInformationParams),
-        std::time::Instant,
-    >,
+    pub in_progress_trip_fetches:
+        std::collections::HashMap<(String, QueryTripInformationParams), std::time::Instant>,
 }
 
 impl Actor for RamondaWebSocket {
@@ -200,7 +198,13 @@ impl RamondaWebSocket {
                                     }
                                 }
                             }
-                            Err(_) => {
+                            Err(e) => {
+                                eprintln!(
+                                    "Ramonda fetch_trip_rt_update failed for chateau={} trip_id={}: {}",
+                                    chateau_clone,
+                                    params_clone.trip_id,
+                                    e
+                                );
                                 act.aspen_endpoint_cache.remove(&chateau_clone);
                             }
                         }
@@ -390,7 +394,8 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or(2);
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
-    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>> = Arc::new(tokio::sync::RwLock::new(None));
+    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>> =
+        Arc::new(tokio::sync::RwLock::new(None));
 
     let port = std::env::var("PORT")
         .ok()
