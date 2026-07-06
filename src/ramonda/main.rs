@@ -37,6 +37,8 @@ pub enum ClientMessage {
     },
     #[serde(rename = "unsubscribe_all_trips")]
     UnsubscribeAllTrips,
+    #[serde(rename = "ping")]
+    Ping,
 }
 
 #[derive(Serialize)]
@@ -48,6 +50,8 @@ pub enum ServerMessage {
     UpdateTrip { data: GtfsRtRefreshData },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "pong")]
+    Pong,
 }
 
 const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -259,6 +263,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                             },
                         );
                         ctx.spawn(fut);
+                    }
+                    Ok(ClientMessage::Ping) => {
+                        let msg = ServerMessage::Pong;
+                        if let Ok(text) = serde_json::to_string(&msg) {
+                            ctx.text(text);
+                        }
                     }
                     Err(e) => {
                         let msg = ServerMessage::Error {
