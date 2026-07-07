@@ -83,6 +83,8 @@ pub struct TripIntroductionInformation {
     pub wheelchair_accessible: i16,
     pub has_frequencies: bool,
     pub route_id: String,
+    pub agency_id: String,
+    pub agency_name: String,
     pub trip_headsign: Option<String>,
     pub route_short_name: Option<String>,
     pub trip_short_name: Option<String>,
@@ -775,6 +777,8 @@ pub async fn fetch_trip_information(
                     }
                     let route = &route_vec[0];
 
+                    let mut agency_id = String::new();
+                    let mut agency_name = String::new();
                     let agency = crate::schema::gtfs::agencies::dsl::agencies
                         .filter(crate::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
                         .select(crate::models::Agency::as_select())
@@ -782,10 +786,18 @@ pub async fn fetch_trip_information(
                         .await;
 
                     let tz = match agency {
-                        Ok(agency) => {
-                            if !agency.is_empty() {
-                                let agency: &crate::models::Agency = &agency[0];
-                                chrono_tz::Tz::from_str_insensitive(agency.agency_timezone.as_str())
+                        Ok(agencies) => {
+                            if !agencies.is_empty() {
+                                let mut selected_agency = &agencies[0];
+                                if let Some(route_agency_id) = &route.agency_id {
+                                    if let Some(matching_agency) = agencies.iter().find(|a| a.agency_id == *route_agency_id) {
+                                        selected_agency = matching_agency;
+                                    }
+                                }
+                                agency_id = selected_agency.agency_id.clone();
+                                agency_name = selected_agency.agency_name.clone();
+
+                                chrono_tz::Tz::from_str_insensitive(selected_agency.agency_timezone.as_str())
                                     .unwrap_or(chrono_tz::UTC)
                             } else {
                                 chrono_tz::UTC
@@ -817,6 +829,8 @@ pub async fn fetch_trip_information(
                         wheelchair_accessible: 0,
                         has_frequencies: false,
                         route_id: route.route_id.clone(),
+                        agency_id,
+                        agency_name,
                         trip_headsign: last_stop_name,
                         route_short_name: route.short_name.clone(),
                         trip_short_name: None,
@@ -926,6 +940,27 @@ pub async fn fetch_trip_information(
     }
 
     let route = route[0].clone();
+
+    let mut agency_id = String::new();
+    let mut agency_name = String::new();
+    let agencies_query = crate::schema::gtfs::agencies::dsl::agencies
+        .filter(crate::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
+        .select(crate::models::Agency::as_select())
+        .load(conn)
+        .await;
+    
+    if let Ok(agencies) = agencies_query {
+        if !agencies.is_empty() {
+            let mut selected_agency = &agencies[0];
+            if let Some(route_agency_id) = &route.agency_id {
+                if let Some(matching_agency) = agencies.iter().find(|a| a.agency_id == *route_agency_id) {
+                    selected_agency = matching_agency;
+                }
+            }
+            agency_id = selected_agency.agency_id.clone();
+            agency_name = selected_agency.agency_name.clone();
+        }
+    }
 
     if let Err(itin_meta) = &itin_meta {
         eprintln!("{}", itin_meta);
@@ -2107,6 +2142,8 @@ pub async fn fetch_trip_information(
         color: route.color,
         text_color: route.text_color,
         route_id: route.route_id,
+        agency_id,
+        agency_name,
         block_id: trip_compressed.block_id,
         bikes_allowed: trip_compressed.bikes_allowed,
         wheelchair_accessible: trip_compressed.wheelchair_accessible,
