@@ -474,13 +474,17 @@ pub async fn fetch_trip_rt_update(
                         ))
                     }
                 }
-                _ => Ok((
+                Ok(None) => Ok((
                     ResponseForGtfsRtRefresh {
                         found_data: false,
                         data: None,
                     },
                     Some(socket),
                 )),
+                Err(e) => {
+                    aspen_client_manager.remove_client(&socket).await;
+                    Err(format!("RPC error: {}", e))
+                }
             }
         }
         _ => Err("Could not connect to realtime data server".to_string()),

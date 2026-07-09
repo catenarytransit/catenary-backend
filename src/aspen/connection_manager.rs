@@ -25,4 +25,9 @@ impl AspenClientManager {
         let mut clients = self.clients.write().await;
         clients.insert(addr, client);
     }
+
+    pub async fn remove_client(&self, addr: &SocketAddr) {
+        let mut clients = self.clients.write().await;
+        clients.remove(addr);
+    }
 }
