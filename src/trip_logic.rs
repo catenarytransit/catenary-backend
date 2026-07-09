@@ -794,15 +794,19 @@ pub async fn fetch_trip_information(
                             if !agencies.is_empty() {
                                 let mut selected_agency = &agencies[0];
                                 if let Some(route_agency_id) = &route.agency_id {
-                                    if let Some(matching_agency) = agencies.iter().find(|a| a.agency_id == *route_agency_id) {
+                                    if let Some(matching_agency) =
+                                        agencies.iter().find(|a| a.agency_id == *route_agency_id)
+                                    {
                                         selected_agency = matching_agency;
                                     }
                                 }
                                 agency_id = selected_agency.agency_id.clone();
                                 agency_name = selected_agency.agency_name.clone();
 
-                                chrono_tz::Tz::from_str_insensitive(selected_agency.agency_timezone.as_str())
-                                    .unwrap_or(chrono_tz::UTC)
+                                chrono_tz::Tz::from_str_insensitive(
+                                    selected_agency.agency_timezone.as_str(),
+                                )
+                                .unwrap_or(chrono_tz::UTC)
                             } else {
                                 chrono_tz::UTC
                             }
@@ -952,12 +956,14 @@ pub async fn fetch_trip_information(
         .select(crate::models::Agency::as_select())
         .load(conn)
         .await;
-    
+
     if let Ok(agencies) = agencies_query {
         if !agencies.is_empty() {
             let mut selected_agency = &agencies[0];
             if let Some(route_agency_id) = &route.agency_id {
-                if let Some(matching_agency) = agencies.iter().find(|a| a.agency_id == *route_agency_id) {
+                if let Some(matching_agency) =
+                    agencies.iter().find(|a| a.agency_id == *route_agency_id)
+                {
                     selected_agency = matching_agency;
                 }
             }
