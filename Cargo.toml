@@ -216,6 +216,8 @@ toml = "0.8"
 tinypointers = "0.2.2"
 fast-float = "0.2.0"
 itoa = "1.0.18"
+sockudo-ws = { version = "1.7.4", features = ["all-transports", "axum-integration", "flate2", "permessage-deflate"] }
+axum = "0.8"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = {version = "0.6", features = ["profiling"]}

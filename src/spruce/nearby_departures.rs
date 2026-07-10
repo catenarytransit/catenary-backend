@@ -1,10 +1,11 @@
-use actix_web::HttpRequest;
-use actix_web::HttpResponse;
-use actix_web::Responder;
-use actix_web::web;
-use actix_web::web::Query;
 use ahash::AHashMap;
 use ahash::AHashSet;
+use axum::http::StatusCode;
+use axum::{
+    Json,
+    extract::{Query, State},
+    response::IntoResponse,
+};
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -176,16 +177,15 @@ pub struct ChateauIntermediate {
     pub query_point: geo::Point<f64>,
 }
 
-#[actix_web::get("/nearbydeparturesfromcoordsv3")]
-#[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(lat = ?query.lat, lon = ?query.lon))]
+#[tracing::instrument(name = "nearby_from_coords_v3", skip(state), fields(lat = ?query.lat, lon = ?query.lon))]
 pub async fn nearby_from_coords_v3(
-    req: HttpRequest,
-    query: Query<NearbyFromCoordsV3>,
-    pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
-) -> impl Responder {
+    State(state): State<crate::AppState>,
+    Query(query): Query<NearbyFromCoordsV3>,
+) -> impl IntoResponse {
+    let pool = &state.pool;
+    let etcd_connection_ips = &state.etcd_connection_ips;
+    let etcd_connection_options = &state.etcd_connection_options;
+    let etcd_reuser = &state.etcd_reuser;
     let start = Instant::now();
     let limit_per_station = query.limit_per_station.unwrap_or(10);
     let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
@@ -194,7 +194,9 @@ pub async fn nearby_from_coords_v3(
     let db_connection_start = Instant::now();
     let mut conn = match conn_pool.get().await {
         Ok(c) => c,
-        Err(_) => return HttpResponse::InternalServerError().body("DB Connection Failed"),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "DB Connection Failed").into_response();
+        }
     };
     let db_connection_time = db_connection_start.elapsed();
 
@@ -248,13 +250,17 @@ pub async fn nearby_from_coords_v3(
     {
         Ok(s) => s,
         Err(e) => {
-            return HttpResponse::InternalServerError().body(format!("Stop fetch error: {:?}", e));
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Stop fetch error: {:?}", e),
+            )
+                .into_response();
         }
     };
     let stops_fetch_time = stops_fetch_start.elapsed();
 
     if stops.is_empty() {
-        return HttpResponse::Ok().json(NearbyDeparturesV3Response {
+        return Json(NearbyDeparturesV3Response {
             long_distance: vec![],
             local: vec![],
             routes: HashMap::new(),
@@ -266,7 +272,8 @@ pub async fn nearby_from_coords_v3(
                 etcd_connection_time_ms: 0,
                 pipeline_processing_time_ms: 0,
             },
-        });
+        })
+        .into_response();
     }
 
     // 4. Group Stops
@@ -363,12 +370,12 @@ pub async fn nearby_from_coords_v3(
 
     let chunk_intermediates = fetch_chunk_intermediates(
         NearbyDeparturesContext {
-            pool: pool.get_ref().clone(),
-            etcd_connection_ips: etcd_connection_ips.get_ref().clone(),
-            etcd_connection_options: etcd_connection_options.get_ref().clone(),
-            etcd_reuser: etcd_reuser.get_ref().clone(),
+            pool: pool.clone(),
+            etcd_connection_ips: etcd_connection_ips.clone(),
+            etcd_connection_options: etcd_connection_options.clone(),
+            etcd_reuser: etcd_reuser.clone(),
         },
-        query.into_inner(),
+        query,
         station_groups, // consumes map
         shared_meta.clone(),
         shared_dist.clone(),
@@ -390,11 +397,11 @@ pub async fn nearby_from_coords_v3(
         input_point,
         shared_meta,
         shared_dist,
-        pool.get_ref().clone(),
+        pool.clone(),
     )
     .await;
 
-    HttpResponse::Ok().json(final_response)
+    Json(final_response).into_response()
 }
 
 async fn fetch_chateau_intermediate(

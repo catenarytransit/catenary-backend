@@ -1,5 +1,3 @@
-use actix::prelude::*;
-use actix_web_actors::ws;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::connection_manager::AspenClientManager;
 use catenary::postgres_tools::CatenaryPostgresPool;
@@ -8,235 +6,249 @@ use catenary::trip_logic::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::{AppState, ClientMessage, ServerMessage, nearby_departures};
+use futures_util::{SinkExt, StreamExt};
+use sockudo_ws::Message;
+use tokio::sync::{RwLock, mpsc};
+use tokio::time::{Instant, interval};
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(10);
 const UPDATE_INTERVAL: Duration = Duration::from_millis(300);
 
-use crate::{ClientMessage, ServerMessage, nearby_departures};
-use futures::StreamExt;
-
-pub struct TripWebSocket {
-    pub pool: Arc<CatenaryPostgresPool>,
-    pub etcd_connection_ips: Arc<EtcdConnectionIps>,
-    pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
-    pub aspen_client_manager: Arc<AspenClientManager>,
+pub struct SessionState {
     pub subscriptions: HashMap<(String, QueryTripInformationParams), Option<u64>>,
     pub hb: Instant,
-
-    pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 }
 
-impl TripWebSocket {
-    pub fn new(
-        pool: Arc<CatenaryPostgresPool>,
-        etcd_connection_ips: Arc<EtcdConnectionIps>,
-        etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
-        aspen_client_manager: Arc<AspenClientManager>,
-        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
-    ) -> Self {
-        Self {
-            pool,
-            etcd_connection_ips,
-            etcd_connection_options,
-            aspen_client_manager,
-            subscriptions: HashMap::new(),
-            hb: Instant::now(),
-            etcd_reuser,
-            aspen_endpoint_cache: HashMap::new(),
-            in_progress_trip_fetches: HashMap::new(),
+pub async fn handle_trip_socket(socket: sockudo_ws::axum_integration::WebSocket, state: AppState) {
+    let (mut receiver, mut sender) = socket.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
+    let session = Arc::new(RwLock::new(SessionState {
+        subscriptions: HashMap::new(),
+        hb: Instant::now(),
+        aspen_endpoint_cache: HashMap::new(),
+        in_progress_trip_fetches: HashMap::new(),
+    }));
+
+    // Writer task
+    let mut writer_task = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            if sender.send(msg).await.is_err() {
+                break;
+            }
         }
-    }
+    });
 
-    fn hb(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(HEARTBEAT_INTERVAL, |act, ctx| {
-            if Instant::now().duration_since(act.hb) > CLIENT_TIMEOUT {
-                ctx.stop();
-                return;
-            }
-            ctx.ping(b"");
-        });
-    }
+    // Background periodic task
+    let session_bg = session.clone();
+    let tx_bg = tx.clone();
+    let state_bg = state.clone();
 
-    fn start_periodic_updates(&self, ctx: &mut ws::WebsocketContext<Self>) {
-        ctx.run_interval(UPDATE_INTERVAL, |act, ctx| {
-            let now = Instant::now();
-            let mut keys_to_fetch = Vec::new();
+    let mut bg_task = tokio::spawn(async move {
+        let mut update_ticker = interval(UPDATE_INTERVAL);
+        let mut hb_ticker = interval(HEARTBEAT_INTERVAL);
 
-            for ((chateau, params), _) in act.subscriptions.iter() {
-                let key = (chateau.clone(), params.clone());
-                if let Some(started) = act.in_progress_trip_fetches.get(&key) {
-                    if started.elapsed() < Duration::from_secs(5) {
-                        continue;
-                    }
-                }
-                keys_to_fetch.push(key);
-            }
+        loop {
+            tokio::select! {
+                _ = update_ticker.tick() => {
+                    let now = Instant::now();
+                    let mut keys_to_fetch = Vec::new();
 
-            for key in keys_to_fetch {
-                act.in_progress_trip_fetches.insert(key.clone(), now);
-                let (chateau_clone, params_clone) = key.clone();
-
-                let cached_socket =
-                    act.aspen_endpoint_cache
-                        .get(&chateau_clone)
-                        .and_then(|(socket, time)| {
-                            if time.elapsed() < Duration::from_secs(300) {
-                                Some(socket.clone())
-                            } else {
-                                None
-                            }
-                        });
-
-                let fs = fetch_trip_rt_update(
-                    chateau_clone.clone(),
-                    params_clone.clone(),
-                    act.etcd_connection_ips.clone(),
-                    act.etcd_connection_options.clone(),
-                    act.aspen_client_manager.clone(),
-                    act.etcd_reuser.clone(),
-                    cached_socket,
-                );
-
-                let fut = async move { fs.await };
-
-                let fut = actix::fut::wrap_future(fut).map(
-                    move |result, act: &mut TripWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
-                        act.in_progress_trip_fetches.remove(&key);
-                        match result {
-                            Ok((response, used_socket)) => {
-                                if let Some(socket) = used_socket {
-                                    act.aspen_endpoint_cache
-                                        .insert(chateau_clone.clone(), (socket, Instant::now()));
-                                }
-
-                                if response.found_data {
-                                    if let Some(data) = response.data {
-                                        use std::collections::hash_map::DefaultHasher;
-                                        use std::hash::{Hash, Hasher};
-
-                                        let stoptimes_json = serde_json::to_string(&data.stoptimes)
-                                            .unwrap_or_default();
-                                        let mut hasher = DefaultHasher::new();
-                                        stoptimes_json.hash(&mut hasher);
-                                        let hash = hasher.finish();
-
-                                        let key = (chateau_clone.clone(), params_clone.clone());
-                                        if let Some(current_last_update) =
-                                            act.subscriptions.get_mut(&key)
-                                        {
-                                            if let Some(last) = current_last_update {
-                                                if *last == hash {
-                                                    return;
-                                                }
-                                            }
-                                            *current_last_update = Some(hash);
-                                        }
-
-                                        let msg = ServerMessage::UpdateTrip { data };
-                                        let text = serde_json::to_string(&msg).unwrap();
-                                        ctx.text(text);
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                act.aspen_endpoint_cache.remove(&chateau_clone);
+                    let mut session_guard = session_bg.write().await;
+                    for ((chateau, params), _) in session_guard.subscriptions.iter() {
+                        let key = (chateau.clone(), params.clone());
+                        if let Some(started) = session_guard.in_progress_trip_fetches.get(&key) {
+                            if started.elapsed() < Duration::from_secs(5) {
+                                continue;
                             }
                         }
-                    },
-                );
-
-                ctx.spawn(fut);
-            }
-        });
-    }
-}
-
-impl Actor for TripWebSocket {
-    type Context = ws::WebsocketContext<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        self.hb(ctx);
-        self.start_periodic_updates(ctx);
-    }
-
-    fn stopping(&mut self, _ctx: &mut Self::Context) -> actix::Running {
-        actix::Running::Stop
-    }
-}
-
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => {
-                self.hb = Instant::now();
-                ctx.pong(&msg);
-            }
-            Ok(ws::Message::Pong(_)) => {
-                self.hb = Instant::now();
-            }
-            Ok(ws::Message::Text(text)) => {
-                let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
-                match msg {
-                    Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
-                        self.subscriptions.remove(&(chateau, params));
+                        keys_to_fetch.push(key);
                     }
-                    Ok(ClientMessage::UnsubscribeAllTrips) => {
-                        self.subscriptions.clear();
-                    }
-                    Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
-                        self.subscriptions
-                            .insert((chateau.clone(), params.clone()), None);
 
-                        let fs = fetch_trip_information(
-                            chateau,
-                            params,
-                            self.pool.clone(),
-                            self.etcd_connection_ips.clone(),
-                            self.etcd_connection_options.clone(),
-                            self.aspen_client_manager.clone(),
-                            None,
-                            self.etcd_reuser.clone(),
-                        );
+                    for key in keys_to_fetch {
+                        session_guard.in_progress_trip_fetches.insert(key.clone(), now);
+                        let (chateau_clone, params_clone) = key.clone();
 
-                        let fut = async move { fs.await };
+                        let cached_socket = session_guard
+                            .aspen_endpoint_cache
+                            .get(&chateau_clone)
+                            .and_then(|(socket, time)| {
+                                if time.elapsed() < Duration::from_secs(300) {
+                                    Some(*socket)
+                                } else {
+                                    None
+                                }
+                            });
 
-                        let fut = actix::fut::wrap_future(fut).map(
-                            |result, _, ctx: &mut ws::WebsocketContext<Self>| match result {
-                                Ok(data) => {
-                                    let msg = ServerMessage::InitialTrip { data };
-                                    let text = serde_json::to_string(&msg).unwrap();
-                                    ctx.text(text);
+                        let tx_clone = tx_bg.clone();
+                        let session_clone = session_bg.clone();
+                        let state_clone = state_bg.clone();
+
+                        tokio::spawn(async move {
+                            let fs = fetch_trip_rt_update(
+                                chateau_clone.clone(),
+                                params_clone.clone(),
+                                state_clone.etcd_connection_ips.clone(),
+                                state_clone.etcd_connection_options.clone(),
+                                state_clone.aspen_client_manager.clone(),
+                                state_clone.etcd_reuser.clone(),
+                                cached_socket,
+                            );
+
+                            let result = fs.await;
+
+                            let mut s_guard = session_clone.write().await;
+                            s_guard.in_progress_trip_fetches.remove(&key);
+
+                            match result {
+                                Ok((response, used_socket)) => {
+                                    if let Some(sock) = used_socket {
+                                        s_guard.aspen_endpoint_cache.insert(
+                                            chateau_clone.clone(),
+                                            (sock, Instant::now()),
+                                        );
+                                    }
+
+                                    if response.found_data {
+                                        if let Some(data) = response.data {
+                                            use std::collections::hash_map::DefaultHasher;
+                                            use std::hash::{Hash, Hasher};
+
+                                            let stoptimes_json =
+                                                serde_json::to_string(&data.stoptimes)
+                                                    .unwrap_or_default();
+                                            let mut hasher = DefaultHasher::new();
+                                            stoptimes_json.hash(&mut hasher);
+                                            let hash = hasher.finish();
+
+                                            if let Some(current_last_update) =
+                                                s_guard.subscriptions.get_mut(&key)
+                                            {
+                                                if let Some(last) = current_last_update {
+                                                    if *last == hash {
+                                                        return;
+                                                    }
+                                                }
+                                                *current_last_update = Some(hash);
+                                            }
+
+                                            let msg = ServerMessage::UpdateTrip { data };
+                                            if let Ok(text) = serde_json::to_string(&msg) {
+                                                let _ = tx_clone.send(Message::Text(text.into_bytes().into()));
+                                            }
+                                        }
+                                    }
                                 }
                                 Err(e) => {
-                                    let msg = ServerMessage::Error { message: e };
-                                    let text = serde_json::to_string(&msg).unwrap();
-                                    ctx.text(text);
+                                    s_guard.aspen_endpoint_cache.remove(&chateau_clone);
                                 }
-                            },
-                        );
-                        ctx.spawn(fut);
+                            }
+                        });
                     }
-                    Ok(ClientMessage::NearbyDepartures { params, request_id }) => {
-                        let context = nearby_departures::NearbyDeparturesContext {
-                            pool: self.pool.clone(),
-                            etcd_connection_ips: self.etcd_connection_ips.clone(),
-                            etcd_connection_options: self.etcd_connection_options.clone(),
-                            etcd_reuser: self.etcd_reuser.clone(),
-                        };
+                }
+                _ = hb_ticker.tick() => {
+                    let last_hb = session_bg.read().await.hb;
+                    if last_hb.elapsed() > CLIENT_TIMEOUT {
+                        break;
+                    }
+                    let _ = tx_bg.send(Message::Ping(vec![].into()));
+                }
+            }
+        }
+    });
 
-                        let request_id_clone = request_id.clone();
+    // Reader task
+    while let Some(msg) = receiver.next().await {
+        match msg {
+            Ok(Message::Ping(msg)) => {
+                session.write().await.hb = Instant::now();
+                let _ = tx.send(Message::Pong(msg));
+            }
+            Ok(Message::Pong(_)) => {
+                session.write().await.hb = Instant::now();
+            }
+            Ok(Message::Text(text)) => {
+                if let Ok(text_str) = String::from_utf8(text.to_vec()) {
+                    let msg: Result<ClientMessage, _> = serde_json::from_str(&text_str);
+                    match msg {
+                        Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
+                            session
+                                .write()
+                                .await
+                                .subscriptions
+                                .remove(&(chateau, params));
+                        }
+                        Ok(ClientMessage::UnsubscribeAllTrips) => {
+                            session.write().await.subscriptions.clear();
+                        }
+                        Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
+                            session
+                                .write()
+                                .await
+                                .subscriptions
+                                .insert((chateau.clone(), params.clone()), None);
 
-                        let fut = async move {
-                            let stream =
-                                nearby_departures::get_nearby_departures_stream(context, params)
-                                    .await;
-                            stream
-                                .enumerate()
-                                .map(move |(idx, (response, is_hydration))| {
+                            let state_clone = state.clone();
+                            let tx_clone = tx.clone();
+
+                            tokio::spawn(async move {
+                                let fs = fetch_trip_information(
+                                    chateau,
+                                    params,
+                                    state_clone.pool.clone(),
+                                    state_clone.etcd_connection_ips.clone(),
+                                    state_clone.etcd_connection_options.clone(),
+                                    state_clone.aspen_client_manager.clone(),
+                                    None,
+                                    state_clone.etcd_reuser.clone(),
+                                );
+
+                                match fs.await {
+                                    Ok(data) => {
+                                        let msg = ServerMessage::InitialTrip { data };
+                                        if let Ok(text) = serde_json::to_string(&msg) {
+                                            let _ = tx_clone
+                                                .send(Message::Text(text.into_bytes().into()));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let msg = ServerMessage::Error { message: e };
+                                        if let Ok(text) = serde_json::to_string(&msg) {
+                                            let _ = tx_clone
+                                                .send(Message::Text(text.into_bytes().into()));
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        Ok(ClientMessage::NearbyDepartures { params, request_id }) => {
+                            let context = nearby_departures::NearbyDeparturesContext {
+                                pool: state.pool.clone(),
+                                etcd_connection_ips: state.etcd_connection_ips.clone(),
+                                etcd_connection_options: state.etcd_connection_options.clone(),
+                                etcd_reuser: state.etcd_reuser.clone(),
+                            };
+
+                            let request_id_clone = request_id.clone();
+                            let tx_clone = tx.clone();
+
+                            tokio::spawn(async move {
+                                let stream = nearby_departures::get_nearby_departures_stream(
+                                    context, params,
+                                )
+                                .await;
+
+                                let mut pinned_stream = std::pin::pin!(stream);
+                                let mut idx = 0;
+                                while let Some((response, is_hydration)) =
+                                    pinned_stream.next().await
+                                {
                                     let msg = ServerMessage::NearbyDeparturesChunk {
                                         request_id: request_id_clone.clone(),
                                         chunk_index: idx,
@@ -245,47 +257,37 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                         data: response,
                                     };
                                     if let Ok(text) = serde_json::to_string(&msg) {
-                                        text
-                                    } else {
-                                        "".to_string()
+                                        let _ =
+                                            tx_clone.send(Message::Text(text.into_bytes().into()));
                                     }
-                                })
-                                .collect::<Vec<String>>()
-                                .await
-                        };
-
-                        let fut = actix::fut::wrap_future(fut).map(
-                            |messages, _, ctx: &mut ws::WebsocketContext<Self>| {
-                                for text in messages {
-                                    if !text.is_empty() {
-                                        ctx.text(text);
-                                    }
+                                    idx += 1;
                                 }
-                            },
-                        );
-
-                        ctx.spawn(fut);
-                    }
-                    Ok(ClientMessage::Ping) => {
-                        let msg = ServerMessage::Pong;
-                        if let Ok(text) = serde_json::to_string(&msg) {
-                            ctx.text(text);
+                            });
                         }
-                    }
-                    _ => {
-                        let msg = ServerMessage::Error {
-                            message: "This endpoint only supports trip information and routing. Please connect to /ws/live/ for live locations.".to_string(),
-                        };
-                        ctx.text(serde_json::to_string(&msg).unwrap());
+                        Ok(ClientMessage::Ping) => {
+                            session.write().await.hb = Instant::now();
+                            let msg = ServerMessage::Pong;
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = tx.send(Message::Text(text.into_bytes().into()));
+                            }
+                        }
+                        _ => {
+                            let msg = ServerMessage::Error {
+                                message: "This endpoint only supports trip information and routing. Please connect to /ws/live/ for live locations.".to_string(),
+                            };
+                            if let Ok(text) = serde_json::to_string(&msg) {
+                                let _ = tx.send(Message::Text(text.into_bytes().into()));
+                            }
+                        }
                     }
                 }
             }
-            Ok(ws::Message::Binary(bin)) => ctx.binary(bin),
-            Ok(ws::Message::Close(reason)) => {
-                ctx.close(reason);
-                ctx.stop();
-            }
-            _ => (),
+            Ok(Message::Binary(_)) => (),
+            Ok(Message::Close(_)) => break,
+            Err(_) => break,
         }
     }
+
+    bg_task.abort();
+    writer_task.abort();
 }

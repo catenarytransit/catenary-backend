@@ -794,14 +794,18 @@ pub async fn new_rt_data(
                     .collect::<Vec<&str>>();
 
                 if !sncf_train_nums.is_empty() {
-                    let missing_sncf_trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
-                        .filter(
-                            catenary::schema::gtfs::trips_compressed::dsl::trip_short_name
-                                .eq_any(&sncf_train_nums),
-                        )
-                        .load::<catenary::models::CompressedTrip>(conn)
-                        .await?;
+                    let missing_sncf_trips =
+                        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                            .filter(
+                                catenary::schema::gtfs::trips_compressed::dsl::chateau
+                                    .eq(chateau_id),
+                            )
+                            .filter(
+                                catenary::schema::gtfs::trips_compressed::dsl::trip_short_name
+                                    .eq_any(&sncf_train_nums),
+                            )
+                            .load::<catenary::models::CompressedTrip>(conn)
+                            .await?;
 
                     let candidate_service_ids = missing_sncf_trips
                         .iter()
@@ -819,38 +823,51 @@ pub async fn new_rt_data(
                         .load::<catenary::models::Calendar>(conn)
                         .await?;
 
-                    let candidate_calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
-                        .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau_id))
-                        .filter(
-                            catenary::schema::gtfs::calendar_dates::dsl::service_id
-                                .eq_any(&candidate_service_ids),
-                        )
-                        .load::<catenary::models::CalendarDate>(conn)
-                        .await?;
+                    let candidate_calendar_dates =
+                        catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                            .filter(
+                                catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau_id),
+                            )
+                            .filter(
+                                catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                    .eq_any(&candidate_service_ids),
+                            )
+                            .load::<catenary::models::CalendarDate>(conn)
+                            .await?;
 
-                    let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(
-                        candidate_calendars,
-                        candidate_calendar_dates,
-                    );
+                    let calendar_structure =
+                        catenary::make_calendar_structure_from_pg_single_chateau(
+                            candidate_calendars,
+                            candidate_calendar_dates,
+                        );
 
                     use std::str::FromStr;
                     let tz = chrono_tz::Tz::from_str("Europe/Paris").unwrap_or(chrono_tz::UTC);
-                    let today = chrono::Utc::now()
-                        .with_timezone(&tz)
-                        .naive_local()
-                        .date();
+                    let today = chrono::Utc::now().with_timezone(&tz).naive_local().date();
 
-                    let mut trips_by_short_name: AHashMap<String, Vec<catenary::models::CompressedTrip>> = AHashMap::new();
+                    let mut trips_by_short_name: AHashMap<
+                        String,
+                        Vec<catenary::models::CompressedTrip>,
+                    > = AHashMap::new();
                     for trip in missing_sncf_trips {
                         if let Some(short_name) = &trip.trip_short_name {
-                            trips_by_short_name.entry(short_name.to_string()).or_default().push(trip);
+                            trips_by_short_name
+                                .entry(short_name.to_string())
+                                .or_default()
+                                .push(trip);
                         }
                     }
 
                     for (_, mut trips) in trips_by_short_name {
-                        let mut active_trip = trips.iter().find(|trip| {
-                            calendar_structure.get(trip.service_id.as_str()).map(|service| catenary::datetime_in_service(service, today)).unwrap_or(false)
-                        }).cloned();
+                        let mut active_trip = trips
+                            .iter()
+                            .find(|trip| {
+                                calendar_structure
+                                    .get(trip.service_id.as_str())
+                                    .map(|service| catenary::datetime_in_service(service, today))
+                                    .unwrap_or(false)
+                            })
+                            .cloned();
 
                         if active_trip.is_none() && trips.len() == 1 {
                             active_trip = Some(trips.pop().unwrap());
