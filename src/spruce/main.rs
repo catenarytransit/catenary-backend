@@ -138,14 +138,28 @@ async fn trip_ws_handler(
     ws: sockudo_ws::axum_integration::WebSocketUpgrade,
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    ws.on_upgrade(|socket| handle_trip_socket(socket, state))
+    let config = sockudo_ws::Config::builder()
+        .max_payload_length(64 * 1024)
+        .idle_timeout(60)
+        .compression(sockudo_ws::Compression::Dedicated)
+        .build();
+
+    ws.config(config)
+        .on_upgrade(|socket| handle_trip_socket(socket, state))
 }
 
 async fn live_ws_handler(
     ws: sockudo_ws::axum_integration::WebSocketUpgrade,
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    ws.on_upgrade(|socket| handle_live_socket(socket, state))
+    let config = sockudo_ws::Config::builder()
+        .max_payload_length(1024 * 1024 * 16) // 16MB because live_websocket sends large initial maps
+        .idle_timeout(60)
+        .compression(sockudo_ws::Compression::Dedicated)
+        .build();
+
+    ws.config(config)
+        .on_upgrade(|socket| handle_live_socket(socket, state))
 }
 
 async fn index_root() -> impl axum::response::IntoResponse {
