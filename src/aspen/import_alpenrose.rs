@@ -3030,19 +3030,44 @@ pub async fn new_rt_data(
                 let mut train_num_to_trip_id: AHashMap<String, String> = AHashMap::new();
                 for (trip_id, trip) in trip_id_to_trip.iter() {
                     if let Some(short_name) = &trip.trip_short_name {
-                        let normalized = crate::track_number::sncf_siri::normalize_train_num(short_name);
+                        let normalized =
+                            crate::track_number::sncf_siri::normalize_train_num(short_name);
                         train_num_to_trip_id.insert(normalized, trip_id.clone());
                     }
                 }
 
                 for (train_num, stop_map) in sncf_data.track_lookup.iter() {
                     if let Some(trip_id) = train_num_to_trip_id.get(train_num) {
-                        if !trip_updates_lookup_by_trip_id_to_trip_update_ids.contains_key(trip_id.as_str()) {
+                        if !trip_updates_lookup_by_trip_id_to_trip_update_ids
+                            .contains_key(trip_id.as_str())
+                        {
                             if let Some(trip) = trip_id_to_trip.get(trip_id) {
                                 let mut stop_time_update = Vec::new();
+                                let itinerary =
+                                    accumulated_itinerary_patterns.get(&trip.itinerary_pattern_id);
 
                                 for (stop_code, track) in stop_map.iter() {
-                                    let arrival_time = track.expected_arrival_time.or(track.aimed_arrival_time);
+                                    let mut full_stop_id = stop_code.as_str();
+                                    let mut stop_sequence = None;
+
+                                    if let Some((_, rows)) = itinerary {
+                                        for row in rows {
+                                            if let Some(code) =
+                                                crate::track_number::sncf_siri::extract_station_code(
+                                                    row.stop_id.as_str(),
+                                                )
+                                            {
+                                                if code == *stop_code {
+                                                    full_stop_id = row.stop_id.as_str();
+                                                    stop_sequence = Some(row.stop_sequence as u16);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let arrival_time =
+                                        track.expected_arrival_time.or(track.aimed_arrival_time);
                                     let arrival = if arrival_time.is_some() {
                                         Some(catenary::aspen_dataset::AspenStopTimeEvent {
                                             time: arrival_time,
@@ -3053,7 +3078,9 @@ pub async fn new_rt_data(
                                         None
                                     };
 
-                                    let departure_time = track.expected_departure_time.or(track.aimed_departure_time);
+                                    let departure_time = track
+                                        .expected_departure_time
+                                        .or(track.aimed_departure_time);
                                     let departure = if departure_time.is_some() {
                                         Some(catenary::aspen_dataset::AspenStopTimeEvent {
                                             time: departure_time,
@@ -3064,23 +3091,30 @@ pub async fn new_rt_data(
                                         None
                                     };
 
-                                    let platform_string = track.departure_platform.as_ref().or(track.arrival_platform.as_ref()).map(|s| ecow::EcoString::from(s.as_str()));
+                                    let platform_string = track
+                                        .departure_platform
+                                        .as_ref()
+                                        .or(track.arrival_platform.as_ref())
+                                        .map(|s| ecow::EcoString::from(s.as_str()));
 
-                                    stop_time_update.push(catenary::aspen_dataset::AspenisedStopTimeUpdate {
-                                        stop_sequence: None,
-                                        stop_id: Some(Arc::from(stop_code.as_str())),
-                                        arrival,
-                                        departure,
-                                        departure_occupancy_status: None,
-                                        schedule_relationship: None,
-                                        stop_time_properties: None,
-                                        platform_string,
-                                        old_rt_data: false,
-                                        platform_info: None,
-                                    });
+                                    stop_time_update.push(
+                                        catenary::aspen_dataset::AspenisedStopTimeUpdate {
+                                            stop_sequence,
+                                            stop_id: Some(Arc::from(full_stop_id)),
+                                            arrival,
+                                            departure,
+                                            departure_occupancy_status: None,
+                                            schedule_relationship: None,
+                                            stop_time_properties: None,
+                                            platform_string,
+                                            old_rt_data: false,
+                                            platform_info: None,
+                                        },
+                                    );
                                 }
 
-                                let synthetic_trip_update_id = format!("sncf-synthetic-{}", trip_id);
+                                let synthetic_trip_update_id =
+                                    format!("sncf-synthetic-{}", trip_id);
 
                                 let synthetic_trip_update = AspenisedTripUpdate {
                                     trip: AspenRawTripInfo {
@@ -3093,21 +3127,29 @@ pub async fn new_rt_data(
                                         modified_trip: None,
                                     },
                                     vehicle: None,
-                                    timestamp: Some(catenary::duration_since_unix_epoch().as_secs()),
+                                    timestamp: Some(
+                                        catenary::duration_since_unix_epoch().as_secs(),
+                                    ),
                                     delay: None,
                                     stop_time_update,
                                     trip_properties: None,
                                     trip_headsign: None,
                                     consist: None,
                                     found_schedule_trip_id: true,
-                                    last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
+                                    last_seen: catenary::duration_since_unix_epoch().as_millis()
+                                        as u64,
                                 };
 
-                                trip_updates.insert(CompactString::new(&synthetic_trip_update_id), synthetic_trip_update);
+                                trip_updates.insert(
+                                    CompactString::new(&synthetic_trip_update_id),
+                                    synthetic_trip_update,
+                                );
 
                                 trip_updates_lookup_by_trip_id_to_trip_update_ids
                                     .entry(CompactString::new(trip_id))
-                                    .and_modify(|x| x.push(CompactString::new(&synthetic_trip_update_id)))
+                                    .and_modify(|x| {
+                                        x.push(CompactString::new(&synthetic_trip_update_id))
+                                    })
                                     .or_insert(vec![CompactString::new(&synthetic_trip_update_id)]);
                             }
                         }

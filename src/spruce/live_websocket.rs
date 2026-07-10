@@ -1,7 +1,7 @@
 use crate::map_coordinator::{
-    AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchResponseV2, ChateauUpdate,
-    EachCategoryPayloadV2, EachChateauResponseV2, PositionDataCategoryV2, PrecomputedChateauMap,
-    Subscribe, Unsubscribe, CategoryOfRealtimeVehicleData,
+    AspenisedVehiclePositionOutput, BoundsInputV3, BulkFetchCoordinatorPool, BulkFetchResponseV2,
+    CategoryOfRealtimeVehicleData, ChateauUpdate, EachCategoryPayloadV2, EachChateauResponseV2,
+    PositionDataCategoryV2, PrecomputedChateauMap, Subscribe, Unsubscribe,
 };
 use actix::prelude::*;
 use actix_web_actors::ws;
@@ -712,7 +712,9 @@ impl LiveLocationsWebSocket {
             };
 
             let fut = actix::fut::wrap_future(fut).map(
-                move |messages, act: &mut LiveLocationsWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                move |messages,
+                      act: &mut LiveLocationsWebSocket,
+                      ctx: &mut ws::WebsocketContext<Self>| {
                     if current_gen != act.trajectory_request_generation {
                         return;
                     }

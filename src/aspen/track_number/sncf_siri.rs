@@ -70,7 +70,11 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
         while let Some(t_start) = journey_xml[t_search_idx..].find("<TrainNumberRef>") {
             let abs_t_start = t_search_idx + t_start + "<TrainNumberRef>".len();
             if let Some(t_end) = journey_xml[abs_t_start..].find("</TrainNumberRef>") {
-                train_numbers.push(journey_xml[abs_t_start..abs_t_start + t_end].trim().to_string());
+                train_numbers.push(
+                    journey_xml[abs_t_start..abs_t_start + t_end]
+                        .trim()
+                        .to_string(),
+                );
                 t_search_idx = abs_t_start + t_end + "</TrainNumberRef>".len();
             } else {
                 break;
@@ -138,7 +142,8 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
                         let aimed_arrival_time = extract_time(call_xml, "<AimedArrivalTime>");
                         let expected_arrival_time = extract_time(call_xml, "<ExpectedArrivalTime>");
                         let aimed_departure_time = extract_time(call_xml, "<AimedDepartureTime>");
-                        let expected_departure_time = extract_time(call_xml, "<ExpectedDepartureTime>");
+                        let expected_departure_time =
+                            extract_time(call_xml, "<ExpectedDepartureTime>");
 
                         let arrival_platform =
                             if let Some(ap_start) = call_xml.find("<ArrivalPlatformName>") {
