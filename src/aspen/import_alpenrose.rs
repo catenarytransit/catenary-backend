@@ -785,6 +785,86 @@ pub async fn new_rt_data(
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
 
+        if chateau_id == "sncf" {
+            if let TrackData::Sncf(Some(sncf_data)) = &fetched_track_data {
+                let sncf_train_nums = sncf_data
+                    .track_lookup
+                    .keys()
+                    .map(|x| x.as_str())
+                    .collect::<Vec<&str>>();
+
+                if !sncf_train_nums.is_empty() {
+                    let missing_sncf_trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::dsl::trip_short_name
+                                .eq_any(&sncf_train_nums),
+                        )
+                        .load::<catenary::models::CompressedTrip>(conn)
+                        .await?;
+
+                    let candidate_service_ids = missing_sncf_trips
+                        .iter()
+                        .map(|trip| trip.service_id.to_string())
+                        .collect::<AHashSet<String>>()
+                        .into_iter()
+                        .collect::<Vec<String>>();
+
+                    let candidate_calendars = catenary::schema::gtfs::calendar::dsl::calendar
+                        .filter(catenary::schema::gtfs::calendar::dsl::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::calendar::dsl::service_id
+                                .eq_any(&candidate_service_ids),
+                        )
+                        .load::<catenary::models::Calendar>(conn)
+                        .await?;
+
+                    let candidate_calendar_dates = catenary::schema::gtfs::calendar_dates::dsl::calendar_dates
+                        .filter(catenary::schema::gtfs::calendar_dates::dsl::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::calendar_dates::dsl::service_id
+                                .eq_any(&candidate_service_ids),
+                        )
+                        .load::<catenary::models::CalendarDate>(conn)
+                        .await?;
+
+                    let calendar_structure = catenary::make_calendar_structure_from_pg_single_chateau(
+                        candidate_calendars,
+                        candidate_calendar_dates,
+                    );
+
+                    use std::str::FromStr;
+                    let tz = chrono_tz::Tz::from_str("Europe/Paris").unwrap_or(chrono_tz::UTC);
+                    let today = chrono::Utc::now()
+                        .with_timezone(&tz)
+                        .naive_local()
+                        .date();
+
+                    let mut trips_by_short_name: AHashMap<String, Vec<catenary::models::CompressedTrip>> = AHashMap::new();
+                    for trip in missing_sncf_trips {
+                        if let Some(short_name) = &trip.trip_short_name {
+                            trips_by_short_name.entry(short_name.to_string()).or_default().push(trip);
+                        }
+                    }
+
+                    for (_, mut trips) in trips_by_short_name {
+                        let mut active_trip = trips.iter().find(|trip| {
+                            calendar_structure.get(trip.service_id.as_str()).map(|service| catenary::datetime_in_service(service, today)).unwrap_or(false)
+                        }).cloned();
+
+                        if active_trip.is_none() && trips.len() == 1 {
+                            active_trip = Some(trips.pop().unwrap());
+                        }
+
+                        if let Some(trip) = active_trip {
+                            trip_ids_to_lookup.insert(trip.trip_id.clone());
+                            trip_id_to_trip.insert(trip.trip_id.clone(), trip);
+                        }
+                    }
+                }
+            }
+        }
+
         let mut nyct_rt_trip_id_to_static_trip_ids: AHashMap<String, Vec<String>> = AHashMap::new();
 
         if chateau_id == "nyct" {
