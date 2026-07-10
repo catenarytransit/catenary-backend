@@ -193,6 +193,9 @@ async fn metrolink_station_schedule_decode(
     }
 }
 
+static SNCF_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<sncf_siri::SncfTrackData>>> =
+    std::sync::OnceLock::new();
+
 pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> TrackData {
     match chateau_id {
         "metrolinktrains" => {
@@ -298,16 +301,34 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
                 Ok(r) => match r.text().await {
                     Ok(body) => {
                         let parsed = sncf_siri::parse_sncf_siri(&body);
+                        if let Ok(mut cache) = SNCF_CACHE
+                            .get_or_init(|| std::sync::Mutex::new(None))
+                            .lock()
+                        {
+                            *cache = Some(parsed.clone());
+                        }
                         TrackData::Sncf(Some(parsed))
                     }
                     Err(e) => {
-                        println!("Error reading SNCF Siri data: {}", e);
-                        TrackData::Sncf(None)
+                        println!(
+                            "Error reading SNCF Siri data: {}. Attempting to use cached data.",
+                            e
+                        );
+                        let cached = SNCF_CACHE
+                            .get()
+                            .and_then(|c| c.lock().ok().and_then(|guard| guard.clone()));
+                        TrackData::Sncf(cached)
                     }
                 },
                 Err(e) => {
-                    println!("Error fetching SNCF Siri data: {}", e);
-                    TrackData::Sncf(None)
+                    println!(
+                        "Error fetching SNCF Siri data: {}. Attempting to use cached data.",
+                        e
+                    );
+                    let cached = SNCF_CACHE
+                        .get()
+                        .and_then(|c| c.lock().ok().and_then(|guard| guard.clone()));
+                    TrackData::Sncf(cached)
                 }
             }
         }
