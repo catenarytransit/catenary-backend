@@ -99,7 +99,7 @@ pub async fn get_single_chateau_trajectories(
             let client_reference = params.client_reference.clone();
 
             let mut ctx = tarpc::context::current();
-            ctx.deadline = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+            ctx.deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
 
             match client.get_trajectories(ctx, chateau.clone(), params).await {
                 Ok(Ok(trajectories)) => {

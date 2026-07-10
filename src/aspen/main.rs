@@ -1719,8 +1719,6 @@ impl AspenRpc for AspenServer {
         let store = trajectory_data.get();
         let trajectories_by_route_type = &store.rtree_by_route_type;
 
-        let mut trajectories = Vec::new();
-
         let min_lon = params.bbox[0];
         let min_lat = params.bbox[1];
         let max_lon = params.bbox[2];
