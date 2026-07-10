@@ -1832,9 +1832,10 @@ impl AspenRpc for AspenServer {
         let wm_simplify_meters = simplify_meters * web_mercator_scale;
         let simplify_meters_sq = wm_simplify_meters * wm_simplify_meters;
 
-        let trajectories: Vec<_> = all_matched_trajectories
-            .into_par_iter()
-            .filter_map(|traj| {
+        let trajectories: Vec<_> = tokio::task::block_in_place(|| {
+            all_matched_trajectories
+                .into_par_iter()
+                .filter_map(|traj| {
                 let mut keep = false;
 
                 if traj.segments.is_empty() {
@@ -2009,7 +2010,8 @@ impl AspenRpc for AspenServer {
                     None
                 }
             })
-            .collect();
+            .collect()
+        });
 
         Ok(trajectories)
     }
