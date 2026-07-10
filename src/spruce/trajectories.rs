@@ -55,110 +55,6 @@ async fn get_aspen_socket(
 }
 use std::io::Write;
 
-fn format_coordinate_precise(val: f64, zoom: u8) -> f64 {
-    let decimals = if zoom < 9 {
-        4
-    } else if zoom < 13 {
-        5
-    } else {
-        6
-    };
-
-    let factor = match decimals {
-        4 => 10_000.0,
-        5 => 100_000.0,
-        _ => 1_000_000.0,
-    };
-
-    // Extract the exact rounded decimal coefficient as an integer
-    let rounded = (val * factor).round() as i64;
-
-    // Construct a stack scratchpad for the scientific string representation
-    let mut buf = [0u8; 24];
-
-    // Format the integer using the ultra-fast `itoa` crate (bypasses core::fmt entirely)
-    let mut itoa_buf = itoa::Buffer::new();
-    let int_bytes = itoa_buf.format(rounded).as_bytes();
-
-    let len = int_bytes.len();
-    buf[..len].copy_from_slice(int_bytes);
-
-    // Append the scientific exponent to scale the value back down precisely
-    let exp_bytes = match decimals {
-        4 => b"e-4",
-        5 => b"e-5",
-        _ => b"e-6",
-    };
-    buf[len..len + 3].copy_from_slice(exp_bytes);
-    let total_len = len + 3;
-
-    // Parse via fast_float, which implements the Eisel-Lemire algorithm.
-    // This uses 128-bit integer multiplications against exact powers of 10,
-    // providing identical bitwise precision to a standard decimal parser.
-    fast_float::parse(&buf[..total_len]).unwrap_or(val)
-}
-
-fn perpendicular_distance_sq(pt: [f64; 2], line_start: [f64; 2], line_end: [f64; 2]) -> f64 {
-    let dx = line_end[0] - line_start[0];
-    let dy = line_end[1] - line_start[1];
-
-    let length_sq = dx * dx + dy * dy;
-    if length_sq == 0.0 {
-        let dx = pt[0] - line_start[0];
-        let dy = pt[1] - line_start[1];
-        return dx * dx + dy * dy;
-    }
-
-    let t = ((pt[0] - line_start[0]) * dx + (pt[1] - line_start[1]) * dy) / length_sq;
-    let t = t.clamp(0.0, 1.0);
-
-    let proj_x = line_start[0] + t * dx;
-    let proj_y = line_start[1] + t * dy;
-
-    let dx = pt[0] - proj_x;
-    let dy = pt[1] - proj_y;
-
-    dx * dx + dy * dy
-}
-
-fn rdp_indices(projected: &[[f64; 2]], epsilon_sq: f64) -> Vec<usize> {
-    if projected.len() <= 2 {
-        return (0..projected.len()).collect();
-    }
-
-    let mut stack = vec![(0, projected.len() - 1)];
-    let mut keep = vec![false; projected.len()];
-    keep[0] = true;
-    keep[projected.len() - 1] = true;
-
-    while let Some((start, end)) = stack.pop() {
-        let mut dmax_sq = 0.0;
-        let mut index = start;
-
-        let pt_start = projected[start];
-        let pt_end = projected[end];
-
-        for i in start + 1..end {
-            let d_sq = perpendicular_distance_sq(projected[i], pt_start, pt_end);
-            if d_sq > dmax_sq {
-                index = i;
-                dmax_sq = d_sq;
-            }
-        }
-
-        if dmax_sq > epsilon_sq {
-            keep[index] = true;
-            stack.push((start, index));
-            stack.push((index, end));
-        }
-    }
-
-    keep.into_iter()
-        .enumerate()
-        .filter_map(|(i, k)| if k { Some(i) } else { None })
-        .collect()
-}
-
 pub async fn get_single_chateau_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
     etcd_connection_ips: Arc<EtcdConnectionIps>,
@@ -200,193 +96,23 @@ pub async fn get_single_chateau_trajectories(
         };
 
         if let Some(mut client) = client_res {
-            let zoom = params.zoom;
             let client_reference = params.client_reference.clone();
-            let min_lon = params.bbox.get(0).copied().unwrap_or(0.0);
-            let min_lat = params.bbox.get(1).copied().unwrap_or(0.0);
-            let max_lon = params.bbox.get(2).copied().unwrap_or(0.0);
-            let max_lat = params.bbox.get(3).copied().unwrap_or(0.0);
 
-            let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
-            let avg_lat = (min_lat + max_lat) / 2.0;
-            let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
-            let min_dim_km = lat_diff_km.min(lon_diff_km);
+            let mut ctx = tarpc::context::current();
+            ctx.deadline = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
 
-            let simplify_meters = if min_dim_km > 300.0 {
-                1500.0
-            } else if min_dim_km > 200.0 {
-                1000.0
-            } else if min_dim_km > 100.0 {
-                500.0
-            } else if min_dim_km > 50.0 {
-                250.0
-            } else if min_dim_km > 20.0 {
-                150.0
-            } else if min_dim_km > 10.0 {
-                100.0
-            } else if min_dim_km > 5.0 {
-                20.0
-            } else {
-                5.0
-            };
-
-            match client
-                .get_trajectories(tarpc::context::current(), chateau.clone(), params)
-                .await
-            {
+            match client.get_trajectories(ctx, chateau.clone(), params).await {
                 Ok(Ok(trajectories)) => {
                     let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
-                    tokio::task::spawn_blocking(move || {
-                        let now = chrono::Utc::now();
-                        let t_start_str = (now - chrono::Duration::minutes(2))
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                        let t_end_str = (now + chrono::Duration::minutes(3))
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-                        trajectories
-                            .into_par_iter()
-                            .filter_map(|mut traj| {
-                                let mut keep = false;
-                                if traj.segments.is_empty() {
-                                    for stop in &traj.stops {
-                                        let stop_time = if stop.arrival.is_empty() {
-                                            &stop.departure
-                                        } else {
-                                            &stop.arrival
-                                        };
-                                        let is_active = stop_time.is_empty()
-                                            || (stop_time.as_str() >= t_start_str.as_str()
-                                                && stop_time.as_str() <= t_end_str.as_str());
-                                        if is_active {
-                                            if stop.lon >= min_lon
-                                                && stop.lon <= max_lon
-                                                && stop.lat >= min_lat
-                                                && stop.lat <= max_lat
-                                            {
-                                                keep = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    traj.segments.retain(|seg| {
-                                        if seg.from_stop_index >= traj.stops.len()
-                                            || seg.to_stop_index >= traj.stops.len()
-                                        {
-                                            return false;
-                                        }
-                                        let from_stop = &traj.stops[seg.from_stop_index];
-                                        let to_stop = &traj.stops[seg.to_stop_index];
-
-                                        let seg_departure = if from_stop.departure.is_empty() {
-                                            &from_stop.arrival
-                                        } else {
-                                            &from_stop.departure
-                                        };
-                                        let seg_arrival = if to_stop.arrival.is_empty() {
-                                            &to_stop.departure
-                                        } else {
-                                            &to_stop.arrival
-                                        };
-
-                                        let is_active =
-                                            if seg_departure.is_empty() || seg_arrival.is_empty() {
-                                                true
-                                            } else {
-                                                seg_departure.as_str() <= t_end_str.as_str()
-                                                    && seg_arrival.as_str() >= t_start_str.as_str()
-                                            };
-
-                                        if is_active {
-                                            let mut seg_min_lon = f64::MAX;
-                                            let mut seg_min_lat = f64::MAX;
-                                            let mut seg_max_lon = f64::MIN;
-                                            let mut seg_max_lat = f64::MIN;
-                                            for coord in &seg.coordinates {
-                                                seg_min_lon = seg_min_lon.min(coord[0]);
-                                                seg_min_lat = seg_min_lat.min(coord[1]);
-                                                seg_max_lon = seg_max_lon.max(coord[0]);
-                                                seg_max_lat = seg_max_lat.max(coord[1]);
-                                            }
-                                            if seg_min_lon <= max_lon
-                                                && seg_max_lon >= min_lon
-                                                && seg_min_lat <= max_lat
-                                                && seg_max_lat >= min_lat
-                                            {
-                                                keep = true;
-                                            }
-                                            true
-                                        } else {
-                                            false
-                                        }
-                                    });
-                                }
-
-                                if keep {
-                                    for seg in &mut traj.segments {
-                                        seg.coordinates
-                                            .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
-                                    }
-
-                                    if simplify_meters > 0.0 {
-                                        // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
-                                        let web_mercator_scale =
-                                            (1.0 / avg_lat.to_radians().cos()).abs();
-                                        let wm_simplify_meters =
-                                            simplify_meters * web_mercator_scale;
-                                        let simplify_meters_sq =
-                                            wm_simplify_meters * wm_simplify_meters;
-
-                                        for seg in &mut traj.segments {
-                                            if seg.coordinates.len() > 2 {
-                                                let projected: Vec<[f64; 2]> = seg
-                                                    .coordinates
-                                                    .iter()
-                                                    .map(|pt| {
-                                                        let r = 6378137.0;
-                                                        let x = pt[0].to_radians() * r;
-                                                        let y = ((std::f64::consts::PI / 4.0)
-                                                            + (pt[1].to_radians() / 2.0))
-                                                            .tan()
-                                                            .ln()
-                                                            * r;
-                                                        [x, y]
-                                                    })
-                                                    .collect();
-
-                                                let indices =
-                                                    rdp_indices(&projected, simplify_meters_sq);
-                                                let mut simplified =
-                                                    Vec::with_capacity(indices.len());
-                                                for idx in indices {
-                                                    simplified.push(seg.coordinates[idx]);
-                                                }
-                                                seg.coordinates = simplified;
-                                            }
-                                        }
-                                    }
-
-                                    for seg in &mut traj.segments {
-                                        for pt in &mut seg.coordinates {
-                                            pt[0] = format_coordinate_precise(pt[0], zoom);
-                                            pt[1] = format_coordinate_precise(pt[1], zoom);
-                                        }
-                                    }
-
-                                    Some(TrajectoryWrapper {
-                                        source: "trajectory".to_string(),
-                                        timestamp: now_ms,
-                                        client_reference: client_reference.clone(),
-                                        content: traj,
-                                    })
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    })
-                    .await
-                    .unwrap_or_else(|_| vec![])
+                    trajectories
+                        .into_iter()
+                        .map(|traj| TrajectoryWrapper {
+                            source: "trajectory".to_string(),
+                            timestamp: now_ms,
+                            client_reference: client_reference.clone(),
+                            content: traj,
+                        })
+                        .collect()
                 }
                 Ok(Err(e)) => {
                     eprintln!("Aspen RPC logic error for {}: {:?}", chateau, e);
@@ -403,8 +129,8 @@ pub async fn get_single_chateau_trajectories(
     };
 
     // Prevent slow or hanging etcd/RPC connections from blocking the entire response.
-    // Increased timeout to 15s to allow large chateaus like ile~de~france~mobilités
-    match tokio::time::timeout(std::time::Duration::from_secs(15), fetch_task).await {
+    // Increased timeout to 60s to allow large chateaus like ile~de~france~mobilités
+    match tokio::time::timeout(std::time::Duration::from_secs(60), fetch_task).await {
         Ok(res) => res,
         Err(_) => {
             eprintln!("Timeout fetching trajectories for chateau {}", chateau);
@@ -458,195 +184,26 @@ pub async fn get_trajectories(
 
                 if let Some(mut client) = client_res {
                     let client_reference = params_clone.client_reference.clone();
-                    let min_lon = params_clone.bbox.get(0).copied().unwrap_or(0.0);
-                    let min_lat = params_clone.bbox.get(1).copied().unwrap_or(0.0);
-                    let max_lon = params_clone.bbox.get(2).copied().unwrap_or(0.0);
-                    let max_lat = params_clone.bbox.get(3).copied().unwrap_or(0.0);
 
-                    let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
-                    let avg_lat = (min_lat + max_lat) / 2.0;
-                    let lon_diff_km =
-                        (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
-                    let min_dim_km = lat_diff_km.min(lon_diff_km);
-
-                    let simplify_meters = if min_dim_km > 200.0 {
-                        1000.0
-                    } else if min_dim_km > 100.0 {
-                        500.0
-                    } else if min_dim_km > 50.0 {
-                        250.0
-                    } else if min_dim_km > 10.0 {
-                        100.0
-                    } else if min_dim_km > 5.0 {
-                        20.0
-                    } else {
-                        5.0
-                    };
+                    let mut ctx = tarpc::context::current();
+                    ctx.deadline =
+                        std::time::SystemTime::now() + std::time::Duration::from_secs(60);
 
                     match client
-                        .get_trajectories(tarpc::context::current(), ch_clone.clone(), params_clone)
+                        .get_trajectories(ctx, ch_clone.clone(), params_clone)
                         .await
                     {
                         Ok(Ok(trajectories)) => {
                             let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
-                            tokio::task::spawn_blocking(move || {
-                                let now = chrono::Utc::now();
-                                let t_start_str = (now - chrono::Duration::minutes(2))
-                                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-                                let t_end_str = (now + chrono::Duration::minutes(3))
-                                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
-
-                                trajectories
-                                    .into_par_iter()
-                                    .filter_map(|mut traj| {
-                                        let mut keep = false;
-                                        if traj.segments.is_empty() {
-                                            for stop in &traj.stops {
-                                                let stop_time = if stop.arrival.is_empty() {
-                                                    &stop.departure
-                                                } else {
-                                                    &stop.arrival
-                                                };
-                                                let is_active = stop_time.is_empty()
-                                                    || (stop_time.as_str() >= t_start_str.as_str()
-                                                        && stop_time.as_str()
-                                                            <= t_end_str.as_str());
-                                                if is_active {
-                                                    if stop.lon >= min_lon
-                                                        && stop.lon <= max_lon
-                                                        && stop.lat >= min_lat
-                                                        && stop.lat <= max_lat
-                                                    {
-                                                        keep = true;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            traj.segments.retain(|seg| {
-                                                if seg.from_stop_index >= traj.stops.len()
-                                                    || seg.to_stop_index >= traj.stops.len()
-                                                {
-                                                    return false;
-                                                }
-                                                let from_stop = &traj.stops[seg.from_stop_index];
-                                                let to_stop = &traj.stops[seg.to_stop_index];
-
-                                                let seg_departure =
-                                                    if from_stop.departure.is_empty() {
-                                                        &from_stop.arrival
-                                                    } else {
-                                                        &from_stop.departure
-                                                    };
-                                                let seg_arrival = if to_stop.arrival.is_empty() {
-                                                    &to_stop.departure
-                                                } else {
-                                                    &to_stop.arrival
-                                                };
-
-                                                let is_active = if seg_departure.is_empty()
-                                                    || seg_arrival.is_empty()
-                                                {
-                                                    true
-                                                } else {
-                                                    seg_departure.as_str() <= t_end_str.as_str()
-                                                        && seg_arrival.as_str()
-                                                            >= t_start_str.as_str()
-                                                };
-
-                                                if is_active {
-                                                    let mut seg_min_lon = f64::MAX;
-                                                    let mut seg_min_lat = f64::MAX;
-                                                    let mut seg_max_lon = f64::MIN;
-                                                    let mut seg_max_lat = f64::MIN;
-                                                    for coord in &seg.coordinates {
-                                                        seg_min_lon = seg_min_lon.min(coord[0]);
-                                                        seg_min_lat = seg_min_lat.min(coord[1]);
-                                                        seg_max_lon = seg_max_lon.max(coord[0]);
-                                                        seg_max_lat = seg_max_lat.max(coord[1]);
-                                                    }
-                                                    if seg_min_lon <= max_lon
-                                                        && seg_max_lon >= min_lon
-                                                        && seg_min_lat <= max_lat
-                                                        && seg_max_lat >= min_lat
-                                                    {
-                                                        keep = true;
-                                                    }
-                                                    true
-                                                } else {
-                                                    false
-                                                }
-                                            });
-                                        }
-
-                                        if keep {
-                                            for seg in &mut traj.segments {
-                                                seg.coordinates
-                                                    .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
-                                            }
-
-                                            if simplify_meters > 0.0 {
-                                                // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
-                                                let web_mercator_scale =
-                                                    (1.0 / avg_lat.to_radians().cos()).abs();
-                                                let wm_simplify_meters =
-                                                    simplify_meters * web_mercator_scale;
-                                                let simplify_meters_sq =
-                                                    wm_simplify_meters * wm_simplify_meters;
-
-                                                for seg in &mut traj.segments {
-                                                    if seg.coordinates.len() > 2 {
-                                                        let projected: Vec<[f64; 2]> = seg
-                                                            .coordinates
-                                                            .iter()
-                                                            .map(|pt| {
-                                                                let r = 6378137.0;
-                                                                let x = pt[0].to_radians() * r;
-                                                                let y = ((std::f64::consts::PI
-                                                                    / 4.0)
-                                                                    + (pt[1].to_radians() / 2.0))
-                                                                    .tan()
-                                                                    .ln()
-                                                                    * r;
-                                                                [x, y]
-                                                            })
-                                                            .collect();
-
-                                                        let indices = rdp_indices(
-                                                            &projected,
-                                                            simplify_meters_sq,
-                                                        );
-                                                        let mut simplified =
-                                                            Vec::with_capacity(indices.len());
-                                                        for idx in indices {
-                                                            simplified.push(seg.coordinates[idx]);
-                                                        }
-                                                        seg.coordinates = simplified;
-                                                    }
-                                                }
-                                            }
-
-                                            for seg in &mut traj.segments {
-                                                for pt in &mut seg.coordinates {
-                                                    pt[0] = format_coordinate_precise(pt[0], zoom);
-                                                    pt[1] = format_coordinate_precise(pt[1], zoom);
-                                                }
-                                            }
-
-                                            Some(TrajectoryWrapper {
-                                                source: "trajectory".to_string(),
-                                                timestamp: now_ms,
-                                                client_reference: client_reference.clone(),
-                                                content: traj,
-                                            })
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
-                            })
-                            .await
-                            .unwrap_or_else(|_| vec![])
+                            trajectories
+                                .into_iter()
+                                .map(|traj| TrajectoryWrapper {
+                                    source: "trajectory".to_string(),
+                                    timestamp: now_ms,
+                                    client_reference: client_reference.clone(),
+                                    content: traj,
+                                })
+                                .collect()
                         }
                         Ok(Err(e)) => {
                             eprintln!("Aspen RPC logic error for {}: {:?}", ch_clone, e);
@@ -663,7 +220,7 @@ pub async fn get_trajectories(
             };
 
             // Prevent slow or hanging etcd/RPC connections from blocking the entire response.
-            match tokio::time::timeout(std::time::Duration::from_secs(5), fetch_task).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(60), fetch_task).await {
                 Ok(res) => res,
                 Err(_) => {
                     eprintln!("Timeout fetching trajectories for chateau {}", ch_clone);

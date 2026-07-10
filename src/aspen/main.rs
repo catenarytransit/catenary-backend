@@ -105,6 +105,98 @@ pub struct GtfsRealtimeHashStore {
     alerts: Option<u64>,
 }
 
+fn format_coordinate_precise(val: f64, zoom: u8) -> f64 {
+    let decimals = if zoom < 9 {
+        4
+    } else if zoom < 13 {
+        5
+    } else {
+        6
+    };
+
+    let factor = match decimals {
+        4 => 10_000.0,
+        5 => 100_000.0,
+        _ => 1_000_000.0,
+    };
+
+    let rounded = (val * factor).round() as i64;
+    let mut buf = [0u8; 24];
+
+    let mut itoa_buf = itoa::Buffer::new();
+    let int_bytes = itoa_buf.format(rounded).as_bytes();
+    let len = int_bytes.len();
+    buf[..len].copy_from_slice(int_bytes);
+
+    let exp_bytes = match decimals {
+        4 => b"e-4",
+        5 => b"e-5",
+        _ => b"e-6",
+    };
+    buf[len..len + 3].copy_from_slice(exp_bytes);
+    fast_float::parse(&buf[..len + 3]).unwrap_or(val)
+}
+
+fn perpendicular_distance_sq(pt: [f64; 2], line_start: [f64; 2], line_end: [f64; 2]) -> f64 {
+    let dx = line_end[0] - line_start[0];
+    let dy = line_end[1] - line_start[1];
+
+    let length_sq = dx * dx + dy * dy;
+    if length_sq == 0.0 {
+        let dx = pt[0] - line_start[0];
+        let dy = pt[1] - line_start[1];
+        return dx * dx + dy * dy;
+    }
+
+    let t = ((pt[0] - line_start[0]) * dx + (pt[1] - line_start[1]) * dy) / length_sq;
+    let t = t.clamp(0.0, 1.0);
+
+    let proj_x = line_start[0] + t * dx;
+    let proj_y = line_start[1] + t * dy;
+
+    let dx = pt[0] - proj_x;
+    let dy = pt[1] - proj_y;
+
+    dx * dx + dy * dy
+}
+
+fn rdp_indices(projected: &[[f64; 2]], epsilon_sq: f64) -> Vec<usize> {
+    if projected.len() <= 2 {
+        return (0..projected.len()).collect();
+    }
+
+    let mut stack = vec![(0, projected.len() - 1)];
+    let mut keep = vec![false; projected.len()];
+    keep[0] = true;
+    keep[projected.len() - 1] = true;
+
+    while let Some((start, end)) = stack.pop() {
+        let mut dmax_sq = 0.0;
+        let mut index = start;
+        let pt_start = projected[start];
+        let pt_end = projected[end];
+
+        for i in start + 1..end {
+            let d_sq = perpendicular_distance_sq(projected[i], pt_start, pt_end);
+            if d_sq > dmax_sq {
+                index = i;
+                dmax_sq = d_sq;
+            }
+        }
+
+        if dmax_sq > epsilon_sq {
+            keep[index] = true;
+            stack.push((start, index));
+            stack.push((index, end));
+        }
+    }
+
+    keep.into_iter()
+        .enumerate()
+        .filter_map(|(i, k)| if k { Some(i) } else { None })
+        .collect()
+}
+
 // This is the type that implements the generated AspenServer trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
@@ -1703,92 +1795,223 @@ impl AspenRpc for AspenServer {
         let t_end_str = (now + chrono::Duration::minutes(25))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
+        let mut all_matched_trajectories = Vec::new();
         for pattern_id in pattern_ids {
             if let Some(trip_ids) = store.pattern_to_trajectories.get(pattern_id) {
                 for trip_id in trip_ids {
                     if let Some(traj) = store.trajectories.get(trip_id) {
-                        let mut keep = false;
-
-                        if traj.segments.is_empty() {
-                            for stop in &traj.stops {
-                                let stop_time = if stop.arrival.is_empty() {
-                                    &stop.departure
-                                } else {
-                                    &stop.arrival
-                                };
-                                let is_active = stop_time.is_empty()
-                                    || (stop_time.as_str() >= t_start_str.as_str()
-                                        && stop_time.as_str() <= t_end_str.as_str());
-                                if is_active {
-                                    if stop.lon >= min_lon
-                                        && stop.lon <= max_lon
-                                        && stop.lat >= min_lat
-                                        && stop.lat <= max_lat
-                                    {
-                                        keep = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        } else {
-                            for seg in &traj.segments {
-                                if seg.from_stop_index >= traj.stops.len()
-                                    || seg.to_stop_index >= traj.stops.len()
-                                {
-                                    continue;
-                                }
-                                let from_stop = &traj.stops[seg.from_stop_index];
-                                let to_stop = &traj.stops[seg.to_stop_index];
-
-                                let seg_departure = if from_stop.departure.is_empty() {
-                                    &from_stop.arrival
-                                } else {
-                                    &from_stop.departure
-                                };
-                                let seg_arrival = if to_stop.arrival.is_empty() {
-                                    &to_stop.departure
-                                } else {
-                                    &to_stop.arrival
-                                };
-
-                                let is_active =
-                                    if seg_departure.is_empty() || seg_arrival.is_empty() {
-                                        true
-                                    } else {
-                                        seg_departure.as_str() <= t_end_str.as_str()
-                                            && seg_arrival.as_str() >= t_start_str.as_str()
-                                    };
-
-                                if is_active {
-                                    let mut seg_min_lon = f64::MAX;
-                                    let mut seg_min_lat = f64::MAX;
-                                    let mut seg_max_lon = f64::MIN;
-                                    let mut seg_max_lat = f64::MIN;
-                                    for coord in &seg.coordinates {
-                                        seg_min_lon = seg_min_lon.min(coord[0]);
-                                        seg_min_lat = seg_min_lat.min(coord[1]);
-                                        seg_max_lon = seg_max_lon.max(coord[0]);
-                                        seg_max_lat = seg_max_lat.max(coord[1]);
-                                    }
-                                    if seg_min_lon <= max_lon
-                                        && seg_max_lon >= min_lon
-                                        && seg_min_lat <= max_lat
-                                        && seg_max_lat >= min_lat
-                                    {
-                                        keep = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        if keep {
-                            trajectories.push(traj.clone());
-                        }
+                        all_matched_trajectories.push(traj);
                     }
                 }
             }
         }
+
+        let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
+        let avg_lat = (min_lat + max_lat) / 2.0;
+        let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
+        let min_dim_km = lat_diff_km.min(lon_diff_km);
+
+        let simplify_meters = if min_dim_km > 300.0 {
+            1500.0
+        } else if min_dim_km > 200.0 {
+            1000.0
+        } else if min_dim_km > 100.0 {
+            500.0
+        } else if min_dim_km > 50.0 {
+            250.0
+        } else if min_dim_km > 20.0 {
+            150.0
+        } else if min_dim_km > 10.0 {
+            100.0
+        } else if min_dim_km > 5.0 {
+            20.0
+        } else {
+            5.0
+        };
+
+        // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
+        let web_mercator_scale = (1.0 / avg_lat.to_radians().cos()).abs();
+        let wm_simplify_meters = simplify_meters * web_mercator_scale;
+        let simplify_meters_sq = wm_simplify_meters * wm_simplify_meters;
+
+        let trajectories: Vec<_> = all_matched_trajectories
+            .into_par_iter()
+            .filter_map(|traj| {
+                let mut keep = false;
+
+                if traj.segments.is_empty() {
+                    for stop in &traj.stops {
+                        let stop_time = if stop.arrival.is_empty() {
+                            &stop.departure
+                        } else {
+                            &stop.arrival
+                        };
+                        let is_active = stop_time.is_empty()
+                            || (stop_time.as_str() >= t_start_str.as_str()
+                                && stop_time.as_str() <= t_end_str.as_str());
+                        if is_active {
+                            if stop.lon >= min_lon
+                                && stop.lon <= max_lon
+                                && stop.lat >= min_lat
+                                && stop.lat <= max_lat
+                            {
+                                keep = true;
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    for seg in &traj.segments {
+                        if seg.from_stop_index >= traj.stops.len()
+                            || seg.to_stop_index >= traj.stops.len()
+                        {
+                            continue;
+                        }
+                        let from_stop = &traj.stops[seg.from_stop_index];
+                        let to_stop = &traj.stops[seg.to_stop_index];
+
+                        let seg_departure = if from_stop.departure.is_empty() {
+                            &from_stop.arrival
+                        } else {
+                            &from_stop.departure
+                        };
+                        let seg_arrival = if to_stop.arrival.is_empty() {
+                            &to_stop.departure
+                        } else {
+                            &to_stop.arrival
+                        };
+
+                        let is_active = if seg_departure.is_empty() || seg_arrival.is_empty() {
+                            true
+                        } else {
+                            seg_departure.as_str() <= t_end_str.as_str()
+                                && seg_arrival.as_str() >= t_start_str.as_str()
+                        };
+
+                        if is_active {
+                            let mut seg_min_lon = f64::MAX;
+                            let mut seg_min_lat = f64::MAX;
+                            let mut seg_max_lon = f64::MIN;
+                            let mut seg_max_lat = f64::MIN;
+                            for coord in &seg.coordinates {
+                                seg_min_lon = seg_min_lon.min(coord[0]);
+                                seg_min_lat = seg_min_lat.min(coord[1]);
+                                seg_max_lon = seg_max_lon.max(coord[0]);
+                                seg_max_lat = seg_max_lat.max(coord[1]);
+                            }
+                            if seg_min_lon <= max_lon
+                                && seg_max_lon >= min_lon
+                                && seg_min_lat <= max_lat
+                                && seg_max_lat >= min_lat
+                            {
+                                keep = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if keep {
+                    let mut traj_clone = traj.clone();
+
+                    if !traj_clone.segments.is_empty() {
+                        traj_clone.segments.retain(|seg| {
+                            if seg.from_stop_index >= traj_clone.stops.len()
+                                || seg.to_stop_index >= traj_clone.stops.len()
+                            {
+                                return false;
+                            }
+                            let from_stop = &traj_clone.stops[seg.from_stop_index];
+                            let to_stop = &traj_clone.stops[seg.to_stop_index];
+
+                            let seg_departure = if from_stop.departure.is_empty() {
+                                &from_stop.arrival
+                            } else {
+                                &from_stop.departure
+                            };
+                            let seg_arrival = if to_stop.arrival.is_empty() {
+                                &to_stop.departure
+                            } else {
+                                &to_stop.arrival
+                            };
+
+                            let is_active = if seg_departure.is_empty() || seg_arrival.is_empty() {
+                                true
+                            } else {
+                                seg_departure.as_str() <= t_end_str.as_str()
+                                    && seg_arrival.as_str() >= t_start_str.as_str()
+                            };
+
+                            if is_active {
+                                let mut seg_min_lon = f64::MAX;
+                                let mut seg_min_lat = f64::MAX;
+                                let mut seg_max_lon = f64::MIN;
+                                let mut seg_max_lat = f64::MIN;
+                                for coord in &seg.coordinates {
+                                    seg_min_lon = seg_min_lon.min(coord[0]);
+                                    seg_min_lat = seg_min_lat.min(coord[1]);
+                                    seg_max_lon = seg_max_lon.max(coord[0]);
+                                    seg_max_lat = seg_max_lat.max(coord[1]);
+                                }
+                                if seg_min_lon <= max_lon
+                                    && seg_max_lon >= min_lon
+                                    && seg_min_lat <= max_lat
+                                    && seg_max_lat >= min_lat
+                                {
+                                    return true;
+                                }
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    }
+
+                    for seg in &mut traj_clone.segments {
+                        seg.coordinates.retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                    }
+
+                    if simplify_meters > 0.0 {
+                        for seg in &mut traj_clone.segments {
+                            if seg.coordinates.len() > 2 {
+                                let projected: Vec<[f64; 2]> = seg
+                                    .coordinates
+                                    .iter()
+                                    .map(|pt| {
+                                        let r = 6378137.0;
+                                        let x = pt[0].to_radians() * r;
+                                        let y = ((std::f64::consts::PI / 4.0)
+                                            + (pt[1].to_radians() / 2.0))
+                                            .tan()
+                                            .ln()
+                                            * r;
+                                        [x, y]
+                                    })
+                                    .collect();
+
+                                let indices = rdp_indices(&projected, simplify_meters_sq);
+                                let mut simplified = Vec::with_capacity(indices.len());
+                                for idx in indices {
+                                    simplified.push(seg.coordinates[idx]);
+                                }
+                                seg.coordinates = simplified;
+                            }
+                        }
+                    }
+
+                    for seg in &mut traj_clone.segments {
+                        for pt in &mut seg.coordinates {
+                            pt[0] = format_coordinate_precise(pt[0], params.zoom);
+                            pt[1] = format_coordinate_precise(pt[1], params.zoom);
+                        }
+                    }
+
+                    Some(traj_clone)
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         Ok(trajectories)
     }
