@@ -187,7 +187,7 @@ pub async fn get_trajectories(
 
                     let mut ctx = tarpc::context::current();
                     ctx.deadline =
-                        std::time::SystemTime::now() + std::time::Duration::from_secs(60);
+                        std::time::Instant::now() + std::time::Duration::from_secs(60);
 
                     match client
                         .get_trajectories(ctx, ch_clone.clone(), params_clone)
