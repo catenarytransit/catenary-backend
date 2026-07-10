@@ -248,7 +248,7 @@ async fn main() -> std::io::Result<()> {
     };
 
     let app = axum::Router::new()
-        .route("/ws/", axum::routing::get(trip_ws_handler))
+        .route("/ws/", axum::routing::get(live_ws_handler))
         .route("/ws/trip", axum::routing::get(trip_ws_handler))
         .route("/ws/trip/", axum::routing::get(trip_ws_handler))
         .route("/ws/live", axum::routing::get(live_ws_handler))
