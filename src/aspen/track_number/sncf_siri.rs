@@ -4,6 +4,24 @@ use std::collections::HashMap;
 pub struct SncfStopTrack {
     pub arrival_platform: Option<String>,
     pub departure_platform: Option<String>,
+    pub aimed_arrival_time: Option<i64>,
+    pub expected_arrival_time: Option<i64>,
+    pub aimed_departure_time: Option<i64>,
+    pub expected_departure_time: Option<i64>,
+}
+
+fn extract_time(call_xml: &str, tag: &str) -> Option<i64> {
+    if let Some(start) = call_xml.find(tag) {
+        let sub = &call_xml[start + tag.len()..];
+        let end_tag = format!("</{}>", &tag[1..]);
+        if let Some(end) = sub.find(&end_tag) {
+            let time_str = sub[..end].trim();
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(time_str) {
+                return Some(dt.timestamp());
+            }
+        }
+    }
+    None
 }
 
 #[derive(Clone, Debug)]
@@ -12,7 +30,7 @@ pub struct SncfTrackData {
 }
 
 pub fn normalize_train_num(s: &str) -> String {
-    s.trim_start_matches('0').to_string()
+    s.trim().trim_start_matches('0').to_string()
 }
 
 pub fn extract_station_code(stop_ref: &str) -> Option<String> {
@@ -47,19 +65,19 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
         let journey_xml = &remaining[..journey_end];
         start_idx = absolute_journey_start + journey_end + "</EstimatedVehicleJourney>".len();
 
-        let train_number = if let Some(t_start) = journey_xml.find("<TrainNumberRef>") {
-            let t_sub = &journey_xml[t_start + "<TrainNumberRef>".len()..];
-            if let Some(t_end) = t_sub.find("</TrainNumberRef>") {
-                Some(t_sub[..t_end].trim().to_string())
+        let mut train_numbers = Vec::new();
+        let mut t_search_idx = 0;
+        while let Some(t_start) = journey_xml[t_search_idx..].find("<TrainNumberRef>") {
+            let abs_t_start = t_search_idx + t_start + "<TrainNumberRef>".len();
+            if let Some(t_end) = journey_xml[abs_t_start..].find("</TrainNumberRef>") {
+                train_numbers.push(journey_xml[abs_t_start..abs_t_start + t_end].trim().to_string());
+                t_search_idx = abs_t_start + t_end + "</TrainNumberRef>".len();
             } else {
-                None
+                break;
             }
-        } else {
-            None
-        };
+        }
 
-        if let Some(train_num) = train_number {
-            let normalized_train = normalize_train_num(&train_num);
+        if !train_numbers.is_empty() {
             let mut stop_map = HashMap::new();
 
             let mut call_start_idx = 0;
@@ -117,6 +135,11 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
 
                 if let Some(stop_ref) = stop_point_ref {
                     if let Some(code) = extract_station_code(&stop_ref) {
+                        let aimed_arrival_time = extract_time(call_xml, "<AimedArrivalTime>");
+                        let expected_arrival_time = extract_time(call_xml, "<ExpectedArrivalTime>");
+                        let aimed_departure_time = extract_time(call_xml, "<AimedDepartureTime>");
+                        let expected_departure_time = extract_time(call_xml, "<ExpectedDepartureTime>");
+
                         let arrival_platform =
                             if let Some(ap_start) = call_xml.find("<ArrivalPlatformName>") {
                                 let ap_sub = &call_xml[ap_start + "<ArrivalPlatformName>".len()..];
@@ -142,12 +165,22 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
                             None
                         };
 
-                        if arrival_platform.is_some() || departure_platform.is_some() {
+                        if arrival_platform.is_some()
+                            || departure_platform.is_some()
+                            || aimed_arrival_time.is_some()
+                            || expected_arrival_time.is_some()
+                            || aimed_departure_time.is_some()
+                            || expected_departure_time.is_some()
+                        {
                             stop_map.insert(
                                 code,
                                 SncfStopTrack {
                                     arrival_platform,
                                     departure_platform,
+                                    aimed_arrival_time,
+                                    expected_arrival_time,
+                                    aimed_departure_time,
+                                    expected_departure_time,
                                 },
                             );
                         }
@@ -156,7 +189,13 @@ pub fn parse_sncf_siri(xml: &str) -> SncfTrackData {
             }
 
             if !stop_map.is_empty() {
-                track_lookup.insert(normalized_train, stop_map);
+                for train_num in train_numbers {
+                    let normalized_train = normalize_train_num(&train_num);
+                    track_lookup
+                        .entry(normalized_train)
+                        .or_insert_with(HashMap::new)
+                        .extend(stop_map.clone());
+                }
             }
         }
     }

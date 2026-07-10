@@ -10,6 +10,9 @@ use std::sync::Arc;
 mod trip_websocket;
 use trip_websocket::TripWebSocket;
 
+mod live_websocket;
+use live_websocket::LiveLocationsWebSocket;
+
 mod chateau_rtree;
 mod departures_shared;
 mod map_coordinator;
@@ -132,12 +135,34 @@ async fn index(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+) -> Result<HttpResponse, Error> {
+    ws::start(
+        TripWebSocket::new(
+            pool.as_ref().clone(),
+            etcd_connection_ips.as_ref().clone(),
+            etcd_connection_options.as_ref().clone(),
+            aspen_client_manager.as_ref().clone(),
+            etcd_reuser.get_ref().clone(),
+        ),
+        &req,
+        stream,
+    )
+}
+
+async fn index_live(
+    req: HttpRequest,
+    stream: web::Payload,
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     coordinator_pool: web::Data<Arc<BulkFetchCoordinatorPool>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
     chateau_rtree: web::Data<Arc<chateau_rtree::ChateauRTree>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
-        TripWebSocket::new(
+        LiveLocationsWebSocket::new(
             pool.as_ref().clone(),
             etcd_connection_ips.as_ref().clone(),
             etcd_connection_options.as_ref().clone(),
@@ -283,6 +308,10 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(etcd_reuser.clone()))
             .app_data(web::Data::new(chateau_rtree.clone()))
             .route("/ws/", web::get().to(index))
+            .route("/ws/trip", web::get().to(index))
+            .route("/ws/trip/", web::get().to(index))
+            .route("/ws/live", web::get().to(index_live))
+            .route("/ws/live/", web::get().to(index_live))
             .service(nearby_departures::nearby_from_coords_v3)
             .route("/", web::get().to(index_root))
     })
