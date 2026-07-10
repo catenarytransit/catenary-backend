@@ -307,7 +307,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(coordinator_pool.clone()))
             .app_data(web::Data::new(etcd_reuser.clone()))
             .app_data(web::Data::new(chateau_rtree.clone()))
-            .route("/ws/", web::get().to(index))
+            .route("/ws/", web::get().to(index_live))
             .route("/ws/trip", web::get().to(index))
             .route("/ws/trip/", web::get().to(index))
             .route("/ws/live", web::get().to(index_live))
