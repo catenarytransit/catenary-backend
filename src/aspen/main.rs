@@ -733,6 +733,18 @@ impl AspenRpc for AspenServer {
                 _ => None,
             };
 
+            let mut trips_gtfs_rt = trips_gtfs_rt;
+
+            if realtime_feed_id == "f-u09-île~de~france~mobilités~rt" {
+                if let Some(t) = &mut trips_gtfs_rt {
+                    for entity in t.entity.iter_mut() {
+                        if let Some(trip_update) = &mut entity.trip_update {
+                            trip_update.trip.start_time = None;
+                        }
+                    }
+                }
+            }
+
             let mut trips_gtfs_rt =
                 trips_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                     "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
