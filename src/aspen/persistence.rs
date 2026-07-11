@@ -61,6 +61,7 @@ mod tests {
         let chateau_id = "test_chateau";
         let data = AspenisedData {
             vehicle_positions: Default::default(),
+            vehicle_positions_rtree_by_route_type: Default::default(),
             vehicle_routes_cache: Default::default(),
             vehicle_routes_cache_hash: 0,
             vehicle_label_to_gtfs_id: Default::default(),
@@ -81,6 +82,8 @@ mod tests {
             trip_id_to_trip_modification_ids: Default::default(),
             stop_id_to_trip_modification_ids: Default::default(),
             stop_id_to_non_scheduled_trip_ids: Default::default(),
+            stop_id_to_parent_id: Default::default(),
+            parent_id_to_children_ids: Default::default(),
         };
 
         save_chateau_data(chateau_id, &data).unwrap();
@@ -94,6 +97,7 @@ mod tests {
         let chateau_id = "test_skip_cache";
         let mut data = AspenisedData {
             vehicle_positions: Default::default(),
+            vehicle_positions_rtree_by_route_type: Default::default(),
             vehicle_routes_cache: Default::default(),
             vehicle_routes_cache_hash: 0,
             vehicle_label_to_gtfs_id: Default::default(),
@@ -114,6 +118,8 @@ mod tests {
             trip_id_to_trip_modification_ids: Default::default(),
             stop_id_to_trip_modification_ids: Default::default(),
             stop_id_to_non_scheduled_trip_ids: Default::default(),
+            stop_id_to_parent_id: Default::default(),
+            parent_id_to_children_ids: Default::default(),
         };
 
         // Populate the cache with some dummy data

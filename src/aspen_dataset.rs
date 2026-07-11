@@ -58,6 +58,7 @@ pub struct AspenisedData {
     //  pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
     pub trip_updates_lookup_by_route_id_to_trip_update_ids:
         AHashMap<CompactString, Vec<CompactString>>,
+    pub vehicle_positions_rtree_by_route_type: AHashMap<i16, rstar::RTree<AspenisedVehiclePositionBBox>>,
     pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
     pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
     pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
@@ -140,6 +141,21 @@ impl rstar::RTreeObject for AspenisedTrajectoryBBox {
 
     fn envelope(&self) -> Self::Envelope {
         rstar::AABB::from_corners([self.min_lon, self.min_lat], [self.max_lon, self.max_lat])
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct AspenisedVehiclePositionBBox {
+    pub vehicle_id: String,
+    pub lon: f64,
+    pub lat: f64,
+}
+
+impl rstar::RTreeObject for AspenisedVehiclePositionBBox {
+    type Envelope = rstar::AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        rstar::AABB::from_point([self.lon, self.lat])
     }
 }
 

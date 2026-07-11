@@ -3445,11 +3445,30 @@ pub async fn new_rt_data(
         }
     }
 
+    let mut vehicle_positions_rtree_by_route_type = AHashMap::new();
+    let mut rtree_elements_by_route_type = AHashMap::new();
+    for (key, vehicle) in aspenised_vehicle_positions.iter() {
+        if let Some(pos) = &vehicle.position {
+            rtree_elements_by_route_type
+                .entry(vehicle.route_type)
+                .or_insert_with(Vec::new)
+                .push(catenary::aspen_dataset::AspenisedVehiclePositionBBox {
+                    vehicle_id: key.clone(),
+                    lon: pos.longitude as f64,
+                    lat: pos.latitude as f64,
+                });
+        }
+    }
+    for (route_type, elements) in rtree_elements_by_route_type.into_iter() {
+        vehicle_positions_rtree_by_route_type.insert(route_type, rstar::RTree::bulk_load(elements));
+    }
+
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
     let aspenised_data = AspenisedData {
         vehicle_positions: aspenised_vehicle_positions,
+        vehicle_positions_rtree_by_route_type,
         vehicle_routes_cache: vehicle_routes_cache,
         vehicle_routes_cache_hash: fast_hash_of_routes,
         trip_updates: trip_updates,
