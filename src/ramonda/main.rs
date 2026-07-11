@@ -152,7 +152,16 @@ impl RamondaWebSocket {
                     cached_socket,
                 );
 
-                let fut = async move { fs.await };
+                let etcd_reuser_clone = act.etcd_reuser.clone();
+                let fut = async move {
+                    let res = fs.await;
+                    if let Err(ref e) = res {
+                        if e == "Could not connect to etcd" {
+                            catenary::invalidate_etcd_client(&etcd_reuser_clone).await;
+                        }
+                    }
+                    res
+                };
 
                 let fut = actix::fut::wrap_future(fut).map(
                     move |result,
@@ -250,7 +259,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                             self.etcd_reuser.clone(),
                         );
 
-                        let fut = async move { fs.await };
+                        let etcd_reuser_clone = self.etcd_reuser.clone();
+                        let fut = async move {
+                            let res = fs.await;
+                            if let Err(ref e) = res {
+                                if e == "Could not connect to etcd" {
+                                    catenary::invalidate_etcd_client(&etcd_reuser_clone).await;
+                                }
+                            }
+                            res
+                        };
 
                         let fut = actix::fut::wrap_future(fut).map(
                             |result, _, ctx: &mut ws::WebsocketContext<Self>| match result {

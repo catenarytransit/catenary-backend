@@ -302,6 +302,7 @@ pub async fn fetch_trip_rt_update(
 
         if let Err(etcd_err) = &etcd {
             eprintln!("{:#?}", etcd_err);
+            crate::invalidate_etcd_client(&etcd_reuser).await;
             return Err("Could not connect to etcd".to_string());
         }
 
@@ -337,7 +338,10 @@ pub async fn fetch_trip_rt_update(
                     return Err("Could not connect to realtime data server".to_string());
                 }
             }
-            _ => return Err("Could not connect to etcd".to_string()),
+            _ => {
+                crate::invalidate_etcd_client(&etcd_reuser).await;
+                return Err("Could not connect to etcd".to_string());
+            }
         }
     };
 
@@ -575,6 +579,7 @@ pub async fn fetch_trip_information(
 
     if let Err(etcd_err) = &etcd {
         eprintln!("{:#?}", etcd_err);
+        crate::invalidate_etcd_client(&etcd_reuser).await;
         return Err("Could not connect to etcd".to_string());
     }
 
@@ -586,6 +591,10 @@ pub async fn fetch_trip_information(
             None,
         )
         .await;
+
+    if fetch_assigned_node_for_this_chateau.is_err() {
+        crate::invalidate_etcd_client(&etcd_reuser).await;
+    }
 
     if let Some(t) = &mut timer {
         t.add("fetch_assigned_aspen_chateau_data_from_etcd");
