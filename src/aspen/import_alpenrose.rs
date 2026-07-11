@@ -1907,6 +1907,10 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
+                        if chateau_id == "île~de~france~mobilités" {
+                            trip_descriptor.start_time = None;
+                        }
+
                         // Normalize the trip_id in the realtime descriptor to the canonical
                         // trip_id from the scheduled data when available. This ensures that
                         // downstream consumers see IDs consistent with the database even when
