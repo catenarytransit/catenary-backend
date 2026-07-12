@@ -58,7 +58,8 @@ pub struct AspenisedData {
     //  pub raw_alerts: AHashMap<String, gtfs_realtime::Alert>,
     pub trip_updates_lookup_by_route_id_to_trip_update_ids:
         AHashMap<CompactString, Vec<CompactString>>,
-    pub vehicle_positions_rtree_by_route_type: AHashMap<i16, rstar::RTree<AspenisedVehiclePositionBBox>>,
+    pub vehicle_positions_rtree_by_route_type:
+        AHashMap<i16, rstar::RTree<AspenisedVehiclePositionBBox>>,
     pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
     pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
     pub impacted_stops_alerts: AHashMap<String, Vec<String>>,

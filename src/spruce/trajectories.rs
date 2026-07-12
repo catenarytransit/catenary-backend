@@ -191,22 +191,27 @@ pub async fn get_single_chateau_trajectories(
             .await
             {
                 Some(s) => s,
-                None => return Err(format!("Could not get socket for chateau {}", chateau_clone)),
+                None => {
+                    return Err(format!(
+                        "Could not get socket for chateau {}",
+                        chateau_clone
+                    ));
+                }
             };
 
-            let client_res = if let Some(client) = aspen_client_manager.get_client(socket.clone()).await
-            {
-                Some(client)
-            } else if let Ok(new_client) =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
-            {
-                aspen_client_manager
-                    .insert_client(socket.clone(), new_client.clone())
-                    .await;
-                Some(new_client)
-            } else {
-                None
-            };
+            let client_res =
+                if let Some(client) = aspen_client_manager.get_client(socket.clone()).await {
+                    Some(client)
+                } else if let Ok(new_client) =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
+                {
+                    aspen_client_manager
+                        .insert_client(socket.clone(), new_client.clone())
+                        .await;
+                    Some(new_client)
+                } else {
+                    None
+                };
 
             if let Some(mut client) = client_res {
                 let zoom = params.zoom;
@@ -218,7 +223,8 @@ pub async fn get_single_chateau_trajectories(
 
                 let lat_diff_km = (max_lat - min_lat).abs() * 111.32;
                 let avg_lat = (min_lat + max_lat) / 2.0;
-                let lon_diff_km = (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
+                let lon_diff_km =
+                    (max_lon - min_lon).abs() * 111.32 * avg_lat.to_radians().cos().abs();
                 let min_dim_km = lat_diff_km.min(lon_diff_km);
 
                 let simplify_meters = if min_dim_km > 300.0 {
@@ -298,13 +304,14 @@ pub async fn get_single_chateau_trajectories(
                                                 &to_stop.arrival
                                             };
 
-                                            let is_active =
-                                                if seg_departure.is_empty() || seg_arrival.is_empty() {
-                                                    true
-                                                } else {
-                                                    seg_departure.as_str() <= t_end_str.as_str()
-                                                        && seg_arrival.as_str() >= t_start_str.as_str()
-                                                };
+                                            let is_active = if seg_departure.is_empty()
+                                                || seg_arrival.is_empty()
+                                            {
+                                                true
+                                            } else {
+                                                seg_departure.as_str() <= t_end_str.as_str()
+                                                    && seg_arrival.as_str() >= t_start_str.as_str()
+                                            };
 
                                             if is_active {
                                                 let mut seg_min_lon = f64::MAX;
@@ -424,7 +431,10 @@ pub async fn get_single_chateau_trajectories(
 
         retries += 1;
         if retries >= 3 {
-            return Err(format!("Failed to fetch trajectories for {} after 3 retries", chateau));
+            return Err(format!(
+                "Failed to fetch trajectories for {} after 3 retries",
+                chateau
+            ));
         }
         tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
@@ -466,10 +476,13 @@ pub async fn get_trajectories(
                 let fetch_task = async move {
                     let socket = match get_aspen_socket(&ch_clone2, &ips, &opts, &reuser).await {
                         Some(s) => s,
-                        None => return Err(format!("Could not get socket for chateau {}", ch_clone2)),
+                        None => {
+                            return Err(format!("Could not get socket for chateau {}", ch_clone2));
+                        }
                     };
 
-                    let client_res = if let Some(client) = manager.get_client(socket.clone()).await {
+                    let client_res = if let Some(client) = manager.get_client(socket.clone()).await
+                    {
                         Some(client)
                     } else if let Ok(new_client) =
                         catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await
@@ -510,11 +523,16 @@ pub async fn get_trajectories(
                         };
 
                         match client
-                            .get_trajectories(tarpc::context::current(), ch_clone2.clone(), params_clone)
+                            .get_trajectories(
+                                tarpc::context::current(),
+                                ch_clone2.clone(),
+                                params_clone,
+                            )
                             .await
                         {
                             Ok(Ok(trajectories)) => {
-                                let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
+                                let now_ms =
+                                    catenary::duration_since_unix_epoch().as_millis() as u64;
                                 let res = tokio::task::spawn_blocking(move || {
                                     let now = chrono::Utc::now();
                                     let t_start_str = (now - chrono::Duration::minutes(2))
@@ -534,7 +552,8 @@ pub async fn get_trajectories(
                                                         &stop.arrival
                                                     };
                                                     let is_active = stop_time.is_empty()
-                                                        || (stop_time.as_str() >= t_start_str.as_str()
+                                                        || (stop_time.as_str()
+                                                            >= t_start_str.as_str()
                                                             && stop_time.as_str()
                                                                 <= t_end_str.as_str());
                                                     if is_active {
@@ -555,7 +574,8 @@ pub async fn get_trajectories(
                                                     {
                                                         return false;
                                                     }
-                                                    let from_stop = &traj.stops[seg.from_stop_index];
+                                                    let from_stop =
+                                                        &traj.stops[seg.from_stop_index];
                                                     let to_stop = &traj.stops[seg.to_stop_index];
 
                                                     let seg_departure =
@@ -564,7 +584,8 @@ pub async fn get_trajectories(
                                                         } else {
                                                             &from_stop.departure
                                                         };
-                                                    let seg_arrival = if to_stop.arrival.is_empty() {
+                                                    let seg_arrival = if to_stop.arrival.is_empty()
+                                                    {
                                                         &to_stop.departure
                                                     } else {
                                                         &to_stop.arrival
@@ -607,8 +628,9 @@ pub async fn get_trajectories(
 
                                             if keep {
                                                 for seg in &mut traj.segments {
-                                                    seg.coordinates
-                                                        .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
+                                                    seg.coordinates.retain(|pt| {
+                                                        !(pt[0] == 0.0 && pt[1] == 0.0)
+                                                    });
                                                 }
 
                                                 if simplify_meters > 0.0 {
@@ -630,7 +652,8 @@ pub async fn get_trajectories(
                                                                     let x = pt[0].to_radians() * r;
                                                                     let y = ((std::f64::consts::PI
                                                                         / 4.0)
-                                                                        + (pt[1].to_radians() / 2.0))
+                                                                        + (pt[1].to_radians()
+                                                                            / 2.0))
                                                                         .tan()
                                                                         .ln()
                                                                         * r;
@@ -645,7 +668,8 @@ pub async fn get_trajectories(
                                                             let mut simplified =
                                                                 Vec::with_capacity(indices.len());
                                                             for idx in indices {
-                                                                simplified.push(seg.coordinates[idx]);
+                                                                simplified
+                                                                    .push(seg.coordinates[idx]);
                                                             }
                                                             seg.coordinates = simplified;
                                                         }
@@ -654,8 +678,10 @@ pub async fn get_trajectories(
 
                                                 for seg in &mut traj.segments {
                                                     for pt in &mut seg.coordinates {
-                                                        pt[0] = format_coordinate_precise(pt[0], zoom);
-                                                        pt[1] = format_coordinate_precise(pt[1], zoom);
+                                                        pt[0] =
+                                                            format_coordinate_precise(pt[0], zoom);
+                                                        pt[1] =
+                                                            format_coordinate_precise(pt[1], zoom);
                                                     }
                                                 }
 
@@ -692,7 +718,10 @@ pub async fn get_trajectories(
                 match tokio::time::timeout(std::time::Duration::from_secs(5), fetch_task).await {
                     Ok(Ok(res)) => return Ok(res),
                     Ok(Err(e)) => {
-                        eprintln!("Error fetching trajectories for chateau {}: {}", ch_clone, e);
+                        eprintln!(
+                            "Error fetching trajectories for chateau {}: {}",
+                            ch_clone, e
+                        );
                     }
                     Err(_) => {
                         eprintln!("Timeout fetching trajectories for chateau {}", ch_clone);
@@ -701,7 +730,10 @@ pub async fn get_trajectories(
 
                 retries += 1;
                 if retries >= 3 {
-                    return Err(format!("Failed to fetch trajectories for {} after 3 retries", ch_clone));
+                    return Err(format!(
+                        "Failed to fetch trajectories for {} after 3 retries",
+                        ch_clone
+                    ));
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }

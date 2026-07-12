@@ -681,7 +681,7 @@ impl LiveLocationsWebSocket {
                             return Vec::new(); // Don't send any websocket message
                         }
                     };
-                    
+
                     let chunks: Vec<_> = trajectories.chunks(200).collect();
                     let total_chunks = chunks.len();
                     let mut serialized_messages = Vec::new();

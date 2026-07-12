@@ -1377,11 +1377,18 @@ impl AspenRpc for AspenServer {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
                 let mut active_routes = std::collections::HashSet::new();
-                let search_envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
+                let search_envelope =
+                    rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
-                for rtree in aspenised_data.vehicle_positions_rtree_by_route_type.values() {
+                for rtree in aspenised_data
+                    .vehicle_positions_rtree_by_route_type
+                    .values()
+                {
                     for vehicle_bbox in rtree.locate_in_envelope_intersecting(&search_envelope) {
-                        if let Some(vehicle_pos) = aspenised_data.vehicle_positions.get(&vehicle_bbox.vehicle_id) {
+                        if let Some(vehicle_pos) = aspenised_data
+                            .vehicle_positions
+                            .get(&vehicle_bbox.vehicle_id)
+                        {
                             if let Some(trip) = &vehicle_pos.trip {
                                 if let Some(route_id) = &trip.route_id {
                                     active_routes.insert(route_id.clone());
