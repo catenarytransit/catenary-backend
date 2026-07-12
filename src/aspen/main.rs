@@ -119,8 +119,8 @@ pub struct AspenServer {
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
-    pub alpenrose_to_process_queue: Arc<Injector<ProcessAlpenroseData>>,
-    pub alpenrose_to_process_queue_chateaux: Arc<Mutex<HashSet<String>>>,
+    pub alpenrose_to_process_queue: async_threads_alpenrose::AlpenroseWorkQueue,
+    pub alpenrose_to_process_queue_chateaux: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
@@ -131,6 +131,36 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+}
+
+impl AspenServer {
+    async fn enqueue_alpenrose_work(&self, task: ProcessAlpenroseData) {
+        let chateau_id = task.chateau_id.clone();
+
+        let should_enqueue = {
+            let mut queued_chateaux = self.alpenrose_to_process_queue_chateaux.lock().await;
+
+            if let Some(state) = queued_chateaux.get_mut(&chateau_id) {
+                state.dirty = true;
+                state.last_task = task.clone();
+                false
+            } else {
+                queued_chateaux.insert(
+                    chateau_id,
+                    ChateauWorkState {
+                        queued_or_running: true,
+                        dirty: false,
+                        last_task: task.clone(),
+                    },
+                );
+                true
+            }
+        };
+
+        if should_enqueue {
+            self.alpenrose_to_process_queue.push(task);
+        }
+    }
 }
 
 impl AspenRpc for AspenServer {
@@ -948,22 +978,18 @@ impl AspenRpc for AspenServer {
                 || chateau_id.as_str() == "dallasarearapidtransit"
                 || chateau_id.as_str() == "fortworthtransportationauthority"
             {
-                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
-
-                if !lock_chateau_queue.contains(&chateau_id) {
-                    lock_chateau_queue.insert(chateau_id.clone());
-                    self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-                        chateau_id,
-                        realtime_feed_id,
-                        has_vehicles,
-                        has_trips,
-                        has_alerts,
-                        vehicles_response_code,
-                        trips_response_code,
-                        alerts_response_code,
-                        time_of_submission_ms,
-                    });
-                }
+                self.enqueue_alpenrose_work(ProcessAlpenroseData {
+                    chateau_id,
+                    realtime_feed_id,
+                    has_vehicles,
+                    has_trips,
+                    has_alerts,
+                    vehicles_response_code,
+                    trips_response_code,
+                    alerts_response_code,
+                    time_of_submission_ms,
+                })
+                .await;
             }
         }
 
@@ -1229,22 +1255,18 @@ impl AspenRpc for AspenServer {
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
             if new_data {
-                let mut lock_chateau_queue = self.alpenrose_to_process_queue_chateaux.lock().await;
-
-                if !lock_chateau_queue.contains(&chateau_id) {
-                    lock_chateau_queue.insert(chateau_id.clone());
-                    self.alpenrose_to_process_queue.push(ProcessAlpenroseData {
-                        chateau_id,
-                        realtime_feed_id,
-                        has_vehicles,
-                        has_trips,
-                        has_alerts,
-                        vehicles_response_code,
-                        trips_response_code,
-                        alerts_response_code,
-                        time_of_submission_ms,
-                    });
-                }
+                self.enqueue_alpenrose_work(ProcessAlpenroseData {
+                    chateau_id,
+                    realtime_feed_id,
+                    has_vehicles,
+                    has_trips,
+                    has_alerts,
+                    vehicles_response_code,
+                    trips_response_code,
+                    alerts_response_code,
+                    time_of_submission_ms,
+                })
+                .await;
             }
         }
 
@@ -1964,7 +1986,7 @@ async fn main() -> anyhow::Result<()> {
     let workers_nodes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let chateau_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>> = Arc::new(Mutex::new(None));
 
-    let process_from_alpenrose_queue = Arc::new(Injector::<ProcessAlpenroseData>::new());
+    let process_from_alpenrose_queue = async_threads_alpenrose::AlpenroseWorkQueue::new();
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
     let authoritative_trajectory_data_store: Arc<
@@ -1972,7 +1994,7 @@ async fn main() -> anyhow::Result<()> {
     > = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
-    let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashSet::new()));
+    let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashMap::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     let hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>> =
@@ -1981,7 +2003,7 @@ async fn main() -> anyhow::Result<()> {
         Arc::new(SccHashMap::new());
 
     //run both the leader and the listener simultaniously
-    let b_alpenrose_to_process_queue = Arc::clone(&process_from_alpenrose_queue);
+    let b_alpenrose_to_process_queue = process_from_alpenrose_queue.clone();
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
     let b_authoritative_data_store = Arc::clone(&authoritative_data_store);
     let b_authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
@@ -2170,7 +2192,7 @@ async fn main() -> anyhow::Result<()> {
                                 &authoritative_trajectory_data_store,
                             ),
                             conn_pool: conn_pool_arced.clone(),
-                            alpenrose_to_process_queue: Arc::clone(&process_from_alpenrose_queue),
+                            alpenrose_to_process_queue: process_from_alpenrose_queue.clone(),
                             authoritative_gtfs_rt_store: Arc::clone(&raw_gtfs),
                             backup_data_store: Arc::clone(&backup_data_store),
                             backup_gtfs_rt_store: Arc::clone(&backup_raw_gtfs),

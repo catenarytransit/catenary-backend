@@ -239,6 +239,13 @@ pub struct ProcessAlpenroseData {
     pub time_of_submission_ms: u64,
 }
 
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct ChateauWorkState {
+    pub queued_or_running: bool,
+    pub dirty: bool,
+    pub last_task: ProcessAlpenroseData,
+}
+
 pub async fn spawn_aspen_client_from_ip(
     addr: &SocketAddr,
 ) -> Result<AspenRpcClient, Box<dyn std::error::Error + Sync + Send>> {
