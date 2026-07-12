@@ -18,6 +18,15 @@ pub async fn assign_chateaus(
     arc_conn_pool: Arc<CatenaryPostgresPool>,
     workers_nodes: Arc<Mutex<Vec<String>>>,
     feeds_list: Arc<Mutex<Option<ChateauxLeaderHashMap>>>,
+    aspen_workers_cache: Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::AspenWorkerMetadataEtcd>,
+    >,
+    aspen_assigned_chateaux_cache: Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+    >,
+    aspen_assigned_realtime_feeds_cache: Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::RealtimeFeedMetadataEtcd>,
+    >,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
     let conn_pool = arc_conn_pool.as_ref();
     let conn_pre = conn_pool.get().await;
@@ -81,25 +90,12 @@ pub async fn assign_chateaus(
         //make a hashmap of workers and their ips
         let mut workers_map = BTreeMap::new();
 
-        let mut fetch_workers_from_etcd_req = etcd
-            .get(
-                "/aspen_workers",
-                Some(etcd_client::GetOptions::new().with_prefix()),
-            )
-            .await?;
+        let dummy_get = etcd.get("dummy", None).await?;
+        let fetch_workers_revision_number = dummy_get.header().unwrap().revision();
 
-        let fetch_workers_from_etcd = fetch_workers_from_etcd_req.take_kvs();
-
-        let fetch_workers_revision_number =
-            fetch_workers_from_etcd_req.header().unwrap().revision();
-
-        for kv in fetch_workers_from_etcd {
-            let decoded_metadata =
-                catenary::bincode_deserialize::<AspenWorkerMetadataEtcd>(kv.value());
-
-            if let Ok(decoded_metadata) = decoded_metadata {
-                workers_map.insert(decoded_metadata.worker_id.clone(), decoded_metadata.clone());
-            }
+        for entry in aspen_workers_cache.cache.iter() {
+            let decoded_metadata = entry.value().clone();
+            workers_map.insert(decoded_metadata.worker_id.clone(), decoded_metadata);
         }
 
         //lock mutability
@@ -118,48 +114,22 @@ pub async fn assign_chateaus(
 
             //prefix fetch aspen_assigned_chateaux
 
-            let mut fetch_assigned_chateaus = etcd
-                .get(
-                    "/aspen_assigned_chateaux",
-                    Some(etcd_client::GetOptions::new().with_prefix()),
-                )
-                .await?;
-
-            let fetch_assigned_chateaus = fetch_assigned_chateaus.take_kvs();
-
             let mut existing_assigned_chateaus = HashMap::new();
 
-            for kv in fetch_assigned_chateaus {
-                let decoded_metadata =
-                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value());
-
-                if let Ok(decoded_metadata) = decoded_metadata {
-                    let key = kv.key_str().unwrap();
-                    let chateau = key.replace("/aspen_assigned_chateaux/", "");
-                    existing_assigned_chateaus.insert(chateau, decoded_metadata);
-                }
+            for entry in aspen_assigned_chateaux_cache.cache.iter() {
+                let decoded_metadata = entry.value().clone();
+                let key = entry.key();
+                let chateau = key.replace("/aspen_assigned_chateaux/", "");
+                existing_assigned_chateaus.insert(chateau, decoded_metadata);
             }
 
             let mut existing_assigned_realtime_feeds = HashMap::new();
 
-            let mut fetch_assigned_realtime_feeds = etcd
-                .get(
-                    "/aspen_assigned_realtime_feed_ids",
-                    Some(etcd_client::GetOptions::new().with_prefix()),
-                )
-                .await?;
-
-            let fetch_assigned_realtime_feeds = fetch_assigned_realtime_feeds.take_kvs();
-
-            for kv in fetch_assigned_realtime_feeds {
-                let decoded_metadata =
-                    catenary::bincode_deserialize::<RealtimeFeedMetadataEtcd>(kv.value());
-
-                if let Ok(decoded_metadata) = decoded_metadata {
-                    let key = kv.key_str().unwrap();
-                    let realtime_feed_id = key.replace("/aspen_assigned_realtime_feed_ids/", "");
-                    existing_assigned_realtime_feeds.insert(realtime_feed_id, decoded_metadata);
-                }
+            for entry in aspen_assigned_realtime_feeds_cache.cache.iter() {
+                let decoded_metadata = entry.value().clone();
+                let key = entry.key();
+                let realtime_feed_id = key.replace("/aspen_assigned_realtime_feed_ids/", "");
+                existing_assigned_realtime_feeds.insert(realtime_feed_id, decoded_metadata);
             }
 
             if let Some(chateau_list_lock) = chateau_list_lock.as_ref() {

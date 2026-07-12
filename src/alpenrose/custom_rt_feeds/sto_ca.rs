@@ -50,7 +50,9 @@ pub async fn telecharger_gtfs(
 }
 
 pub async fn recuperer_les_donnees_sto(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     client: &reqwest::Client,
     feed_id: &str,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
@@ -76,8 +78,7 @@ pub async fn recuperer_les_donnees_sto(
         eprintln!("{:?}", erreur);
     }
 
-    let fetch_assigned_node_meta =
-        catenary::get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

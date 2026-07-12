@@ -57,44 +57,18 @@ pub async fn get_vehicle_metadata(path: web::Path<(String, String)>) -> impl Res
 #[actix_web::get("/get_vehicle_information_from_label/{chateau}/{vehicle_label}")]
 pub async fn get_vehicle_information_from_label(
     path: web::Path<(String, String)>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let (chateau, vehicle_label) = path.into_inner();
 
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if etcd.is_err() {
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
-            None,
-        )
-        .await;
-
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau.as_ref()
+    if let Some(cached_node) = aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau))
     {
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
-
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
-
+        let assigned_chateau_data = cached_node.value().clone();
+        if true {
             let aspen_client =
                 catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
                     .await;
@@ -141,43 +115,18 @@ pub async fn get_vehicle_information_from_label(
 #[actix_web::get("/get_vehicle_information/{chateau}/{gtfs_rt_id}")]
 pub async fn get_vehicle_information(
     path: web::Path<(String, String)>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if etcd.is_err() {
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
-            None,
-        )
-        .await;
-
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
-
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
-
+    if let Some(cached_node) = aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau))
+    {
+        let assigned_chateau_data = cached_node.value().clone();
+        if true {
             let aspen_client =
                 catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
                     .await;
@@ -230,10 +179,10 @@ pub async fn get_vehicle_information(
 pub async fn get_trip_rt_update(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>, // pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let chateau = path.into_inner();
     let query = query.into_inner();
@@ -241,10 +190,8 @@ pub async fn get_trip_rt_update(
     match fetch_trip_rt_update(
         chateau,
         query,
-        etcd_connection_ips.as_ref().clone(),
-        etcd_connection_options.as_ref().clone(),
+        aspen_chateau_cache.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
-        etcd_reuser.as_ref().clone(),
         None,
     )
     .await
@@ -259,10 +206,10 @@ pub async fn get_trip_init(
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
@@ -272,11 +219,9 @@ pub async fn get_trip_init(
         chateau,
         query_params,
         pool.as_ref().clone(),
-        etcd_connection_ips.as_ref().clone(),
-        etcd_connection_options.as_ref().clone(),
+        aspen_chateau_cache.as_ref().clone(),
         aspen_client_manager.as_ref().clone(),
         Some(&mut timer),
-        etcd_reuser.as_ref().clone(),
     )
     .await
     {

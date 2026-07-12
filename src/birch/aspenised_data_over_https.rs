@@ -260,23 +260,11 @@ pub struct PerRouteRtInfo {
 #[actix_web::post("/bulk_realtime_fetch_v3")]
 pub async fn bulk_realtime_fetch_v3(
     req: HttpRequest,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
     params: web::Json<BulkFetchParamsV3>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if etcd.is_err() {
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
     let mut bulk_fetch_response = BulkFetchResponseV2 {
         chateaus: BTreeMap::new(),
     };
@@ -294,30 +282,16 @@ pub async fn bulk_realtime_fetch_v3(
         .flatten()
         .collect::<Vec<CategoryOfRealtimeVehicleData>>();
 
-    let etcd_data_list: Vec<(
-        &String,
-        &ChateauAskParamsV2,
-        Result<etcd_client::GetResponse, etcd_client::Error>,
-    )> = futures::stream::iter(params.chateaus.iter().map(|(chateau_id, chateau_params)| {
-        let mut etcd = etcd.clone();
-        async move {
-            let fetch_assigned_node_for_this_realtime_feed = etcd
-                .get(
-                    format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-                    None,
-                )
-                .await;
-
-            (
-                chateau_id,
-                chateau_params,
-                fetch_assigned_node_for_this_realtime_feed,
-            )
-        }
-    }))
-    .buffer_unordered(64)
-    .collect::<Vec<_>>()
-    .await;
+    let chateaux_data: Vec<(&String, &ChateauAskParamsV2, ChateauMetadataEtcd)> = params
+        .chateaus
+        .iter()
+        .filter_map(|(chateau_id, chateau_params)| {
+            aspen_chateau_cache
+                .cache
+                .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+                .map(|val| (chateau_id, chateau_params, val.value().clone()))
+        })
+        .collect();
 
     let route_types_wanted = Arc::new(match categories_requested.len() {
         4 => None,
@@ -329,57 +303,34 @@ pub async fn bulk_realtime_fetch_v3(
         ),
     });
 
-    let parallel_chateau_data_fetch = futures::stream::iter(
-        etcd_data_list
-            .iter()
-            .filter(|x| x.2.is_ok())
-            .map(|(chateau_id, chateau_params, etcd_data)| {
-                (chateau_id, chateau_params, etcd_data.as_ref().unwrap())
-            })
-            .map(|(chateau_id, chateau_params, etcd_data_list)| {
-                let route_types_wanted = Arc::clone(&route_types_wanted);
+    let parallel_chateau_data_fetch = futures::stream::iter(chateaux_data.into_iter().map(
+        |(chateau_id, chateau_params, assigned_chateau_data)| {
+            let route_types_wanted = Arc::clone(&route_types_wanted);
 
-                async move {
-                    if etcd_data_list.kvs().is_empty() {
-                        return (chateau_id, None, chateau_params);
-                    }
+            async move {
+                let aspen_client =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
+                        .await;
 
-                    //deserialise into ChateauMetadataZookeeper
+                if aspen_client.is_err() {
+                    return (chateau_id, None, chateau_params);
+                }
 
-                    let assigned_chateau_data =
-                        catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                            etcd_data_list.kvs().first().unwrap().value(),
-                        )
-                        .unwrap();
+                let aspen_client = aspen_client.unwrap();
 
-                    //then connect to the node via tarpc
-
-                    let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(
-                        &assigned_chateau_data.socket,
+                let response = aspen_client
+                    .get_vehicle_locations(
+                        context::current(),
+                        chateau_id.to_string(),
+                        None,
+                        route_types_wanted.as_ref().clone(),
                     )
                     .await;
 
-                    if aspen_client.is_err() {
-                        return (chateau_id, None, chateau_params);
-                    }
-
-                    let aspen_client = aspen_client.unwrap();
-
-                    //then call the get_vehicle_locations method
-
-                    let response = aspen_client
-                        .get_vehicle_locations(
-                            context::current(),
-                            chateau_id.to_string(),
-                            None,
-                            route_types_wanted.as_ref().clone(),
-                        )
-                        .await;
-
-                    (chateau_id, Some(response), chateau_params)
-                }
-            }),
-    )
+                (chateau_id, Some(response), chateau_params)
+            }
+        },
+    ))
     .buffer_unordered(32)
     .collect::<Vec<_>>()
     .await;
@@ -646,27 +597,11 @@ pub async fn bulk_realtime_fetch_v3(
 )]
 pub async fn get_realtime_locations(
     req: HttpRequest,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
     path: web::Path<(String, String, u64, u64)>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> impl Responder {
     let (chateau_id, category, client_last_updated_time_ms, existing_fasthash_of_routes) =
         path.into_inner();
-
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
 
     let category_requested = match category.as_str() {
         "metro" => CategoryOfRealtimeVehicleData::Metro,
@@ -681,44 +616,17 @@ pub async fn get_realtime_locations(
         _ => Some(existing_fasthash_of_routes),
     };
 
-    //first identify which node to connect to
-
-    let fetch_assigned_node_for_this_realtime_feed = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-            None,
-        )
-        .await;
-
-    if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
-        eprintln!("{}", err_fetch);
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body(format!(
-                "Error fetching assigned node: {}, failed to connect to etcd",
-                err_fetch
-            ));
-    }
-
-    let fetch_assigned_node_for_this_realtime_feed =
-        fetch_assigned_node_for_this_realtime_feed.unwrap();
-
-    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
-        return HttpResponse::Ok()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("No assigned node found for this chateau according to etcd database");
-    }
-
-    //deserialise into ChateauMetadataZookeeper
-
-    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-        fetch_assigned_node_for_this_realtime_feed
-            .kvs()
-            .first()
-            .unwrap()
-            .value(),
-    )
-    .unwrap();
+    let assigned_chateau_data = match aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+    {
+        Some(s) => s.value().clone(),
+        None => {
+            return HttpResponse::Ok()
+                .append_header(("Cache-Control", "no-cache"))
+                .body("No assigned node found for this chateau according to etcd database");
+        }
+    };
 
     //then connect to the node via tarpc
 
@@ -802,8 +710,7 @@ pub struct SingleRouteRtInfo {
 #[actix_web::get("/get_rt_of_single_route")]
 pub async fn get_rt_of_route(
     req: HttpRequest,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     query: web::Query<SingleRouteRtInfo>,
 ) -> impl Responder {
@@ -822,58 +729,17 @@ pub async fn get_rt_of_route(
 
     let conn = &mut conn_pre.unwrap();
 
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_realtime_feed = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-            None,
-        )
-        .await;
-
-    if let Err(err_fetch) = &fetch_assigned_node_for_this_realtime_feed {
-        eprintln!("{}", err_fetch);
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body(format!(
-                "Error fetching assigned node: {}, failed to connect to etcd",
-                err_fetch
-            ));
-    }
-
-    let fetch_assigned_node_for_this_realtime_feed =
-        fetch_assigned_node_for_this_realtime_feed.unwrap();
-
-    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
-        return HttpResponse::Ok()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("No assigned node found for this chateau according to etcd database");
-    }
-
-    //deserialise into ChateauMetadataZookeeper
-
-    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-        fetch_assigned_node_for_this_realtime_feed
-            .kvs()
-            .first()
-            .unwrap()
-            .value(),
-    )
-    .unwrap();
+    let assigned_chateau_data = match aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+    {
+        Some(s) => s.value().clone(),
+        None => {
+            return HttpResponse::Ok()
+                .append_header(("Cache-Control", "no-cache"))
+                .body("No assigned node found for this chateau according to etcd database");
+        }
+    };
 
     //then connect to the node via tarpc
 
@@ -1090,43 +956,24 @@ pub struct ChateauQueryOnly {
 #[actix_web::get("/fetch_full_trip_updates_dataset")]
 async fn fetch_full_trip_updates_dataset(
     req: HttpRequest,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     query: web::Query<ChateauQueryOnly>,
 ) -> impl Responder {
     let chateau_id = query.into_inner().chateau;
 
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if etcd.is_err() {
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_realtime_feed = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-            None,
-        )
-        .await;
-
-    let fetch_assigned_node_for_this_realtime_feed =
-        fetch_assigned_node_for_this_realtime_feed.unwrap();
-
-    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-        fetch_assigned_node_for_this_realtime_feed
-            .kvs()
-            .first()
-            .unwrap()
-            .value(),
-    )
-    .unwrap();
+    let assigned_chateau_data = match aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+    {
+        Some(s) => s.value().clone(),
+        None => {
+            return HttpResponse::InternalServerError()
+                .append_header(("Cache-Control", "no-cache"))
+                .body("No assigned node found for this chateau");
+        }
+    };
 
     let aspen_client =
         catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
@@ -1158,50 +1005,22 @@ async fn fetch_full_trip_updates_dataset(
 #[actix_web::get("/get_all_trajectories")]
 pub async fn get_all_trajectories(
     req: HttpRequest,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     query: web::Query<ChateauQueryOnly>,
 ) -> impl Responder {
     let chateau_id = query.into_inner().chateau;
 
-    let etcd =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    if etcd.is_err() {
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_realtime_feed = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-            None,
-        )
-        .await;
-
-    let fetch_assigned_node_for_this_realtime_feed =
-        match fetch_assigned_node_for_this_realtime_feed {
-            Ok(data) => data,
-            Err(_) => return HttpResponse::InternalServerError().body("Failed to connect to etcd"),
-        };
-
-    if fetch_assigned_node_for_this_realtime_feed.kvs().is_empty() {
-        return HttpResponse::NotFound().body("No assigned node found");
-    }
-
-    let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-        fetch_assigned_node_for_this_realtime_feed
-            .kvs()
-            .first()
-            .unwrap()
-            .value(),
-    )
-    .unwrap();
+    let assigned_chateau_data = match aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+    {
+        Some(s) => s.value().clone(),
+        None => {
+            return HttpResponse::NotFound().body("No assigned node found");
+        }
+    };
 
     let aspen_client =
         catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;

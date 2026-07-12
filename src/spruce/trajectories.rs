@@ -28,31 +28,6 @@ pub struct ClientTrajectorySubscriptionParams {
     pub client_reference: String,
 }
 
-async fn get_aspen_socket(
-    chateau_id: &str,
-    etcd_ips: &EtcdConnectionIps,
-    etcd_opts: &Option<etcd_client::ConnectOptions>,
-    etcd_reuser: &tokio::sync::RwLock<Option<etcd_client::Client>>,
-) -> Option<std::net::SocketAddr> {
-    let mut etcd = catenary::get_etcd_client(etcd_ips, etcd_opts, etcd_reuser)
-        .await
-        .ok()?;
-    let resp = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-            None,
-        )
-        .await
-        .ok()?;
-    if !resp.kvs().is_empty() {
-        if let Ok(assigned_chateau_data) =
-            bincode_deserialize::<ChateauMetadataEtcd>(resp.kvs().first().unwrap().value())
-        {
-            return Some(assigned_chateau_data.socket);
-        }
-    }
-    None
-}
 use std::io::Write;
 
 fn format_coordinate_precise(val: f64, zoom: u8) -> f64 {
@@ -161,10 +136,10 @@ fn rdp_indices(projected: &[[f64; 2]], epsilon_sq: f64) -> Vec<usize> {
 
 pub async fn get_single_chateau_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
-    etcd_connection_ips: Arc<EtcdConnectionIps>,
-    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_chateau_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+    >,
     aspen_client_manager: Arc<AspenClientManager>,
-    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     params: TrajectorySubscriptionParams,
     chateau: String,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
@@ -175,22 +150,16 @@ pub async fn get_single_chateau_trajectories(
     let mut retries = 0;
     loop {
         let chateau_clone = chateau.clone();
-        let etcd_connection_ips = etcd_connection_ips.clone();
-        let etcd_connection_options = etcd_connection_options.clone();
-        let etcd_reuser = etcd_reuser.clone();
+        let aspen_chateau_cache = aspen_chateau_cache.clone();
         let aspen_client_manager = aspen_client_manager.clone();
         let params = params.clone();
 
         let fetch_task = async move {
-            let socket = match get_aspen_socket(
-                &chateau_clone,
-                &etcd_connection_ips,
-                &etcd_connection_options,
-                &etcd_reuser,
-            )
-            .await
+            let socket = match aspen_chateau_cache
+                .cache
+                .get(&format!("/aspen_assigned_chateaux/{}", chateau_clone))
             {
-                Some(s) => s,
+                Some(s) => s.value().socket.clone(),
                 None => {
                     return Err(format!(
                         "Could not get socket for chateau {}",
@@ -442,10 +411,10 @@ pub async fn get_single_chateau_trajectories(
 
 pub async fn get_trajectories(
     _pool: Arc<CatenaryPostgresPool>,
-    etcd_connection_ips: Arc<EtcdConnectionIps>,
-    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_chateau_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+    >,
     aspen_client_manager: Arc<AspenClientManager>,
-    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     params: TrajectorySubscriptionParams,
     chateaus: std::collections::HashSet<String>,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
@@ -456,9 +425,7 @@ pub async fn get_trajectories(
         if !ALLOWED_CHATEAUX.contains(&ch.as_str()) {
             continue;
         }
-        let ips = etcd_connection_ips.clone();
-        let opts = etcd_connection_options.clone();
-        let reuser = etcd_reuser.clone();
+        let aspen_chateau_cache = aspen_chateau_cache.clone();
         let manager = aspen_client_manager.clone();
         let params_clone = params.clone();
         let ch_clone = ch.clone();
@@ -467,15 +434,16 @@ pub async fn get_trajectories(
             let mut retries = 0;
             loop {
                 let ch_clone2 = ch_clone.clone();
-                let ips = ips.clone();
-                let opts = opts.clone();
-                let reuser = reuser.clone();
+                let aspen_chateau_cache = aspen_chateau_cache.clone();
                 let manager = manager.clone();
                 let params_clone = params_clone.clone();
 
                 let fetch_task = async move {
-                    let socket = match get_aspen_socket(&ch_clone2, &ips, &opts, &reuser).await {
-                        Some(s) => s,
+                    let socket = match aspen_chateau_cache
+                        .cache
+                        .get(&format!("/aspen_assigned_chateaux/{}", ch_clone2))
+                    {
+                        Some(s) => s.value().socket.clone(),
                         None => {
                             return Err(format!("Could not get socket for chateau {}", ch_clone2));
                         }

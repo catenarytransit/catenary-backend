@@ -159,14 +159,14 @@ pub struct LocalDepartureItem {
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
-#[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(lat = ?query.lat, lon = ?query.lon))]
+#[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, aspen_chateau_cache), fields(lat = ?query.lat, lon = ?query.lon))]
 pub async fn nearby_from_coords_v3(
     req: HttpRequest,
     query: Query<NearbyFromCoordsV3>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
 
@@ -333,15 +333,7 @@ pub async fn nearby_from_coords_v3(
         }
     }
 
-    // 5. Connect to Etcd
-    let etcd_connection_start = Instant::now();
-    let etcd_result =
-        catenary::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-            .await;
-
-    let etcd = etcd_result.ok();
-    let etcd_arc = Arc::new(etcd);
-    let etcd_connection_time = etcd_connection_start.elapsed();
+    let etcd_connection_time = std::time::Duration::from_secs(0);
 
     // 5. Fetch Data
     let mut chateau_stops: HashMap<String, HashSet<String>> = HashMap::new();
@@ -386,11 +378,13 @@ pub async fn nearby_from_coords_v3(
     let stop_full_info_map_arc = Arc::new(stop_full_info_map);
     let stop_dist_map_arc = Arc::new(stop_dist_map);
 
+    let aspen_chateau_cache_arc = aspen_chateau_cache.get_ref().clone();
+
     let mut chateau_futures = Vec::new();
     for (chateau, stop_ids) in chateau_stops {
         let pool = pool.get_ref().clone();
         let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
-        let etcd_clone = etcd_arc.clone();
+        let aspen_chateau_cache_clone = aspen_chateau_cache_arc.clone();
         let dep_time = departure_time_chrono;
         let chateau_clone = chateau.clone();
         let ld_arc_clone = long_distance_chateaux_arc.clone();
@@ -406,7 +400,7 @@ pub async fn nearby_from_coords_v3(
                 chateau_clone,
                 stop_ids_vec,
                 dep_time,
-                etcd_clone,
+                aspen_chateau_cache_clone,
                 ld_arc_clone,
                 stop_to_key_map,
                 stop_platform_map,
@@ -623,7 +617,7 @@ async fn fetch_chateau_data(
     chateau: String,
     stop_ids: Vec<String>,
     departure_time_chrono: chrono::DateTime<chrono::Utc>,
-    etcd_arc: Arc<Option<etcd_client::Client>>,
+    aspen_chateau_cache: Arc<catenary::aspen::lib::AspenChateauCache>,
     long_distance_chateaux: Arc<HashSet<&str>>,
     stop_to_key_map: Arc<HashMap<(String, String), StationKey>>,
     stop_platform_map: Arc<HashMap<String, Option<String>>>,
@@ -966,97 +960,71 @@ async fn fetch_chateau_data(
     let mut rt_alerts: BTreeMap<String, catenary::aspen_dataset::AspenisedAlert> = BTreeMap::new();
 
     if !skip_realtime {
-        if let Some(etcd) = etcd_arc.as_ref() {
+        if let Some(meta) = aspen_chateau_cache
+            .cache
+            .get(&format!("/aspen_assigned_chateaux/{}", &chateau))
+            .map(|val| val.value().clone())
+        {
             if !trip_ids.is_empty() {
-                let mut etcd_clone = etcd.clone();
-                let start_realtime_fetch = std::time::Instant::now();
-
-                println!("Etcd aspen assignment fetching...");
-
-                if let Ok(resp) = etcd_clone
-                    .get(
-                        format!("/aspen_assigned_chateaux/{}", &chateau),
-                        Some(etcd_client::GetOptions::new().with_limit(1)),
-                    )
-                    .await
+                let timer_to_connect_to_aspen = std::time::Instant::now();
+                if let Ok(client) =
+                    catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                 {
-                    let etcd_time = start_realtime_fetch.elapsed();
-                    println!("Etcd aspen assignment fetched in {:?}", etcd_time);
-                    if let Some(kv) = resp.kvs().first() {
-                        if let Ok(meta) =
-                            catenary::bincode_deserialize::<ChateauMetadataEtcd>(kv.value())
-                        {
-                            println!("Etcd {} aspen assignment deserialized", &chateau);
-                            let timer_to_connect_to_aspen = std::time::Instant::now();
-                            if let Ok(client) =
-                                catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
-                            {
-                                let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+                    let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
 
-                                let timer_get_trips = std::time::Instant::now();
-                                let timeout_result = tokio::time::timeout(
-                                    std::time::Duration::from_millis(rt_timeout_ms),
-                                    async {
-                                        tokio::join!(
-                                            client.get_all_trips_with_ids(
-                                                tarpc::context::current(),
-                                                chateau.clone(),
-                                                trip_ids.clone()
-                                            ),
-                                            client.get_all_alerts(
-                                                tarpc::context::current(),
-                                                chateau.clone()
-                                            ),
-                                        )
-                                    },
-                                )
-                                .await;
-                                let time_get_trips = timer_get_trips.elapsed();
+                    let timer_get_trips = std::time::Instant::now();
+                    let timeout_result = tokio::time::timeout(
+                        std::time::Duration::from_millis(rt_timeout_ms),
+                        async {
+                            tokio::join!(
+                                client.get_all_trips_with_ids(
+                                    tarpc::context::current(),
+                                    chateau.clone(),
+                                    trip_ids.clone()
+                                ),
+                                client.get_all_alerts(tarpc::context::current(), chateau.clone()),
+                            )
+                        },
+                    )
+                    .await;
+                    let time_get_trips = timer_get_trips.elapsed();
 
-                                match timeout_result {
-                                    Ok((t, a)) => {
-                                        println!(
-                                            "nearby deps realtime data fetch chateau {}, etcd time {:?}, aspen connect time {:?}, get trips time {:?}",
-                                            chateau.as_str(),
-                                            etcd_time,
-                                            time_to_connect_to_aspen,
-                                            time_get_trips
-                                        );
+                    match timeout_result {
+                        Ok((t, a)) => {
+                            println!(
+                                "nearby deps realtime data fetch chateau {}, aspen connect time {:?}, get trips time {:?}",
+                                chateau.as_str(),
+                                time_to_connect_to_aspen,
+                                time_get_trips
+                            );
 
-                                        if let Ok(Some(tr)) = t {
-                                            //    pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
-                                            //pub trip_id_to_trip_update_ids: AHashMap<String, Vec<String>>,
-                                            // pub stop_id_to_parent_id: AHashMap<String, String>,
+                            if let Ok(Some(tr)) = t {
+                                println!(
+                                    "Nearby Departures {} rt trip_updates {}, trip_id_to_trip_updates {}, and stop_id_to_parent_id {}",
+                                    chateau.as_str(),
+                                    tr.trip_updates.len(),
+                                    tr.trip_id_to_trip_update_ids.len(),
+                                    tr.stop_id_to_parent_id.len()
+                                );
 
-                                            println!(
-                                                "Nearby Departures {} rt trip_updates {}, trip_id_to_trip_updates {}, and stop_id_to_parent_id {}",
-                                                chateau.as_str(),
-                                                tr.trip_updates.len(),
-                                                tr.trip_id_to_trip_update_ids.len(),
-                                                tr.stop_id_to_parent_id.len()
-                                            );
-
-                                            rt_data = Some(tr);
-                                        }
-                                        if let Ok(Some(al)) = a {
-                                            rt_alerts = al.into_iter().collect();
-                                        }
-                                    }
-                                    Err(_) => {
-                                        println!(
-                                            "realtime fetch timeout for chateau {} after {:?}",
-                                            chateau.as_str(),
-                                            time_get_trips
-                                        );
-                                    }
-                                }
+                                rt_data = Some(tr);
                             }
+                            if let Ok(Some(al)) = a {
+                                rt_alerts = al.into_iter().collect();
+                            }
+                        }
+                        Err(_) => {
+                            println!(
+                                "realtime fetch timeout for chateau {} after {:?}",
+                                chateau.as_str(),
+                                time_get_trips
+                            );
                         }
                     }
                 }
-            } else {
-                eprintln!("Failed to get etcd data for chateau {}", chateau.as_str());
             }
+        } else {
+            eprintln!("Failed to get etcd data for chateau {}", chateau.as_str());
         }
     }
 

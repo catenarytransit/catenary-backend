@@ -19,13 +19,15 @@ use futures::StreamExt;
 
 pub struct TripWebSocket {
     pub pool: Arc<CatenaryPostgresPool>,
-    pub etcd_connection_ips: Arc<EtcdConnectionIps>,
-    pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    pub aspen_chateau_cache: Arc<catenary::aspen::lib::AspenChateauCache>,
     pub aspen_client_manager: Arc<AspenClientManager>,
     pub subscriptions: HashMap<(String, QueryTripInformationParams), Option<u64>>,
     pub hb: Instant,
 
+    pub etcd_connection_ips: Arc<EtcdConnectionIps>,
+    pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+
     pub aspen_endpoint_cache: HashMap<String, (std::net::SocketAddr, Instant)>,
     pub in_progress_trip_fetches: HashMap<(String, QueryTripInformationParams), Instant>,
 }
@@ -33,18 +35,20 @@ pub struct TripWebSocket {
 impl TripWebSocket {
     pub fn new(
         pool: Arc<CatenaryPostgresPool>,
+        aspen_chateau_cache: Arc<catenary::aspen::lib::AspenChateauCache>,
+        aspen_client_manager: Arc<AspenClientManager>,
         etcd_connection_ips: Arc<EtcdConnectionIps>,
         etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
-        aspen_client_manager: Arc<AspenClientManager>,
         etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     ) -> Self {
         Self {
             pool,
-            etcd_connection_ips,
-            etcd_connection_options,
+            aspen_chateau_cache,
             aspen_client_manager,
             subscriptions: HashMap::new(),
             hb: Instant::now(),
+            etcd_connection_ips,
+            etcd_connection_options,
             etcd_reuser,
             aspen_endpoint_cache: HashMap::new(),
             in_progress_trip_fetches: HashMap::new(),
@@ -94,10 +98,8 @@ impl TripWebSocket {
                 let fs = fetch_trip_rt_update(
                     chateau_clone.clone(),
                     params_clone.clone(),
-                    act.etcd_connection_ips.clone(),
-                    act.etcd_connection_options.clone(),
+                    act.aspen_chateau_cache.clone(),
                     act.aspen_client_manager.clone(),
-                    act.etcd_reuser.clone(),
                     cached_socket,
                 );
 
@@ -195,11 +197,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             chateau,
                             params,
                             self.pool.clone(),
-                            self.etcd_connection_ips.clone(),
-                            self.etcd_connection_options.clone(),
+                            self.aspen_chateau_cache.clone(),
                             self.aspen_client_manager.clone(),
                             None,
-                            self.etcd_reuser.clone(),
                         );
 
                         let fut = async move { fs.await };

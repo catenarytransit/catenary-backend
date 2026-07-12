@@ -26,6 +26,40 @@ pub async fn aspen_leader_thread(
 
     println!("Connected to etcd!");
 
+    let etcd_connection_ips = Arc::new(catenary::EtcdConnectionIps {
+        ip_addresses: (*etcd_addresses).clone(),
+    });
+
+    let aspen_workers_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::AspenWorkerMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            arc_etcd_connection_options.clone(),
+            "/aspen_workers",
+        )
+        .await
+        .unwrap(),
+    );
+
+    let aspen_assigned_chateaux_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::ChateauMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            arc_etcd_connection_options.clone(),
+            "/aspen_assigned_chateaux",
+        )
+        .await
+        .unwrap(),
+    );
+
+    let aspen_assigned_realtime_feeds_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::RealtimeFeedMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            arc_etcd_connection_options.clone(),
+            "/aspen_assigned_realtime_feed_ids",
+        )
+        .await
+        .unwrap(),
+    );
+
     loop {
         //attempt to become leader
 
@@ -84,6 +118,9 @@ pub async fn aspen_leader_thread(
                                 Arc::clone(&arc_conn_pool),
                                 Arc::clone(&workers_nodes),
                                 Arc::clone(&feeds_list),
+                                Arc::clone(&aspen_workers_cache),
+                                Arc::clone(&aspen_assigned_chateaux_cache),
+                                Arc::clone(&aspen_assigned_realtime_feeds_cache),
                             )
                             .await;
 

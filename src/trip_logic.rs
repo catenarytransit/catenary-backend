@@ -281,10 +281,8 @@ pub async fn get_alert_single_trip(
 pub async fn fetch_trip_rt_update(
     chateau: String,
     query: QueryTripInformationParams,
-    etcd_connection_ips: Arc<EtcdConnectionIps>,
-    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_chateau_cache: Arc<crate::aspen::lib::AspenChateauCache>,
     aspen_client_manager: Arc<AspenClientManager>,
-    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     cached_aspen_ip: Option<std::net::SocketAddr>,
 ) -> Result<(ResponseForGtfsRtRefresh, Option<std::net::SocketAddr>), String> {
     if chateau == "irvine~ca~us" {
@@ -296,52 +294,13 @@ pub async fn fetch_trip_rt_update(
     let socket = if let Some(cached_ip) = cached_aspen_ip {
         cached_ip
     } else {
-        let etcd =
-            crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser)
-                .await;
-
-        if let Err(etcd_err) = &etcd {
-            eprintln!("{:#?}", etcd_err);
-            crate::invalidate_etcd_client(&etcd_reuser).await;
-            return Err("Could not connect to etcd".to_string());
-        }
-
-        let mut etcd = etcd.unwrap();
-
-        let fetch_assigned_node_for_this_chateau = etcd
-            .get(
-                format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
-                None,
-            )
-            .await;
-
-        match fetch_assigned_node_for_this_chateau {
-            Ok(fetch_assigned_node_for_this_chateau) => {
-                let fetch_assigned_node_for_this_chateau_kv_first =
-                    fetch_assigned_node_for_this_chateau.kvs().first();
-
-                if let Some(fetch_assigned_node_for_this_chateau_data) =
-                    fetch_assigned_node_for_this_chateau_kv_first
-                {
-                    if chateau == "irvine~ca~us" {
-                        println!(
-                            "DEBUG: fetch_trip_rt_update: Found assigned chateau node via etcd"
-                        );
-                    }
-                    let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
-                        fetch_assigned_node_for_this_chateau_data.value(),
-                    )
-                    .unwrap();
-
-                    assigned_chateau_data.socket
-                } else {
-                    return Err("Could not connect to realtime data server".to_string());
-                }
+        if let Some(metadata) = aspen_chateau_cache.get(&chateau) {
+            if chateau == "irvine~ca~us" {
+                println!("DEBUG: fetch_trip_rt_update: Found assigned chateau node via cache");
             }
-            _ => {
-                crate::invalidate_etcd_client(&etcd_reuser).await;
-                return Err("Could not connect to etcd".to_string());
-            }
+            metadata.socket
+        } else {
+            return Err("Could not connect to realtime data server".to_string());
         }
     };
 
@@ -499,11 +458,9 @@ pub async fn fetch_trip_information(
     chateau: String,
     query: QueryTripInformationParams,
     pool: Arc<CatenaryPostgresPool>,
-    etcd_connection_ips: Arc<EtcdConnectionIps>,
-    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_chateau_cache: Arc<crate::aspen::lib::AspenChateauCache>,
     aspen_client_manager: Arc<AspenClientManager>,
     mut timer: Option<&mut simple_server_timing_header::Timer>,
-    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 ) -> Result<TripIntroductionInformation, String> {
     if let Some(t) = &mut timer {
         t.add("open_pg_connection");
@@ -574,27 +531,7 @@ pub async fn fetch_trip_information(
 
     let mut consist: Option<_> = None;
 
-    let etcd =
-        crate::get_etcd_client(&etcd_connection_ips, &etcd_connection_options, &etcd_reuser).await;
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-        crate::invalidate_etcd_client(&etcd_reuser).await;
-        return Err("Could not connect to etcd".to_string());
-    }
-
-    let mut etcd = etcd.unwrap();
-
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", chateau).as_str(),
-            None,
-        )
-        .await;
-
-    if fetch_assigned_node_for_this_chateau.is_err() {
-        crate::invalidate_etcd_client(&etcd_reuser).await;
-    }
+    let assigned_node = aspen_chateau_cache.get(&chateau);
 
     if let Some(t) = &mut timer {
         t.add("fetch_assigned_aspen_chateau_data_from_etcd");
@@ -602,20 +539,7 @@ pub async fn fetch_trip_information(
 
     // RT ONLY TRIP LOGIC
     if trip_compressed.is_empty() {
-        let fetch_assigned_node_for_this_chateau_kv_first = fetch_assigned_node_for_this_chateau
-            .as_ref()
-            .ok()
-            .map(|x| x.kvs().first())
-            .flatten();
-
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
-
+        if let Some(assigned_chateau_data) = assigned_node.clone() {
             let socket = assigned_chateau_data.socket;
             let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
                 Ok(client)
@@ -1314,21 +1238,13 @@ pub async fn fetch_trip_information(
     let mut vehicle = None;
     let mut cancelled_stop_times = vec![];
 
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
+    if let Some(assigned_chateau_data) = assigned_node.clone() {
         if chateau == "irvine~ca~us" {
-            println!("DEBUG: fetch_trip_information: Static Path - Found assigned chateau in etcd");
+            println!(
+                "DEBUG: fetch_trip_information: Static Path - Found assigned chateau in cache"
+            );
         }
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
-
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
         {
-            let assigned_chateau_data = crate::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
-
             let socket = assigned_chateau_data.socket;
             let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
                 Ok(client)

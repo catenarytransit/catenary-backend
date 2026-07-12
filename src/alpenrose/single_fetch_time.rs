@@ -3,8 +3,6 @@ use crate::RealtimeFeedFetch;
 use crate::custom_rt_feeds;
 use catenary::ahash_fast_hash;
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id;
-use catenary::get_node_for_realtime_feed_id_kvclient;
 use dashmap::DashMap;
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
@@ -116,6 +114,9 @@ pub async fn single_fetch_time(
     etcd_urls: Arc<Vec<String>>,
     etcd_connection_options: Option<etcd_client::ConnectOptions>,
     lease_id: i64,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     hashes_of_data: Arc<SccHashMap<(String, UrlType), u64>>,
     too_many_requests_log: Arc<SccHashMap<String, std::time::Instant>>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
@@ -200,6 +201,7 @@ pub async fn single_fetch_time(
                 let cta_bus_gtfs = cta_bus_gtfs.clone();
                 let flixbus_us_aggregator = flixbus_us_aggregator.clone();
                 let flixbus_eu_aggregator = flixbus_eu_aggregator.clone();
+                let realtime_feed_cache = realtime_feed_cache.clone();
 
                 let mut kv_client = etcd.kv_client();
                 let mut lease_client = etcd.lease_client();
@@ -383,8 +385,7 @@ pub async fn single_fetch_time(
                         }
 
                         //lookup currently assigned realtime dataset in zookeeper
-                        let fetch_assigned_node_meta =
-                            get_node_for_realtime_feed_id_kvclient(&mut kv_client, &feed_id).await;
+                        let fetch_assigned_node_meta = realtime_feed_cache.get(&feed_id);
 
                         match fetch_assigned_node_meta {
                             Some(data) => {
@@ -564,7 +565,7 @@ pub async fn single_fetch_time(
                                 let amtrak_lock = amtrak_gtfs.read().await;
                                 if let Some(gtfs) = amtrak_lock.as_ref() {
                                     let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         gtfs,
                                         &client,
@@ -574,7 +575,7 @@ pub async fn single_fetch_time(
                             }
                             "f-9vg-dart~rt~catenary~unwire" => {
                                 let _ = custom_rt_feeds::unwire::fetch_unwire_dart_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -582,7 +583,7 @@ pub async fn single_fetch_time(
                             }
                             "f-9vff-fortworthtransportationauthority~rt~catenary~unwire" => {
                                 let _ = custom_rt_feeds::unwire::fetch_unwire_fawa_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -593,7 +594,7 @@ pub async fn single_fetch_time(
                                 let via_lock = via_gtfs.read().await;
                                 if let Some(gtfs) = via_lock.as_ref() {
                                     custom_rt_feeds::viarail::fetch_via_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         &client,
                                         gtfs,
@@ -603,7 +604,7 @@ pub async fn single_fetch_time(
                             }
                             "f-mta~nyc~rt~lirr" => {
                                 let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -613,7 +614,7 @@ pub async fn single_fetch_time(
                                 let mnr_lock = mnr_gtfs.read().await;
                                 if let Some(gtfs) = mnr_lock.as_ref() {
                                     let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         &client,
                                         gtfs,
@@ -623,7 +624,7 @@ pub async fn single_fetch_time(
                             }
                             "f-metrolinktrains~extra~rt" => {
                                 custom_rt_feeds::metrolink_extra::fetch_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -631,7 +632,7 @@ pub async fn single_fetch_time(
                             }
                             "f-bus~dft~gov~uk~rt" => {
                                 let _ = custom_rt_feeds::uk::fetch_dft_bus_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -644,7 +645,7 @@ pub async fn single_fetch_time(
                                 if let Some(chicago_text_str) = chicago_text_lock.as_ref() {
                                     if let Some(chicago_gtfs) = chicago_gtfs_lock.as_ref() {
                                         custom_rt_feeds::chicagotransit::fetch_chicago_data(
-                                            &mut kv_client,
+                                            realtime_feed_cache.clone(),
                                             &feed_id,
                                             &client,
                                             chicago_text_str.as_str(),
@@ -660,7 +661,7 @@ pub async fn single_fetch_time(
                                 let rtc_lock = rtcquebec_gtfs.read().await;
                                 if let Some(gtfs) = rtc_lock.as_ref() {
                                     custom_rt_feeds::rtcquebec::fetch_rtc_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         gtfs,
                                         &client,
@@ -672,7 +673,7 @@ pub async fn single_fetch_time(
                                 let lock = bridgeport_gtfs.read().await;
                                 if let Some(gtfs) = lock.as_ref() {
                                     if let Err(e) = custom_rt_feeds::bridgeport::fetch_bridgeport_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         &client,
                                         gtfs,
@@ -684,7 +685,7 @@ pub async fn single_fetch_time(
                             }
                             "f-tlms~rt" => {
                                 custom_rt_feeds::tlms::fetch_tlms_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -694,7 +695,7 @@ pub async fn single_fetch_time(
                                 let cta_bus_lock = cta_bus_gtfs.read().await;
                                 if let Some(gtfs) = cta_bus_lock.as_ref() {
                                     custom_rt_feeds::cta_bus::fetch_cta_bus_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         gtfs,
                                         &assignment,
@@ -703,16 +704,16 @@ pub async fn single_fetch_time(
                                 }
                             }*/
                             "f-f244-sto~rt" => {
-                                let _ = custom_rt_feeds::sto_ca::recuperer_les_donnees_sto(
-                                    &mut kv_client,
-                                    &client,
-                                    &feed_id,
-                                )
+                                 let _ = custom_rt_feeds::sto_ca::recuperer_les_donnees_sto(
+                                     realtime_feed_cache.clone(),
+                                     &client,
+                                     &feed_id,
+                                 )
                                 .await;
                             }
                             "f-northern~indiana~commuter~transportation~district~catenary~alerts~rt" => {
                                 let _ = custom_rt_feeds::northern_indiana::fetch_northern_indiana_data(
-                                    &mut kv_client,
+                                    realtime_feed_cache.clone(),
                                     &feed_id,
                                     &client,
                                 )
@@ -722,7 +723,7 @@ pub async fn single_fetch_time(
                                 let lock = flixbus_us_aggregator.read().await;
                                 if let Some(aggregator) = lock.as_ref() {
                                     if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         aggregator,
                                     ).await {
@@ -734,7 +735,7 @@ pub async fn single_fetch_time(
                                 let lock = flixbus_eu_aggregator.read().await;
                                 if let Some(aggregator) = lock.as_ref() {
                                     if let Err(e) = custom_rt_feeds::flixbus::fetch_flixbus_data(
-                                        &mut kv_client,
+                                        realtime_feed_cache.clone(),
                                         &feed_id,
                                         aggregator,
                                     ).await {

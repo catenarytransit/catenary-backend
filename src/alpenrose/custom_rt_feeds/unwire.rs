@@ -1,6 +1,6 @@
 use crate::RealtimeFeedFetch;
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id_kvclient;
+
 use etcd_client::KvClient;
 use gtfs_structures::Gtfs;
 use prost::Message;
@@ -12,11 +12,13 @@ use unwire_gtfs_rt::{
 };
 
 pub async fn fetch_unwire_dart_data(
-    kv_client: &mut KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     _client: &Client,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(kv_client, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;
@@ -69,11 +71,13 @@ pub async fn fetch_unwire_dart_data(
 }
 
 pub async fn fetch_unwire_fawa_data(
-    kv_client: &mut KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     _client: &Client,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(kv_client, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

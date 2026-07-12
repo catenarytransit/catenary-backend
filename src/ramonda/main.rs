@@ -60,12 +60,11 @@ const UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(30
 
 pub struct RamondaWebSocket {
     pub pool: Arc<CatenaryPostgresPool>,
-    pub etcd_connection_ips: Arc<EtcdConnectionIps>,
-    pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    pub aspen_chateau_cache:
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
     pub aspen_client_manager: Arc<AspenClientManager>,
     pub subscriptions: std::collections::HashMap<(String, QueryTripInformationParams), Option<u64>>,
     pub hb: std::time::Instant,
-    pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     pub aspen_endpoint_cache:
         std::collections::HashMap<String, (std::net::SocketAddr, std::time::Instant)>,
     pub in_progress_trip_fetches:
@@ -84,19 +83,17 @@ impl Actor for RamondaWebSocket {
 impl RamondaWebSocket {
     pub fn new(
         pool: Arc<CatenaryPostgresPool>,
-        etcd_connection_ips: Arc<EtcdConnectionIps>,
-        etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+        aspen_chateau_cache: std::sync::Arc<
+            catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+        >,
         aspen_client_manager: Arc<AspenClientManager>,
-        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     ) -> Self {
         Self {
             pool,
-            etcd_connection_ips,
-            etcd_connection_options,
+            aspen_chateau_cache,
             aspen_client_manager,
             subscriptions: std::collections::HashMap::new(),
             hb: std::time::Instant::now(),
-            etcd_reuser,
             aspen_endpoint_cache: std::collections::HashMap::new(),
             in_progress_trip_fetches: std::collections::HashMap::new(),
         }
@@ -145,22 +142,13 @@ impl RamondaWebSocket {
                 let fs = fetch_trip_rt_update(
                     chateau_clone.clone(),
                     params_clone.clone(),
-                    act.etcd_connection_ips.clone(),
-                    act.etcd_connection_options.clone(),
+                    act.aspen_chateau_cache.clone(),
                     act.aspen_client_manager.clone(),
-                    act.etcd_reuser.clone(),
                     cached_socket,
                 );
 
-                let etcd_reuser_clone = act.etcd_reuser.clone();
                 let fut = async move {
-                    let res = fs.await;
-                    if let Err(ref e) = res {
-                        if e == "Could not connect to etcd" {
-                            catenary::invalidate_etcd_client(&etcd_reuser_clone).await;
-                        }
-                    }
-                    res
+                    fs.await
                 };
 
                 let fut = actix::fut::wrap_future(fut).map(
@@ -252,23 +240,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                             chateau,
                             params,
                             self.pool.clone(),
-                            self.etcd_connection_ips.clone(),
-                            self.etcd_connection_options.clone(),
+                            self.aspen_chateau_cache.clone(),
                             self.aspen_client_manager.clone(),
                             None,
-                            self.etcd_reuser.clone(),
                         );
 
-                        let etcd_reuser_clone = self.etcd_reuser.clone();
-                        let fut = async move {
-                            let res = fs.await;
-                            if let Err(ref e) = res {
-                                if e == "Could not connect to etcd" {
-                                    catenary::invalidate_etcd_client(&etcd_reuser_clone).await;
-                                }
-                            }
-                            res
-                        };
+                        let fut = async move { fs.await };
 
                         let fut = actix::fut::wrap_future(fut).map(
                             |result, _, ctx: &mut ws::WebsocketContext<Self>| match result {
@@ -316,18 +293,16 @@ async fn index(
     req: HttpRequest,
     stream: web::Payload,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         RamondaWebSocket::new(
             pool.as_ref().clone(),
-            etcd_connection_ips.as_ref().clone(),
-            etcd_connection_options.as_ref().clone(),
+            aspen_chateau_cache.as_ref().clone(),
             aspen_client_manager.as_ref().clone(),
-            etcd_reuser.get_ref().clone(),
         ),
         &req,
         stream,
@@ -412,8 +387,15 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or(2);
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
-    let etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>> =
-        Arc::new(tokio::sync::RwLock::new(None));
+    let aspen_chateau_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::ChateauMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            etcd_connection_options.clone(),
+            "/aspen_assigned_chateaux/",
+        )
+        .await
+        .unwrap(),
+    );
 
     let port = std::env::var("PORT")
         .ok()
@@ -429,10 +411,8 @@ async fn main() -> std::io::Result<()> {
     let server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
-            .app_data(web::Data::new(etcd_connection_ips.clone()))
-            .app_data(web::Data::new(etcd_connection_options.clone()))
+            .app_data(web::Data::new(aspen_chateau_cache.clone()))
             .app_data(web::Data::new(aspen_client_manager.clone()))
-            .app_data(web::Data::new(etcd_reuser.clone()))
             .route("/ws", web::get().to(index))
             .route("/ws/", web::get().to(index))
             .route("/", web::get().to(index_root))

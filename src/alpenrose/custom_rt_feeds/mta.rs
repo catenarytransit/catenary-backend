@@ -38,7 +38,9 @@ pub async fn get_and_convert_lirr(
 }
 
 pub async fn fetch_mta_lirr_data(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     client: &reqwest::Client,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
@@ -49,7 +51,7 @@ pub async fn fetch_mta_lirr_data(
         let lirr_trip_updates_bytes = gtfs_rt_trips.encode_to_vec();
 
         send_mta_rail_to_aspen(
-            etcd,
+            realtime_feed_cache.clone(),
             MtaRailroad::LIRR,
             lirr_vehicle_position_bytes,
             lirr_trip_updates_bytes,
@@ -62,7 +64,9 @@ pub async fn fetch_mta_lirr_data(
 }
 
 pub async fn fetch_mta_metronorth_data(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     client: &reqwest::Client,
     mnr_gtfs: &gtfs_structures::Gtfs,
@@ -94,7 +98,7 @@ pub async fn fetch_mta_metronorth_data(
                 let mnr_trip_updates_bytes = mnr_trip_id_fixed.encode_to_vec();
 
                 send_mta_rail_to_aspen(
-                    etcd,
+                    realtime_feed_cache.clone(),
                     MtaRailroad::MNR,
                     mnr_vehicle_position_bytes,
                     mnr_trip_updates_bytes,
@@ -416,14 +420,15 @@ pub enum MtaRailroad {
 }
 
 pub async fn send_mta_rail_to_aspen(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     railroad: MtaRailroad,
     vehicle_position: Vec<u8>,
     trip_updates: Vec<u8>,
     feed_id: &str,
 ) {
-    let fetch_assigned_node_meta =
-        catenary::get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

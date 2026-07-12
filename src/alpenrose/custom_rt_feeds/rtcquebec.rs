@@ -1,16 +1,18 @@
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id_kvclient;
+
 use chrono::Timelike;
 use prost::Message;
 use std::collections::HashSet;
 
 pub async fn fetch_rtc_data(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     gtfs: &gtfs_structures::Gtfs,
     client: &reqwest::Client,
 ) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(data) = fetch_assigned_node_meta {
         let worker_id = data.worker_id;

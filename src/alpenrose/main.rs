@@ -241,6 +241,18 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     //create parent node for workers
 
+    let realtime_feed_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::RealtimeFeedMetadataEtcd>::new(
+            Arc::new(catenary::EtcdConnectionIps {
+                ip_addresses: etcd_urls.as_ref().clone(),
+            }),
+            arc_etcd_connection_options.clone(),
+            "/aspen_assigned_realtime_feed_ids/",
+        )
+        .await
+        .unwrap(),
+    );
+
     loop {
         //let is_online = online::tokio::check(Some(10)).await.is_ok();
 
@@ -759,6 +771,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 etcd_urls.clone(),
                 etcd_connection_options.clone(),
                 etcd_lease_id,
+                realtime_feed_cache.clone(),
                 hashes_of_data.clone(),
                 too_many_requests_log.clone(),
             )

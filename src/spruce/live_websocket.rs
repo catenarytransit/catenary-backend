@@ -35,8 +35,8 @@ use futures::StreamExt;
 
 pub struct LiveLocationsWebSocket {
     pub pool: Arc<CatenaryPostgresPool>,
-    pub etcd_connection_ips: Arc<EtcdConnectionIps>,
-    pub etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    pub aspen_chateau_cache:
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
     pub aspen_client_manager: Arc<AspenClientManager>,
     pub hb: Instant,
 
@@ -53,8 +53,6 @@ pub struct LiveLocationsWebSocket {
     pub chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
     pub client_viewport_v2: Option<crate::SubscribeMapV2Params>,
 
-    pub etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
-
     pub trajectory_subscription: Option<crate::trajectories::ClientTrajectorySubscriptionParams>,
     pub trajectory_request_generation: u64,
     pub last_trajectory_sent_time: Option<Instant>,
@@ -63,17 +61,16 @@ pub struct LiveLocationsWebSocket {
 impl LiveLocationsWebSocket {
     pub fn new(
         pool: Arc<CatenaryPostgresPool>,
-        etcd_connection_ips: Arc<EtcdConnectionIps>,
-        etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+        aspen_chateau_cache: std::sync::Arc<
+            catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+        >,
         aspen_client_manager: Arc<AspenClientManager>,
         coordinator_pool: Arc<BulkFetchCoordinatorPool>,
-        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
         chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
     ) -> Self {
         Self {
             pool,
-            etcd_connection_ips,
-            etcd_connection_options,
+            aspen_chateau_cache,
             aspen_client_manager,
             hb: Instant::now(),
             coordinator_pool,
@@ -85,7 +82,6 @@ impl LiveLocationsWebSocket {
             map_build_in_progress: false,
             chateau_rtree,
             client_viewport_v2: None,
-            etcd_reuser,
             trajectory_subscription: None,
             trajectory_request_generation: 0,
             last_trajectory_sent_time: None,
@@ -616,10 +612,8 @@ impl LiveLocationsWebSocket {
             return;
         };
         let pool = self.pool.clone();
-        let etcd_ips = self.etcd_connection_ips.clone();
-        let etcd_opts = self.etcd_connection_options.clone();
+        let aspen_chateau_cache = self.aspen_chateau_cache.clone();
         let manager = self.aspen_client_manager.clone();
-        let etcd_reuser = self.etcd_reuser.clone();
 
         let now_ms = chrono::Utc::now().timestamp_millis();
         let look_ahead_ms = 90000;
@@ -651,10 +645,8 @@ impl LiveLocationsWebSocket {
         for ch in chateaus {
             let ch_clone = ch.clone();
             let pool_clone = pool.clone();
-            let ips_clone = etcd_ips.clone();
-            let opts_clone = etcd_opts.clone();
+            let aspen_chateau_cache_clone = aspen_chateau_cache.clone();
             let manager_clone = manager.clone();
-            let reuser_clone = etcd_reuser.clone();
             let params_clone = params.clone();
             let client_ref = client_params.client_reference.clone();
 
@@ -664,10 +656,8 @@ impl LiveLocationsWebSocket {
             let fut = async move {
                 let trajectories_res = trajectories::get_single_chateau_trajectories(
                     pool_clone,
-                    ips_clone,
-                    opts_clone,
+                    aspen_chateau_cache_clone,
                     manager_clone,
-                    reuser_clone,
                     params_clone,
                     ch_clone,
                 )

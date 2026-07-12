@@ -140,46 +140,16 @@ struct DeparturesAtOsmStationResponse {
 }
 
 #[actix_web::get("/departures_at_osm_station")]
-#[tracing::instrument(name = "departures_at_osm_station", skip(pool, etcd_connection_ips, etcd_connection_options, etcd_reuser), fields(osm_id = ?query.osm_station_id))]
+#[tracing::instrument(name = "departures_at_osm_station", skip(pool, aspen_chateau_cache), fields(osm_id = ?query.osm_station_id))]
 pub async fn departures_at_osm_station(
     req: HttpRequest,
     query: Query<DeparturesAtOsmStationQuery>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let start = Instant::now();
-    let etcd_reuser = etcd_reuser.as_ref();
-
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        let mut client_is_healthy = false;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            let mut client = client.clone();
-
-            if client.status().await.is_ok() {
-                etcd = Some(client.clone());
-                client_is_healthy = true;
-            }
-        }
-
-        if !client_is_healthy {
-            drop(etcd_reuser_contents);
-            let new_client = etcd_client::Client::connect(
-                etcd_connection_ips.ip_addresses.as_slice(),
-                etcd_connection_options.as_ref().as_ref().to_owned(),
-            )
-            .await
-            .unwrap();
-            etcd = Some(new_client.clone());
-            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-            *etcd_reuser_write_lock = Some(new_client);
-        }
-    }
-
-    let mut etcd = etcd.unwrap();
 
     let etcd_connection_time = start.elapsed();
     let db_timer = Instant::now();
@@ -449,22 +419,15 @@ pub async fn departures_at_osm_station(
 
     // Fetch realtime data from aspen
     let mut chateau_metadata = HashMap::new();
-    let mut etcd_futures = Vec::new();
     for chateau_id in stops_to_search.keys() {
-        let mut etcd_clone = etcd.clone();
-        let chateau_id = chateau_id.clone();
-        etcd_futures.push(async move {
-            let etcd_data = etcd_clone
-                .get(
-                    format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
-                    None,
-                )
-                .await;
-            (chateau_id, etcd_data)
-        });
+        if let Some(entry) = aspen_chateau_cache
+            .cache
+            .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+        {
+            chateau_metadata.insert(chateau_id.clone(), entry.value().clone());
+        }
     }
-
-    let (results, etcd_results) = join!(stops_stream.collect::<Vec<_>>(), join_all(etcd_futures));
+    let results = stops_stream.collect::<Vec<_>>().await;
 
     for (
         chateau_id,
@@ -529,18 +492,6 @@ pub async fn departures_at_osm_station(
             }
         }
         active_services_by_chateau.insert(chateau_id.clone(), active_services);
-    }
-
-    for (chateau_id, etcd_data) in etcd_results {
-        if let Ok(etcd_data) = etcd_data {
-            if let Some(first_value) = etcd_data.kvs().first() {
-                let this_chateau_metadata =
-                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(first_value.value())
-                        .unwrap();
-
-                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
-            }
-        }
     }
 
     let mut events: Vec<StopEvent> = vec![];

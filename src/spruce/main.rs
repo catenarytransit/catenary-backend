@@ -132,17 +132,19 @@ async fn index(
     req: HttpRequest,
     stream: web::Payload,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
+    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
     etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         TripWebSocket::new(
             pool.as_ref().clone(),
+            aspen_chateau_cache.as_ref().clone(),
+            aspen_client_manager.as_ref().clone(),
             etcd_connection_ips.as_ref().clone(),
             etcd_connection_options.as_ref().clone(),
-            aspen_client_manager.as_ref().clone(),
             etcd_reuser.get_ref().clone(),
         ),
         &req,
@@ -154,21 +156,17 @@ async fn index_live(
     req: HttpRequest,
     stream: web::Payload,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
     aspen_client_manager: web::Data<Arc<AspenClientManager>>,
     coordinator_pool: web::Data<Arc<BulkFetchCoordinatorPool>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
     chateau_rtree: web::Data<Arc<chateau_rtree::ChateauRTree>>,
 ) -> Result<HttpResponse, Error> {
     ws::start(
         LiveLocationsWebSocket::new(
             pool.as_ref().clone(),
-            etcd_connection_ips.as_ref().clone(),
-            etcd_connection_options.as_ref().clone(),
+            aspen_chateau_cache.as_ref().clone(),
             aspen_client_manager.as_ref().clone(),
             coordinator_pool.get_ref().clone(),
-            etcd_reuser.get_ref().clone(),
             chateau_rtree.get_ref().clone(),
         ),
         &req,
@@ -257,7 +255,17 @@ async fn main() -> std::io::Result<()> {
     // But the code in `bulk_realtime_fetch_v3` manually checks status and reconnects.
     // Let's replicate strict behavior: create an initial client (or None) and wrap in RwLock.
 
-    let etcd_reuser = Arc::new(tokio::sync::RwLock::new(None));
+    let etcd_reuser = Arc::new(tokio::sync::RwLock::new(None::<etcd_client::Client>));
+
+    let aspen_chateau_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::ChateauMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            etcd_connection_options.clone(),
+            "/aspen_assigned_chateaux/",
+        )
+        .await
+        .unwrap(),
+    );
 
     let coordinator_shard_count = std::env::var("COORDINATOR_SHARDS")
         .ok()
@@ -277,18 +285,11 @@ async fn main() -> std::io::Result<()> {
         let arbiter = Arbiter::new();
 
         let addr = BulkFetchCoordinator::start_in_arbiter(&arbiter.handle(), {
-            let etcd_connection_ips = etcd_connection_ips.clone();
-            let etcd_connection_options = etcd_connection_options.clone();
+            let aspen_chateau_cache = aspen_chateau_cache.clone();
             let aspen_client_manager = aspen_client_manager.clone();
-            let etcd_reuser = etcd_reuser.clone();
 
             move |_| {
-                BulkFetchCoordinator::new(
-                    etcd_connection_ips.clone(),
-                    etcd_connection_options.clone(),
-                    aspen_client_manager.clone(),
-                    etcd_reuser.clone(),
-                )
+                BulkFetchCoordinator::new(aspen_chateau_cache.clone(), aspen_client_manager.clone())
             }
         });
 
@@ -303,6 +304,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(etcd_connection_ips.clone()))
             .app_data(web::Data::new(etcd_connection_options.clone()))
+            .app_data(web::Data::new(aspen_chateau_cache.clone()))
             .app_data(web::Data::new(aspen_client_manager.clone()))
             .app_data(web::Data::new(coordinator_pool.clone()))
             .app_data(web::Data::new(etcd_reuser.clone()))

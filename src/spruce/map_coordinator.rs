@@ -350,10 +350,9 @@ pub struct BulkFetchCoordinator {
     in_progress_fetches: HashMap<String, Instant>,
     active_chateaus: Arc<RwLock<HashSet<String>>>,
     aspen_endpoint_cache: Arc<RwLock<HashMap<String, (std::net::SocketAddr, Instant)>>>,
-    etcd_connection_ips: Arc<EtcdConnectionIps>,
-    etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+    aspen_chateau_cache:
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
     aspen_client_manager: Arc<AspenClientManager>,
-    etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
 }
 
 #[derive(Clone)]
@@ -395,10 +394,10 @@ fn is_chateau_active(active_chateaus: &Arc<RwLock<HashSet<String>>>, chateau_id:
 
 impl BulkFetchCoordinator {
     pub fn new(
-        etcd_connection_ips: Arc<EtcdConnectionIps>,
-        etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
+        aspen_chateau_cache: std::sync::Arc<
+            catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+        >,
         aspen_client_manager: Arc<AspenClientManager>,
-        etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
     ) -> Self {
         Self {
             subscribers: HashMap::new(),
@@ -406,10 +405,8 @@ impl BulkFetchCoordinator {
             in_progress_fetches: HashMap::new(),
             active_chateaus: Arc::new(RwLock::new(HashSet::new())),
             aspen_endpoint_cache: Arc::new(RwLock::new(HashMap::new())),
-            etcd_connection_ips,
-            etcd_connection_options,
+            aspen_chateau_cache,
             aspen_client_manager,
-            etcd_reuser,
         }
     }
 
@@ -444,30 +441,14 @@ impl BulkFetchCoordinator {
 
         let active_chateaus = self.active_chateaus.clone();
         let aspen_endpoint_cache = self.aspen_endpoint_cache.clone();
-        let etcd_reuser = self.etcd_reuser.clone();
-        let etcd_ips = self.etcd_connection_ips.clone();
-        let etcd_opts = self.etcd_connection_options.clone();
+        let aspen_chateau_cache = self.aspen_chateau_cache.clone();
         let aspen_manager = self.aspen_client_manager.clone();
 
         let fut = async move {
-            let etcd_result = catenary::get_etcd_client(&etcd_ips, &etcd_opts, &etcd_reuser).await;
-
-            let etcd = etcd_result.ok();
-            if etcd.is_none() {
-                return futures::stream::iter(
-                    chateaus_to_fetch
-                        .into_iter()
-                        .map(|(id, _)| FetchResultMsg(id, None)),
-                )
-                .left_stream();
-            }
-            let etcd = etcd.unwrap();
-
             let tasks = chateaus_to_fetch.into_iter().map(
                 move |(chateau_id, cached_last_updated_time_ms)| {
-                    let mut etcd = etcd.clone();
+                    let aspen_chateau_cache = aspen_chateau_cache.clone();
                     let aspen_manager = aspen_manager.clone();
-                    let etcd_reuser = etcd_reuser.clone();
                     let active_chateaus = active_chateaus.clone();
                     let aspen_endpoint_cache = aspen_endpoint_cache.clone();
 
@@ -488,44 +469,23 @@ impl BulkFetchCoordinator {
                         let socket_to_use = if let Some(socket) = cached_socket.clone() {
                             socket
                         } else {
-                            let fetch_assigned_node = etcd
-                                .get(
-                                    format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-                                    None,
-                                )
-                                .await;
-
-                            if let Ok(resp) = fetch_assigned_node {
-                                if !resp.kvs().is_empty() {
-                                    if let Ok(assigned_chateau_data) =
-                                        bincode_deserialize::<ChateauMetadataEtcd>(
-                                            resp.kvs().first().unwrap().value(),
-                                        )
-                                    {
-                                        if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                            cache_write.insert(
-                                                chateau_id.clone(),
-                                                (
-                                                    assigned_chateau_data.socket.clone(),
-                                                    Instant::now(),
-                                                ),
-                                            );
-                                        }
-                                        assigned_chateau_data.socket
-                                    } else {
-                                        return FetchResultMsg(chateau_id, None);
-                                    }
-                                } else {
-                                    println!("DEBUG: No assigned node for {}", chateau_id);
-                                    return FetchResultMsg(chateau_id, None);
+                            let socket_opt = match aspen_chateau_cache
+                                .cache
+                                .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+                            {
+                                Some(s) => Some(s.value().socket.clone()),
+                                None => None,
+                            };
+                            if let Some(socket) = socket_opt {
+                                if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                                    cache_write.insert(
+                                        chateau_id.clone(),
+                                        (socket.clone(), Instant::now()),
+                                    );
                                 }
+                                socket
                             } else {
-                                println!("DEBUG: Etcd fetch failed for {}", chateau_id);
-                                catenary::invalidate_etcd_client(&etcd_reuser).await;
-                                println!(
-                                    "DEBUG: Flushed Etcd reuser due to failure for {}",
-                                    chateau_id
-                                );
+                                println!("DEBUG: No assigned node for {}", chateau_id);
                                 return FetchResultMsg(chateau_id, None);
                             }
                         };
@@ -727,7 +687,7 @@ impl BulkFetchCoordinator {
             );
 
             let stream = futures::stream::iter(tasks).buffer_unordered(10);
-            stream.right_stream()
+            stream.right_stream::<futures::stream::Pending<FetchResultMsg>>()
         };
 
         ctx.spawn(actix::fut::wrap_future(fut).map(
@@ -839,20 +799,10 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
 
         let active_chateaus = self.active_chateaus.clone();
         let aspen_endpoint_cache = self.aspen_endpoint_cache.clone();
-        let etcd_reuser = self.etcd_reuser.clone();
-        let etcd_ips = self.etcd_connection_ips.clone();
-        let etcd_opts = self.etcd_connection_options.clone();
+        let aspen_chateau_cache = self.aspen_chateau_cache.clone();
         let aspen_manager = self.aspen_client_manager.clone();
 
         let fut = async move {
-            let etcd_result = catenary::get_etcd_client(&etcd_ips, &etcd_opts, &etcd_reuser).await;
-            let etcd = etcd_result.ok();
-
-            if etcd.is_none() {
-                return FetchResultMsg(chateau_id, None);
-            }
-            let mut etcd = etcd.unwrap();
-
             if !is_chateau_active(&active_chateaus, &chateau_id) {
                 return FetchResultMsg(chateau_id, None);
             }
@@ -869,33 +819,20 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
             let socket_to_use = if let Some(socket) = cached_socket.clone() {
                 socket
             } else {
-                let fetch_assigned_node = etcd
-                    .get(
-                        format!("/aspen_assigned_chateaux/{}", chateau_id).as_str(),
-                        None,
-                    )
-                    .await;
-
-                if let Ok(resp) = fetch_assigned_node {
-                    if !resp.kvs().is_empty() {
-                        if let Ok(assigned_chateau_data) = bincode_deserialize::<ChateauMetadataEtcd>(
-                            resp.kvs().first().unwrap().value(),
-                        ) {
-                            if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
-                                cache_write.insert(
-                                    chateau_id.clone(),
-                                    (assigned_chateau_data.socket.clone(), Instant::now()),
-                                );
-                            }
-                            assigned_chateau_data.socket
-                        } else {
-                            return FetchResultMsg(chateau_id, None);
-                        }
-                    } else {
-                        return FetchResultMsg(chateau_id, None);
+                let socket_opt = match aspen_chateau_cache
+                    .cache
+                    .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+                {
+                    Some(s) => Some(s.value().socket.clone()),
+                    None => None,
+                };
+                if let Some(socket) = socket_opt {
+                    if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
+                        cache_write.insert(chateau_id.clone(), (socket.clone(), Instant::now()));
                     }
+                    socket
                 } else {
-                    catenary::invalidate_etcd_client(&etcd_reuser).await;
+                    println!("DEBUG: No assigned node for {}", chateau_id);
                     return FetchResultMsg(chateau_id, None);
                 }
             };

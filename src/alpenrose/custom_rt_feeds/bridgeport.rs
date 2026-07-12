@@ -1,6 +1,6 @@
 use ahash::AHashMap;
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id_kvclient;
+
 use prost::Message;
 use serde::Deserialize;
 
@@ -293,12 +293,14 @@ fn convert_to_gtfs_rt(
 }
 
 pub async fn fetch_bridgeport_data(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     client: &reqwest::Client,
     gtfs: &gtfs_structures::Gtfs,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     let Some(data) = fetch_assigned_node_meta else {
         println!("No assigned node found for Bridgeport Transit");

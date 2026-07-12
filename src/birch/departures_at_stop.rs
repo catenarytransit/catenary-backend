@@ -129,41 +129,10 @@ pub async fn departures_at_stop(
 
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
-    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+    aspen_chateau_cache: web::Data<
+        std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
-    let etcd_reuser = etcd_reuser.as_ref();
-
-    let mut etcd = None;
-    {
-        let etcd_reuser_contents = etcd_reuser.read().await;
-        let mut client_is_healthy = false;
-        if let Some(client) = etcd_reuser_contents.as_ref() {
-            let mut client = client.clone();
-
-            if client.status().await.is_ok() {
-                etcd = Some(client.clone());
-                client_is_healthy = true;
-            }
-        }
-
-        if !client_is_healthy {
-            drop(etcd_reuser_contents);
-            let new_client = etcd_client::Client::connect(
-                etcd_connection_ips.ip_addresses.as_slice(),
-                etcd_connection_options.as_ref().as_ref().to_owned(),
-            )
-            .await
-            .unwrap();
-            etcd = Some(new_client.clone());
-            let mut etcd_reuser_write_lock = etcd_reuser.write().await;
-            *etcd_reuser_write_lock = Some(new_client);
-        }
-    }
-
-    let mut etcd = etcd.unwrap();
-
     let conn_pool = pool.as_ref();
     let conn_pre = conn_pool.get().await;
     let conn = &mut conn_pre.unwrap();
@@ -489,32 +458,12 @@ pub async fn departures_at_stop(
 
     let mut chateau_metadata = HashMap::new();
 
-    let mut etcd_futures = Vec::new();
     for chateau_id in stops_to_search.keys() {
-        let mut etcd_clone = etcd.clone();
-        let chateau_id = chateau_id.clone();
-        etcd_futures.push(async move {
-            let etcd_data = etcd_clone
-                .get(
-                    format!("/aspen_assigned_chateaux/{}", chateau_id.clone()).as_str(),
-                    None,
-                )
-                .await;
-            (chateau_id, etcd_data)
-        });
-    }
-
-    let etcd_results = join_all(etcd_futures).await;
-
-    for (chateau_id, etcd_data) in etcd_results {
-        if let Ok(etcd_data) = etcd_data {
-            if let Some(first_value) = etcd_data.kvs().first() {
-                let this_chateau_metadata =
-                    catenary::bincode_deserialize::<ChateauMetadataEtcd>(first_value.value())
-                        .unwrap();
-
-                chateau_metadata.insert(chateau_id.clone(), this_chateau_metadata);
-            }
+        if let Some(entry) = aspen_chateau_cache
+            .cache
+            .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
+        {
+            chateau_metadata.insert(chateau_id.clone(), entry.value().clone());
         }
     }
 

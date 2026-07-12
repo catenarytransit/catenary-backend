@@ -8,6 +8,7 @@ use crate::ChateauDataNoGeometry;
 pub mod connection_manager;
 use connection_manager::AspenClientManager;
 
+pub type AspenChateauCache = crate::etcd_cache::EtcdCache<ChateauMetadataEtcd>;
 /// This is the service definition. It looks a lot like a trait definition.
 /// It defines one RPC, hello, which takes one arg, name, and returns a String.
 use crate::aspen_dataset::*;

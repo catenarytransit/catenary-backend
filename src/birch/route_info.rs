@@ -64,29 +64,10 @@ struct QueryRouteInfo {
 #[actix_web::get("/route_info")]
 pub async fn route_info(
     query: web::Query<QueryRouteInfo>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
     let query = query.into_inner();
-
-    //connect to etcd
-
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
 
     //connect to postgres
     let conn_pool = pool.as_ref();
@@ -432,68 +413,53 @@ pub async fn route_info(
 
     //query realtime data pool for alerts
 
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", &query.chateau).as_str(),
-            None,
-        )
-        .await;
+    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", &query.chateau))
+        .map(|val| val.value().clone());
 
     let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut alert_ids = vec![];
 
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
+    if let Some(assigned_chateau_data) = fetch_assigned_node_for_this_chateau {
+        let aspen_client =
+            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
+        if let Ok(aspen_client) = aspen_client {
+            let alerts_for_route = aspen_client
+                .get_alerts_from_route_id(
+                    context::current(),
+                    query.chateau.clone(),
+                    route.route_id.clone(),
+                )
+                .await;
 
-            let aspen_client =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
-                    .await;
+            if let Ok(Some(alerts_for_route)) = alerts_for_route {
+                for (alert_id, alert) in alerts_for_route {
+                    alert_ids.push(alert_id.clone());
+                    alerts_for_route_send.insert(alert_id.clone(), alert);
+                }
+            }
 
-            if let Ok(aspen_client) = aspen_client {
-                let alerts_for_route = aspen_client
-                    .get_alerts_from_route_id(
-                        context::current(),
-                        query.chateau.clone(),
-                        route.route_id.clone(),
-                    )
-                    .await;
+            let alerts_for_stops = aspen_client
+                .get_alert_from_stop_ids(
+                    context::current(),
+                    query.chateau.clone(),
+                    list_of_stop_ids.iter().map(|x| x.to_string()).collect(),
+                )
+                .await;
 
-                if let Ok(Some(alerts_for_route)) = alerts_for_route {
-                    for (alert_id, alert) in alerts_for_route {
-                        alert_ids.push(alert_id.clone());
-                        alerts_for_route_send.insert(alert_id.clone(), alert);
-                    }
+            if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                for (alert_id, alert) in alerts_for_stops.alerts {
+                    alert_ids.push(alert_id.clone());
                 }
 
-                let alerts_for_stops = aspen_client
-                    .get_alert_from_stop_ids(
-                        context::current(),
-                        query.chateau.clone(),
-                        list_of_stop_ids.iter().map(|x| x.to_string()).collect(),
-                    )
-                    .await;
-
-                if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
-                    for (alert_id, alert) in alerts_for_stops.alerts {
-                        alert_ids.push(alert_id.clone());
-                    }
-
-                    for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
-                        stop_id_to_alert_ids.insert(
-                            stop_id.clone(),
-                            alert_ids.iter().cloned().collect::<Vec<_>>(),
-                        );
-                    }
+                for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+                    stop_id_to_alert_ids.insert(
+                        stop_id.clone(),
+                        alert_ids.iter().cloned().collect::<Vec<_>>(),
+                    );
                 }
             }
         }
@@ -613,29 +579,10 @@ pub struct RouteInfoResponseV2 {
 #[actix_web::get("/route_info_v2")]
 pub async fn route_info_v2(
     query: web::Query<QueryRouteInfo>,
-    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    aspen_chateau_cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
-    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
 ) -> impl Responder {
     let query = query.into_inner();
-
-    //connect to etcd
-
-    let etcd = etcd_client::Client::connect(
-        etcd_connection_ips.ip_addresses.as_slice(),
-        etcd_connection_options.as_ref().as_ref().to_owned(),
-    )
-    .await;
-
-    if let Err(etcd_err) = &etcd {
-        eprintln!("{:#?}", etcd_err);
-
-        return HttpResponse::InternalServerError()
-            .append_header(("Cache-Control", "no-cache"))
-            .body("Could not connect to etcd");
-    }
-
-    let mut etcd = etcd.unwrap();
 
     //connect to postgres
     let conn_pool = pool.as_ref();
@@ -981,68 +928,53 @@ pub async fn route_info_v2(
 
     //query realtime data pool for alerts
 
-    let fetch_assigned_node_for_this_chateau = etcd
-        .get(
-            format!("/aspen_assigned_chateaux/{}", &query.chateau).as_str(),
-            None,
-        )
-        .await;
+    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache
+        .cache
+        .get(&format!("/aspen_assigned_chateaux/{}", &query.chateau))
+        .map(|val| val.value().clone());
 
     let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut alert_ids = vec![];
 
-    if let Ok(fetch_assigned_node_for_this_chateau) = fetch_assigned_node_for_this_chateau {
-        let fetch_assigned_node_for_this_chateau_kv_first =
-            fetch_assigned_node_for_this_chateau.kvs().first();
+    if let Some(assigned_chateau_data) = fetch_assigned_node_for_this_chateau {
+        let aspen_client =
+            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
-        if let Some(fetch_assigned_node_for_this_chateau_data) =
-            fetch_assigned_node_for_this_chateau_kv_first
-        {
-            let assigned_chateau_data = catenary::bincode_deserialize::<ChateauMetadataEtcd>(
-                fetch_assigned_node_for_this_chateau_data.value(),
-            )
-            .unwrap();
+        if let Ok(aspen_client) = aspen_client {
+            let alerts_for_route = aspen_client
+                .get_alerts_from_route_id(
+                    context::current(),
+                    query.chateau.clone(),
+                    route.route_id.clone(),
+                )
+                .await;
 
-            let aspen_client =
-                catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
-                    .await;
+            if let Ok(Some(alerts_for_route)) = alerts_for_route {
+                for (alert_id, alert) in alerts_for_route {
+                    alert_ids.push(alert_id.clone());
+                    alerts_for_route_send.insert(alert_id.clone(), alert);
+                }
+            }
 
-            if let Ok(aspen_client) = aspen_client {
-                let alerts_for_route = aspen_client
-                    .get_alerts_from_route_id(
-                        context::current(),
-                        query.chateau.clone(),
-                        route.route_id.clone(),
-                    )
-                    .await;
+            let alerts_for_stops = aspen_client
+                .get_alert_from_stop_ids(
+                    context::current(),
+                    query.chateau.clone(),
+                    list_of_stop_ids.iter().map(|x| x.to_string()).collect(),
+                )
+                .await;
 
-                if let Ok(Some(alerts_for_route)) = alerts_for_route {
-                    for (alert_id, alert) in alerts_for_route {
-                        alert_ids.push(alert_id.clone());
-                        alerts_for_route_send.insert(alert_id.clone(), alert);
-                    }
+            if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
+                for (alert_id, alert) in alerts_for_stops.alerts {
+                    alert_ids.push(alert_id.clone());
                 }
 
-                let alerts_for_stops = aspen_client
-                    .get_alert_from_stop_ids(
-                        context::current(),
-                        query.chateau.clone(),
-                        list_of_stop_ids.iter().map(|x| x.to_string()).collect(),
-                    )
-                    .await;
-
-                if let Ok(Some(alerts_for_stops)) = alerts_for_stops {
-                    for (alert_id, alert) in alerts_for_stops.alerts {
-                        alert_ids.push(alert_id.clone());
-                    }
-
-                    for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
-                        stop_id_to_alert_ids.insert(
-                            stop_id.clone(),
-                            alert_ids.iter().cloned().collect::<Vec<_>>(),
-                        );
-                    }
+                for (stop_id, alert_ids) in alerts_for_stops.stops_to_alert_ids {
+                    stop_id_to_alert_ids.insert(
+                        stop_id.clone(),
+                        alert_ids.iter().cloned().collect::<Vec<_>>(),
+                    );
                 }
             }
         }

@@ -888,6 +888,16 @@ async fn main() -> std::io::Result<()> {
 
     let aspen_client_manager = Arc::new(AspenClientManager::new());
 
+    let aspen_chateau_cache = Arc::new(
+        catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::ChateauMetadataEtcd>::new(
+            etcd_connection_ips.clone(),
+            Arc::new(etcd_connection_options.clone()),
+            "/aspen_assigned_chateaux/",
+        )
+        .await
+        .unwrap(),
+    );
+
     let _ = prioritise_self_for_oom();
 
     // Create a new HTTP server.
@@ -938,6 +948,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(middleware::Compress::default())
             .app_data(actix_web::web::Data::new(Arc::clone(&sqlx_pool)))
             .app_data(actix_web::web::Data::new(Arc::clone(&pool)))
+            .app_data(actix_web::web::Data::new(aspen_chateau_cache.clone()))
             .app_data(actix_web::web::Data::new(Arc::clone(&elasticclient)))
             .app_data(actix_web::web::Data::new(Arc::new(RwLock::new(
                 None::<ChateauCache>,

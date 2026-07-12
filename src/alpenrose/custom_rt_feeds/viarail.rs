@@ -1,14 +1,16 @@
 use catenary::duration_since_unix_epoch;
-use catenary::get_node_for_realtime_feed_id_kvclient;
+
 use prost::Message;
 
 pub async fn fetch_via_data(
-    etcd: &mut etcd_client::KvClient,
+    realtime_feed_cache: std::sync::Arc<
+        catenary::etcd_cache::EtcdCache<catenary::RealtimeFeedMetadataEtcd>,
+    >,
     feed_id: &str,
     _client: &reqwest::Client,
     gtfs: &gtfs_structures::Gtfs,
 ) {
-    let fetch_assigned_node_meta = get_node_for_realtime_feed_id_kvclient(etcd, feed_id).await;
+    let fetch_assigned_node_meta = realtime_feed_cache.get(feed_id);
 
     if let Some(assigned_chateau_data) = fetch_assigned_node_meta {
         let worker_id = assigned_chateau_data.worker_id;
