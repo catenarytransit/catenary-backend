@@ -662,7 +662,7 @@ impl LiveLocationsWebSocket {
             let ch_clone2 = ch.clone();
 
             let fut = async move {
-                let trajectories = trajectories::get_single_chateau_trajectories(
+                let trajectories_res = trajectories::get_single_chateau_trajectories(
                     pool_clone,
                     ips_clone,
                     opts_clone,
@@ -674,6 +674,14 @@ impl LiveLocationsWebSocket {
                 .await;
 
                 tokio::task::spawn_blocking(move || {
+                    let trajectories = match trajectories_res {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("Skipping trajectories update due to error: {}", e);
+                            return Vec::new(); // Don't send any websocket message
+                        }
+                    };
+                    
                     let chunks: Vec<_> = trajectories.chunks(200).collect();
                     let total_chunks = chunks.len();
                     let mut serialized_messages = Vec::new();
