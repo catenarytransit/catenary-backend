@@ -39,6 +39,7 @@ const ALLOWED_CHATEAUX: &[&str] = &[
     "île~de~france~mobilités",
     "sncb",
     "tisséo",
+    "vbb",
 ];
 
 #[derive(Clone, Debug)]
