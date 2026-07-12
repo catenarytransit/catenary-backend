@@ -459,11 +459,8 @@ pub async fn departures_at_stop(
     let mut chateau_metadata = HashMap::new();
 
     for chateau_id in stops_to_search.keys() {
-        if let Some(entry) = aspen_chateau_cache
-            .cache
-            .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-        {
-            chateau_metadata.insert(chateau_id.clone(), entry.value().clone());
+        if let Some(metadata) = aspen_chateau_cache.get(chateau_id) {
+            chateau_metadata.insert(chateau_id.clone(), metadata);
         }
     }
 

@@ -469,13 +469,9 @@ impl BulkFetchCoordinator {
                         let socket_to_use = if let Some(socket) = cached_socket.clone() {
                             socket
                         } else {
-                            let socket_opt = match aspen_chateau_cache
-                                .cache
-                                .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-                            {
-                                Some(s) => Some(s.value().socket.clone()),
-                                None => None,
-                            };
+                            let socket_opt = aspen_chateau_cache
+                                .get(&chateau_id)
+                                .map(|metadata| metadata.socket);
                             if let Some(socket) = socket_opt {
                                 if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
                                     cache_write.insert(
@@ -819,13 +815,9 @@ impl Handler<FetchChateauNow> for BulkFetchCoordinator {
             let socket_to_use = if let Some(socket) = cached_socket.clone() {
                 socket
             } else {
-                let socket_opt = match aspen_chateau_cache
-                    .cache
-                    .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-                {
-                    Some(s) => Some(s.value().socket.clone()),
-                    None => None,
-                };
+                let socket_opt = aspen_chateau_cache
+                    .get(&chateau_id)
+                    .map(|metadata| metadata.socket);
                 if let Some(socket) = socket_opt {
                     if let Ok(mut cache_write) = aspen_endpoint_cache.write() {
                         cache_write.insert(chateau_id.clone(), (socket.clone(), Instant::now()));

@@ -420,11 +420,8 @@ pub async fn departures_at_osm_station(
     // Fetch realtime data from aspen
     let mut chateau_metadata = HashMap::new();
     for chateau_id in stops_to_search.keys() {
-        if let Some(entry) = aspen_chateau_cache
-            .cache
-            .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-        {
-            chateau_metadata.insert(chateau_id.clone(), entry.value().clone());
+        if let Some(metadata) = aspen_chateau_cache.get(chateau_id) {
+            chateau_metadata.insert(chateau_id.clone(), metadata);
         }
     }
     let results = stops_stream.collect::<Vec<_>>().await;

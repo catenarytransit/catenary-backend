@@ -413,10 +413,7 @@ pub async fn route_info(
 
     //query realtime data pool for alerts
 
-    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", &query.chateau))
-        .map(|val| val.value().clone());
+    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache.get(&query.chateau);
 
     let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -928,10 +925,7 @@ pub async fn route_info_v2(
 
     //query realtime data pool for alerts
 
-    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", &query.chateau))
-        .map(|val| val.value().clone());
+    let fetch_assigned_node_for_this_chateau = aspen_chateau_cache.get(&query.chateau);
 
     let mut alerts_for_route_send: BTreeMap<String, AspenisedAlert> = BTreeMap::new();
     let mut stop_id_to_alert_ids: BTreeMap<String, Vec<String>> = BTreeMap::new();

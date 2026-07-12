@@ -63,11 +63,7 @@ pub async fn get_vehicle_information_from_label(
 ) -> impl Responder {
     let (chateau, vehicle_label) = path.into_inner();
 
-    if let Some(cached_node) = aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau))
-    {
-        let assigned_chateau_data = cached_node.value().clone();
+    if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
         if true {
             let aspen_client =
                 catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)
@@ -121,11 +117,7 @@ pub async fn get_vehicle_information(
 ) -> impl Responder {
     let (chateau, gtfs_id) = path.into_inner();
 
-    if let Some(cached_node) = aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau))
-    {
-        let assigned_chateau_data = cached_node.value().clone();
+    if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
         if true {
             let aspen_client =
                 catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket)

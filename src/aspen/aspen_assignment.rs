@@ -93,7 +93,7 @@ pub async fn assign_chateaus(
         let dummy_get = etcd.get("dummy", None).await?;
         let fetch_workers_revision_number = dummy_get.header().unwrap().revision();
 
-        for entry in aspen_workers_cache.cache.iter() {
+        for entry in aspen_workers_cache.iter() {
             let decoded_metadata = entry.value().clone();
             workers_map.insert(decoded_metadata.worker_id.clone(), decoded_metadata);
         }
@@ -116,19 +116,17 @@ pub async fn assign_chateaus(
 
             let mut existing_assigned_chateaus = HashMap::new();
 
-            for entry in aspen_assigned_chateaux_cache.cache.iter() {
+            for entry in aspen_assigned_chateaux_cache.iter() {
                 let decoded_metadata = entry.value().clone();
-                let key = entry.key();
-                let chateau = key.replace("/aspen_assigned_chateaux/", "");
+                let chateau = entry.key().clone();
                 existing_assigned_chateaus.insert(chateau, decoded_metadata);
             }
 
             let mut existing_assigned_realtime_feeds = HashMap::new();
 
-            for entry in aspen_assigned_realtime_feeds_cache.cache.iter() {
+            for entry in aspen_assigned_realtime_feeds_cache.iter() {
                 let decoded_metadata = entry.value().clone();
-                let key = entry.key();
-                let realtime_feed_id = key.replace("/aspen_assigned_realtime_feed_ids/", "");
+                let realtime_feed_id = entry.key().clone();
                 existing_assigned_realtime_feeds.insert(realtime_feed_id, decoded_metadata);
             }
 

@@ -156,18 +156,12 @@ pub async fn get_single_chateau_trajectories(
         let params = params.clone();
 
         let fetch_task = async move {
-            let socket = match aspen_chateau_cache
-                .cache
-                .get(&format!("/aspen_assigned_chateaux/{}", chateau_clone))
-            {
-                Some(s) => s.value().socket.clone(),
-                None => {
-                    return Err(format!(
-                        "Could not get socket for chateau {}",
-                        chateau_clone
-                    ));
-                }
-            };
+            let socket = aspen_chateau_cache
+                .get(&chateau_clone)
+                .ok_or_else(|| {
+                    format!("Could not get socket for chateau {}", chateau_clone)
+                })?
+                .socket;
 
             let client_res =
                 if let Some(client) = aspen_client_manager.get_client(socket.clone()).await {
@@ -440,15 +434,12 @@ pub async fn get_trajectories(
                 let params_clone = params_clone.clone();
 
                 let fetch_task = async move {
-                    let socket = match aspen_chateau_cache
-                        .cache
-                        .get(&format!("/aspen_assigned_chateaux/{}", ch_clone2))
-                    {
-                        Some(s) => s.value().socket.clone(),
-                        None => {
-                            return Err(format!("Could not get socket for chateau {}", ch_clone2));
-                        }
-                    };
+                    let socket = aspen_chateau_cache
+                        .get(&ch_clone2)
+                        .ok_or_else(|| {
+                            format!("Could not get socket for chateau {}", ch_clone2)
+                        })?
+                        .socket;
 
                     let client_res = if let Some(client) = manager.get_client(socket.clone()).await
                     {

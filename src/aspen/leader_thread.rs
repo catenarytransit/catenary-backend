@@ -34,7 +34,7 @@ pub async fn aspen_leader_thread(
         catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::AspenWorkerMetadataEtcd>::new(
             etcd_connection_ips.clone(),
             arc_etcd_connection_options.clone(),
-            "/aspen_workers",
+            "/aspen_workers/",
         )
         .await
         .unwrap(),
@@ -44,7 +44,7 @@ pub async fn aspen_leader_thread(
         catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::ChateauMetadataEtcd>::new(
             etcd_connection_ips.clone(),
             arc_etcd_connection_options.clone(),
-            "/aspen_assigned_chateaux",
+            "/aspen_assigned_chateaux/",
         )
         .await
         .unwrap(),
@@ -54,7 +54,7 @@ pub async fn aspen_leader_thread(
         catenary::etcd_cache::EtcdCache::<catenary::aspen::lib::RealtimeFeedMetadataEtcd>::new(
             etcd_connection_ips.clone(),
             arc_etcd_connection_options.clone(),
-            "/aspen_assigned_realtime_feed_ids",
+            "/aspen_assigned_realtime_feed_ids/",
         )
         .await
         .unwrap(),

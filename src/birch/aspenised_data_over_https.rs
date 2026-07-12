@@ -287,9 +287,8 @@ pub async fn bulk_realtime_fetch_v3(
         .iter()
         .filter_map(|(chateau_id, chateau_params)| {
             aspen_chateau_cache
-                .cache
-                .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-                .map(|val| (chateau_id, chateau_params, val.value().clone()))
+                .get(chateau_id)
+                .map(|metadata| (chateau_id, chateau_params, metadata))
         })
         .collect();
 
@@ -616,11 +615,8 @@ pub async fn get_realtime_locations(
         _ => Some(existing_fasthash_of_routes),
     };
 
-    let assigned_chateau_data = match aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-    {
-        Some(s) => s.value().clone(),
+    let assigned_chateau_data = match aspen_chateau_cache.get(&chateau_id) {
+        Some(s) => s,
         None => {
             return HttpResponse::Ok()
                 .append_header(("Cache-Control", "no-cache"))
@@ -729,11 +725,8 @@ pub async fn get_rt_of_route(
 
     let conn = &mut conn_pre.unwrap();
 
-    let assigned_chateau_data = match aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-    {
-        Some(s) => s.value().clone(),
+    let assigned_chateau_data = match aspen_chateau_cache.get(&chateau_id) {
+        Some(s) => s,
         None => {
             return HttpResponse::Ok()
                 .append_header(("Cache-Control", "no-cache"))
@@ -963,11 +956,8 @@ async fn fetch_full_trip_updates_dataset(
 ) -> impl Responder {
     let chateau_id = query.into_inner().chateau;
 
-    let assigned_chateau_data = match aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-    {
-        Some(s) => s.value().clone(),
+    let assigned_chateau_data = match aspen_chateau_cache.get(&chateau_id) {
+        Some(s) => s,
         None => {
             return HttpResponse::InternalServerError()
                 .append_header(("Cache-Control", "no-cache"))
@@ -1012,11 +1002,8 @@ pub async fn get_all_trajectories(
 ) -> impl Responder {
     let chateau_id = query.into_inner().chateau;
 
-    let assigned_chateau_data = match aspen_chateau_cache
-        .cache
-        .get(&format!("/aspen_assigned_chateaux/{}", chateau_id))
-    {
-        Some(s) => s.value().clone(),
+    let assigned_chateau_data = match aspen_chateau_cache.get(&chateau_id) {
+        Some(s) => s,
         None => {
             return HttpResponse::NotFound().body("No assigned node found");
         }
