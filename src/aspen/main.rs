@@ -109,7 +109,7 @@ pub struct GtfsRealtimeHashStore {
 // and is used to start the server.
 #[derive(Clone)]
 pub struct AspenServer {
-    pub addr: SocketAddr,
+    //pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
     pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
     pub authoritative_trajectory_data_store:
@@ -382,7 +382,7 @@ impl AspenRpc for AspenServer {
                 .sample(&mut rng()),
         );
         tokio::time::sleep(sleep_time).await;
-        format!("Hello, {name}! You are connected from {}", self.addr)
+        format!("Hello, {name}! You are connected")
     }
 
     async fn get_all_trips_with_ids(
@@ -2185,7 +2185,7 @@ async fn main() -> anyhow::Result<()> {
                     .map(server::BaseChannel::with_defaults)
                     .map(|channel| {
                         let server = AspenServer {
-                            addr: channel.transport().peer_addr().unwrap(),
+                            //addr: channel.transport().peer_addr().unwrap(),
                             worker_id: worker_id_for_this_thread.clone(),
                             authoritative_data_store: Arc::clone(&authoritative_data_store),
                             authoritative_trajectory_data_store: Arc::clone(
