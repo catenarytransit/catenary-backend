@@ -76,7 +76,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_track_data() {
         dotenvy::dotenv().ok();
-        let pool = crate::postgres_tools::make_async_pool()
+        let pool = catenary::postgres_tools::make_async_pool()
             .await
             .unwrap_or_else(|e| panic!("pool init failed: {}", e));
 

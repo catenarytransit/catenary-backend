@@ -4011,7 +4011,7 @@ pub async fn new_rt_data(
         .entry_async(chateau_id.to_string())
         .await
         .and_modify(|d| *d = store.clone())
-        .or_insert(store);
+        .or_insert(store.clone());
 
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
@@ -4022,6 +4022,9 @@ pub async fn new_rt_data(
         if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data_for_persist) {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
+            if let Err(e) = persistence::save_trajectory_data(chateau_id, &store) {
+                eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
+            }
             LAST_SAVE_TIME
                 .entry_async(chateau_id.to_string())
                 .await

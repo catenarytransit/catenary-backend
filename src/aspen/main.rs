@@ -2030,6 +2030,31 @@ async fn main() -> anyhow::Result<()> {
                                                 .await
                                                 .or_insert(data);
                                             println!("Successfully loaded data for {}", chateau_id);
+
+                                            match persistence::load_trajectory_data(chateau_id) {
+                                                Ok(Some(traj_data)) => {
+                                                    authoritative_trajectory_data_store
+                                                        .entry_async(chateau_id.to_string())
+                                                        .await
+                                                        .or_insert(traj_data);
+                                                    println!(
+                                                        "Successfully loaded trajectory data for {}",
+                                                        chateau_id
+                                                    );
+                                                }
+                                                Ok(None) => {
+                                                    println!(
+                                                        "No trajectory data found for {}",
+                                                        chateau_id
+                                                    );
+                                                }
+                                                Err(e) => {
+                                                    eprintln!(
+                                                        "Failed to load trajectory data for {}: {}",
+                                                        chateau_id, e
+                                                    );
+                                                }
+                                            }
                                         }
                                         Ok(None) => {
                                             eprintln!("No data found for {}", chateau_id);

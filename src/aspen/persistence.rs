@@ -48,6 +48,55 @@ pub fn load_chateau_data(
     Ok(Some(data))
 }
 
+pub fn save_trajectory_data(
+    chateau_id: &str,
+    data: &catenary::aspen_dataset::AspenTrajectoryStore,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let dir = "data/aspen_trajectories";
+    std::fs::create_dir_all(dir)?;
+
+    let file_path = format!("{}/{}.bin.zlib", dir, chateau_id);
+    let temp_file_path = format!("{}/{}.bin.zlib.tmp", dir, chateau_id);
+
+    let file = File::create(&temp_file_path)?;
+    let writer = BufWriter::new(file);
+    let mut encoder = flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
+
+    let bytes = catenary::bincode_serialize(data)?;
+    encoder.write_all(&bytes)?;
+
+    encoder.finish()?;
+
+    std::fs::rename(temp_file_path, file_path)?;
+
+    Ok(())
+}
+
+pub fn load_trajectory_data(
+    chateau_id: &str,
+) -> Result<
+    Option<catenary::aspen_dataset::AspenTrajectoryStore>,
+    Box<dyn std::error::Error + Send + Sync>,
+> {
+    let file_path = format!("data/aspen_trajectories/{}.bin.zlib", chateau_id);
+    let path = Path::new(&file_path);
+
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut decoder = flate2::read::ZlibDecoder::new(reader);
+    let mut buffer = Vec::new();
+    std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+
+    let data: catenary::aspen_dataset::AspenTrajectoryStore =
+        catenary::bincode_deserialize(&buffer)?;
+
+    Ok(Some(data))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +189,7 @@ mod tests {
                         timezone: "UTC".to_string(),
                         route_id: "test_route".into(),
                         direction_pattern_id: Some("test_direction".to_string()),
+                        row_count: 0,
                     },
                     vec![],
                 ),
@@ -158,6 +208,24 @@ mod tests {
 
         // Verify other data is preserved
         assert_eq!(data.last_updated_time_ms, loaded_data.last_updated_time_ms);
+    }
+
+    #[test]
+    fn test_save_and_load_trajectory() {
+        let chateau_id = "test_trajectory_chateau";
+        let store = catenary::aspen_dataset::AspenTrajectoryStore {
+            rtree_by_route_type: Default::default(),
+            pattern_to_trajectories: Default::default(),
+            trajectories: Default::default(),
+        };
+
+        save_trajectory_data(chateau_id, &store).unwrap();
+        let loaded_store = load_trajectory_data(chateau_id).unwrap().unwrap();
+
+        assert_eq!(
+            store.pattern_to_trajectories.len(),
+            loaded_store.pattern_to_trajectories.len()
+        );
     }
 }
 
