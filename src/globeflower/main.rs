@@ -339,8 +339,8 @@ fn load_and_match_gtfs_to_osm(
                     {
                         allowed = true;
                     }
-                    // Check Deutschland / DB Regio S-Bahn / Switzerland
-                    else if (c == "deutschland" || c == "dbregioag" || c == "schweiz")
+                    // Check Deutschland / Switzerland
+                    else if (c == "deutschland" || c == "vbb" || c == "schweiz")
                         && line.label.starts_with('S')
                     {
                         allowed = true;
