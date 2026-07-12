@@ -1549,7 +1549,7 @@ impl AspenRpc for AspenServer {
                         Some(trip_updates)
                     }
                     None => {
-                        println!("Trip id not found in trip updates lookup table");
+                        //println!("Trip id not found in trip updates lookup table");
                         None
                     }
                 }
