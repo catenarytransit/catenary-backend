@@ -2331,7 +2331,7 @@ async fn main() -> anyhow::Result<()> {
                     // Ignore accept errors.
                     .filter_map(|r| future::ready(r.ok()))
                     .map(server::BaseChannel::with_defaults)
-                    .map(|channel| {
+                    .for_each(|channel| {
                         let server = AspenServer {
                             //addr: channel.transport().peer_addr().unwrap(),
                             worker_id: worker_id_for_this_thread.clone(),
@@ -2358,11 +2358,9 @@ async fn main() -> anyhow::Result<()> {
                             ),
                             backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
                         };
-                        channel.execute(server.serve()).for_each(spawn)
+                        tokio::spawn(channel.execute(server.serve()).for_each(spawn));
+                        future::ready(())
                     })
-                    // Max n channels.
-                    .buffer_unordered(channel_count)
-                    .for_each(|_| async {})
                     .await;
 
                 panic!("Why did the tarpc task end?");
