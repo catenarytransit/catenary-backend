@@ -19,12 +19,12 @@ async fn main() -> Result<()> {
     let pool = make_async_pool().await.map_err(|e| anyhow::anyhow!(e))?;
     let mut conn = pool.get().await.map_err(|e| anyhow::anyhow!(e))?;
 
-    // 2. Fetch all Chateaus
-    println!("Fetching active chateaus...");
-    use catenary::schema::gtfs::chateaus::dsl::*;
-    let all_chateaus: Vec<String> = chateaus.select(chateau).load(&mut conn).await?;
+    // 2. Fetch all Châteaux
+    println!("Fetching active chateaux...");
+    use catenary::schema::gtfs::chateaux::dsl::*;
+    let all_chateaux: Vec<String> = chateaux.select(chateau).load(&mut conn).await?;
 
-    println!("Found {} chateaus.", all_chateaus.len());
+    println!("Found {} chateaux.", all_chateaux.len());
 
     // 3. Initialize Etcd Client
     let etcd_urls_env = env::var("ETCD_URLS").unwrap_or_else(|_| "localhost:2379".to_string());
