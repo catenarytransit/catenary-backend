@@ -3148,6 +3148,33 @@ pub async fn new_rt_data(
         }
 
         if chateau_id == "sncf" {
+            match crate::sncf_siri_alerts::fetch_alerts(conn).await {
+                Ok(sncf_siri_alerts) => {
+                    println!(
+                        "Loaded {} SNCF SIRI Situation Exchange alerts",
+                        sncf_siri_alerts.len()
+                    );
+                    for (alert_id, alert) in sncf_siri_alerts {
+                        let processed_alert =
+                            crate::alerts_processing::process_alert(alert, chateau_id);
+                        alerts.insert(alert_id, processed_alert);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Failed to load SNCF SIRI Situation Exchange alerts: {error}");
+
+                    if let Some(previous_data) = &previous_authoritative_data_store {
+                        for (alert_id, alert) in &previous_data.aspenised_alerts {
+                            if alert_id.starts_with("sncf-siri-sx:") {
+                                alerts.insert(alert_id.clone(), alert.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if chateau_id == "sncf" {
             if let TrackData::Sncf(Some(sncf_data)) = &fetched_track_data {
                 let mut train_num_to_trip_id: AHashMap<String, String> = AHashMap::new();
                 for (trip_id, trip) in trip_id_to_trip.iter() {
