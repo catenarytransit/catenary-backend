@@ -1268,6 +1268,8 @@ impl AspenRpc for AspenServer {
                     time_of_submission_ms,
                 })
                 .await;
+
+                println!("successfully enqueued work for {}", chateau_id);
             }
         }
 
