@@ -478,41 +478,17 @@ pub async fn single_fetch_time(
                                             _ => None,
                                         };
 
-                                        let mut alert_dupe_trips = false;
+                                        //let mut alert_dupe_trips = false;
 
-                                        if alerts_cleanup == trip_updates_cleanup {
-                                            alerts_cleanup = None;
-                                            alert_dupe_trips = true;
-                                        }
+                                        //if alerts_cleanup == trip_updates_cleanup {
+                                        ///    alerts_cleanup = None;
+                                        //    alert_dupe_trips = true;
+                                        //}
 
                                         //map compression for all data
 
-                                        let vehicle_positions_cleanup = vehicle_positions_cleanup
-                                            .map(|v| {
-                                                let mut encoder = ZlibEncoder::new(
-                                                    Vec::new(),
-                                                    Compression::new(2),
-                                                );
-                                                encoder.write_all(v.as_slice()).unwrap();
-                                                encoder.finish().unwrap()
-                                            });
-
-                                        let trip_updates_cleanup = trip_updates_cleanup.map(|v| {
-                                            let mut encoder =
-                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
-                                            encoder.write_all(v.as_slice()).unwrap();
-                                            encoder.finish().unwrap()
-                                        });
-
-                                        let alerts_cleanup = alerts_cleanup.map(|v| {
-                                            let mut encoder =
-                                                ZlibEncoder::new(Vec::new(), Compression::new(2));
-                                            encoder.write_all(v.as_slice()).unwrap();
-                                            encoder.finish().unwrap()
-                                        });
-
                                         let tarpc_send_to_aspen = aspen_client
-                                            .from_alpenrose_compressed(
+                                            .from_alpenrose(
                                                 tarpc::context::current(),
                                                 data.chateau_id.clone(),
                                                 feed_id.clone(),
@@ -526,7 +502,6 @@ pub async fn single_fetch_time(
                                                 trip_updates_http_status,
                                                 alerts_http_status,
                                                 duration_since_unix_epoch().as_millis() as u64,
-                                                alert_dupe_trips,
                                             )
                                             .await;
 
