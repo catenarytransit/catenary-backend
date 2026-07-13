@@ -960,8 +960,7 @@ async fn fetch_chateau_data(
     let mut rt_alerts: BTreeMap<String, catenary::aspen_dataset::AspenisedAlert> = BTreeMap::new();
 
     if !skip_realtime {
-        if let Some(meta) = aspen_chateau_cache.get(&chateau)
-        {
+        if let Some(meta) = aspen_chateau_cache.get(&chateau) {
             if !trip_ids.is_empty() {
                 let timer_to_connect_to_aspen = std::time::Instant::now();
                 if let Ok(client) =

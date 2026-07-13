@@ -145,11 +145,17 @@ impl<T: DeserializeOwned + Send + Sync + 'static + Clone> EtcdCache<T> {
                                 for event in resp.events() {
                                     if let Some(kv) = event.kv() {
                                         if let Some(key_str) = kv.key_str().ok() {
-                                            if let Some(id) = key_str.strip_prefix(prefix_str.as_str()) {
-                                                if event.event_type() == etcd_client::EventType::Put {
-                                                    match crate::bincode_deserialize::<T>(kv.value()) {
+                                            if let Some(id) =
+                                                key_str.strip_prefix(prefix_str.as_str())
+                                            {
+                                                if event.event_type() == etcd_client::EventType::Put
+                                                {
+                                                    match crate::bincode_deserialize::<T>(
+                                                        kv.value(),
+                                                    ) {
                                                         Ok(metadata) => {
-                                                            cache_clone.insert(id.to_string(), metadata);
+                                                            cache_clone
+                                                                .insert(id.to_string(), metadata);
                                                         }
                                                         Err(e) => {
                                                             eprintln!(

@@ -15,12 +15,19 @@ pub struct PlatformInfo {
     pub platform: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IleDeFrancePlatformInfo {
+    pub stop_id: String,
+    pub platform_name: String,
+}
+
 #[derive(Clone, Debug)]
 pub enum TrackData {
     //output Option<MetrolinkOutputTrackData> instead
     Metrolink(Option<MetrolinkOutputTrackData>),
     Amtrak(AmtrakTrackDataMultisource),
     NationalRail(HashMap<String, Vec<PlatformInfo>>),
+    IleDeFrance(HashMap<String, Vec<IleDeFrancePlatformInfo>>),
     ViaRail(Option<viarail::ViaRailTrackData>),
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
@@ -280,6 +287,26 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
                 Err(e) => {
                     println!("Error fetching National Rail data: {}", e);
                     TrackData::NationalRail(HashMap::new())
+                }
+            }
+        }
+        "île~de~france~mobilités" => {
+            let url = "http://localhost:46299/platforms";
+
+            match reqwest::get(url).await {
+                Ok(r) => match r
+                    .json::<HashMap<String, Vec<IleDeFrancePlatformInfo>>>()
+                    .await
+                {
+                    Ok(response) => TrackData::IleDeFrance(response),
+                    Err(e) => {
+                        println!("Error decoding Île-de-France platform data: {}", e);
+                        TrackData::IleDeFrance(HashMap::new())
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching Île-de-France platform data: {}", e);
+                    TrackData::IleDeFrance(HashMap::new())
                 }
             }
         }

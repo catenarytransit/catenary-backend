@@ -158,9 +158,7 @@ pub async fn get_single_chateau_trajectories(
         let fetch_task = async move {
             let socket = aspen_chateau_cache
                 .get(&chateau_clone)
-                .ok_or_else(|| {
-                    format!("Could not get socket for chateau {}", chateau_clone)
-                })?
+                .ok_or_else(|| format!("Could not get socket for chateau {}", chateau_clone))?
                 .socket;
 
             let client_res =
@@ -436,9 +434,7 @@ pub async fn get_trajectories(
                 let fetch_task = async move {
                     let socket = aspen_chateau_cache
                         .get(&ch_clone2)
-                        .ok_or_else(|| {
-                            format!("Could not get socket for chateau {}", ch_clone2)
-                        })?
+                        .ok_or_else(|| format!("Could not get socket for chateau {}", ch_clone2))?
                         .socket;
 
                     let client_res = if let Some(client) = manager.get_client(socket.clone()).await
