@@ -141,55 +141,77 @@ pub async fn alpenrose_process_threads(
 
     loop {
         tokio::select! {
-            // Wait for a concurrency permit FIRST to apply backpressure before
-            // popping an item off the queue. This prevents the dispatcher from
-            // dequeuing and holding an item while waiting for a permit.
-            permit = permits.clone().acquire_owned() => {
-                let permit = permit.expect("Alpenrose concurrency semaphore closed");
+                    // Wait for a concurrency permit FIRST to apply backpressure before
+                    // popping an item off the queue. This prevents the dispatcher from
+                    // dequeuing and holding an item while waiting for a permit.
+                    permit = permits.clone().acquire_owned() => {
+                        let permit = permit.expect("Alpenrose concurrency semaphore closed");
 
-                let received = alpenrose_to_process_queue.recv().await;
-                let task = match received {
-                    Ok(task) => task,
-                    Err(_) => break, // Queue closed
-                };
+                        let received = alpenrose_to_process_queue.recv().await;
+                        let task = match received {
+                            Ok(task) => task,
+                            Err(_) => break, // Queue closed
+                        };
 
-                let alpenrose_to_process_queue = alpenrose_to_process_queue.clone();
-                let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
-                let authoritative_data_store = Arc::clone(&authoritative_data_store);
-                let authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
-                let conn_pool = Arc::clone(&conn_pool);
-                let chateau_queue_list = Arc::clone(&chateau_queue_list);
-                let redis_client = redis_client.clone();
-                let nyct_cache = Arc::clone(&authoritative_nyct_subway_data_cache);
+                        let alpenrose_to_process_queue = alpenrose_to_process_queue.clone();
+                        let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
+                        let authoritative_data_store = Arc::clone(&authoritative_data_store);
+                        let authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
+                        let conn_pool = Arc::clone(&conn_pool);
+                        let chateau_queue_list = Arc::clone(&chateau_queue_list);
+                        let redis_client = redis_client.clone();
+                        let nyct_cache = Arc::clone(&authoritative_nyct_subway_data_cache);
 
-                running.spawn(async move {
-                    // Hold the permit for the duration of the task
-                    let _permit = permit;
+                        let permits_for_log = Arc::clone(&permits);
 
-                    let _ = process_one_alpenrose_task(
-                        alpenrose_to_process_queue,
-                        task,
-                        authoritative_gtfs_rt_store,
-                        authoritative_data_store,
-                        authoritative_trajectory_data_store,
-                        conn_pool,
-                        chateau_queue_list,
-                        redis_client,
-                        nyct_cache,
-                    )
-                    .await;
-                });
+        running.spawn(async move {
+            let permit = permit;
+
+            let result = process_one_alpenrose_task(
+                alpenrose_to_process_queue,
+                task,
+                authoritative_gtfs_rt_store,
+                authoritative_data_store,
+                authoritative_trajectory_data_store,
+                conn_pool,
+                chateau_queue_list,
+                redis_client,
+                nyct_cache,
+            )
+            .await;
+
+            tracing::info!(
+                available_permits_before_drop =
+                    permits_for_log.available_permits(),
+                "Alpenrose processing function returned; releasing permit"
+            );
+
+            drop(permit);
+
+            tracing::info!(
+                available_permits_after_drop =
+                    permits_for_log.available_permits(),
+                "Alpenrose concurrency permit released"
+            );
+
+            if let Err(error) = result {
+                tracing::error!(
+                    error = ?error,
+                    "Alpenrose processing task returned an error"
+                );
             }
+        });
+                    }
 
-            completed = running.join_next(), if !running.is_empty() => {
-                if let Some(Err(error)) = completed {
-                    tracing::error!(
-                        error = ?error,
-                        "Alpenrose processing task panicked"
-                    );
+                    completed = running.join_next(), if !running.is_empty() => {
+                        if let Some(Err(error)) = completed {
+                            tracing::error!(
+                                error = ?error,
+                                "Alpenrose processing task panicked"
+                            );
+                        }
+                    }
                 }
-            }
-        }
     }
 
     while let Some(result) = running.join_next().await {
@@ -272,13 +294,25 @@ pub async fn process_one_alpenrose_task(
         .catch_unwind(),
     )
     .await;
+
     println!(
         "Worker thread: finished new_rt_data for chateau: {}, feed: {}, result: {:?}",
         chateau_id, feed_id, processing_result
     );
 
+    println!(
+        "Alpenrose postprocess: waiting for chateau state lock: {}",
+        chateau_id
+    );
+
     let task_to_requeue = {
         let mut states = chateau_queue_list.lock();
+
+        println!(
+            "Alpenrose postprocess: acquired chateau state lock: {}",
+            chateau_id
+        );
+
         match states.get_mut(&key) {
             Some(state) if state.dirty => {
                 state.dirty = false;
@@ -292,9 +326,30 @@ pub async fn process_one_alpenrose_task(
         }
     };
 
+    println!(
+        "Alpenrose postprocess: released chateau state lock: {}, requeue={}",
+        chateau_id,
+        task_to_requeue.is_some()
+    );
+
     if let Some(task) = task_to_requeue {
+        println!(
+            "Alpenrose postprocess: requeueing dirty chateau: {}",
+            chateau_id
+        );
+
         alpenrose_to_process_queue.push(task);
+
+        println!(
+            "Alpenrose postprocess: requeued dirty chateau: {}",
+            chateau_id
+        );
     }
+
+    println!(
+        "Alpenrose postprocess: handling processing result: {}",
+        chateau_id
+    );
 
     match processing_result {
         Ok(Ok(Ok(_))) => {}
@@ -314,6 +369,7 @@ pub async fn process_one_alpenrose_task(
             } else {
                 None
             };
+
             tracing::error!(
                 feed_id = %feed_id,
                 chateau_id = %chateau_id,
@@ -330,7 +386,19 @@ pub async fn process_one_alpenrose_task(
         }
     }
 
-    ACTIVE_ALPENROSE_JOBS.fetch_sub(1, Ordering::AcqRel);
+    let active_before = ACTIVE_ALPENROSE_JOBS.load(Ordering::Acquire);
+    let active_after = ACTIVE_ALPENROSE_JOBS.fetch_sub(1, Ordering::AcqRel) - 1;
+
+    tracing::info!(
+        chateau_id = %chateau_id,
+        feed_id = %feed_id,
+        active_before,
+        active_jobs = active_after,
+        queue_depth = alpenrose_to_process_queue
+            .queued
+            .load(Ordering::Acquire),
+        "Alpenrose job fully exited"
+    );
 
     Ok(())
 }
