@@ -145,6 +145,8 @@ pub async fn fetch_lirr_mnr_track_data(
             }
         };
 
+        drop(conn);
+
         for (id, code) in stops_list {
             if let Some(c) = code {
                 code_to_ids.entry(c).or_default().push(id);

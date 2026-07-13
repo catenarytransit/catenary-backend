@@ -112,7 +112,7 @@ pub struct GtfsRealtimeHashStore {
 pub struct AspenServer {
     //pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    pub authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     pub authoritative_trajectory_data_store:
         Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
@@ -1608,7 +1608,7 @@ impl AspenRpc for AspenServer {
             Some(aspenised_data) => {
                 let aspenised_data = aspenised_data.get();
 
-                Some(aspenised_data.clone())
+                Some((**aspenised_data).clone())
             }
             None => None,
         }
@@ -2160,7 +2160,7 @@ async fn main() -> anyhow::Result<()> {
                                             authoritative_data_store
                                                 .entry_async(chateau_id.to_string())
                                                 .await
-                                                .or_insert(data);
+                                                .or_insert(Arc::new(data));
                                             //println!("Successfully loaded data for {}", chateau_id);
 
                                             match persistence::load_trajectory_data(chateau_id) {

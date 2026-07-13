@@ -5,7 +5,7 @@ use scc::HashMap as SccHashMap;
 use std::sync::Arc;
 
 pub fn get_alerts_from_route_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     chateau_id: &str,
     route_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
@@ -45,7 +45,7 @@ pub fn get_alerts_from_route_id(
 }
 
 pub fn get_alerts_from_stop_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     chateau_id: &str,
     stop_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
@@ -85,7 +85,7 @@ pub fn get_alerts_from_stop_id(
 }
 
 pub fn get_alert_from_trip_id(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     chateau_id: &str,
     trip_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
@@ -125,7 +125,7 @@ pub fn get_alert_from_trip_id(
 }
 
 pub fn get_alert_from_stop_ids(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     chateau_id: &str,
     stop_ids: Vec<String>,
 ) -> Option<AlertsforManyStops> {

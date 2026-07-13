@@ -186,7 +186,7 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 //For example, the delay
 //then we write some indexes, so that way the realtime data can quickly be found by certain IDs
 pub async fn new_rt_data(
-    authoritative_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
     >,
@@ -238,7 +238,7 @@ pub async fn new_rt_data(
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => (
                 data.compressed_trip_internal_cache.clone(),
-                Some(data.get().clone()),
+                Some(Arc::clone(data.get())),
             ),
             None => (CompressedTripInternalCache::new(), None),
         };
@@ -3666,11 +3666,13 @@ pub async fn new_rt_data(
     let stage = Instant::now();
     set_stage(chateau_id, realtime_feed_id, "replace_authoritative_store", total_started);
 
-    let aspenised_data_for_persist = aspenised_data.clone();
+    let aspenised_data = Arc::new(aspenised_data);
+    let aspenised_data_for_persist = Arc::clone(&aspenised_data);
+
     authoritative_data_store
         .entry_async(chateau_id.to_string())
         .await
-        .and_modify(|d| *d = aspenised_data_for_persist.clone())
+        .and_modify(|d| *d = Arc::clone(&aspenised_data))
         .or_insert(aspenised_data);
 
     tracing::info!(
@@ -4242,7 +4244,7 @@ pub async fn new_rt_data(
     };
 
     if should_save {
-        if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data_for_persist) {
+        if let Err(e) = persistence::save_chateau_data(chateau_id, aspenised_data_for_persist.as_ref()) {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
             if let Err(e) = persistence::save_trajectory_data(chateau_id, &store, static_changed) {
