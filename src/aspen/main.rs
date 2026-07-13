@@ -672,7 +672,7 @@ impl AspenRpc for AspenServer {
                                 realtime_feed_id.as_str(),
                             )),
                             Err(e) => {
-                                eprintln!("Error decoding vehicles: {}", e);
+                                eprintln!("Error decoding vehicles (compressed): {}", e);
                                 None
                             }
                         }
@@ -754,7 +754,7 @@ impl AspenRpc for AspenServer {
                                 realtime_feed_id.as_str(),
                             )),
                             Err(e) => {
-                                eprintln!("Error decoding trips: {}", e);
+                                eprintln!("Error decoding trips (compressed): {}", e);
                                 None
                             }
                         }
@@ -811,7 +811,7 @@ impl AspenRpc for AspenServer {
                             match parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
                                 Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
                                 Err(e) => {
-                                    eprintln!("Error decoding alerts: {}", e);
+                                    eprintln!("Error decoding alerts (compressed): {}", e);
                                     None
                                 }
                             }
