@@ -1276,7 +1276,7 @@ impl AspenRpc for AspenServer {
                 })
                 .await;
 
-                println!("successfully enqueued work for {}", chateau_id);
+                //println!("successfully enqueued work for {}", chateau_id);
             }
         }
 
@@ -2161,7 +2161,7 @@ async fn main() -> anyhow::Result<()> {
                                                 .entry_async(chateau_id.to_string())
                                                 .await
                                                 .or_insert(data);
-                                            println!("Successfully loaded data for {}", chateau_id);
+                                            //println!("Successfully loaded data for {}", chateau_id);
 
                                             match persistence::load_trajectory_data(chateau_id) {
                                                 Ok(Some(traj_data)) => {
@@ -2169,16 +2169,16 @@ async fn main() -> anyhow::Result<()> {
                                                         .entry_async(chateau_id.to_string())
                                                         .await
                                                         .or_insert(traj_data);
-                                                    println!(
-                                                        "Successfully loaded trajectory data for {}",
-                                                        chateau_id
-                                                    );
+                                                    //println!(
+                                                    //    "Successfully loaded trajectory data for {}",
+                                                    //    chateau_id
+                                                    //);
                                                 }
                                                 Ok(None) => {
-                                                    println!(
-                                                        "No trajectory data found for {}",
-                                                        chateau_id
-                                                    );
+                                                    //println!(
+                                                    //    "No trajectory data found for {}",
+                                                    //    chateau_id
+                                                    //);
                                                 }
                                                 Err(e) => {
                                                     eprintln!(
