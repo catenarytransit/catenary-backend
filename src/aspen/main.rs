@@ -1257,7 +1257,7 @@ impl AspenRpc for AspenServer {
 
             if new_data {
                 self.enqueue_alpenrose_work(ProcessAlpenroseData {
-                    chateau_id,
+                    chateau_id: chateau_id.clone(),
                     realtime_feed_id,
                     has_vehicles,
                     has_trips,
