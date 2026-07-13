@@ -9,38 +9,34 @@ pub fn get_alerts_from_route_id(
     chateau_id: &str,
     route_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
+    let snapshot = {
+        let guard = authoritative_data_store.get_sync(chateau_id)?;
+        Arc::clone(guard.get())
+    };
 
-            let alerts = aspenised_data.impacted_routes_alerts.get(route_id);
+    match snapshot.impacted_routes_alerts.get(route_id) {
+        Some(alerts) => {
+            let mut alerts_vec = Vec::new();
 
-            match alerts {
-                Some(alerts) => {
-                    let mut alerts_vec = Vec::new();
+            for alert_id in alerts {
+                let alert = snapshot.aspenised_alerts.get(alert_id);
 
-                    for alert_id in alerts {
-                        let alert = aspenised_data.aspenised_alerts.get(alert_id);
-
-                        match alert {
-                            Some(alert) => {
-                                alerts_vec.push((alert_id.clone(), alert.clone()));
-                            }
-                            None => {
-                                println!("Alert not found for alert id {}", alert_id);
-                            }
-                        }
+                match alert {
+                    Some(alert) => {
+                        alerts_vec.push((alert_id.clone(), alert.clone()));
                     }
-
-                    Some(alerts_vec)
-                }
-                None => {
-                    println!("Route id not found in alerts lookup table");
-                    None
+                    None => {
+                        println!("Alert not found for alert id {}", alert_id);
+                    }
                 }
             }
+
+            Some(alerts_vec)
         }
-        None => None,
+        None => {
+            println!("Route id not found in alerts lookup table");
+            None
+        }
     }
 }
 
@@ -49,38 +45,34 @@ pub fn get_alerts_from_stop_id(
     chateau_id: &str,
     stop_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
+    let snapshot = {
+        let guard = authoritative_data_store.get_sync(chateau_id)?;
+        Arc::clone(guard.get())
+    };
 
-            let alerts = aspenised_data.impacted_stops_alerts.get(stop_id);
+    match snapshot.impacted_stops_alerts.get(stop_id) {
+        Some(alerts) => {
+            let mut alerts_vec = Vec::new();
 
-            match alerts {
-                Some(alerts) => {
-                    let mut alerts_vec = Vec::new();
+            for alert_id in alerts {
+                let alert = snapshot.aspenised_alerts.get(alert_id);
 
-                    for alert_id in alerts {
-                        let alert = aspenised_data.aspenised_alerts.get(alert_id);
-
-                        match alert {
-                            Some(alert) => {
-                                alerts_vec.push((alert_id.clone(), alert.clone()));
-                            }
-                            None => {
-                                println!("Alert not found for alert id {}", alert_id);
-                            }
-                        }
+                match alert {
+                    Some(alert) => {
+                        alerts_vec.push((alert_id.clone(), alert.clone()));
                     }
-
-                    Some(alerts_vec)
-                }
-                None => {
-                    println!("Stop id not found in alerts lookup table");
-                    None
+                    None => {
+                        println!("Alert not found for alert id {}", alert_id);
+                    }
                 }
             }
+
+            Some(alerts_vec)
         }
-        None => None,
+        None => {
+            println!("Stop id not found in alerts lookup table");
+            None
+        }
     }
 }
 
@@ -89,38 +81,34 @@ pub fn get_alert_from_trip_id(
     chateau_id: &str,
     trip_id: &str,
 ) -> Option<Vec<(String, AspenisedAlert)>> {
-    match authoritative_data_store.get_sync(chateau_id) {
-        Some(aspenised_data) => {
-            let aspenised_data = aspenised_data.get();
+    let snapshot = {
+        let guard = authoritative_data_store.get_sync(chateau_id)?;
+        Arc::clone(guard.get())
+    };
 
-            let alerts = aspenised_data.impacted_trips_alerts.get(trip_id);
+    match snapshot.impacted_trips_alerts.get(trip_id) {
+        Some(alerts) => {
+            let mut alerts_vec = Vec::new();
 
-            match alerts {
-                Some(alerts) => {
-                    let mut alerts_vec = Vec::new();
+            for alert_id in alerts {
+                let alert = snapshot.aspenised_alerts.get(alert_id);
 
-                    for alert_id in alerts {
-                        let alert = aspenised_data.aspenised_alerts.get(alert_id);
-
-                        match alert {
-                            Some(alert) => {
-                                alerts_vec.push((alert_id.clone(), alert.clone()));
-                            }
-                            None => {
-                                println!("Alert not found for alert id {}", alert_id);
-                            }
-                        }
+                match alert {
+                    Some(alert) => {
+                        alerts_vec.push((alert_id.clone(), alert.clone()));
                     }
-
-                    Some(alerts_vec)
-                }
-                None => {
-                    println!("Trip id not found in alerts lookup table");
-                    None
+                    None => {
+                        println!("Alert not found for alert id {}", alert_id);
+                    }
                 }
             }
+
+            Some(alerts_vec)
         }
-        None => None,
+        None => {
+            println!("Trip id not found in alerts lookup table");
+            None
+        }
     }
 }
 

@@ -3663,29 +3663,33 @@ pub async fn new_rt_data(
     };
 
     // Insert the aspenised data - clone only for persistence, move into map when possible
-    let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "replace_authoritative_store", total_started);
-
     let aspenised_data = Arc::new(aspenised_data);
     let aspenised_data_for_persist = Arc::clone(&aspenised_data);
 
-    authoritative_data_store
-        .entry_async(chateau_id.to_string())
-        .await
-        .and_modify(|d| *d = Arc::clone(&aspenised_data))
-        .or_insert(aspenised_data);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "wait_authoritative_store",
+        total_started,
+    );
+
+    let wait_started = Instant::now();
+
+    let _ = authoritative_data_store
+        .insert_async(chateau_id.to_string(), Arc::clone(&aspenised_data))
+        .await;
 
     tracing::info!(
         chateau_id,
-        realtime_feed_id,
-        elapsed_ms = stage.elapsed().as_millis(),
-        "new_rt_data stage=replace_authoritative_store complete"
+        wait_elapsed_ms = wait_started.elapsed().as_millis(),
+        "Authoritative snapshot replaced"
     );
-    let existing_trajectory_store = authoritative_trajectory_data_store
-        .get_async(chateau_id)
-        .await;
-    let (mut geometries, mut patterns, mut rtree_by_route_type) =
-        if let Some(ref existing) = existing_trajectory_store {
+
+    let (mut geometries, mut patterns, mut rtree_by_route_type) = {
+        let guard = authoritative_trajectory_data_store
+            .get_async(chateau_id)
+            .await;
+        if let Some(existing) = guard {
             let store = existing.get();
             (
                 store.geometries.clone(),
@@ -3694,7 +3698,8 @@ pub async fn new_rt_data(
             )
         } else {
             (Vec::new(), Vec::new(), AHashMap::new())
-        };
+        }
+    };
     let mut pattern_map: AHashMap<CompactString, u32> = AHashMap::new();
     for (idx, pat) in patterns.iter().enumerate() {
         pattern_map.insert(pat.pattern_id_str.clone(), idx as u32);
@@ -4219,20 +4224,23 @@ pub async fn new_rt_data(
         "new_rt_data stage=build_trajectories complete"
     );
 
-    let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "replace_authoritative_store", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "wait_trajectory_store",
+        total_started,
+    );
 
-    authoritative_trajectory_data_store
-        .entry_async(chateau_id.to_string())
-        .await
-        .and_modify(|d| *d = store.clone())
-        .or_insert(store.clone());
+    let wait_started = Instant::now();
+
+    let _ = authoritative_trajectory_data_store
+        .insert_async(chateau_id.to_string(), store.clone())
+        .await;
 
     tracing::info!(
         chateau_id,
-        realtime_feed_id,
-        elapsed_ms = stage.elapsed().as_millis(),
-        "new_rt_data stage=replace_authoritative_store complete"
+        wait_elapsed_ms = wait_started.elapsed().as_millis(),
+        "Authoritative trajectory snapshot replaced"
     );
 
     let stage = Instant::now();
