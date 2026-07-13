@@ -216,6 +216,7 @@ toml = "0.8"
 tinypointers = "0.2.2"
 fast-float = "0.2.0"
 itoa = "1.0.18"
+parking_lot = "0.12.5"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = {version = "0.6", features = ["profiling"]}

@@ -121,7 +121,8 @@ pub struct AspenServer {
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub alpenrose_to_process_queue: async_threads_alpenrose::AlpenroseWorkQueue,
-    pub alpenrose_to_process_queue_chateaux: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
+    pub alpenrose_to_process_queue_chateaux:
+        Arc<parking_lot::Mutex<HashMap<WorkKey, ChateauWorkState>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
@@ -136,18 +137,18 @@ pub struct AspenServer {
 
 impl AspenServer {
     async fn enqueue_alpenrose_work(&self, task: ProcessAlpenroseData) {
-        let chateau_id = task.chateau_id.clone();
+        let key = task.chateau_id.clone();
 
         let should_enqueue = {
-            let mut queued_chateaux = self.alpenrose_to_process_queue_chateaux.lock().await;
+            let mut queued_chateaux = self.alpenrose_to_process_queue_chateaux.lock();
 
-            if let Some(state) = queued_chateaux.get_mut(&chateau_id) {
+            if let Some(state) = queued_chateaux.get_mut(&key) {
                 state.dirty = true;
                 state.last_task = task.clone();
                 false
             } else {
                 queued_chateaux.insert(
-                    chateau_id,
+                    key,
                     ChateauWorkState {
                         queued_or_running: true,
                         dirty: false,
@@ -754,7 +755,10 @@ impl AspenRpc for AspenServer {
                                 realtime_feed_id.as_str(),
                             )),
                             Err(e) => {
-                                eprintln!("Error decoding trips (compressed): {}", e);
+                                eprintln!(
+                                    "Error decoding trips (compressed): {} {}",
+                                    realtime_feed_id, e
+                                );
                                 None
                             }
                         }
@@ -811,7 +815,10 @@ impl AspenRpc for AspenServer {
                             match parse_gtfs_rt_message(decompressed_bytes.as_slice()) {
                                 Ok(a) => Some(id_cleanup::gtfs_rt_cleanup(a)),
                                 Err(e) => {
-                                    eprintln!("Error decoding alerts (compressed): {}", e);
+                                    eprintln!(
+                                        "Error decoding alerts (compressed): {} {}",
+                                        realtime_feed_id, e
+                                    );
                                     None
                                 }
                             }
@@ -2119,7 +2126,7 @@ async fn main() -> anyhow::Result<()> {
     > = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
-    let alpenrose_to_process_queue_chateaux = Arc::new(Mutex::new(HashMap::new()));
+    let alpenrose_to_process_queue_chateaux = Arc::new(parking_lot::Mutex::new(HashMap::new()));
     let rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
     let hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>> =

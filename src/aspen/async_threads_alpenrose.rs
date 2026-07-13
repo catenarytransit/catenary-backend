@@ -5,14 +5,17 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use crossbeam::deque::{Injector, Steal};
 
 use ahash::AHashMap;
+use futures::FutureExt;
+use parking_lot::Mutex;
 use scc::HashMap as SccHashMap;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tokio::sync::{AcquireError, Semaphore};
 use tokio::task::JoinSet;
+use tokio::time::timeout;
 
 use crate::import_alpenrose::new_rt_data;
 
@@ -103,7 +106,7 @@ pub async fn alpenrose_process_threads(
     >,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
-    chateau_queue_list: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
+    chateau_queue_list: Arc<Mutex<HashMap<WorkKey, ChateauWorkState>>>,
     _lease_id_for_this_worker: i64,
     redis_client: redis::Client,
     authoritative_nyct_subway_data_cache: Arc<
@@ -215,7 +218,7 @@ pub async fn alpenrose_loop_process_thread(
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
     >,
     conn_pool: Arc<CatenaryPostgresPool>,
-    chateau_queue_list: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
+    chateau_queue_list: Arc<Mutex<HashMap<WorkKey, ChateauWorkState>>>,
     redis_client: redis::Client,
     authoritative_nyct_subway_data_cache: Arc<
         tokio::sync::RwLock<
@@ -237,37 +240,42 @@ pub async fn alpenrose_loop_process_thread(
 
         let feed_id = new_ingest_task.realtime_feed_id.clone();
         let chateau_id = new_ingest_task.chateau_id.clone();
+        let key = chateau_id.clone();
 
-        let rt_processed_status = new_rt_data(
-            Arc::clone(&authoritative_data_store),
-            Arc::clone(&authoritative_trajectory_data_store),
-            Arc::clone(&authoritative_gtfs_rt_store),
-            new_ingest_task.chateau_id.as_str(),
-            new_ingest_task.realtime_feed_id.as_str(),
-            new_ingest_task.has_vehicles,
-            new_ingest_task.has_trips,
-            new_ingest_task.has_alerts,
-            new_ingest_task.vehicles_response_code,
-            new_ingest_task.trips_response_code,
-            new_ingest_task.alerts_response_code,
-            Arc::clone(&conn_pool),
-            &redis_client,
-            Arc::clone(&authoritative_nyct_subway_data_cache),
+        let processing_result = timeout(
+            Duration::from_secs(300),
+            AssertUnwindSafe(new_rt_data(
+                Arc::clone(&authoritative_data_store),
+                Arc::clone(&authoritative_trajectory_data_store),
+                Arc::clone(&authoritative_gtfs_rt_store),
+                new_ingest_task.chateau_id.as_str(),
+                new_ingest_task.realtime_feed_id.as_str(),
+                new_ingest_task.has_vehicles,
+                new_ingest_task.has_trips,
+                new_ingest_task.has_alerts,
+                new_ingest_task.vehicles_response_code,
+                new_ingest_task.trips_response_code,
+                new_ingest_task.alerts_response_code,
+                Arc::clone(&conn_pool),
+                &redis_client,
+                Arc::clone(&authoritative_nyct_subway_data_cache),
+            ))
+            .catch_unwind(),
         )
         .await;
 
         let task_to_requeue = {
-            let mut chateau_queue_list = chateau_queue_list.lock().await;
-            if let Some(state) = chateau_queue_list.get_mut(&chateau_id) {
-                if state.dirty {
+            let mut states = chateau_queue_list.lock();
+            match states.get_mut(&key) {
+                Some(state) if state.dirty => {
                     state.dirty = false;
                     Some(state.last_task.clone())
-                } else {
-                    chateau_queue_list.remove(&chateau_id);
+                }
+                Some(_) => {
+                    states.remove(&key);
                     None
                 }
-            } else {
-                None
+                None => None,
             }
         };
 
@@ -275,13 +283,38 @@ pub async fn alpenrose_loop_process_thread(
             alpenrose_to_process_queue.push(task);
         }
 
-        if let Err(error) = rt_processed_status {
-            tracing::error!(
-                feed_id = %feed_id,
-                chateau_id = %chateau_id,
-                error = ?error,
-                "Error processing realtime data"
-            );
+        match processing_result {
+            Ok(Ok(Ok(_))) => {}
+            Ok(Ok(Err(error))) => {
+                tracing::error!(
+                    feed_id = %feed_id,
+                    chateau_id = %chateau_id,
+                    error = ?error,
+                    "Error processing realtime data"
+                );
+            }
+            Ok(Err(payload)) => {
+                let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                    Some(*s)
+                } else if let Some(s) = payload.downcast_ref::<String>() {
+                    Some(s.as_str())
+                } else {
+                    None
+                };
+                tracing::error!(
+                    feed_id = %feed_id,
+                    chateau_id = %chateau_id,
+                    panic_message = ?msg,
+                    "Panic occurred while processing realtime data"
+                );
+            }
+            Err(_elapsed) => {
+                tracing::error!(
+                    feed_id = %feed_id,
+                    chateau_id = %chateau_id,
+                    "Timeout processing realtime data"
+                );
+            }
         }
     }
 

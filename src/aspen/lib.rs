@@ -240,6 +240,8 @@ pub struct ProcessAlpenroseData {
     pub time_of_submission_ms: u64,
 }
 
+pub type WorkKey = String;
+
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct ChateauWorkState {
     pub queued_or_running: bool,
