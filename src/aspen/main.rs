@@ -122,7 +122,7 @@ pub struct AspenServer {
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub alpenrose_to_process_queue: async_threads_alpenrose::AlpenroseWorkQueue,
     pub alpenrose_to_process_queue_chateaux:
-        Arc<parking_lot::Mutex<HashMap<WorkKey, ChateauWorkState>>>,
+        Arc<parking_lot::Mutex<HashMap<String, ChateauWorkState>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,

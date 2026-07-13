@@ -106,7 +106,7 @@ pub async fn alpenrose_process_threads(
     >,
     conn_pool: Arc<CatenaryPostgresPool>,
     alpenrosethreadcount: usize,
-    chateau_queue_list: Arc<Mutex<HashMap<WorkKey, ChateauWorkState>>>,
+    chateau_queue_list: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
     _lease_id_for_this_worker: i64,
     redis_client: redis::Client,
     authoritative_nyct_subway_data_cache: Arc<
@@ -218,7 +218,7 @@ pub async fn alpenrose_loop_process_thread(
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
     >,
     conn_pool: Arc<CatenaryPostgresPool>,
-    chateau_queue_list: Arc<Mutex<HashMap<WorkKey, ChateauWorkState>>>,
+    chateau_queue_list: Arc<Mutex<HashMap<String, ChateauWorkState>>>,
     redis_client: redis::Client,
     authoritative_nyct_subway_data_cache: Arc<
         tokio::sync::RwLock<
@@ -231,17 +231,25 @@ pub async fn alpenrose_loop_process_thread(
         >,
     >,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    println!("Worker thread alpenrose_loop_process_thread started");
     loop {
         // Suspends the task when no work exists. No polling and no idle CPU.
         let new_ingest_task = match alpenrose_to_process_queue.recv().await {
-            Ok(task) => task,
-            Err(_) => break, // Queue closed
+            Ok(task) => {
+                println!("Worker thread received task for chateau: {}, feed: {}", task.chateau_id, task.realtime_feed_id);
+                task
+            }
+            Err(e) => {
+                println!("Worker thread recv() returned error: {:?}", e);
+                break; // Queue closed
+            }
         };
 
         let feed_id = new_ingest_task.realtime_feed_id.clone();
         let chateau_id = new_ingest_task.chateau_id.clone();
         let key = chateau_id.clone();
 
+        println!("Worker thread: about to trigger new_rt_data for chateau: {}, feed: {}", chateau_id, feed_id);
         let processing_result = timeout(
             Duration::from_secs(300),
             AssertUnwindSafe(new_rt_data(
@@ -263,6 +271,7 @@ pub async fn alpenrose_loop_process_thread(
             .catch_unwind(),
         )
         .await;
+        println!("Worker thread: finished new_rt_data for chateau: {}, feed: {}, result: {:?}", chateau_id, feed_id, processing_result);
 
         let task_to_requeue = {
             let mut states = chateau_queue_list.lock();
