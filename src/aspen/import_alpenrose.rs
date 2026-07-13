@@ -102,6 +102,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use crate::async_threads_alpenrose::set_stage;
 
 lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
@@ -215,7 +216,14 @@ pub async fn new_rt_data(
         "Started processing for chateau {} and feed {}",
         chateau_id, realtime_feed_id
     );
-    let start = std::time::Instant::now();
+    let total_started = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "start", total_started);
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        "new_rt_data stage=start"
+    );
 
     START_TIME
         .entry_async(chateau_id.to_string())
@@ -223,6 +231,9 @@ pub async fn new_rt_data(
         .or_insert(Instant::now());
 
     // Fetch existing data once - extracting only what we need to avoid holding the lock
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "clone_previous_state", total_started);
+
     let (mut compressed_trip_internal_cache, previous_authoritative_data_store) =
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => (
@@ -231,6 +242,13 @@ pub async fn new_rt_data(
             ),
             None => (CompressedTripInternalCache::new(), None),
         };
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=clone_previous_state complete"
+    );
 
     // Metrolink provides a separate JSON endpoint with higher fidelity data (PTC status, exact speed)
     // than their standard GTFS-RT feed. We fetch this to supplement the standard feed.
@@ -397,10 +415,32 @@ pub async fn new_rt_data(
         }
     }
 
-    let conn_pool = pool.as_ref();
-    let mut conn_pre = conn_pool.get().await;
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "postgres_acquire", total_started);
 
-    let fetched_track_data: TrackData = fetch_track_data(&chateau_id, &pool).await;
+    let conn_result = pool.get().await;
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        success = conn_result.is_ok(),
+        "new_rt_data stage=postgres_acquire complete"
+    );
+
+    let conn_pre = conn_result;
+
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "fetch_track_data", total_started);
+
+    let fetched_track_data = fetch_track_data(chateau_id, &pool).await;
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=fetch_track_data complete"
+    );
 
     match &fetched_track_data {
         TrackData::MetroNorthRailroad(x) => {
@@ -509,12 +549,20 @@ pub async fn new_rt_data(
     use catenary::schema::gtfs::routes as routes_pg_schema;
 
     // let's first query the metadata for the chateau
-    let start_chateau_query = Instant::now();
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "query_chateau", total_started);
+
     let this_chateau = chateaus_pg_schema::dsl::chateaus
-        .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
+        .filter(chateaus_pg_schema::dsl::chateau.eq(chateau_id))
         .first::<catenary::models::Chateau>(conn)
         .await?;
-    let chateau_elapsed = start_chateau_query.elapsed();
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=query_chateau complete"
+    );
 
     let is_europe = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
         "EXISTS(SELECT 1 FROM gtfs.chateaus WHERE chateau = '{}' AND ST_Intersects(hull, ST_MakeEnvelope(-28.4207529, 34.31734126604816, 40.85603290981834, 71.4754084, 4326)))",
@@ -525,13 +573,21 @@ pub async fn new_rt_data(
     .unwrap_or(false);
 
     //we want all the routes for this chateau
-    let start_routes_query = Instant::now();
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "query_routes", total_started);
+
     let routes: Vec<catenary::models::Route> = routes_pg_schema::dsl::routes
-        .filter(routes_pg_schema::dsl::chateau.eq(&chateau_id))
+        .filter(routes_pg_schema::dsl::chateau.eq(chateau_id))
         .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await?;
-    let routes_query_elapsed = start_routes_query.elapsed();
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=query_routes complete"
+    );
 
     //It's stranged to have a good transit agency with no routes! What is this, Irvine?
     //This is logged just so we know, but perhaps it is not a crash.
@@ -582,6 +638,9 @@ pub async fn new_rt_data(
 
     // Collects all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
     // to perform a single batch lookup against the cache/DB!
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "collect_rt_trip_ids", total_started);
+
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
     let mut nyct_rt_trip_contexts: AHashMap<String, NyctRtTripContext> = AHashMap::new();
 
@@ -746,6 +805,16 @@ pub async fn new_rt_data(
                 }
             }
         }
+
+        tracing::info!(
+            chateau_id,
+            realtime_feed_id,
+            elapsed_ms = stage.elapsed().as_millis(),
+            "new_rt_data stage=collect_rt_trip_ids complete"
+        );
+
+        let stage = Instant::now();
+        set_stage(chateau_id, realtime_feed_id, "load_trip_cache_or_database", total_started);
 
         // Remove trips not in the current lookup set using retain (avoids intermediate Vec allocation)
         compressed_trip_internal_cache
@@ -1471,6 +1540,16 @@ pub async fn new_rt_data(
             rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
 
+        tracing::info!(
+            chateau_id,
+            realtime_feed_id,
+            elapsed_ms = stage.elapsed().as_millis(),
+            "new_rt_data stage=load_trip_cache_or_database complete"
+        );
+
+        let stage = Instant::now();
+        set_stage(chateau_id, realtime_feed_id, "build_stop_indexes", total_started);
+
         let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
             String,
             Option<AHashSet<std::sync::Arc<str>>>,
@@ -1483,10 +1562,20 @@ pub async fn new_rt_data(
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
 
+        tracing::info!(
+            chateau_id,
+            realtime_feed_id,
+            elapsed_ms = stage.elapsed().as_millis(),
+            "new_rt_data stage=build_stop_indexes complete"
+        );
+
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
             let vehicle_id_to_trip_update_start_time: AHashMap<String, String> = AHashMap::new();
+
+            let stage_vp = Instant::now();
+            set_stage(chateau_id, realtime_feed_id, "process_vehicle_positions", total_started);
 
             if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -1820,6 +1909,16 @@ pub async fn new_rt_data(
                     }
                 }
             }
+
+            tracing::info!(
+                chateau_id,
+                realtime_feed_id,
+                elapsed_ms = stage_vp.elapsed().as_millis(),
+                "new_rt_data stage=process_vehicle_positions complete"
+            );
+
+            let stage_tu = Instant::now();
+            set_stage(chateau_id, realtime_feed_id, "process_trip_updates", total_started);
 
             if let Some(trip_updates_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
@@ -3127,6 +3226,16 @@ pub async fn new_rt_data(
                 }
             }
 
+            tracing::info!(
+                chateau_id,
+                realtime_feed_id,
+                elapsed_ms = stage_tu.elapsed().as_millis(),
+                "new_rt_data stage=process_trip_updates complete"
+            );
+
+            let stage_al = Instant::now();
+            set_stage(chateau_id, realtime_feed_id, "process_alerts", total_started);
+
             if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
                 .await
@@ -3145,6 +3254,13 @@ pub async fn new_rt_data(
                     }
                 }
             }
+
+            tracing::info!(
+                chateau_id,
+                realtime_feed_id,
+                elapsed_ms = stage_al.elapsed().as_millis(),
+                "new_rt_data stage=process_alerts complete"
+            );
         }
 
         if chateau_id == "sncf" {
@@ -3547,12 +3663,22 @@ pub async fn new_rt_data(
     };
 
     // Insert the aspenised data - clone only for persistence, move into map when possible
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "replace_authoritative_store", total_started);
+
     let aspenised_data_for_persist = aspenised_data.clone();
     authoritative_data_store
         .entry_async(chateau_id.to_string())
         .await
         .and_modify(|d| *d = aspenised_data_for_persist.clone())
         .or_insert(aspenised_data);
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=replace_authoritative_store complete"
+    );
     let existing_trajectory_store = authoritative_trajectory_data_store
         .get_async(chateau_id)
         .await;
@@ -3572,6 +3698,9 @@ pub async fn new_rt_data(
         pattern_map.insert(pat.pattern_id_str.clone(), idx as u32);
     }
     let mut static_changed = false;
+
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "build_trajectories", total_started);
 
     let mut trajectories = Vec::new();
     let mut pattern_to_trajectories = vec![Vec::new(); patterns.len()];
@@ -4081,11 +4210,31 @@ pub async fn new_rt_data(
         rtree_by_route_type,
     };
 
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=build_trajectories complete"
+    );
+
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "replace_authoritative_store", total_started);
+
     authoritative_trajectory_data_store
         .entry_async(chateau_id.to_string())
         .await
         .and_modify(|d| *d = store.clone())
         .or_insert(store.clone());
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=replace_authoritative_store complete"
+    );
+
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "persist_data", total_started);
 
     let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
         Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
@@ -4107,7 +4256,21 @@ pub async fn new_rt_data(
         }
     }
 
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = stage.elapsed().as_millis(),
+        "new_rt_data stage=persist_data complete"
+    );
+
     println!("Updated Chateau {}", chateau_id);
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        elapsed_ms = total_started.elapsed().as_millis(),
+        "new_rt_data stage=complete"
+    );
 
     Ok(true)
 }

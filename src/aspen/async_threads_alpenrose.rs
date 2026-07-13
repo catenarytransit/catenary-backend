@@ -12,14 +12,44 @@ use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::time::Duration;
+use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use tokio::sync::{AcquireError, Semaphore};
 use tokio::task::JoinSet;
 use tokio::time::timeout;
+use dashmap::DashMap;
 
 use crate::import_alpenrose::new_rt_data;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+pub static ACTIVE_STAGES: LazyLock<DashMap<String, ActiveAlpenroseStage>> =
+    LazyLock::new(DashMap::new);
+
+#[derive(Clone, Debug)]
+pub struct ActiveAlpenroseStage {
+    pub feed_id: String,
+    pub stage: &'static str,
+    pub stage_started: Instant,
+    pub job_started: Instant,
+}
+
+pub fn set_stage(
+    chateau_id: &str,
+    feed_id: &str,
+    stage: &'static str,
+    job_started: Instant,
+) {
+    ACTIVE_STAGES.insert(
+        chateau_id.to_string(),
+        ActiveAlpenroseStage {
+            feed_id: feed_id.to_string(),
+            stage,
+            stage_started: Instant::now(),
+            job_started,
+        },
+    );
+}
 
 // This is a somewhat simple function!
 // Because Aspen adds incoming new gtfs realtime data into the in-memory database, and then adds the notification to do the work
@@ -30,6 +60,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // Initially written by Kyler
 
 pub static ACTIVE_ALPENROSE_JOBS: AtomicUsize = AtomicUsize::new(0);
+
+struct ActiveJobGuard;
+
+impl ActiveJobGuard {
+    fn new() -> Self {
+        ACTIVE_ALPENROSE_JOBS.fetch_add(1, Ordering::AcqRel);
+        Self
+    }
+}
+
+impl Drop for ActiveJobGuard {
+    fn drop(&mut self) {
+        ACTIVE_ALPENROSE_JOBS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 #[derive(Clone)]
 pub struct AlpenroseWorkQueue {
@@ -139,30 +184,53 @@ pub async fn alpenrose_process_threads(
     let permits = Arc::new(Semaphore::new(concurrency));
     let mut running = JoinSet::new();
 
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+
+        loop {
+            interval.tick().await;
+
+            for entry in ACTIVE_STAGES.iter() {
+                let value = entry.value();
+
+                if value.job_started.elapsed() > Duration::from_secs(10) {
+                    tracing::warn!(
+                        chateau_id = entry.key(),
+                        feed_id = value.feed_id,
+                        stage = value.stage,
+                        stage_elapsed_ms =
+                            value.stage_started.elapsed().as_millis(),
+                        job_elapsed_ms =
+                            value.job_started.elapsed().as_millis(),
+                        "Long-running Alpenrose job"
+                    );
+                }
+            }
+        }
+    });
+
     loop {
-        tokio::select! {
-                    // Wait for a concurrency permit FIRST to apply backpressure before
-                    // popping an item off the queue. This prevents the dispatcher from
-                    // dequeuing and holding an item while waiting for a permit.
-                    permit = permits.clone().acquire_owned() => {
-                        let permit = permit.expect("Alpenrose concurrency semaphore closed");
+        let task = match alpenrose_to_process_queue.recv().await {
+            Ok(task) => task,
+            Err(_) => break,
+        };
 
-                        let received = alpenrose_to_process_queue.recv().await;
-                        let task = match received {
-                            Ok(task) => task,
-                            Err(_) => break, // Queue closed
-                        };
+        let permit = permits
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("Alpenrose semaphore closed");
 
-                        let alpenrose_to_process_queue = alpenrose_to_process_queue.clone();
-                        let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
-                        let authoritative_data_store = Arc::clone(&authoritative_data_store);
-                        let authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
-                        let conn_pool = Arc::clone(&conn_pool);
-                        let chateau_queue_list = Arc::clone(&chateau_queue_list);
-                        let redis_client = redis_client.clone();
-                        let nyct_cache = Arc::clone(&authoritative_nyct_subway_data_cache);
+        let alpenrose_to_process_queue = alpenrose_to_process_queue.clone();
+        let authoritative_gtfs_rt_store = Arc::clone(&authoritative_gtfs_rt_store);
+        let authoritative_data_store = Arc::clone(&authoritative_data_store);
+        let authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
+        let conn_pool = Arc::clone(&conn_pool);
+        let chateau_queue_list = Arc::clone(&chateau_queue_list);
+        let redis_client = redis_client.clone();
+        let nyct_cache = Arc::clone(&authoritative_nyct_subway_data_cache);
 
-                        let permits_for_log = Arc::clone(&permits);
+        let permits_for_log = Arc::clone(&permits);
 
         running.spawn(async move {
             let permit = permit;
@@ -181,16 +249,14 @@ pub async fn alpenrose_process_threads(
             .await;
 
             tracing::info!(
-                available_permits_before_drop =
-                    permits_for_log.available_permits(),
+                available_permits_before_drop = permits_for_log.available_permits(),
                 "Alpenrose processing function returned; releasing permit"
             );
 
             drop(permit);
 
             tracing::info!(
-                available_permits_after_drop =
-                    permits_for_log.available_permits(),
+                available_permits_after_drop = permits_for_log.available_permits(),
                 "Alpenrose concurrency permit released"
             );
 
@@ -201,17 +267,15 @@ pub async fn alpenrose_process_threads(
                 );
             }
         });
-                    }
 
-                    completed = running.join_next(), if !running.is_empty() => {
-                        if let Some(Err(error)) = completed {
-                            tracing::error!(
-                                error = ?error,
-                                "Alpenrose processing task panicked"
-                            );
-                        }
-                    }
-                }
+        while let Some(result) = running.try_join_next() {
+            if let Err(error) = result {
+                tracing::error!(
+                    error = ?error,
+                    "Alpenrose processing task panicked"
+                );
+            }
+        }
     }
 
     while let Some(result) = running.join_next().await {
@@ -259,7 +323,8 @@ pub async fn process_one_alpenrose_task(
     let chateau_id = new_ingest_task.chateau_id.clone();
     let key = chateau_id.clone();
 
-    let active = ACTIVE_ALPENROSE_JOBS.fetch_add(1, Ordering::AcqRel) + 1;
+    let _active_job_guard = ActiveJobGuard::new();
+    let active = ACTIVE_ALPENROSE_JOBS.load(Ordering::Acquire);
 
     tracing::info!(
         active_jobs = active,
@@ -387,7 +452,7 @@ pub async fn process_one_alpenrose_task(
     }
 
     let active_before = ACTIVE_ALPENROSE_JOBS.load(Ordering::Acquire);
-    let active_after = ACTIVE_ALPENROSE_JOBS.fetch_sub(1, Ordering::AcqRel) - 1;
+    let active_after = active_before.saturating_sub(1);
 
     tracing::info!(
         chateau_id = %chateau_id,
@@ -399,6 +464,8 @@ pub async fn process_one_alpenrose_task(
             .load(Ordering::Acquire),
         "Alpenrose job fully exited"
     );
+
+    ACTIVE_STAGES.remove(&chateau_id);
 
     Ok(())
 }
