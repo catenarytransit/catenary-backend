@@ -2214,20 +2214,44 @@ async fn main() -> anyhow::Result<()> {
         >,
     > = Arc::new(tokio::sync::RwLock::new(None));
 
-    let async_from_alpenrose_processor_handler: tokio::task::JoinHandle<
-        Result<(), Box<dyn Error + Sync + Send>>,
-    > = tokio::task::spawn(async_threads_alpenrose::alpenrose_process_threads(
-        b_alpenrose_to_process_queue,
-        b_authoritative_gtfs_rt_store,
-        b_authoritative_data_store,
-        b_authoritative_trajectory_data_store,
-        b_conn_pool,
-        b_thread_count,
-        Arc::clone(&alpenrose_to_process_queue_chateaux),
-        etcd_lease_id_for_this_worker,
-        redis_client.clone(),
-        Arc::clone(&authoritative_nyct_subway_data_cache),
-    ));
+    let alpenrose_thread_chateaux = Arc::clone(&alpenrose_to_process_queue_chateaux);
+    let alpenrose_thread_nyct = Arc::clone(&authoritative_nyct_subway_data_cache);
+
+    let _alpenrose_thread = std::thread::Builder::new()
+        .name("aspen-alpenrose-rt".to_string())
+        .spawn(move || {
+            let thread_count = b_thread_count.max(2);
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(thread_count)
+                .max_blocking_threads(thread_count * 2)
+                .thread_name("aspen-alpenrose")
+                .enable_all()
+                .build()
+                .expect("failed to build Alpenrose Tokio runtime");
+
+            runtime.block_on(async move {
+                if let Err(error) = async_threads_alpenrose::alpenrose_process_threads(
+                    b_alpenrose_to_process_queue,
+                    b_authoritative_gtfs_rt_store,
+                    b_authoritative_data_store,
+                    b_authoritative_trajectory_data_store,
+                    b_conn_pool,
+                    b_thread_count,
+                    alpenrose_thread_chateaux,
+                    etcd_lease_id_for_this_worker,
+                    redis_client.clone(),
+                    alpenrose_thread_nyct,
+                )
+                .await
+                {
+                    tracing::error!(
+                        error = ?error,
+                        "Alpenrose runtime exited"
+                    );
+                }
+            });
+        })
+        .expect("Failed to spawn Alpenrose thread");
 
     let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
