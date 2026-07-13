@@ -3602,17 +3602,6 @@ pub async fn new_rt_data(
     let aspenised_data = Arc::new(aspenised_data);
     let aspenised_data_for_persist = Arc::clone(&aspenised_data);
 
-    set_stage(
-        chateau_id,
-        realtime_feed_id,
-        "wait_authoritative_store",
-        total_started,
-    );
-
-    let _ = authoritative_data_store
-        .insert_async(chateau_id.to_string(), Arc::clone(&aspenised_data))
-        .await;
-
     let (mut geometries, mut patterns, mut rtree_by_route_type) = {
         let guard = authoritative_trajectory_data_store
             .get_async(chateau_id)
@@ -4145,18 +4134,68 @@ pub async fn new_rt_data(
         rtree_by_route_type,
     };
 
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "publish_authoritative_store",
+        total_started,
+    );
 
+    let published_at_ms = aspenised_data.last_updated_time_ms;
+
+    authoritative_data_store
+        .entry_async(chateau_id.to_string())
+        .await
+        .and_modify(|current| {
+            if published_at_ms >= current.last_updated_time_ms {
+                *current = Arc::clone(&aspenised_data);
+            } else {
+                tracing::warn!(
+                    chateau_id,
+                    realtime_feed_id,
+                    candidate_timestamp = published_at_ms,
+                    current_timestamp = current.last_updated_time_ms,
+                    "Refusing to overwrite newer authoritative snapshot"
+                );
+            }
+        })
+        .or_insert(Arc::clone(&aspenised_data));
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        published_at_ms,
+        vehicle_count = aspenised_data.vehicle_positions.len(),
+        trip_update_count = aspenised_data.trip_updates.len(),
+        alert_count = aspenised_data.aspenised_alerts.len(),
+        "Published authoritative realtime snapshot"
+    );
 
     set_stage(
         chateau_id,
         realtime_feed_id,
-        "wait_trajectory_store",
+        "publish_trajectory_store",
         total_started,
     );
 
-    let _ = authoritative_trajectory_data_store
-        .insert_async(chateau_id.to_string(), store.clone())
-        .await;
+    let trajectory_count = store.trajectories.len();
+    let pattern_count = store.patterns.len();
+
+    authoritative_trajectory_data_store
+        .entry_async(chateau_id.to_string())
+        .await
+        .and_modify(|current| {
+            *current = store.clone();
+        })
+        .or_insert(store.clone());
+
+    tracing::info!(
+        chateau_id,
+        realtime_feed_id,
+        trajectory_count,
+        pattern_count,
+        "Published authoritative trajectory snapshot"
+    );
 
     let stage = Instant::now();
     set_stage(chateau_id, realtime_feed_id, "persist_data", total_started);
