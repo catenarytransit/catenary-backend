@@ -3553,14 +3553,28 @@ pub async fn new_rt_data(
         .await
         .and_modify(|d| *d = aspenised_data_for_persist.clone())
         .or_insert(aspenised_data);
-    let mut trajectories_by_route_type: AHashMap<
-        i16,
-        rstar::RTree<catenary::aspen_dataset::AspenisedTrajectoryBBox>,
-    > = AHashMap::new();
-    let mut pattern_to_trajectories: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut trajectories: AHashMap<String, catenary::aspen_dataset::AspenisedTrajectory> =
-        AHashMap::new();
-    let mut indexed_bboxes: AHashSet<(String, u64, u64, u64, u64)> = AHashSet::new();
+    let existing_trajectory_store = authoritative_trajectory_data_store
+        .get_async(chateau_id)
+        .await;
+    let (mut geometries, mut patterns, mut rtree_by_route_type) =
+        if let Some(ref existing) = existing_trajectory_store {
+            let store = existing.get();
+            (
+                store.geometries.clone(),
+                store.patterns.clone(),
+                store.rtree_by_route_type.clone(),
+            )
+        } else {
+            (Vec::new(), Vec::new(), AHashMap::new())
+        };
+    let mut pattern_map: AHashMap<CompactString, u32> = AHashMap::new();
+    for (idx, pat) in patterns.iter().enumerate() {
+        pattern_map.insert(pat.pattern_id_str.clone(), idx as u32);
+    }
+    let mut static_changed = false;
+
+    let mut trajectories = Vec::new();
+    let mut pattern_to_trajectories = vec![Vec::new(); patterns.len()];
     let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
     let current_secs = (current_timestamp / 1000) as i64;
 
@@ -3662,7 +3676,7 @@ pub async fn new_rt_data(
         let mut skipped_too_few_trajectory_stops = 0;
         let mut skipped_too_few_shape_coords = 0;
 
-        for (trip_update_id, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
+        for (_trip_update_id, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
             if trip_update.stop_time_update.is_empty() {
                 skipped_no_stops += 1;
                 continue;
@@ -3727,48 +3741,6 @@ pub async fn new_rt_data(
                 continue;
             }
 
-            let mut stops = Vec::new();
-            for (stu, arr, dep) in &trajectory_stops {
-                let mut name = String::new();
-                let mut lat = 0.0;
-                let mut lon = 0.0;
-                if let Some(stop_id) = &stu.stop_id {
-                    if let Some(stop) = aspenised_data_for_persist
-                        .stop_id_to_stop
-                        .get(stop_id.as_ref())
-                    {
-                        name = stop
-                            .stop_name
-                            .as_ref()
-                            .and_then(|ts| ts.translation.get(0).map(|t| t.text.clone()))
-                            .unwrap_or_default();
-                        lat = stop.stop_lat.unwrap_or(0.0) as f64;
-                        lon = stop.stop_lon.unwrap_or(0.0) as f64;
-                    }
-                }
-
-                let arr_str = chrono::DateTime::from_timestamp(*arr, 0)
-                    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-                    .unwrap_or_default();
-                let dep_str = chrono::DateTime::from_timestamp(*dep, 0)
-                    .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
-                    .unwrap_or_default();
-
-                stops.push(catenary::aspen_dataset::AspenisedTrajectoryStop {
-                    name,
-                    stop_id: stu.stop_id.clone(),
-                    lat,
-                    lon,
-                    track: stu.platform_string.clone().map(|s| s.to_string()),
-                    modes: vec![route_type_str.to_string()],
-                    arrival: arr_str,
-                    departure: dep_str,
-                });
-            }
-
-            let mut segments = Vec::new();
-            let mut total_distance = 0.0;
-
             // Try to find the linestring for this trip's shape
             let mut trip_shape_coords = None;
             if let Some(compressed_trip) = aspenised_data_for_persist
@@ -3797,16 +3769,39 @@ pub async fn new_rt_data(
                 skipped_too_few_shape_coords += 1;
             }
 
+            let mut segments = Vec::new();
             let mut last_shape_idx = 0;
-            for i in 0..stops.len() - 1 {
-                let mut seg_coords = vec![
-                    [stops[i].lon, stops[i].lat],
-                    [stops[i + 1].lon, stops[i + 1].lat],
-                ];
+            for i in 0..trajectory_stops.len() - 1 {
+                let from_stu = trajectory_stops[i].0;
+                let to_stu = trajectory_stops[i + 1].0;
 
-                // If shape is available, find the closest points to stops[i] and stops[i+1]
+                let mut from_lat = 0.0;
+                let mut from_lon = 0.0;
+                if let Some(stop_id) = &from_stu.stop_id {
+                    if let Some(stop) = aspenised_data_for_persist
+                        .stop_id_to_stop
+                        .get(stop_id.as_ref())
+                    {
+                        from_lat = stop.stop_lat.unwrap_or(0.0) as f64;
+                        from_lon = stop.stop_lon.unwrap_or(0.0) as f64;
+                    }
+                }
+
+                let mut to_lat = 0.0;
+                let mut to_lon = 0.0;
+                if let Some(stop_id) = &to_stu.stop_id {
+                    if let Some(stop) = aspenised_data_for_persist
+                        .stop_id_to_stop
+                        .get(stop_id.as_ref())
+                    {
+                        to_lat = stop.stop_lat.unwrap_or(0.0) as f64;
+                        to_lon = stop.stop_lon.unwrap_or(0.0) as f64;
+                    }
+                }
+
+                let mut seg_coords = vec![[from_lon, from_lat], [to_lon, to_lat]];
+
                 if let Some(ref coords) = trip_shape_coords {
-                    // Simple distance function
                     fn dist_sq(a: &[f64; 2], b: &[f64; 2]) -> f64 {
                         let dx = a[0] - b[0];
                         let dy = a[1] - b[1];
@@ -3839,8 +3834,6 @@ pub async fn new_rt_data(
 
                     if best_start <= best_end {
                         seg_coords = coords[best_start..=best_end].to_vec();
-                    } else {
-                        // The bus might have looped or direction is weird, just fallback to straight line
                     }
                 }
 
@@ -3850,12 +3843,6 @@ pub async fn new_rt_data(
                     coordinates: seg_coords,
                 });
             }
-
-            let unique_trip_id = format!("{}_{}", chateau_id, trip_id);
-            let display_name = route
-                .route_short_name
-                .clone()
-                .unwrap_or_else(|| route_id.to_string());
 
             let trip_short_name = trip_update
                 .trip_properties
@@ -3869,31 +3856,7 @@ pub async fn new_rt_data(
                         .and_then(|t| t.trip_short_name.clone().map(|s| s.to_string()))
                 });
 
-            let traj = catenary::aspen_dataset::AspenisedTrajectory {
-                unique_trip_id: unique_trip_id.clone(),
-                chateau_id: chateau_id.to_string(),
-                trip_id: trip_id.to_string(),
-                route_id: trip_update.trip.route_id.clone(),
-                start_time: trip_update.trip.start_time.clone(),
-                start_date: trip_update
-                    .trip
-                    .start_date
-                    .map(|d| d.format("%Y%m%d").to_string()),
-                display_name,
-                mode: route_type_str.to_string(),
-                color: route.route_colour.clone(),
-                text_color: route.route_text_colour.clone(),
-                route_short_name: route.route_short_name.clone(),
-                route_long_name: route.route_long_name.clone(),
-                trip_short_name,
-                route_type: route.route_type as i32,
-                distance: total_distance,
-                segments: segments.clone(),
-                stops,
-                real_time: true,
-            };
-
-            let pattern_id = if let Some(compressed_trip) = aspenised_data_for_persist
+            let pattern_id_str = if let Some(compressed_trip) = aspenised_data_for_persist
                 .compressed_trip_internal_cache
                 .compressed_trips
                 .get(trip_id.as_str())
@@ -3907,108 +3870,127 @@ pub async fn new_rt_data(
                 )
             };
 
-            let is_train = route.route_type == 1 || route.route_type == 2;
+            let pattern_idx = if let Some(&idx) = pattern_map.get(pattern_id_str.as_str()) {
+                idx
+            } else {
+                let new_idx = patterns.len() as u32;
+                let geometry_id = geometries.len() as u32;
 
-            if is_train {
+                let mut pattern_coordinates: Vec<[f64; 2]> = Vec::new();
+                let mut segment_ranges = Vec::new();
+
                 for seg in &segments {
-                    if seg.coordinates.is_empty() {
-                        continue;
-                    }
-                    let mut min_lon = f64::MAX;
-                    let mut min_lat = f64::MAX;
-                    let mut max_lon = f64::MIN;
-                    let mut max_lat = f64::MIN;
-                    for coord in &seg.coordinates {
-                        min_lon = min_lon.min(coord[0]);
-                        min_lat = min_lat.min(coord[1]);
-                        max_lon = max_lon.max(coord[0]);
-                        max_lat = max_lat.max(coord[1]);
-                    }
+                    let coord_start = pattern_coordinates.len() as u32;
+                    pattern_coordinates.extend_from_slice(&seg.coordinates);
+                    let coord_end = pattern_coordinates.len() as u32;
+                    segment_ranges.push(SegmentRange {
+                        from_stop_index: seg.from_stop_index as u16,
+                        to_stop_index: seg.to_stop_index as u16,
+                        coordinate_start: coord_start,
+                        coordinate_end: coord_end,
+                    });
+                }
 
-                    let bbox_key = (
-                        pattern_id.clone(),
-                        min_lon.to_bits(),
-                        min_lat.to_bits(),
-                        max_lon.to_bits(),
-                        max_lat.to_bits(),
-                    );
-                    if indexed_bboxes.insert(bbox_key) {
-                        trajectories_by_route_type
+                let packed_coords = pattern_coordinates
+                    .iter()
+                    .map(|&[lon, lat]| {
+                        [
+                            (lon * 1_000_000.0).round() as i32,
+                            (lat * 1_000_000.0).round() as i32,
+                        ]
+                    })
+                    .collect::<Vec<[i32; 2]>>()
+                    .into_boxed_slice();
+
+                geometries.push(PackedGeometry {
+                    coordinates: packed_coords,
+                });
+
+                patterns.push(PatternGeometry {
+                    pattern_id_str: CompactString::new(&pattern_id_str),
+                    route_id: CompactString::new(route_id),
+                    mode: CompactString::new(route_type_str),
+                    geometry_id,
+                    segments: segment_ranges.into_boxed_slice(),
+                    distance: 0.0,
+                });
+
+                // Calculate bounding boxes and insert into rtree_by_route_type
+                let is_train = route.route_type == 1 || route.route_type == 2;
+                if is_train {
+                    for seg in &segments {
+                        if seg.coordinates.is_empty() {
+                            continue;
+                        }
+                        let mut min_lon = f64::MAX;
+                        let mut min_lat = f64::MAX;
+                        let mut max_lon = f64::MIN;
+                        let mut max_lat = f64::MIN;
+                        for coord in &seg.coordinates {
+                            min_lon = min_lon.min(coord[0]);
+                            min_lat = min_lat.min(coord[1]);
+                            max_lon = max_lon.max(coord[0]);
+                            max_lat = max_lat.max(coord[1]);
+                        }
+                        rtree_by_route_type
                             .entry(route.route_type)
                             .or_insert_with(|| rstar::RTree::new())
-                            .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                                pattern_id: pattern_id.clone(),
+                            .insert(PatternBBox {
+                                pattern_id: new_idx,
                                 min_lon,
                                 min_lat,
                                 max_lon,
                                 max_lat,
                             });
                     }
-                }
-            } else {
-                let mut current_min_lon = f64::MAX;
-                let mut current_min_lat = f64::MAX;
-                let mut current_max_lon = f64::MIN;
-                let mut current_max_lat = f64::MIN;
-                let mut current_dist = 0.0;
-                let mut last_coord: Option<[f64; 2]> = None;
+                } else {
+                    let mut current_min_lon = f64::MAX;
+                    let mut current_min_lat = f64::MAX;
+                    let mut current_max_lon = f64::MIN;
+                    let mut current_max_lat = f64::MIN;
+                    let mut current_dist = 0.0;
+                    let mut last_coord: Option<[f64; 2]> = None;
 
-                for seg in &segments {
-                    for coord in &seg.coordinates {
-                        current_min_lon = current_min_lon.min(coord[0]);
-                        current_min_lat = current_min_lat.min(coord[1]);
-                        current_max_lon = current_max_lon.max(coord[0]);
-                        current_max_lat = current_max_lat.max(coord[1]);
+                    for seg in &segments {
+                        for coord in &seg.coordinates {
+                            current_min_lon = current_min_lon.min(coord[0]);
+                            current_min_lat = current_min_lat.min(coord[1]);
+                            current_max_lon = current_max_lon.max(coord[0]);
+                            current_max_lat = current_max_lat.max(coord[1]);
 
-                        if let Some(last) = last_coord {
-                            let dx = (coord[0] - last[0]) * 111320.0 * (last[1].to_radians().cos());
-                            let dy = (coord[1] - last[1]) * 111320.0;
-                            current_dist += (dx * dx + dy * dy).sqrt();
-                        }
-                        last_coord = Some(*coord);
+                            if let Some(last) = last_coord {
+                                let dx =
+                                    (coord[0] - last[0]) * 111320.0 * (last[1].to_radians().cos());
+                                let dy = (coord[1] - last[1]) * 111320.0;
+                                current_dist += (dx * dx + dy * dy).sqrt();
+                            }
+                            last_coord = Some(*coord);
 
-                        if current_dist >= 10000.0 {
-                            let bbox_key = (
-                                pattern_id.clone(),
-                                current_min_lon.to_bits(),
-                                current_min_lat.to_bits(),
-                                current_max_lon.to_bits(),
-                                current_max_lat.to_bits(),
-                            );
-                            if indexed_bboxes.insert(bbox_key) {
-                                trajectories_by_route_type
+                            if current_dist >= 10000.0 {
+                                rtree_by_route_type
                                     .entry(route.route_type)
                                     .or_insert_with(|| rstar::RTree::new())
-                                    .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                                        pattern_id: pattern_id.clone(),
+                                    .insert(PatternBBox {
+                                        pattern_id: new_idx,
                                         min_lon: current_min_lon,
                                         min_lat: current_min_lat,
                                         max_lon: current_max_lon,
                                         max_lat: current_max_lat,
                                     });
+                                current_min_lon = f64::MAX;
+                                current_min_lat = f64::MAX;
+                                current_max_lon = f64::MIN;
+                                current_max_lat = f64::MIN;
+                                current_dist = 0.0;
                             }
-                            current_min_lon = f64::MAX;
-                            current_min_lat = f64::MAX;
-                            current_max_lon = f64::MIN;
-                            current_max_lat = f64::MIN;
-                            current_dist = 0.0;
                         }
                     }
-                }
-                if current_dist > 0.0 || (current_min_lon != f64::MAX) {
-                    let bbox_key = (
-                        pattern_id.clone(),
-                        current_min_lon.to_bits(),
-                        current_min_lat.to_bits(),
-                        current_max_lon.to_bits(),
-                        current_max_lat.to_bits(),
-                    );
-                    if indexed_bboxes.insert(bbox_key) {
-                        trajectories_by_route_type
+                    if current_dist > 0.0 || (current_min_lon != f64::MAX) {
+                        rtree_by_route_type
                             .entry(route.route_type)
                             .or_insert_with(|| rstar::RTree::new())
-                            .insert(catenary::aspen_dataset::AspenisedTrajectoryBBox {
-                                pattern_id: pattern_id.clone(),
+                            .insert(PatternBBox {
+                                pattern_id: new_idx,
                                 min_lon: current_min_lon,
                                 min_lat: current_min_lat,
                                 max_lon: current_max_lon,
@@ -4016,13 +3998,55 @@ pub async fn new_rt_data(
                             });
                     }
                 }
+
+                pattern_map.insert(CompactString::new(&pattern_id_str), new_idx);
+                static_changed = true;
+                new_idx
+            };
+
+            let trajectory_idx = trajectories.len() as u32;
+            let mut stops_instances = Vec::new();
+            for (stu, arr, dep) in &trajectory_stops {
+                stops_instances.push(TrajectoryStopInstance {
+                    stop_id: stu
+                        .stop_id
+                        .as_ref()
+                        .map(|id| CompactString::new(id.as_ref())),
+                    track: stu
+                        .platform_string
+                        .as_ref()
+                        .map(|s| CompactString::new(s.as_str())),
+                    arrival: *arr,
+                    departure: *dep,
+                });
             }
 
-            pattern_to_trajectories
-                .entry(pattern_id)
-                .or_insert_with(Vec::new)
-                .push(unique_trip_id.clone());
-            trajectories.insert(unique_trip_id, traj);
+            let start_time_parsed = trip_update
+                .trip
+                .start_time
+                .as_ref()
+                .and_then(|s| parse_start_time(s));
+
+            let service_date_parsed = trip_update
+                .trip
+                .start_date
+                .and_then(|d| d.format("%Y%m%d").to_string().parse::<i32>().ok());
+
+            let traj_instance = TrajectoryInstance {
+                pattern_id: pattern_idx,
+                trip_id: CompactString::new(trip_id),
+                start_time: start_time_parsed,
+                service_date: service_date_parsed,
+                trip_short_name: trip_short_name.map(CompactString::new),
+                stops: stops_instances.into_boxed_slice(),
+            };
+
+            trajectories.push(traj_instance);
+
+            if (pattern_idx as usize) >= pattern_to_trajectories.len() {
+                pattern_to_trajectories.resize_with(pattern_idx as usize + 1, Vec::new);
+            }
+            pattern_to_trajectories[pattern_idx as usize].push(trajectory_idx);
         }
         println!(
             "Trajectory computation for chateau {}: \
@@ -4042,7 +4066,7 @@ pub async fn new_rt_data(
             skipped_no_route_cache,
             skipped_too_few_trajectory_stops,
             skipped_too_few_shape_coords,
-            trajectories_by_route_type
+            rtree_by_route_type
                 .values()
                 .map(|t| t.size())
                 .sum::<usize>()
@@ -4050,9 +4074,11 @@ pub async fn new_rt_data(
     }
 
     let store = catenary::aspen_dataset::AspenTrajectoryStore {
-        rtree_by_route_type: trajectories_by_route_type,
-        pattern_to_trajectories,
+        geometries,
+        patterns,
         trajectories,
+        pattern_to_trajectories,
+        rtree_by_route_type,
     };
 
     authoritative_trajectory_data_store
@@ -4070,7 +4096,7 @@ pub async fn new_rt_data(
         if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data_for_persist) {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
-            if let Err(e) = persistence::save_trajectory_data(chateau_id, &store) {
+            if let Err(e) = persistence::save_trajectory_data(chateau_id, &store, static_changed) {
                 eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
             }
             LAST_SAVE_TIME
@@ -4084,6 +4110,22 @@ pub async fn new_rt_data(
     println!("Updated Chateau {}", chateau_id);
 
     Ok(true)
+}
+
+fn parse_start_time(time_str: &str) -> Option<i32> {
+    let parts: Vec<&str> = time_str.split(':').collect();
+    if parts.len() >= 2 {
+        let hrs: i32 = parts[0].parse().ok()?;
+        let mins: i32 = parts[1].parse().ok()?;
+        let secs: i32 = if parts.len() >= 3 {
+            parts[2].parse().unwrap_or(0)
+        } else {
+            0
+        };
+        Some(hrs * 3600 + mins * 60 + secs)
+    } else {
+        None
+    }
 }
 
 //Assisted-by: Gemini 3 via Google Antigravity

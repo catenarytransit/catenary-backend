@@ -130,11 +130,84 @@ pub struct AspenisedTrajectoryBBox {
     pub max_lat: f64,
 }
 
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PackedGeometry {
+    pub coordinates: Box<[[i32; 2]]>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct SegmentRange {
+    pub from_stop_index: u16,
+    pub to_stop_index: u16,
+    pub coordinate_start: u32,
+    pub coordinate_end: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PatternGeometry {
+    pub pattern_id_str: CompactString,
+    pub route_id: CompactString,
+    pub mode: CompactString,
+    pub geometry_id: u32,
+    pub segments: Box<[SegmentRange]>,
+    pub distance: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct TrajectoryStopInstance {
+    pub stop_id: Option<CompactString>,
+    pub track: Option<CompactString>,
+    pub arrival: i64,
+    pub departure: i64,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct TrajectoryInstance {
+    pub pattern_id: u32,
+    pub trip_id: CompactString,
+    pub start_time: Option<i32>,
+    pub service_date: Option<i32>,
+    pub trip_short_name: Option<CompactString>,
+    pub stops: Box<[TrajectoryStopInstance]>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug, PartialEq)]
+pub struct PatternBBox {
+    pub pattern_id: u32,
+    pub min_lon: f64,
+    pub min_lat: f64,
+    pub max_lon: f64,
+    pub max_lat: f64,
+}
+
+impl rstar::RTreeObject for PatternBBox {
+    type Envelope = rstar::AABB<[f64; 2]>;
+
+    fn envelope(&self) -> Self::Envelope {
+        rstar::AABB::from_corners([self.min_lon, self.min_lat], [self.max_lon, self.max_lat])
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenStaticTrajectoryData {
+    pub geometries: Vec<PackedGeometry>,
+    pub patterns: Vec<PatternGeometry>,
+    pub rtree_by_route_type: AHashMap<i16, rstar::RTree<PatternBBox>>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct AspenRealtimeTrajectoryData {
+    pub trajectories: Vec<TrajectoryInstance>,
+    pub pattern_to_trajectories: Vec<Vec<u32>>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct AspenTrajectoryStore {
-    pub rtree_by_route_type: AHashMap<i16, rstar::RTree<AspenisedTrajectoryBBox>>,
-    pub pattern_to_trajectories: AHashMap<String, Vec<String>>,
-    pub trajectories: AHashMap<String, AspenisedTrajectory>,
+    pub geometries: Vec<PackedGeometry>,
+    pub patterns: Vec<PatternGeometry>,
+    pub trajectories: Vec<TrajectoryInstance>,
+    pub pattern_to_trajectories: Vec<Vec<u32>>,
+    pub rtree_by_route_type: AHashMap<i16, rstar::RTree<PatternBBox>>,
 }
 
 impl rstar::RTreeObject for AspenisedTrajectoryBBox {

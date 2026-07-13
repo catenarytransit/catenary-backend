@@ -51,23 +51,43 @@ pub fn load_chateau_data(
 pub fn save_trajectory_data(
     chateau_id: &str,
     data: &catenary::aspen_dataset::AspenTrajectoryStore,
+    static_changed: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let dir = "data/aspen_trajectories";
     std::fs::create_dir_all(dir)?;
 
-    let file_path = format!("{}/{}.bin.zlib", dir, chateau_id);
-    let temp_file_path = format!("{}/{}.bin.zlib.tmp", dir, chateau_id);
+    let static_file_path = format!("{}/{}_static.bin.zlib", dir, chateau_id);
+    let static_path = Path::new(&static_file_path);
 
-    let file = File::create(&temp_file_path)?;
+    if static_changed || !static_path.exists() {
+        let static_temp = format!("{}/{}_static.bin.zlib.tmp", dir, chateau_id);
+        let static_data = catenary::aspen_dataset::AspenStaticTrajectoryData {
+            geometries: data.geometries.clone(),
+            patterns: data.patterns.clone(),
+            rtree_by_route_type: data.rtree_by_route_type.clone(),
+        };
+        let file = File::create(&static_temp)?;
+        let writer = BufWriter::new(file);
+        let mut encoder = flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
+        let bytes = catenary::bincode_serialize(&static_data)?;
+        encoder.write_all(&bytes)?;
+        encoder.finish()?;
+        std::fs::rename(static_temp, static_file_path)?;
+    }
+
+    let rt_file_path = format!("{}/{}_realtime.bin.zlib", dir, chateau_id);
+    let rt_temp = format!("{}/{}_realtime.bin.zlib.tmp", dir, chateau_id);
+    let rt_data = catenary::aspen_dataset::AspenRealtimeTrajectoryData {
+        trajectories: data.trajectories.clone(),
+        pattern_to_trajectories: data.pattern_to_trajectories.clone(),
+    };
+    let file = File::create(&rt_temp)?;
     let writer = BufWriter::new(file);
     let mut encoder = flate2::write::ZlibEncoder::new(writer, flate2::Compression::default());
-
-    let bytes = catenary::bincode_serialize(data)?;
+    let bytes = catenary::bincode_serialize(&rt_data)?;
     encoder.write_all(&bytes)?;
-
     encoder.finish()?;
-
-    std::fs::rename(temp_file_path, file_path)?;
+    std::fs::rename(rt_temp, rt_file_path)?;
 
     Ok(())
 }
@@ -78,23 +98,69 @@ pub fn load_trajectory_data(
     Option<catenary::aspen_dataset::AspenTrajectoryStore>,
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    let file_path = format!("data/aspen_trajectories/{}.bin.zlib", chateau_id);
-    let path = Path::new(&file_path);
+    let dir = "data/aspen_trajectories";
+    let static_file_path = format!("{}/{}_static.bin.zlib", dir, chateau_id);
+    let rt_file_path = format!("{}/{}_realtime.bin.zlib", dir, chateau_id);
 
-    if !path.exists() {
+    let static_path = Path::new(&static_file_path);
+    let rt_path = Path::new(&rt_file_path);
+
+    if !static_path.exists() && !rt_path.exists() {
+        let old_file_path = format!("{}/{}.bin.zlib", dir, chateau_id);
+        let old_path = Path::new(&old_file_path);
+        if old_path.exists() {
+            let file = File::open(old_path)?;
+            let reader = BufReader::new(file);
+            let mut decoder = flate2::read::ZlibDecoder::new(reader);
+            let mut buffer = Vec::new();
+            std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+            let data: catenary::aspen_dataset::AspenTrajectoryStore =
+                catenary::bincode_deserialize(&buffer)?;
+            return Ok(Some(data));
+        }
         return Ok(None);
     }
 
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let mut decoder = flate2::read::ZlibDecoder::new(reader);
-    let mut buffer = Vec::new();
-    std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+    let static_data = if static_path.exists() {
+        let file = File::open(static_path)?;
+        let reader = BufReader::new(file);
+        let mut decoder = flate2::read::ZlibDecoder::new(reader);
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+        catenary::bincode_deserialize::<catenary::aspen_dataset::AspenStaticTrajectoryData>(
+            &buffer,
+        )?
+    } else {
+        catenary::aspen_dataset::AspenStaticTrajectoryData {
+            geometries: Vec::new(),
+            patterns: Vec::new(),
+            rtree_by_route_type: ahash::AHashMap::new(),
+        }
+    };
 
-    let data: catenary::aspen_dataset::AspenTrajectoryStore =
-        catenary::bincode_deserialize(&buffer)?;
+    let rt_data = if rt_path.exists() {
+        let file = File::open(rt_path)?;
+        let reader = BufReader::new(file);
+        let mut decoder = flate2::read::ZlibDecoder::new(reader);
+        let mut buffer = Vec::new();
+        std::io::Read::read_to_end(&mut decoder, &mut buffer)?;
+        catenary::bincode_deserialize::<catenary::aspen_dataset::AspenRealtimeTrajectoryData>(
+            &buffer,
+        )?
+    } else {
+        catenary::aspen_dataset::AspenRealtimeTrajectoryData {
+            trajectories: Vec::new(),
+            pattern_to_trajectories: Vec::new(),
+        }
+    };
 
-    Ok(Some(data))
+    Ok(Some(catenary::aspen_dataset::AspenTrajectoryStore {
+        geometries: static_data.geometries,
+        patterns: static_data.patterns,
+        trajectories: rt_data.trajectories,
+        pattern_to_trajectories: rt_data.pattern_to_trajectories,
+        rtree_by_route_type: static_data.rtree_by_route_type,
+    }))
 }
 
 #[cfg(test)]
@@ -214,12 +280,14 @@ mod tests {
     fn test_save_and_load_trajectory() {
         let chateau_id = "test_trajectory_chateau";
         let store = catenary::aspen_dataset::AspenTrajectoryStore {
-            rtree_by_route_type: Default::default(),
-            pattern_to_trajectories: Default::default(),
+            geometries: Default::default(),
+            patterns: Default::default(),
             trajectories: Default::default(),
+            pattern_to_trajectories: Default::default(),
+            rtree_by_route_type: Default::default(),
         };
 
-        save_trajectory_data(chateau_id, &store).unwrap();
+        save_trajectory_data(chateau_id, &store, true).unwrap();
         let loaded_store = load_trajectory_data(chateau_id).unwrap().unwrap();
 
         assert_eq!(

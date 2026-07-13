@@ -1728,13 +1728,13 @@ impl AspenRpc for AspenServer {
             }
         }
 
-        let mut pattern_ids: AHashSet<&String> = AHashSet::new();
+        let mut pattern_ids: AHashSet<u32> = AHashSet::new();
 
         for (route_type, rtree) in trajectories_by_route_type {
             if route_types.contains(route_type) {
                 let iter = rtree.locate_in_envelope_intersecting(&search_envelope);
                 for bbox_item in iter {
-                    pattern_ids.insert(&bbox_item.pattern_id);
+                    pattern_ids.insert(bbox_item.pattern_id);
                 }
             }
         }
@@ -1745,14 +1745,107 @@ impl AspenRpc for AspenServer {
         let t_end_str = (now + chrono::Duration::minutes(25))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
+        let aspenised_data = match self.authoritative_data_store.get_async(&chateau_id).await {
+            Some(data) => data,
+            None => {
+                return Err(format!(
+                    "No AspenisedData found for chateau: {}",
+                    chateau_id
+                ));
+            }
+        };
+        let aspenised_data_ref = aspenised_data.get();
+        let stop_id_to_stop = &aspenised_data_ref.stop_id_to_stop;
+        let vehicle_routes_cache = &aspenised_data_ref.vehicle_routes_cache;
+
         for pattern_id in pattern_ids {
-            if let Some(trip_ids) = store.pattern_to_trajectories.get(pattern_id) {
-                for trip_id in trip_ids {
-                    if let Some(traj) = store.trajectories.get(trip_id) {
+            if let Some(trip_indices) = store.pattern_to_trajectories.get(pattern_id as usize) {
+                let pattern = &store.patterns[pattern_id as usize];
+                let geometry = &store.geometries[pattern.geometry_id as usize];
+
+                let route_id_str = pattern.route_id.as_str();
+                let route = match vehicle_routes_cache.get(route_id_str) {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                for &trip_idx in trip_indices {
+                    if let Some(traj_inst) = store.trajectories.get(trip_idx as usize) {
                         let mut keep = false;
 
-                        if traj.segments.is_empty() {
-                            for stop in &traj.stops {
+                        let start_time_str = traj_inst.start_time.map(|s| {
+                            let hrs = s / 3600;
+                            let mins = (s % 3600) / 60;
+                            let secs = s % 60;
+                            format!("{:02}:{:02}:{:02}", hrs, mins, secs)
+                        });
+
+                        let start_date_str = traj_inst.service_date.map(|d| format!("{}", d));
+
+                        let mut stops = Vec::with_capacity(traj_inst.stops.len());
+                        for stop_inst in traj_inst.stops.iter() {
+                            let mut name = String::new();
+                            let mut lat = 0.0;
+                            let mut lon = 0.0;
+                            if let Some(ref stop_id) = stop_inst.stop_id {
+                                if let Some(stop) = stop_id_to_stop.get(stop_id) {
+                                    name = stop
+                                        .stop_name
+                                        .as_ref()
+                                        .and_then(|ts| {
+                                            ts.translation.get(0).map(|t| t.text.clone())
+                                        })
+                                        .unwrap_or_default();
+                                    lat = stop.stop_lat.unwrap_or(0.0) as f64;
+                                    lon = stop.stop_lon.unwrap_or(0.0) as f64;
+                                }
+                            }
+
+                            let arr_str = chrono::DateTime::from_timestamp(stop_inst.arrival, 0)
+                                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                                .unwrap_or_default();
+                            let dep_str = chrono::DateTime::from_timestamp(stop_inst.departure, 0)
+                                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+                                .unwrap_or_default();
+
+                            stops.push(catenary::aspen_dataset::AspenisedTrajectoryStop {
+                                name,
+                                stop_id: stop_inst
+                                    .stop_id
+                                    .as_ref()
+                                    .map(|s| std::sync::Arc::from(s.as_str())),
+                                lat,
+                                lon,
+                                track: stop_inst.track.as_ref().map(|s| s.to_string()),
+                                modes: vec![pattern.mode.to_string()],
+                                arrival: arr_str,
+                                departure: dep_str,
+                            });
+                        }
+
+                        let mut segments = Vec::with_capacity(pattern.segments.len());
+                        for seg_range in pattern.segments.iter() {
+                            let start = seg_range.coordinate_start as usize;
+                            let end = seg_range.coordinate_end as usize;
+                            let mut coordinates = Vec::with_capacity(end - start);
+                            if start <= end && end <= geometry.coordinates.len() {
+                                for coord in &geometry.coordinates[start..end] {
+                                    coordinates.push([
+                                        coord[0] as f64 / 1_000_000.0,
+                                        coord[1] as f64 / 1_000_000.0,
+                                    ]);
+                                }
+                            }
+
+                            segments.push(catenary::aspen_dataset::AspenisedTrajectorySegment {
+                                from_stop_index: seg_range.from_stop_index as usize,
+                                to_stop_index: seg_range.to_stop_index as usize,
+                                coordinates,
+                            });
+                        }
+
+                        if segments.is_empty() {
+                            for stop in &stops {
                                 let stop_time = if stop.arrival.is_empty() {
                                     &stop.departure
                                 } else {
@@ -1773,14 +1866,14 @@ impl AspenRpc for AspenServer {
                                 }
                             }
                         } else {
-                            for seg in &traj.segments {
-                                if seg.from_stop_index >= traj.stops.len()
-                                    || seg.to_stop_index >= traj.stops.len()
+                            for seg in &segments {
+                                if seg.from_stop_index >= stops.len()
+                                    || seg.to_stop_index >= stops.len()
                                 {
                                     continue;
                                 }
-                                let from_stop = &traj.stops[seg.from_stop_index];
-                                let to_stop = &traj.stops[seg.to_stop_index];
+                                let from_stop = &stops[seg.from_stop_index];
+                                let to_stop = &stops[seg.to_stop_index];
 
                                 let seg_departure = if from_stop.departure.is_empty() {
                                     &from_stop.arrival
@@ -1825,7 +1918,36 @@ impl AspenRpc for AspenServer {
                         }
 
                         if keep {
-                            trajectories.push(traj.clone());
+                            let display_name = route
+                                .route_short_name
+                                .clone()
+                                .unwrap_or_else(|| route_id_str.to_string());
+
+                            let unique_trip_id = format!("{}_{}", chateau_id, traj_inst.trip_id);
+
+                            trajectories.push(catenary::aspen_dataset::AspenisedTrajectory {
+                                unique_trip_id,
+                                chateau_id: chateau_id.clone(),
+                                trip_id: traj_inst.trip_id.to_string(),
+                                route_id: Some(route_id_str.to_string()),
+                                start_time: start_time_str,
+                                start_date: start_date_str,
+                                display_name,
+                                mode: pattern.mode.to_string(),
+                                color: route.route_colour.clone(),
+                                text_color: route.route_text_colour.clone(),
+                                route_short_name: route.route_short_name.clone(),
+                                route_long_name: route.route_long_name.clone(),
+                                trip_short_name: traj_inst
+                                    .trip_short_name
+                                    .as_ref()
+                                    .map(|s| s.to_string()),
+                                route_type: route.route_type as i32,
+                                distance: pattern.distance,
+                                segments,
+                                stops,
+                                real_time: true,
+                            });
                         }
                     }
                 }
