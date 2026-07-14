@@ -519,7 +519,7 @@ pub async fn single_fetch_time(
                                                 trip_updates_http_status,
                                                 alerts_http_status,
                                                 duration_since_unix_epoch().as_millis() as u64,
-                                                alerts_dupe_trips
+                                                alert_dupe_trips
                                             )
                                             .await;
 
