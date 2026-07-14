@@ -114,6 +114,7 @@ struct StopEvent {
     service_date: Option<NaiveDate>,
     last_stop: bool,
     scheduled_trip_shape_id: Option<CompactString>,
+    pub final_station_name: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -452,6 +453,68 @@ pub async fn departures_at_osm_station(
         calendar_dates_responses.push(calendar_dates);
     }
 
+    let mut itinerary_final_station_name = HashMap::new();
+    if let Some(itin_meta) = itin_meta_btreemap_by_chateau.get("île~de~france~mobilités") {
+        let filtered_itinerary_ids: Vec<String> = itin_meta.keys().cloned().collect();
+        if !filtered_itinerary_ids.is_empty() {
+            let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
+                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq("île~de~france~mobilités".to_string()))
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                            .eq_any(&filtered_itinerary_ids),
+                    )
+                    .select(catenary::models::ItineraryPatternRow::as_select())
+                    .load::<catenary::models::ItineraryPatternRow>(&mut *conn)
+                    .await
+                    .unwrap_or_default();
+
+            let mut itinerary_last_stop_id = HashMap::new();
+            for row in &itin_rows_all {
+                if let Some(meta) = itin_meta.get(&row.itinerary_pattern_id) {
+                    if row.stop_sequence == meta.row_count - 1 {
+                        itinerary_last_stop_id
+                            .insert(row.itinerary_pattern_id.clone(), row.stop_id.to_string());
+                    }
+                }
+            }
+
+            let last_stop_ids: Vec<String> = itinerary_last_stop_id
+                .values()
+                .cloned()
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+
+            if !last_stop_ids.is_empty() {
+                let stop_names: Vec<(String, Option<String>)> =
+                    catenary::schema::gtfs::stops::dsl::stops
+                        .filter(catenary::schema::gtfs::stops::chateau.eq("île~de~france~mobilités".to_string()))
+                        .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(&last_stop_ids))
+                        .select((
+                            catenary::schema::gtfs::stops::gtfs_id,
+                            catenary::schema::gtfs::stops::name,
+                        ))
+                        .load(&mut *conn)
+                        .await
+                        .unwrap_or_default();
+
+                let mut stop_names_map = HashMap::new();
+                for (sid, name) in stop_names {
+                    if let Some(n) = name {
+                        stop_names_map.insert(sid, n);
+                    }
+                }
+
+                for (itin_id, last_sid) in itinerary_last_stop_id {
+                    if let Some(name) = stop_names_map.get(&last_sid) {
+                        itinerary_final_station_name.insert(itin_id, name.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let stop_data_fetch_time = stop_data_fetch_timer.elapsed();
 
     let calendar_structure =
@@ -698,6 +761,7 @@ pub async fn departures_at_osm_station(
     let stops_to_search = std::sync::Arc::new(stops_to_search);
     let alert_indices = std::sync::Arc::new(alert_indices);
     let chateau_to_trips_aspenised = std::sync::Arc::new(chateau_to_trips_aspenised);
+    let itinerary_final_station_name = std::sync::Arc::new(itinerary_final_station_name);
     let events_result = web::block(move || {
         trip_compressed_btreemap_by_chateau.par_iter().flat_map(|(chateau_id, trips_compressed_data)| {
             let active_services = active_services_by_chateau.get(chateau_id);
@@ -708,6 +772,7 @@ pub async fn departures_at_osm_station(
             let stops_to_search = stops_to_search.clone();
             let alert_indices = alert_indices.clone();
             let chateau_to_trips_aspenised = chateau_to_trips_aspenised.clone();
+            let itinerary_final_station_name = itinerary_final_station_name.clone();
 
             // Build cache
             let mut pattern_cache = HashMap::new();
@@ -1067,6 +1132,11 @@ pub async fn departures_at_osm_station(
                                     let is_last_stop = itin_option.gtfs_stop_sequence
                                         == (direction_meta.row_count as u32).saturating_sub(1);
 
+                                    let mut final_station_name = None;
+                                    if chateau_id == "île~de~france~mobilités" {
+                                        final_station_name = itinerary_final_station_name.get(&valid_trip.itinerary_pattern_id).cloned();
+                                    }
+
                                     local_events.push(StopEvent {
                                         scheduled_arrival: scheduled_arrival_time,
                                         scheduled_departure: scheduled_departure_time,
@@ -1095,6 +1165,7 @@ pub async fn departures_at_osm_station(
                                         service_date: Some(valid_trip.trip_service_date),
                                         scheduled_trip_shape_id: direction_meta.gtfs_shape_id.clone()
                                             .map(|x| x.into()),
+                                        final_station_name,
                                     });
                                 }
                             }
