@@ -16,7 +16,7 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tokio::sync::{AcquireError, Semaphore};
 use tokio::task::JoinSet;
-use tokio::time::timeout;
+use tokio::task::JoinSet;
 use dashmap::DashMap;
 
 use crate::import_alpenrose::new_rt_data;
@@ -338,26 +338,23 @@ pub async fn process_one_alpenrose_task(
         "Worker thread: about to trigger new_rt_data for chateau: {}, feed: {}",
         chateau_id, feed_id
     );
-    let processing_result = timeout(
-        Duration::from_secs(300),
-        AssertUnwindSafe(new_rt_data(
-            Arc::clone(&authoritative_data_store),
-            Arc::clone(&authoritative_trajectory_data_store),
-            Arc::clone(&authoritative_gtfs_rt_store),
-            new_ingest_task.chateau_id.as_str(),
-            new_ingest_task.realtime_feed_id.as_str(),
-            new_ingest_task.has_vehicles,
-            new_ingest_task.has_trips,
-            new_ingest_task.has_alerts,
-            new_ingest_task.vehicles_response_code,
-            new_ingest_task.trips_response_code,
-            new_ingest_task.alerts_response_code,
-            Arc::clone(&conn_pool),
-            &redis_client,
-            Arc::clone(&authoritative_nyct_subway_data_cache),
-        ))
-        .catch_unwind(),
-    )
+    let processing_result = AssertUnwindSafe(new_rt_data(
+        Arc::clone(&authoritative_data_store),
+        Arc::clone(&authoritative_trajectory_data_store),
+        Arc::clone(&authoritative_gtfs_rt_store),
+        new_ingest_task.chateau_id.as_str(),
+        new_ingest_task.realtime_feed_id.as_str(),
+        new_ingest_task.has_vehicles,
+        new_ingest_task.has_trips,
+        new_ingest_task.has_alerts,
+        new_ingest_task.vehicles_response_code,
+        new_ingest_task.trips_response_code,
+        new_ingest_task.alerts_response_code,
+        Arc::clone(&conn_pool),
+        &redis_client,
+        Arc::clone(&authoritative_nyct_subway_data_cache),
+    ))
+    .catch_unwind()
     .await;
 
     println!(
@@ -417,8 +414,8 @@ pub async fn process_one_alpenrose_task(
     );
 
     match processing_result {
-        Ok(Ok(Ok(_))) => {}
-        Ok(Ok(Err(error))) => {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
             tracing::error!(
                 feed_id = %feed_id,
                 chateau_id = %chateau_id,
@@ -426,7 +423,7 @@ pub async fn process_one_alpenrose_task(
                 "Error processing realtime data"
             );
         }
-        Ok(Err(payload)) => {
+        Err(payload) => {
             let msg = if let Some(s) = payload.downcast_ref::<&str>() {
                 Some(*s)
             } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -440,13 +437,6 @@ pub async fn process_one_alpenrose_task(
                 chateau_id = %chateau_id,
                 panic_message = ?msg,
                 "Panic occurred while processing realtime data"
-            );
-        }
-        Err(_elapsed) => {
-            tracing::error!(
-                feed_id = %feed_id,
-                chateau_id = %chateau_id,
-                "Timeout processing realtime data"
             );
         }
     }
