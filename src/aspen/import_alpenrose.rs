@@ -43,7 +43,7 @@ const ALLOWED_CHATEAUX: &[&str] = &[
     "rejseplanen~dk~gtfs",
     "busÉireann",
     "nederland",
-];1
+];
 
 #[derive(Clone, Debug)]
 struct NyctRtTripContext {
