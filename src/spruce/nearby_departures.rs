@@ -111,6 +111,7 @@ pub struct DepartureItem {
     pub delayed: bool,
     pub chateau_id: String,
     pub last_stop: bool,
+    pub final_station_name: Option<String>,
 }
 
 #[derive(Serialize, Clone, Debug)]
@@ -174,6 +175,7 @@ pub struct ChateauIntermediate {
     pub departure_time: i64,
     pub long_distance_chateaux: Arc<HashSet<&'static str>>,
     pub query_point: geo::Point<f64>,
+    pub itinerary_final_station_name: HashMap<String, String>,
 }
 
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
@@ -819,6 +821,66 @@ async fn fetch_chateau_intermediate(
         }
     }
 
+    let mut itinerary_final_station_name = HashMap::new();
+    if chateau == "île~de~france~mobilités" && !filtered_itinerary_ids.is_empty() {
+        let mut conn = pool.get().await.unwrap();
+        let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
+            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau.clone()))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                        .eq_any(&filtered_itinerary_ids),
+                )
+                .select(catenary::models::ItineraryPatternRow::as_select())
+                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default();
+
+        let mut itinerary_last_stop_id = HashMap::new();
+        for row in &itin_rows_all {
+            if let Some(meta) = itin_meta.get(&row.itinerary_pattern_id) {
+                if row.stop_sequence == meta.row_count - 1 {
+                    itinerary_last_stop_id
+                        .insert(row.itinerary_pattern_id.clone(), row.stop_id.to_string());
+                }
+            }
+        }
+
+        let last_stop_ids: Vec<String> = itinerary_last_stop_id
+            .values()
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        if !last_stop_ids.is_empty() {
+            let stop_names: Vec<(String, Option<String>)> =
+                catenary::schema::gtfs::stops::dsl::stops
+                    .filter(catenary::schema::gtfs::stops::chateau.eq(chateau.clone()))
+                    .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(&last_stop_ids))
+                    .select((
+                        catenary::schema::gtfs::stops::gtfs_id,
+                        catenary::schema::gtfs::stops::name,
+                    ))
+                    .load(&mut conn)
+                    .await
+                    .unwrap_or_default();
+
+            let mut stop_names_map = HashMap::new();
+            for (sid, name) in stop_names {
+                if let Some(n) = name {
+                    stop_names_map.insert(sid, n);
+                }
+            }
+
+            for (itin_id, last_sid) in itinerary_last_stop_id {
+                if let Some(name) = stop_names_map.get(&last_sid) {
+                    itinerary_final_station_name.insert(itin_id, name.clone());
+                }
+            }
+        }
+    }
+
     Some(ChateauIntermediate {
         chateau,
         valid_trips,
@@ -834,6 +896,7 @@ async fn fetch_chateau_intermediate(
         departure_time: departure_time_chrono.timestamp(),
         long_distance_chateaux,
         query_point,
+        itinerary_final_station_name,
     })
 }
 
@@ -1529,6 +1592,7 @@ async fn render_chateau_response(
                             delayed: is_delayed,
                             chateau_id: chateau.clone(),
                             last_stop: is_last_stop,
+                            final_station_name: intermediate.itinerary_final_station_name.get(&valid_trip.itinerary_pattern_id).cloned(),
                         };
                         ld_departures_by_group
                             .entry((chateau.clone(), station_key.clone()))

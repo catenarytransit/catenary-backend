@@ -40,7 +40,10 @@ const ALLOWED_CHATEAUX: &[&str] = &[
     "sncb",
     "tisséo",
     "vbb",
-];
+    "rejseplanen~dk~gtfs",
+    "busÉireann",
+    "nederland",
+];1
 
 #[derive(Clone, Debug)]
 struct NyctRtTripContext {
@@ -1180,9 +1183,19 @@ pub async fn new_rt_data(
 
                         // Also add ALL stop_ids to lookup so we have their coordinates for trajectories
                         if ALLOWED_CHATEAUX.contains(&chateau_id) {
-                            for stu in &trip_update.stop_time_update {
-                                if let Some(stop_id) = &stu.stop_id {
-                                    stop_ids_to_lookup.insert(stop_id.to_string());
+                            let should_add = if chateau_id == "busÉireann" || chateau_id == "nederland" {
+                                trip_update.trip.route_id.as_ref()
+                                    .and_then(|r_id| route_id_to_route.get(r_id))
+                                    .map(|route| route.route_type == 2)
+                                    .unwrap_or(false)
+                            } else {
+                                true
+                            };
+                            if should_add {
+                                for stu in &trip_update.stop_time_update {
+                                    if let Some(stop_id) = &stu.stop_id {
+                                        stop_ids_to_lookup.insert(stop_id.to_string());
+                                    }
                                 }
                             }
                         }
@@ -3637,7 +3650,17 @@ pub async fn new_rt_data(
     // For trajectories, we need to look at the schedules instead.
     let mut shape_ids_to_fetch = std::collections::HashSet::new();
     if ALLOWED_CHATEAUX.contains(&chateau_id) {
+        let is_special_chateau = chateau_id == "busÉireann" || chateau_id == "nederland";
         for (_, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
+            if is_special_chateau {
+                let is_rail = trip_update.trip.route_id.as_ref()
+                    .and_then(|r_id| aspenised_data_for_persist.vehicle_routes_cache.get(r_id))
+                    .map(|route| route.route_type == 2)
+                    .unwrap_or(false);
+                if !is_rail {
+                    continue;
+                }
+            }
             if let Some(trip_id) = &trip_update.trip.trip_id {
                 if let Some(compressed_trip) = aspenised_data_for_persist
                     .compressed_trip_internal_cache
@@ -3729,6 +3752,8 @@ pub async fn new_rt_data(
         let mut skipped_too_few_trajectory_stops = 0;
         let mut skipped_too_few_shape_coords = 0;
 
+        let is_special_chateau = chateau_id == "busÉireann" || chateau_id == "nederland";
+
         for (_trip_update_id, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
             if trip_update.stop_time_update.is_empty() {
                 skipped_no_stops += 1;
@@ -3761,6 +3786,10 @@ pub async fn new_rt_data(
                     continue;
                 }
             };
+
+            if is_special_chateau && route.route_type != 2 {
+                continue;
+            }
 
             let route_type_str = match route.route_type {
                 0 => "tram",
