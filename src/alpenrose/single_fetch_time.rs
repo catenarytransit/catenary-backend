@@ -478,17 +478,34 @@ pub async fn single_fetch_time(
                                             _ => None,
                                         };
 
-                                        //let mut alert_dupe_trips = false;
+                                        let mut alert_dupe_trips = false;
 
-                                        //if alerts_cleanup == trip_updates_cleanup {
-                                        ///    alerts_cleanup = None;
-                                        //    alert_dupe_trips = true;
-                                        //}
+                                        if alerts_cleanup == trip_updates_cleanup {
+                                            alerts_cleanup = None;
+                                            alert_dupe_trips = true;
+                                        }
 
                                         //map compression for all data
+                                        let vehicle_positions_cleanup = vehicle_positions_cleanup.map(|v| {
+                                            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                                            e.write_all(&v).unwrap();
+                                            e.finish().unwrap()
+                                        });
+
+                                        let trip_updates_cleanup = trip_updates_cleanup.map(|v| {
+                                            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                                            e.write_all(&v).unwrap();
+                                            e.finish().unwrap()
+                                        });
+
+                                        let alerts_cleanup = alerts_cleanup.map(|v| {
+                                            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+                                            e.write_all(&v).unwrap();
+                                            e.finish().unwrap()
+                                        });
 
                                         let tarpc_send_to_aspen = aspen_client
-                                            .from_alpenrose(
+                                            .from_alpenrose_compressed(
                                                 tarpc::context::current(),
                                                 data.chateau_id.clone(),
                                                 feed_id.clone(),
