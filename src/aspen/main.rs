@@ -636,6 +636,7 @@ impl AspenRpc for AspenServer {
         time_of_submission_ms: u64,
         alerts_dupe_trips: bool,
     ) -> bool {
+        println!("Recieved a compressed submission for {} {}", chateau_id, realtime_feed_id);
         //decompress using flate2
 
         //   if new_data_status_from_timestamps {
