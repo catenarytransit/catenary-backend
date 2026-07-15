@@ -1002,7 +1002,7 @@ pub fn name_shortening_hash_insert_elastic(
     } else {
         let lang_tag = lang
             .to_string()
-            .replace("-", "_")
+            .replace('-', '_')
             .to_lowercase()
             .to_string();
 
