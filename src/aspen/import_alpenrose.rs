@@ -4246,15 +4246,15 @@ pub async fn new_rt_data(
         })
         .or_insert(Arc::clone(&aspenised_data));
 
-    tracing::info!(
-        chateau_id,
-        realtime_feed_id,
-        published_at_ms,
-        vehicle_count = aspenised_data.vehicle_positions.len(),
-        trip_update_count = aspenised_data.trip_updates.len(),
-        alert_count = aspenised_data.aspenised_alerts.len(),
-        "Published authoritative realtime snapshot"
-    );
+    // tracing::info!(
+    //     chateau_id,
+    //     realtime_feed_id,
+    //     published_at_ms,
+    //     vehicle_count = aspenised_data.vehicle_positions.len(),
+    //     trip_update_count = aspenised_data.trip_updates.len(),
+    //     alert_count = aspenised_data.aspenised_alerts.len(),
+    //     "Published authoritative realtime snapshot"
+    // );
 
     set_stage(
         chateau_id,
@@ -4274,13 +4274,13 @@ pub async fn new_rt_data(
         })
         .or_insert(store.clone());
 
-    tracing::info!(
-        chateau_id,
-        realtime_feed_id,
-        trajectory_count,
-        pattern_count,
-        "Published authoritative trajectory snapshot"
-    );
+    // tracing::info!(
+    //     chateau_id,
+    //     realtime_feed_id,
+    //     trajectory_count,
+    //     pattern_count,
+    //     "Published authoritative trajectory snapshot"
+    // );
 
     let stage = Instant::now();
     set_stage(chateau_id, realtime_feed_id, "persist_data", total_started);
@@ -4307,7 +4307,7 @@ pub async fn new_rt_data(
         }
     }
 
-    println!("Updated Chateau {}", chateau_id);
+    //println!("Updated Chateau {}", chateau_id);
 
     Ok(true)
 }

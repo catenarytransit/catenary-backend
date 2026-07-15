@@ -319,18 +319,18 @@ pub async fn process_one_alpenrose_task(
     let _active_job_guard = ActiveJobGuard::new();
     let active = ACTIVE_ALPENROSE_JOBS.load(Ordering::Acquire);
 
-    tracing::info!(
-        active_jobs = active,
-        queue_depth = alpenrose_to_process_queue.queued.load(Ordering::Relaxed),
-        chateau_id,
-        feed_id,
-        "Starting Alpenrose job"
-    );
+    // tracing::info!(
+    //     active_jobs = active,
+    //     queue_depth = alpenrose_to_process_queue.queued.load(Ordering::Relaxed),
+    //     chateau_id,
+    //     feed_id,
+    //     "Starting Alpenrose job"
+    // );
 
-    println!(
-        "Worker thread: about to trigger new_rt_data for chateau: {}, feed: {}",
-        chateau_id, feed_id
-    );
+    // println!(
+    //     "Worker thread: about to trigger new_rt_data for chateau: {}, feed: {}",
+    //     chateau_id, feed_id
+    // );
     let processing_result = AssertUnwindSafe(new_rt_data(
         Arc::clone(&authoritative_data_store),
         Arc::clone(&authoritative_trajectory_data_store),
@@ -350,23 +350,23 @@ pub async fn process_one_alpenrose_task(
     .catch_unwind()
     .await;
 
-    println!(
-        "Worker thread: finished new_rt_data for chateau: {}, feed: {}, result: {:?}",
-        chateau_id, feed_id, processing_result
-    );
+    // println!(
+    //     "Worker thread: finished new_rt_data for chateau: {}, feed: {}, result: {:?}",
+    //     chateau_id, feed_id, processing_result
+    // );
 
-    println!(
-        "Alpenrose postprocess: waiting for chateau state lock: {}",
-        chateau_id
-    );
+    // println!(
+    //     "Alpenrose postprocess: waiting for chateau state lock: {}",
+    //     chateau_id
+    // );
 
     let task_to_requeue = {
         let mut states = chateau_queue_list.lock();
 
-        println!(
-            "Alpenrose postprocess: acquired chateau state lock: {}",
-            chateau_id
-        );
+        // println!(
+        //     "Alpenrose postprocess: acquired chateau state lock: {}",
+        //     chateau_id
+        // );
 
         match states.get_mut(&key) {
             Some(state) if state.dirty => {
@@ -381,30 +381,30 @@ pub async fn process_one_alpenrose_task(
         }
     };
 
-    println!(
-        "Alpenrose postprocess: released chateau state lock: {}, requeue={}",
-        chateau_id,
-        task_to_requeue.is_some()
-    );
+    // println!(
+    //     "Alpenrose postprocess: released chateau state lock: {}, requeue={}",
+    //     chateau_id,
+    //     task_to_requeue.is_some()
+    // );
 
     if let Some(task) = task_to_requeue {
-        println!(
-            "Alpenrose postprocess: requeueing dirty chateau: {}",
-            chateau_id
-        );
+        // println!(
+        //     "Alpenrose postprocess: requeueing dirty chateau: {}",
+        //     chateau_id
+        // );
 
         alpenrose_to_process_queue.push(task);
 
-        println!(
-            "Alpenrose postprocess: requeued dirty chateau: {}",
-            chateau_id
-        );
+        // println!(
+        //     "Alpenrose postprocess: requeued dirty chateau: {}",
+        //     chateau_id
+        // );
     }
 
-    println!(
-        "Alpenrose postprocess: handling processing result: {}",
-        chateau_id
-    );
+    // println!(
+    //     "Alpenrose postprocess: handling processing result: {}",
+    //     chateau_id
+    // );
 
     match processing_result {
         Ok(Ok(_)) => {}
@@ -437,16 +437,16 @@ pub async fn process_one_alpenrose_task(
     let active_before = ACTIVE_ALPENROSE_JOBS.load(Ordering::Acquire);
     let active_after = active_before.saturating_sub(1);
 
-    tracing::info!(
-        chateau_id = %chateau_id,
-        feed_id = %feed_id,
-        active_before,
-        active_jobs = active_after,
-        queue_depth = alpenrose_to_process_queue
-            .queued
-            .load(Ordering::Acquire),
-        "Alpenrose job fully exited"
-    );
+    // tracing::info!(
+    //     chateau_id = %chateau_id,
+    //     feed_id = %feed_id,
+    //     active_before,
+    //     active_jobs = active_after,
+    //     queue_depth = alpenrose_to_process_queue
+    //         .queued
+    //         .load(Ordering::Acquire),
+    //     "Alpenrose job fully exited"
+    // );
 
     ACTIVE_STAGES.remove(&chateau_id);
 
