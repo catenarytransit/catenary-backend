@@ -309,6 +309,33 @@ pub async fn gtfs_process_feed(
 
             writeln!(file, "37200,Tampoi,1.515891,103.741847")?;
         }
+        "f-u3-günterangergüterverkehrsgmbh~coomnibusvermietungkg~fritzbeh" => {
+                        let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![
+                    String::from("rail"),
+                    String::from("subway"),
+                    String::from("tram"),
+                ]),
+                true,
+                true,
+            )
+            .await?;
+
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-germany-latest.osm.pbf",
+                Some(vec![
+                    String::from("bus"),
+                    String::from("coach"),
+                    String::from("trolleybus"),
+                ]),
+                true,
+                true,
+            )
+            .await?;
+        }
         "f-gtfs~de"
         | "f-gtfs~de~bayern"
         | "f-gtfs~de~berlin"
