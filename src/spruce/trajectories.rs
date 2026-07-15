@@ -143,10 +143,18 @@ pub async fn get_single_chateau_trajectories(
         catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
     >,
     aspen_client_manager: Arc<AspenClientManager>,
-    params: TrajectorySubscriptionParams,
+    mut params: TrajectorySubscriptionParams,
     chateau: String,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
     if !ALLOWED_CHATEAUX.contains(&chateau.as_str()) {
+        return Ok(vec![]);
+    }
+
+    if params.zoom < 9 {
+        params.modes.retain(|m| m != "bus");
+    }
+
+    if params.modes.is_empty() {
         return Ok(vec![]);
     }
 
@@ -432,9 +440,17 @@ pub async fn get_trajectories(
         catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
     >,
     aspen_client_manager: Arc<AspenClientManager>,
-    params: TrajectorySubscriptionParams,
+    mut params: TrajectorySubscriptionParams,
     chateaus: std::collections::HashSet<String>,
 ) -> Result<Vec<TrajectoryWrapper>, String> {
+    if params.zoom < 9 {
+        params.modes.retain(|m| m != "bus");
+    }
+
+    if params.modes.is_empty() {
+        return Ok(vec![]);
+    }
+
     let zoom = params.zoom;
     let mut futures = Vec::new();
 
