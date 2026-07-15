@@ -3697,6 +3697,19 @@ pub async fn new_rt_data(
     let current_timestamp = catenary::duration_since_unix_epoch().as_millis() as u64;
     let current_secs = (current_timestamp / 1000) as i64;
 
+    let mut vehicle_trip_ids = AHashSet::new();
+    let mut vehicle_route_ids = AHashSet::new();
+    for vehicle in aspenised_data_for_persist.vehicle_positions.values() {
+        if let Some(trip) = &vehicle.trip {
+            if let Some(t_id) = &trip.trip_id {
+                vehicle_trip_ids.insert(t_id.clone());
+            }
+            if let Some(r_id) = &trip.route_id {
+                vehicle_route_ids.insert(r_id.clone());
+            }
+        }
+    }
+
     // Fetch shapes for all trips
     // Note: The shape IDs sent in the GTFS realtime dataset are only used for detours.
     // They are not related to the shape IDs required for timetable analysis and trajectory computation.
@@ -3705,6 +3718,16 @@ pub async fn new_rt_data(
     if ALLOWED_CHATEAUX.contains(&chateau_id) {
         let is_special_chateau = chateau_id == "busÉireann" || chateau_id == "nederland";
         for (_, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
+            if let Some(trip_id) = &trip_update.trip.trip_id {
+                if vehicle_trip_ids.contains(trip_id) {
+                    continue;
+                }
+            }
+            if let Some(route_id) = &trip_update.trip.route_id {
+                if vehicle_route_ids.contains(route_id) {
+                    continue;
+                }
+            }
             if is_special_chateau {
                 let is_rail = trip_update
                     .trip
@@ -3831,6 +3854,10 @@ pub async fn new_rt_data(
                     continue;
                 }
             };
+
+            if vehicle_trip_ids.contains(trip_id) || vehicle_route_ids.contains(route_id) {
+                continue;
+            }
 
             let route = match aspenised_data_for_persist
                 .vehicle_routes_cache
