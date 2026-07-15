@@ -1037,6 +1037,8 @@ async fn main() -> std::io::Result<()> {
             .service(unmatched_rail_stops_meta)
             .service(aspenised_data_over_https::fetch_full_trip_updates_dataset)
             .service(aspenised_data_over_https::get_all_trajectories)
+            .service(chateau_gtfs_rt_counts)
+            .service(chateau_authoritative_counts)
             //   .service(nearby_departuresv2::nearby_from_coords_v2)
             //we do some trolling
             .service(web::redirect(
@@ -1146,4 +1148,48 @@ pub async fn proxy_for_watchduty_tiles(
                 .body("Could not fetch data")
         }
     }
+}
+
+#[actix_web::get("/chateau_gtfs_rt_counts/{chateau}")]
+pub async fn chateau_gtfs_rt_counts(
+    path: web::Path<String>,
+    aspen_chateau_cache: web::Data<Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>>,
+) -> impl Responder {
+    let chateau = path.into_inner();
+
+    if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
+        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+        if let Ok(aspen_client) = aspen_client {
+            let counts = aspen_client.get_gtfs_rt_entity_counts(tarpc::context::current(), chateau.clone()).await;
+            if let Ok(Some(counts)) = counts {
+                return HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body(serde_json::to_string(&counts).unwrap());
+            }
+        }
+    }
+    HttpResponse::NotFound().body("Chateau or data not found")
+}
+
+#[actix_web::get("/chateau_authoritative_counts/{chateau}")]
+pub async fn chateau_authoritative_counts(
+    path: web::Path<String>,
+    aspen_chateau_cache: web::Data<Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>>,
+) -> impl Responder {
+    let chateau = path.into_inner();
+
+    if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
+        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+
+        if let Ok(aspen_client) = aspen_client {
+            let counts = aspen_client.get_authoritative_store_counts(tarpc::context::current(), chateau.clone()).await;
+            if let Ok(Some(counts)) = counts {
+                return HttpResponse::Ok()
+                    .insert_header(("Content-Type", "application/json"))
+                    .body(serde_json::to_string(&counts).unwrap());
+            }
+        }
+    }
+    HttpResponse::NotFound().body("Chateau or data not found")
 }

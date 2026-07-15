@@ -1918,6 +1918,117 @@ impl AspenRpc for AspenServer {
 
         Ok(trajectories)
     }
+
+    async fn get_gtfs_rt_entity_counts(
+        self,
+        _: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<HashMap<String, u64>> {
+        use diesel::prelude::*;
+        use diesel_async::RunQueryDsl;
+
+        let conn_pool = self.conn_pool.as_ref();
+        let conn_pre = conn_pool.get().await;
+        if let Err(e) = &conn_pre {
+            println!("Error connecting to postgres in get_gtfs_rt_entity_counts: {e}");
+        }
+        let mut conn = conn_pre.ok()?;
+
+        use catenary::schema::gtfs::chateaus as chateaus_pg_schema;
+        let this_chateau = chateaus_pg_schema::dsl::chateaus
+            .filter(chateaus_pg_schema::dsl::chateau.eq(&chateau_id))
+            .first::<catenary::models::Chateau>(&mut conn)
+            .await
+            .ok()?;
+
+        let feed_ids: Vec<String> = this_chateau
+            .realtime_feeds
+            .into_iter()
+            .flatten()
+            .collect();
+
+        let mut trip_update_count = 0;
+        let mut vehicle_count = 0;
+        let mut alert_count = 0;
+        let mut shape_count = 0;
+        let mut stop_count = 0;
+        let mut trip_modifications_count = 0;
+
+        for feed_id in feed_ids {
+            for &feed_type in &[GtfsRtType::VehiclePositions, GtfsRtType::TripUpdates, GtfsRtType::Alerts] {
+                if let Some(guard) = self.authoritative_gtfs_rt_store.get_async(&(feed_id.clone(), feed_type)).await {
+                    let compact_feed_msg = guard.get();
+                    for entity in &compact_feed_msg.entity {
+                        if entity.trip_update.is_some() {
+                            trip_update_count += 1;
+                        }
+                        if entity.vehicle.is_some() {
+                            vehicle_count += 1;
+                        }
+                        if entity.alert.is_some() {
+                            alert_count += 1;
+                        }
+                        if entity.shape.is_some() {
+                            shape_count += 1;
+                        }
+                        if entity.stop.is_some() {
+                            stop_count += 1;
+                        }
+                        if entity.trip_modifications.is_some() {
+                            trip_modifications_count += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut counts = HashMap::new();
+        counts.insert("trip_updates".to_string(), trip_update_count);
+        counts.insert("vehicles".to_string(), vehicle_count);
+        counts.insert("alerts".to_string(), alert_count);
+        counts.insert("shapes".to_string(), shape_count);
+        counts.insert("stops".to_string(), stop_count);
+        counts.insert("trip_modifications".to_string(), trip_modifications_count);
+
+        Some(counts)
+    }
+
+    async fn get_authoritative_store_counts(
+        self,
+        _: tarpc::context::Context,
+        chateau_id: String,
+    ) -> Option<HashMap<String, u64>> {
+        let aspenised_data = {
+            let guard = self.authoritative_data_store.get_async(&chateau_id).await?;
+            Arc::clone(guard.get())
+        };
+
+        let mut counts = HashMap::new();
+        counts.insert("vehicle_positions".to_string(), aspenised_data.vehicle_positions.len() as u64);
+        counts.insert("vehicle_routes_cache".to_string(), aspenised_data.vehicle_routes_cache.len() as u64);
+        counts.insert("vehicle_label_to_gtfs_id".to_string(), aspenised_data.vehicle_label_to_gtfs_id.len() as u64);
+        counts.insert("trip_updates".to_string(), aspenised_data.trip_updates.len() as u64);
+        counts.insert("trip_updates_lookup_by_trip_id_to_trip_update_ids".to_string(), aspenised_data.trip_updates_lookup_by_trip_id_to_trip_update_ids.len() as u64);
+        counts.insert("trip_updates_lookup_by_route_id_to_trip_update_ids".to_string(), aspenised_data.trip_updates_lookup_by_route_id_to_trip_update_ids.len() as u64);
+        counts.insert("vehicle_positions_rtree_by_route_type".to_string(), aspenised_data.vehicle_positions_rtree_by_route_type.len() as u64);
+        counts.insert("aspenised_alerts".to_string(), aspenised_data.aspenised_alerts.len() as u64);
+        counts.insert("impacted_routes_alerts".to_string(), aspenised_data.impacted_routes_alerts.len() as u64);
+        counts.insert("impacted_stops_alerts".to_string(), aspenised_data.impacted_stops_alerts.len() as u64);
+        counts.insert("impacted_trips_alerts".to_string(), aspenised_data.impacted_trips_alerts.len() as u64);
+        counts.insert("trip_id_to_vehicle_gtfs_rt_id".to_string(), aspenised_data.trip_id_to_vehicle_gtfs_rt_id.len() as u64);
+        counts.insert("stop_id_to_stop".to_string(), aspenised_data.stop_id_to_stop.len() as u64);
+        counts.insert("shape_id_to_shape".to_string(), aspenised_data.shape_id_to_shape.len() as u64);
+        counts.insert("trip_modifications".to_string(), aspenised_data.trip_modifications.len() as u64);
+        counts.insert("trip_id_to_trip_modification_ids".to_string(), aspenised_data.trip_id_to_trip_modification_ids.len() as u64);
+        counts.insert("stop_id_to_trip_modification_ids".to_string(), aspenised_data.stop_id_to_trip_modification_ids.len() as u64);
+        counts.insert("stop_id_to_non_scheduled_trip_ids".to_string(), aspenised_data.stop_id_to_non_scheduled_trip_ids.len() as u64);
+        counts.insert("stop_id_to_parent_id".to_string(), aspenised_data.stop_id_to_parent_id.len() as u64);
+        counts.insert("parent_id_to_children_ids".to_string(), aspenised_data.parent_id_to_children_ids.len() as u64);
+        counts.insert("itinerary_patterns".to_string(), aspenised_data.itinerary_pattern_internal_cache.itinerary_patterns.len() as u64);
+        counts.insert("compressed_trips".to_string(), aspenised_data.compressed_trip_internal_cache.compressed_trips.len() as u64);
+
+        Some(counts)
+    }
 }
 
 async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {

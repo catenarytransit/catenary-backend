@@ -193,6 +193,10 @@ pub trait AspenRpc {
         chateau_id: String,
         params: crate::pasque::lib::TrajectorySubscriptionParams,
     ) -> Result<Vec<crate::aspen_dataset::AspenisedTrajectory>, String>;
+
+    async fn get_gtfs_rt_entity_counts(chateau_id: String) -> Option<HashMap<String, u64>>;
+
+    async fn get_authoritative_store_counts(chateau_id: String) -> Option<HashMap<String, u64>>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
