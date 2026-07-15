@@ -151,7 +151,7 @@ fn get_expected_trip_position(
 }
 
 pub async fn assign_trips_for_dresden(
-    authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     conn: &mut diesel_async::AsyncPgConnection,
 ) -> Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
     use log::debug;
@@ -165,7 +165,7 @@ pub async fn assign_trips_for_dresden(
     let tlms_feed_key = ("f-tlms~rt".to_string(), GtfsRtType::VehiclePositions);
     let feed_msg = match authoritative_gtfs_rt.get_async(&tlms_feed_key).await {
         Some(msg) => {
-            let msg_val = msg.get().clone();
+            let msg_val = Arc::clone(msg.get());
             debug!(
                 "Found 'f-tlms~rt' vehicle positions feed with {} entities",
                 msg_val.entity.len()

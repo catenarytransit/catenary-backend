@@ -193,7 +193,7 @@ pub async fn new_rt_data(
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
     >,
-    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     chateau_id: &str,
     realtime_feed_id: &str,
     has_vehicles: bool,

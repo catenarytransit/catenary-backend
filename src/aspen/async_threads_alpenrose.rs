@@ -154,7 +154,7 @@ impl Default for AlpenroseWorkQueue {
 
 pub async fn alpenrose_process_threads(
     alpenrose_to_process_queue: AlpenroseWorkQueue,
-    authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
@@ -293,7 +293,7 @@ pub async fn alpenrose_process_threads(
 pub async fn process_one_alpenrose_task(
     alpenrose_to_process_queue: AlpenroseWorkQueue,
     new_ingest_task: ProcessAlpenroseData,
-    authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,

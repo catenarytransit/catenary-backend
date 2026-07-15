@@ -116,7 +116,7 @@ pub struct AspenServer {
     pub authoritative_trajectory_data_store:
         Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
-    pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
@@ -125,8 +125,8 @@ pub struct AspenServer {
         Arc<parking_lot::Mutex<HashMap<String, ChateauWorkState>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
-    pub backup_data_store: Arc<SccHashMap<String, catenary::aspen_dataset::AspenisedData>>,
-    pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), CompactFeedMessage>>,
+    pub backup_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
+    pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     pub backup_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub etcd_addresses: Arc<Vec<String>>,
@@ -528,7 +528,7 @@ impl AspenRpc for AspenServer {
 
         match pair {
             Some(pair) => {
-                let message: &CompactFeedMessage = pair.get();
+                let message: &CompactFeedMessage = pair.get().as_ref();
                 let message = message.to_feed_message();
 
                 Some(message.encode_to_vec())
@@ -550,7 +550,7 @@ impl AspenRpc for AspenServer {
 
         match pair {
             Some(pair) => {
-                let message: &CompactFeedMessage = pair.get();
+                let message: &CompactFeedMessage = pair.get().as_ref();
                 let message = message.to_feed_message();
 
                 let mut d = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
@@ -1197,39 +1197,36 @@ impl AspenRpc for AspenServer {
 
             if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
+                    let compact = Arc::new(CompactFeedMessage::from_feed_message(vehicles_gtfs_rt.clone()));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                         .await
                         .and_modify(|gtfs_data| {
-                            *gtfs_data =
-                                CompactFeedMessage::from_feed_message(vehicles_gtfs_rt.clone())
+                            *gtfs_data = Arc::clone(&compact);
                         })
-                        .or_insert(CompactFeedMessage::from_feed_message(
-                            vehicles_gtfs_rt.clone(),
-                        ));
+                        .or_insert(compact);
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
+                    let compact = Arc::new(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .await
                         .and_modify(|gtfs_data| {
-                            *gtfs_data = CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone())
+                            *gtfs_data = Arc::clone(&compact);
                         })
-                        .or_insert(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
+                        .or_insert(compact);
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
+                    let compact = Arc::new(CompactFeedMessage::from_feed_message(alerts_gtfs_rt.clone()));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts))
                         .await
                         .and_modify(|gtfs_data| {
-                            *gtfs_data =
-                                CompactFeedMessage::from_feed_message(alerts_gtfs_rt.clone())
+                            *gtfs_data = Arc::clone(&compact);
                         })
-                        .or_insert(CompactFeedMessage::from_feed_message(
-                            alerts_gtfs_rt.clone(),
-                        ));
+                        .or_insert(compact);
                 }
             }
 
@@ -1578,7 +1575,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
     ) -> Option<AspenisedData> {
         match self.backup_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => Some(aspenised_data.get().clone()),
+            Some(aspenised_data) => Some((**aspenised_data.get()).clone()),
             None => None,
         }
     }
@@ -1589,7 +1586,7 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         data: AspenisedData,
     ) -> () {
-        let _ = self.backup_data_store.insert_async(chateau_id, data).await;
+        let _ = self.backup_data_store.insert_async(chateau_id, Arc::new(data)).await;
 
         ()
     }
@@ -2573,16 +2570,16 @@ fn contains_new_data(
 }
 
 async fn upsert_compact_feed(
-    store: &SccHashMap<(String, GtfsRtType), CompactFeedMessage>,
+    store: &SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>,
     realtime_feed_id: &str,
     feed_type: GtfsRtType,
     feed: FeedMessage,
 ) {
-    let compact = CompactFeedMessage::from_feed_message(feed);
+    let compact = Arc::new(CompactFeedMessage::from_feed_message(feed));
 
     store
         .entry_async((realtime_feed_id.to_string(), feed_type))
         .await
-        .and_modify(|existing| *existing = compact.clone())
+        .and_modify(|existing| *existing = Arc::clone(&compact))
         .or_insert(compact);
 }
