@@ -29,7 +29,7 @@ pub enum CategoryOfRealtimeVehicleData {
 #[derive(Clone, Debug, Serialize, Deserialize, Hash)]
 pub struct AspenisedVehicleTripInfoOutput {
     pub trip_id: Option<String>,
-    pub trip_headsign: Option<String>,
+    pub trip_headsign: Option<Arc<str>>,
     pub route_id: Option<String>,
     pub trip_short_name: Option<String>,
     pub direction_id: Option<u32>,

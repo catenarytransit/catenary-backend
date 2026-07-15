@@ -34,12 +34,7 @@ pub struct ActiveAlpenroseStage {
     pub job_started: Instant,
 }
 
-pub fn set_stage(
-    chateau_id: &str,
-    feed_id: &str,
-    stage: &'static str,
-    job_started: Instant,
-) {
+pub fn set_stage(chateau_id: &str, feed_id: &str, stage: &'static str, job_started: Instant) {
     ACTIVE_STAGES.insert(
         chateau_id.to_string(),
         ActiveAlpenroseStage {
@@ -198,10 +193,8 @@ pub async fn alpenrose_process_threads(
                         chateau_id = entry.key(),
                         feed_id = value.feed_id,
                         stage = value.stage,
-                        stage_elapsed_ms =
-                            value.stage_started.elapsed().as_millis(),
-                        job_elapsed_ms =
-                            value.job_started.elapsed().as_millis(),
+                        stage_elapsed_ms = value.stage_started.elapsed().as_millis(),
+                        job_elapsed_ms = value.job_started.elapsed().as_millis(),
                         "Long-running Alpenrose job"
                     );
                 }

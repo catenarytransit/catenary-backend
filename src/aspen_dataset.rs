@@ -530,7 +530,7 @@ pub struct AspenisedTripUpdate {
     pub delay: Option<i32>,
     pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
     pub trip_properties: Option<AspenTripProperties>,
-    pub trip_headsign: Option<CompactString>,
+    pub trip_headsign: Option<Arc<str>>,
     pub consist: Option<crate::formation_v1::UnifiedConsist>,
     pub found_schedule_trip_id: bool,
     #[serde(default)]
@@ -889,7 +889,7 @@ impl From<VehicleDescriptor> for AspenisedVehicleDescriptor {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AspenisedVehicleTripInfo {
     pub trip_id: Option<String>,
-    pub trip_headsign: Option<String>,
+    pub trip_headsign: Option<Arc<str>>,
     pub route_id: Option<String>,
     pub trip_short_name: Option<String>,
     pub direction_id: Option<u32>,

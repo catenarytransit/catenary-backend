@@ -112,7 +112,8 @@ pub struct GtfsRealtimeHashStore {
 pub struct AspenServer {
     //pub addr: SocketAddr,
     pub worker_id: Arc<String>, // Worker Id for this instance of Aspen
-    pub authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
+    pub authoritative_data_store:
+        Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     pub authoritative_trajectory_data_store:
         Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
@@ -261,9 +262,9 @@ impl AspenRpc for AspenServer {
             }
         }
 
-        let trip_modification = trip_modifications.iter().find(|trip_modification| {
-            trip_modification.service_dates.contains(&service_day)
-        });
+        let trip_modification = trip_modifications
+            .iter()
+            .find(|trip_modification| trip_modification.service_dates.contains(&service_day));
 
         match trip_modification {
             Some(trip_modification) => Some((*trip_modification).to_owned()),
@@ -326,9 +327,7 @@ impl AspenRpc for AspenServer {
         let mut trip_data_to_send: Vec<AspenisedTripUpdate> = vec![];
 
         for trip_update_id in trip_update_ids_to_get.iter() {
-            if let Some(trip_update) =
-                aspenised_data.trip_updates.get(trip_update_id.as_str())
-            {
+            if let Some(trip_update) = aspenised_data.trip_updates.get(trip_update_id.as_str()) {
                 trip_data_to_send.push(trip_update.clone())
             }
         }
@@ -346,16 +345,14 @@ impl AspenRpc for AspenServer {
             let guard = self.authoritative_data_store.get_async(&chateau_id).await?;
             Arc::clone(guard.get())
         };
-        let mut trip_modifications: AHashMap<String, AspenisedTripModification> =
-            AHashMap::new();
+        let mut trip_modifications: AHashMap<String, AspenisedTripModification> = AHashMap::new();
 
         for modification_id in &modification_ids {
             if let Some(trip_modification) = aspenised_data
                 .trip_modifications
                 .get(modification_id.as_str())
             {
-                trip_modifications
-                    .insert(modification_id.clone(), trip_modification.clone());
+                trip_modifications.insert(modification_id.clone(), trip_modification.clone());
             } else {
                 println!(
                     "Trip modification not found for modification id {}",
@@ -409,8 +406,7 @@ impl AspenRpc for AspenServer {
                     if let Some(trip_update) =
                         authoritative_data.trip_updates.get(trip_update_id.as_str())
                     {
-                        trip_updates
-                            .insert(trip_update_id.to_string(), trip_update.clone());
+                        trip_updates.insert(trip_update_id.to_string(), trip_update.clone());
                     }
                 }
             }
@@ -474,8 +470,7 @@ impl AspenRpc for AspenServer {
                     if let Some(trip_update) =
                         authoritative_data.trip_updates.get(trip_update_id.as_str())
                     {
-                        trip_updates
-                            .insert(trip_update_id.to_string(), trip_update.clone());
+                        trip_updates.insert(trip_update_id.to_string(), trip_update.clone());
 
                         if let Some(trip_id) = &trip_update.trip.trip_id {
                             trip_id_to_trip_update_ids
@@ -1316,11 +1311,11 @@ impl AspenRpc for AspenServer {
                     let filtered_vehicle_positions = aspenised_data
                         .vehicle_positions
                         .iter()
-                        .filter(|(_gtfs_id, vehicle_position)| {
-                            match &vehicle_position.route_type {
+                        .filter(
+                            |(_gtfs_id, vehicle_position)| match &vehicle_position.route_type {
                                 route_type => route_types_filter.contains(route_type),
-                            }
-                        })
+                            },
+                        )
                         .map(|(a, b)| (a.clone(), b.clone()))
                         .collect::<AHashMap<_, _>>();
 
@@ -1392,8 +1387,7 @@ impl AspenRpc for AspenServer {
             Arc::clone(guard.get())
         };
         let mut active_routes = std::collections::HashSet::new();
-        let search_envelope =
-            rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
+        let search_envelope = rstar::AABB::from_corners([min_lon, min_lat], [max_lon, max_lat]);
 
         for rtree in aspenised_data
             .vehicle_positions_rtree_by_route_type
@@ -1483,8 +1477,7 @@ impl AspenRpc for AspenServer {
 
             if let Some(trip_update_ids) = trip_updates_id_list {
                 for trip_update_id in trip_update_ids.iter() {
-                    let trip_update =
-                        aspenised_data.trip_updates.get(trip_update_id.as_str());
+                    let trip_update = aspenised_data.trip_updates.get(trip_update_id.as_str());
 
                     if let Some(trip_update) = trip_update {
                         data_out.push(trip_update.clone());
@@ -1515,8 +1508,7 @@ impl AspenRpc for AspenServer {
                 let mut trip_updates = Vec::new();
 
                 for trip_update_id in trip_updates_id_list {
-                    let trip_update =
-                        aspenised_data.trip_updates.get(trip_update_id.as_str());
+                    let trip_update = aspenised_data.trip_updates.get(trip_update_id.as_str());
 
                     match trip_update {
                         Some(trip_update) => {

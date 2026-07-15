@@ -94,6 +94,7 @@ use catenary::compact_formats::{
 };
 use lazy_static::lazy_static;
 
+use crate::async_threads_alpenrose::set_stage;
 use prost::Message;
 use scc::HashIndex;
 use scc::HashMap as SccHashMap;
@@ -105,7 +106,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
-use crate::async_threads_alpenrose::set_stage;
 
 lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
@@ -218,7 +218,8 @@ pub async fn new_rt_data(
     let total_started = Instant::now();
     set_stage(chateau_id, realtime_feed_id, "start", total_started);
 
-
+    let mut headsign_cache: std::collections::HashMap<String, Arc<str>> =
+        std::collections::HashMap::new();
 
     START_TIME
         .entry_async(chateau_id.to_string())
@@ -227,7 +228,12 @@ pub async fn new_rt_data(
 
     // Fetch existing data once - extracting only what we need to avoid holding the lock
     let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "clone_previous_state", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "clone_previous_state",
+        total_started,
+    );
 
     let (mut compressed_trip_internal_cache, previous_authoritative_data_store) =
         match authoritative_data_store.get_async(chateau_id).await {
@@ -237,8 +243,6 @@ pub async fn new_rt_data(
             ),
             None => (CompressedTripInternalCache::new(), None),
         };
-
-
 
     // Metrolink provides a separate JSON endpoint with higher fidelity data (PTC status, exact speed)
     // than their standard GTFS-RT feed. We fetch this to supplement the standard feed.
@@ -406,20 +410,26 @@ pub async fn new_rt_data(
     }
 
     let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "postgres_acquire", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "postgres_acquire",
+        total_started,
+    );
 
     let conn_result = pool.get().await;
-
-
 
     let conn_pre = conn_result;
 
     let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "fetch_track_data", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "fetch_track_data",
+        total_started,
+    );
 
     let fetched_track_data = fetch_track_data(chateau_id, &pool).await;
-
-
 
     match &fetched_track_data {
         TrackData::MetroNorthRailroad(x) => {
@@ -536,8 +546,6 @@ pub async fn new_rt_data(
         .first::<catenary::models::Chateau>(conn)
         .await?;
 
-
-
     let is_europe = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
         "EXISTS(SELECT 1 FROM gtfs.chateaus WHERE chateau = '{}' AND ST_Intersects(hull, ST_MakeEnvelope(-28.4207529, 34.31734126604816, 40.85603290981834, 71.4754084, 4326)))",
         chateau_id
@@ -555,8 +563,6 @@ pub async fn new_rt_data(
         .select(catenary::models::Route::as_select())
         .load::<catenary::models::Route>(conn)
         .await?;
-
-
 
     //It's stranged to have a good transit agency with no routes! What is this, Irvine?
     //This is logged just so we know, but perhaps it is not a crash.
@@ -608,7 +614,12 @@ pub async fn new_rt_data(
     // Collects all Trip IDs referenced in the RT feeds (Vehicles, TripUpdates, Alerts)
     // to perform a single batch lookup against the cache/DB!
     let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "collect_rt_trip_ids", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "collect_rt_trip_ids",
+        total_started,
+    );
 
     let mut trip_ids_to_lookup: AHashSet<String> = AHashSet::new();
     let mut nyct_rt_trip_contexts: AHashMap<String, NyctRtTripContext> = AHashMap::new();
@@ -775,10 +786,13 @@ pub async fn new_rt_data(
             }
         }
 
-
-
         let stage = Instant::now();
-        set_stage(chateau_id, realtime_feed_id, "load_trip_cache_or_database", total_started);
+        set_stage(
+            chateau_id,
+            realtime_feed_id,
+            "load_trip_cache_or_database",
+            total_started,
+        );
 
         // Remove trips not in the current lookup set using retain (avoids intermediate Vec allocation)
         compressed_trip_internal_cache
@@ -1183,14 +1197,18 @@ pub async fn new_rt_data(
 
                         // Also add ALL stop_ids to lookup so we have their coordinates for trajectories
                         if ALLOWED_CHATEAUX.contains(&chateau_id) {
-                            let should_add = if chateau_id == "busÉireann" || chateau_id == "nederland" {
-                                trip_update.trip.route_id.as_ref()
-                                    .and_then(|r_id| route_id_to_route.get(r_id))
-                                    .map(|route| route.route_type == 2)
-                                    .unwrap_or(false)
-                            } else {
-                                true
-                            };
+                            let should_add =
+                                if chateau_id == "busÉireann" || chateau_id == "nederland" {
+                                    trip_update
+                                        .trip
+                                        .route_id
+                                        .as_ref()
+                                        .and_then(|r_id| route_id_to_route.get(r_id))
+                                        .map(|route| route.route_type == 2)
+                                        .unwrap_or(false)
+                                } else {
+                                    true
+                                };
                             if should_add {
                                 for stu in &trip_update.stop_time_update {
                                     if let Some(stop_id) = &stu.stop_id {
@@ -1514,10 +1532,13 @@ pub async fn new_rt_data(
             rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
 
-
-
         let stage = Instant::now();
-        set_stage(chateau_id, realtime_feed_id, "build_stop_indexes", total_started);
+        set_stage(
+            chateau_id,
+            realtime_feed_id,
+            "build_stop_indexes",
+            total_started,
+        );
 
         let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
             String,
@@ -1531,15 +1552,18 @@ pub async fn new_rt_data(
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
 
-
-
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
         for realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
             let vehicle_id_to_trip_update_start_time: AHashMap<String, String> = AHashMap::new();
 
             let stage_vp = Instant::now();
-            set_stage(chateau_id, realtime_feed_id, "process_vehicle_positions", total_started);
+            set_stage(
+                chateau_id,
+                realtime_feed_id,
+                "process_vehicle_positions",
+                total_started,
+            );
 
             if let Some(vehicle_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
@@ -1755,7 +1779,15 @@ pub async fn new_rt_data(
                                         &trip.schedule_relationship,
                                     ),
                                     route_id: recalculate_route_id.clone(),
-                                    trip_headsign: trip_headsign,
+                                    trip_headsign: trip_headsign.as_deref().map(|hs| {
+                                        if let Some(existing) = headsign_cache.get(hs) {
+                                            existing.clone()
+                                        } else {
+                                            let arc: Arc<str> = Arc::from(hs);
+                                            headsign_cache.insert(hs.to_string(), arc.clone());
+                                            arc
+                                        }
+                                    }),
                                     // Use the original realtime trip_id for lookup into the
                                     // scheduled data; the metadata itself (including
                                     // trip_short_name) comes from Postgres.
@@ -1874,10 +1906,13 @@ pub async fn new_rt_data(
                 }
             }
 
-
-
             let stage_tu = Instant::now();
-            set_stage(chateau_id, realtime_feed_id, "process_trip_updates", total_started);
+            set_stage(
+                chateau_id,
+                realtime_feed_id,
+                "process_trip_updates",
+                total_started,
+            );
 
             if let Some(trip_updates_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
@@ -1950,12 +1985,17 @@ pub async fn new_rt_data(
                                     Some(last_non_cancelled_stop_id) => {
                                         stop_id_to_stop_from_postgres
                                             .get(last_non_cancelled_stop_id.as_ref())
-                                            .map(|s| {
-                                                s.name
-                                                    .as_ref()
-                                                    .map(|name| CompactString::new(&name))
+                                            .and_then(|s| s.name.as_deref())
+                                            .map(|hs| {
+                                                if let Some(existing) = headsign_cache.get(hs) {
+                                                    existing.clone()
+                                                } else {
+                                                    let arc: Arc<str> = Arc::from(hs);
+                                                    headsign_cache
+                                                        .insert(hs.to_string(), arc.clone());
+                                                    arc
+                                                }
                                             })
-                                            .flatten()
                                     }
                                     None => None,
                                 },
@@ -2092,7 +2132,16 @@ pub async fn new_rt_data(
                                                                         start_time: trip_update.trip.start_time.clone(),
                                                                         schedule_relationship: option_i32_to_schedule_relationship(&trip_update.trip.schedule_relationship),
                                                                         route_id: trip_descriptor.route_id.clone(),
-                                                                        trip_headsign: Some(associated_helium_data.headsign.clone()),
+                                                                        trip_headsign: Some({
+                                                                            let hs = &associated_helium_data.headsign;
+                                                                            if let Some(existing) = headsign_cache.get(hs) {
+                                                                                existing.clone()
+                                                                            } else {
+                                                                                let arc: Arc<str> = Arc::from(hs.as_str());
+                                                                                headsign_cache.insert(hs.clone(), arc.clone());
+                                                                                arc
+                                                                            }
+                                                                        }),
                                                                         trip_short_name: match &trip_id {
                                                                             Some(t_id) => trip_id_to_trip.get(t_id).and_then(|t| t.trip_short_name.as_ref().map(|x| x.to_string())),
                                                                             None => None,
@@ -3086,9 +3135,8 @@ pub async fn new_rt_data(
                                                 .get_mut(vehicle_entity_id)
                                             {
                                                 if let Some(trip_assigned) = &mut vehicle_pos.trip {
-                                                    trip_assigned.trip_headsign = trip_headsign
-                                                        .clone()
-                                                        .map(|x| x.to_string());
+                                                    trip_assigned.trip_headsign =
+                                                        trip_headsign.clone();
                                                 }
                                             }
                                         }
@@ -3112,8 +3160,7 @@ pub async fn new_rt_data(
                                             aspenised_vehicle_positions.get_mut(vehicle_entity_id)
                                         {
                                             if let Some(trip_assigned) = &mut vehicle_pos.trip {
-                                                trip_assigned.trip_headsign =
-                                                    trip_headsign.clone().map(|x| x.to_string());
+                                                trip_assigned.trip_headsign = trip_headsign.clone();
                                             }
                                         }
                                     }
@@ -3185,10 +3232,13 @@ pub async fn new_rt_data(
                 }
             }
 
-
-
             let stage_al = Instant::now();
-            set_stage(chateau_id, realtime_feed_id, "process_alerts", total_started);
+            set_stage(
+                chateau_id,
+                realtime_feed_id,
+                "process_alerts",
+                total_started,
+            );
 
             if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
                 .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
@@ -3208,8 +3258,6 @@ pub async fn new_rt_data(
                     }
                 }
             }
-
-
         }
 
         if chateau_id == "sncf" {
@@ -3637,7 +3685,12 @@ pub async fn new_rt_data(
     let mut static_changed = false;
 
     let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "build_trajectories", total_started);
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "build_trajectories",
+        total_started,
+    );
 
     let mut trajectories = Vec::new();
     let mut pattern_to_trajectories = vec![Vec::new(); patterns.len()];
@@ -3653,7 +3706,10 @@ pub async fn new_rt_data(
         let is_special_chateau = chateau_id == "busÉireann" || chateau_id == "nederland";
         for (_, trip_update) in aspenised_data_for_persist.trip_updates.iter() {
             if is_special_chateau {
-                let is_rail = trip_update.trip.route_id.as_ref()
+                let is_rail = trip_update
+                    .trip
+                    .route_id
+                    .as_ref()
                     .and_then(|r_id| aspenised_data_for_persist.vehicle_routes_cache.get(r_id))
                     .map(|route| route.route_type == 2)
                     .unwrap_or(false);
@@ -4235,7 +4291,9 @@ pub async fn new_rt_data(
     };
 
     if should_save {
-        if let Err(e) = persistence::save_chateau_data(chateau_id, aspenised_data_for_persist.as_ref()) {
+        if let Err(e) =
+            persistence::save_chateau_data(chateau_id, aspenised_data_for_persist.as_ref())
+        {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
             if let Err(e) = persistence::save_trajectory_data(chateau_id, &store, static_changed) {
@@ -4249,11 +4307,7 @@ pub async fn new_rt_data(
         }
     }
 
-
-
     println!("Updated Chateau {}", chateau_id);
-
-
 
     Ok(true)
 }

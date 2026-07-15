@@ -459,7 +459,10 @@ pub async fn departures_at_osm_station(
         if !filtered_itinerary_ids.is_empty() {
             let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
                 catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                    .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq("île~de~france~mobilités".to_string()))
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::chateau
+                            .eq("île~de~france~mobilités".to_string()),
+                    )
                     .filter(
                         catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
                             .eq_any(&filtered_itinerary_ids),
@@ -489,7 +492,10 @@ pub async fn departures_at_osm_station(
             if !last_stop_ids.is_empty() {
                 let stop_names: Vec<(String, Option<String>)> =
                     catenary::schema::gtfs::stops::dsl::stops
-                        .filter(catenary::schema::gtfs::stops::chateau.eq("île~de~france~mobilités".to_string()))
+                        .filter(
+                            catenary::schema::gtfs::stops::chateau
+                                .eq("île~de~france~mobilités".to_string()),
+                        )
                         .filter(catenary::schema::gtfs::stops::gtfs_id.eq_any(&last_stop_ids))
                         .select((
                             catenary::schema::gtfs::stops::gtfs_id,
