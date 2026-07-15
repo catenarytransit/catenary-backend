@@ -332,12 +332,9 @@ pub async fn get_single_chateau_trajectories(
                             let simplify_start = std::time::Instant::now();
                             if simplify_meters > 0.0 {
                                 // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
-                                let web_mercator_scale =
-                                    (1.0 / avg_lat.to_radians().cos()).abs();
-                                let wm_simplify_meters =
-                                    simplify_meters * web_mercator_scale;
-                                let simplify_meters_sq =
-                                    wm_simplify_meters * wm_simplify_meters;
+                                let web_mercator_scale = (1.0 / avg_lat.to_radians().cos()).abs();
+                                let wm_simplify_meters = simplify_meters * web_mercator_scale;
+                                let simplify_meters_sq = wm_simplify_meters * wm_simplify_meters;
 
                                 filtered.par_iter_mut().for_each(|traj| {
                                     for seg in &mut traj.segments {
@@ -359,8 +356,7 @@ pub async fn get_single_chateau_trajectories(
 
                                             let indices =
                                                 rdp_indices(&projected, simplify_meters_sq);
-                                            let mut simplified =
-                                                Vec::with_capacity(indices.len());
+                                            let mut simplified = Vec::with_capacity(indices.len());
                                             for idx in indices {
                                                 simplified.push(seg.coordinates[idx]);
                                             }
@@ -661,10 +657,8 @@ pub async fn get_trajectories(
                                                         .map(|pt| {
                                                             let r = 6378137.0;
                                                             let x = pt[0].to_radians() * r;
-                                                            let y = ((std::f64::consts::PI
-                                                                / 4.0)
-                                                                + (pt[1].to_radians()
-                                                                    / 2.0))
+                                                            let y = ((std::f64::consts::PI / 4.0)
+                                                                + (pt[1].to_radians() / 2.0))
                                                                 .tan()
                                                                 .ln()
                                                                 * r;
@@ -672,15 +666,12 @@ pub async fn get_trajectories(
                                                         })
                                                         .collect();
 
-                                                    let indices = rdp_indices(
-                                                        &projected,
-                                                        simplify_meters_sq,
-                                                    );
+                                                    let indices =
+                                                        rdp_indices(&projected, simplify_meters_sq);
                                                     let mut simplified =
                                                         Vec::with_capacity(indices.len());
                                                     for idx in indices {
-                                                        simplified
-                                                            .push(seg.coordinates[idx]);
+                                                        simplified.push(seg.coordinates[idx]);
                                                     }
                                                     seg.coordinates = simplified;
                                                 }
@@ -698,10 +689,8 @@ pub async fn get_trajectories(
                                         .map(|mut traj| {
                                             for seg in &mut traj.segments {
                                                 for pt in &mut seg.coordinates {
-                                                    pt[0] =
-                                                        format_coordinate_precise(pt[0], zoom);
-                                                    pt[1] =
-                                                        format_coordinate_precise(pt[1], zoom);
+                                                    pt[0] = format_coordinate_precise(pt[0], zoom);
+                                                    pt[1] = format_coordinate_precise(pt[1], zoom);
                                                 }
                                             }
 

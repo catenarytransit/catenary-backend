@@ -636,7 +636,10 @@ impl AspenRpc for AspenServer {
         time_of_submission_ms: u64,
         alerts_dupe_trips: bool,
     ) -> bool {
-        println!("Recieved a compressed submission for {} {}", chateau_id, realtime_feed_id);
+        println!(
+            "Recieved a compressed submission for {} {}",
+            chateau_id, realtime_feed_id
+        );
         //decompress using flate2
 
         //   if new_data_status_from_timestamps {
@@ -1198,7 +1201,9 @@ impl AspenRpc for AspenServer {
 
             if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-                    let compact = Arc::new(CompactFeedMessage::from_feed_message(vehicles_gtfs_rt.clone()));
+                    let compact = Arc::new(CompactFeedMessage::from_feed_message(
+                        vehicles_gtfs_rt.clone(),
+                    ));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::VehiclePositions))
                         .await
@@ -1209,7 +1214,8 @@ impl AspenRpc for AspenServer {
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                    let compact = Arc::new(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
+                    let compact =
+                        Arc::new(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .await
@@ -1220,7 +1226,9 @@ impl AspenRpc for AspenServer {
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-                    let compact = Arc::new(CompactFeedMessage::from_feed_message(alerts_gtfs_rt.clone()));
+                    let compact = Arc::new(CompactFeedMessage::from_feed_message(
+                        alerts_gtfs_rt.clone(),
+                    ));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::Alerts))
                         .await
@@ -1587,7 +1595,10 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         data: AspenisedData,
     ) -> () {
-        let _ = self.backup_data_store.insert_async(chateau_id, Arc::new(data)).await;
+        let _ = self
+            .backup_data_store
+            .insert_async(chateau_id, Arc::new(data))
+            .await;
 
         ()
     }
@@ -1935,11 +1946,7 @@ impl AspenRpc for AspenServer {
             .await
             .ok()?;
 
-        let feed_ids: Vec<String> = this_chateau
-            .realtime_feeds
-            .into_iter()
-            .flatten()
-            .collect();
+        let feed_ids: Vec<String> = this_chateau.realtime_feeds.into_iter().flatten().collect();
 
         let mut trip_update_count = 0;
         let mut vehicle_count = 0;
@@ -1949,8 +1956,16 @@ impl AspenRpc for AspenServer {
         let mut trip_modifications_count = 0;
 
         for feed_id in feed_ids {
-            for &feed_type in &[GtfsRtType::VehiclePositions, GtfsRtType::TripUpdates, GtfsRtType::Alerts] {
-                if let Some(guard) = self.authoritative_gtfs_rt_store.get_async(&(feed_id.clone(), feed_type)).await {
+            for &feed_type in &[
+                GtfsRtType::VehiclePositions,
+                GtfsRtType::TripUpdates,
+                GtfsRtType::Alerts,
+            ] {
+                if let Some(guard) = self
+                    .authoritative_gtfs_rt_store
+                    .get_async(&(feed_id.clone(), feed_type))
+                    .await
+                {
                     let compact_feed_msg = guard.get();
                     for entity in &compact_feed_msg.entity {
                         if entity.trip_update.is_some() {
@@ -1998,28 +2013,104 @@ impl AspenRpc for AspenServer {
         };
 
         let mut counts = HashMap::new();
-        counts.insert("vehicle_positions".to_string(), aspenised_data.vehicle_positions.len() as u64);
-        counts.insert("vehicle_routes_cache".to_string(), aspenised_data.vehicle_routes_cache.len() as u64);
-        counts.insert("vehicle_label_to_gtfs_id".to_string(), aspenised_data.vehicle_label_to_gtfs_id.len() as u64);
-        counts.insert("trip_updates".to_string(), aspenised_data.trip_updates.len() as u64);
-        counts.insert("trip_updates_lookup_by_trip_id_to_trip_update_ids".to_string(), aspenised_data.trip_updates_lookup_by_trip_id_to_trip_update_ids.len() as u64);
-        counts.insert("trip_updates_lookup_by_route_id_to_trip_update_ids".to_string(), aspenised_data.trip_updates_lookup_by_route_id_to_trip_update_ids.len() as u64);
-        counts.insert("vehicle_positions_rtree_by_route_type".to_string(), aspenised_data.vehicle_positions_rtree_by_route_type.len() as u64);
-        counts.insert("aspenised_alerts".to_string(), aspenised_data.aspenised_alerts.len() as u64);
-        counts.insert("impacted_routes_alerts".to_string(), aspenised_data.impacted_routes_alerts.len() as u64);
-        counts.insert("impacted_stops_alerts".to_string(), aspenised_data.impacted_stops_alerts.len() as u64);
-        counts.insert("impacted_trips_alerts".to_string(), aspenised_data.impacted_trips_alerts.len() as u64);
-        counts.insert("trip_id_to_vehicle_gtfs_rt_id".to_string(), aspenised_data.trip_id_to_vehicle_gtfs_rt_id.len() as u64);
-        counts.insert("stop_id_to_stop".to_string(), aspenised_data.stop_id_to_stop.len() as u64);
-        counts.insert("shape_id_to_shape".to_string(), aspenised_data.shape_id_to_shape.len() as u64);
-        counts.insert("trip_modifications".to_string(), aspenised_data.trip_modifications.len() as u64);
-        counts.insert("trip_id_to_trip_modification_ids".to_string(), aspenised_data.trip_id_to_trip_modification_ids.len() as u64);
-        counts.insert("stop_id_to_trip_modification_ids".to_string(), aspenised_data.stop_id_to_trip_modification_ids.len() as u64);
-        counts.insert("stop_id_to_non_scheduled_trip_ids".to_string(), aspenised_data.stop_id_to_non_scheduled_trip_ids.len() as u64);
-        counts.insert("stop_id_to_parent_id".to_string(), aspenised_data.stop_id_to_parent_id.len() as u64);
-        counts.insert("parent_id_to_children_ids".to_string(), aspenised_data.parent_id_to_children_ids.len() as u64);
-        counts.insert("itinerary_patterns".to_string(), aspenised_data.itinerary_pattern_internal_cache.itinerary_patterns.len() as u64);
-        counts.insert("compressed_trips".to_string(), aspenised_data.compressed_trip_internal_cache.compressed_trips.len() as u64);
+        counts.insert(
+            "vehicle_positions".to_string(),
+            aspenised_data.vehicle_positions.len() as u64,
+        );
+        counts.insert(
+            "vehicle_routes_cache".to_string(),
+            aspenised_data.vehicle_routes_cache.len() as u64,
+        );
+        counts.insert(
+            "vehicle_label_to_gtfs_id".to_string(),
+            aspenised_data.vehicle_label_to_gtfs_id.len() as u64,
+        );
+        counts.insert(
+            "trip_updates".to_string(),
+            aspenised_data.trip_updates.len() as u64,
+        );
+        counts.insert(
+            "trip_updates_lookup_by_trip_id_to_trip_update_ids".to_string(),
+            aspenised_data
+                .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                .len() as u64,
+        );
+        counts.insert(
+            "trip_updates_lookup_by_route_id_to_trip_update_ids".to_string(),
+            aspenised_data
+                .trip_updates_lookup_by_route_id_to_trip_update_ids
+                .len() as u64,
+        );
+        counts.insert(
+            "vehicle_positions_rtree_by_route_type".to_string(),
+            aspenised_data.vehicle_positions_rtree_by_route_type.len() as u64,
+        );
+        counts.insert(
+            "aspenised_alerts".to_string(),
+            aspenised_data.aspenised_alerts.len() as u64,
+        );
+        counts.insert(
+            "impacted_routes_alerts".to_string(),
+            aspenised_data.impacted_routes_alerts.len() as u64,
+        );
+        counts.insert(
+            "impacted_stops_alerts".to_string(),
+            aspenised_data.impacted_stops_alerts.len() as u64,
+        );
+        counts.insert(
+            "impacted_trips_alerts".to_string(),
+            aspenised_data.impacted_trips_alerts.len() as u64,
+        );
+        counts.insert(
+            "trip_id_to_vehicle_gtfs_rt_id".to_string(),
+            aspenised_data.trip_id_to_vehicle_gtfs_rt_id.len() as u64,
+        );
+        counts.insert(
+            "stop_id_to_stop".to_string(),
+            aspenised_data.stop_id_to_stop.len() as u64,
+        );
+        counts.insert(
+            "shape_id_to_shape".to_string(),
+            aspenised_data.shape_id_to_shape.len() as u64,
+        );
+        counts.insert(
+            "trip_modifications".to_string(),
+            aspenised_data.trip_modifications.len() as u64,
+        );
+        counts.insert(
+            "trip_id_to_trip_modification_ids".to_string(),
+            aspenised_data.trip_id_to_trip_modification_ids.len() as u64,
+        );
+        counts.insert(
+            "stop_id_to_trip_modification_ids".to_string(),
+            aspenised_data.stop_id_to_trip_modification_ids.len() as u64,
+        );
+        counts.insert(
+            "stop_id_to_non_scheduled_trip_ids".to_string(),
+            aspenised_data.stop_id_to_non_scheduled_trip_ids.len() as u64,
+        );
+        counts.insert(
+            "stop_id_to_parent_id".to_string(),
+            aspenised_data.stop_id_to_parent_id.len() as u64,
+        );
+        counts.insert(
+            "parent_id_to_children_ids".to_string(),
+            aspenised_data.parent_id_to_children_ids.len() as u64,
+        );
+        counts.insert(
+            "itinerary_patterns".to_string(),
+            aspenised_data
+                .itinerary_pattern_internal_cache
+                .itinerary_patterns
+                .len() as u64,
+        );
+        counts.insert(
+            "compressed_trips".to_string(),
+            aspenised_data
+                .compressed_trip_internal_cache
+                .compressed_trips
+                .len() as u64,
+        );
 
         Some(counts)
     }

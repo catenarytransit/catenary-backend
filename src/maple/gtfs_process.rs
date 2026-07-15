@@ -310,7 +310,7 @@ pub async fn gtfs_process_feed(
             writeln!(file, "37200,Tampoi,1.515891,103.741847")?;
         }
         "f-u3-günterangergüterverkehrsgmbh~coomnibusvermietungkg~fritzbeh" => {
-                        let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![

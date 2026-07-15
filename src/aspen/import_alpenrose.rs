@@ -4321,7 +4321,9 @@ pub async fn new_rt_data(
         {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
-            if let Err(e) = persistence::save_trajectory_data(chateau_id, store.as_ref(), static_changed) {
+            if let Err(e) =
+                persistence::save_trajectory_data(chateau_id, store.as_ref(), static_changed)
+            {
                 eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
             }
             LAST_SAVE_TIME

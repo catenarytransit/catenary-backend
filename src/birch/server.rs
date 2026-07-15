@@ -1153,15 +1153,20 @@ pub async fn proxy_for_watchduty_tiles(
 #[actix_web::get("/chateau_gtfs_rt_counts/{chateau}")]
 pub async fn chateau_gtfs_rt_counts(
     path: web::Path<String>,
-    aspen_chateau_cache: web::Data<Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
     if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
-        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+        let aspen_client =
+            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
         if let Ok(aspen_client) = aspen_client {
-            let counts = aspen_client.get_gtfs_rt_entity_counts(tarpc::context::current(), chateau.clone()).await;
+            let counts = aspen_client
+                .get_gtfs_rt_entity_counts(tarpc::context::current(), chateau.clone())
+                .await;
             if let Ok(Some(counts)) = counts {
                 return HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
@@ -1175,15 +1180,20 @@ pub async fn chateau_gtfs_rt_counts(
 #[actix_web::get("/chateau_authoritative_counts/{chateau}")]
 pub async fn chateau_authoritative_counts(
     path: web::Path<String>,
-    aspen_chateau_cache: web::Data<Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
 ) -> impl Responder {
     let chateau = path.into_inner();
 
     if let Some(assigned_chateau_data) = aspen_chateau_cache.get(&chateau) {
-        let aspen_client = catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
+        let aspen_client =
+            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await;
 
         if let Ok(aspen_client) = aspen_client {
-            let counts = aspen_client.get_authoritative_store_counts(tarpc::context::current(), chateau.clone()).await;
+            let counts = aspen_client
+                .get_authoritative_store_counts(tarpc::context::current(), chateau.clone())
+                .await;
             if let Ok(Some(counts)) = counts {
                 return HttpResponse::Ok()
                     .insert_header(("Content-Type", "application/json"))
