@@ -17,6 +17,7 @@ pub const ALLOWED_CHATEAUX: &[&str] = &[
     "vbb",
     "busÉireann",
     "nederland",
+    "rejseplanen~dk~gtfs",
 ];
 
 pub use catenary::pasque::lib::TrajectorySubscriptionParams;
