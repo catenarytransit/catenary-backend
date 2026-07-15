@@ -729,11 +729,11 @@ pub async fn departures_at_osm_station(
                     let route_match = entity
                         .route_id
                         .as_ref()
-                        .map_or(false, |r_id| relevant_routes.contains(r_id));
-                    let trip_match = entity.trip.as_ref().map_or(false, |t| {
+                        .is_some_and( |r_id| relevant_routes.contains(r_id));
+                    let trip_match = entity.trip.as_ref().is_some_and( |t| {
                         t.trip_id
                             .as_ref()
-                            .map_or(false, |t_id| relevant_trips.contains(t_id))
+                            .is_some_and( |t_id| relevant_trips.contains(t_id))
                     });
 
                     // An entity is relevant if it matches a route, trip, or stop we are looking at.

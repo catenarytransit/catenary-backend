@@ -2825,7 +2825,7 @@ pub async fn new_rt_data(
                                                         previous_authoritative_data_store
                                                             .trip_updates
                                                             .get(possible_match_trip_id.as_str())
-                                                            .map_or(false, |possible_old_trip| {
+                                                            .is_some_and( |possible_old_trip| {
                                                                 possible_old_trip.trip == trip_descriptor
                                                             })
                                                     },

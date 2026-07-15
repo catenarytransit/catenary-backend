@@ -1894,11 +1894,11 @@ pub async fn fetch_trip_information(
                                     let route_match = e
                                         .route_id
                                         .as_ref()
-                                        .map_or(false, |r_id| *r_id == itin_meta.route_id);
-                                    let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                        .is_some_and( |r_id| *r_id == itin_meta.route_id);
+                                    let trip_match = e.trip.as_ref().is_some_and( |t| {
                                         t.trip_id
                                             .as_ref()
-                                            .map_or(false, |t_id| *t_id == query.trip_id)
+                                            .is_some_and( |t_id| *t_id == query.trip_id)
                                     });
                                     route_match || trip_match
                                 });
@@ -1911,11 +1911,11 @@ pub async fn fetch_trip_information(
                                         let route_match = e
                                             .route_id
                                             .as_ref()
-                                            .map_or(false, |r_id| *r_id == itin_meta.route_id);
-                                        let trip_match = e.trip.as_ref().map_or(false, |t| {
+                                            .is_some_and( |r_id| *r_id == itin_meta.route_id);
+                                        let trip_match = e.trip.as_ref().is_some_and( |t| {
                                             t.trip_id
                                                 .as_ref()
-                                                .map_or(false, |t_id| *t_id == query.trip_id)
+                                                .is_some_and( |t_id| *t_id == query.trip_id)
                                         });
 
                                         route_match || trip_match

@@ -93,7 +93,7 @@ async fn collect_file_hashes_sip_zero(
             // Recurse
             collect_file_hashes_sip_zero(base_path, &path, file_hashes).await?;
         } else if metadata.is_file() {
-            if path.extension().map_or(false, |ext| ext == "pdf") {
+            if path.extension().is_some_and( |ext| ext == "pdf") {
                 continue;
             }
 
