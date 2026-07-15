@@ -12,7 +12,7 @@
 use catenary::models::OsmStation;
 use diesel::prelude::*;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use geo::{HaversineDistance, point};
+use geo::{Distance, Haversine, point};
 use rayon::prelude::*;
 use rstar::{AABB, PointDistance, RTree, RTreeObject};
 use std::collections::{HashMap, HashSet};
@@ -372,7 +372,7 @@ fn score_candidate(
     // Compute distance using geo crate
     let p1 = point!(x: stop_lon, y: stop_lat);
     let p2 = point!(x: station.x, y: station.y);
-    let distance = p1.haversine_distance(&p2);
+    let distance = Haversine.distance(p1, p2);
 
     // Compute proximity score (1.0 at center, 0.0 at radius edge)
     let proximity_score = 1.0 - (distance / radius_m).min(1.0);
@@ -594,7 +594,7 @@ fn match_stop_with_rtree(
         .iter()
         .map(|s| {
             let station_point = point!(x: s.x, y: s.y);
-            let distance = stop_point.haversine_distance(&station_point);
+            let distance = Haversine.distance(stop_point, station_point);
             let mode_priority = mode_match_priority(mode, &s.mode_type);
             (s, distance, mode_priority)
         })
@@ -611,7 +611,7 @@ fn match_stop_with_rtree(
         .iter()
         .map(|p| {
             let platform_point = point!(x: p.x, y: p.y);
-            let distance = stop_point.haversine_distance(&platform_point);
+            let distance = Haversine.distance(stop_point, platform_point);
             let mode_priority = mode_match_priority(mode, &p.mode_type);
             (p, distance, mode_priority)
         })

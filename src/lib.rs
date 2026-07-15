@@ -19,7 +19,6 @@
     clippy::arc_with_non_send_sync,
     clippy::single_char_pattern,
     clippy::for_kv_map,
-    clippy::let_unit_value,
     clippy::iter_nth,
     clippy::iter_cloned_collect,
     clippy::bytes_nth,
@@ -758,7 +757,7 @@ mod test_calendar {
 
 // Metrolink date fix
 pub fn metrolink_unix_fix(date: &str) -> u64 {
-    ///Date(1729199040000)/
+    //Date(1729199040000)/
     //extract all the numbers
     let mut numbers = date.chars().filter(|x| x.is_numeric()).collect::<String>();
 
@@ -876,14 +875,14 @@ mod test {
     }
 }
 
-use geo::HaversineDestination;
+use geo::{Destination, Haversine};
 pub fn make_degree_length_as_distance_from_point(point: &geo::Point, distance_metres: f64) -> f64 {
     let direction = match point.x() > 0. {
         true => 90.,
         false => -90.,
     };
 
-    let distance_calc_point = point.haversine_destination(direction, distance_metres);
+    let distance_calc_point = Haversine.destination(*point, direction, distance_metres);
 
     f64::abs(distance_calc_point.x() - point.x())
 }

@@ -1,6 +1,5 @@
 use crate::osm_types::{AtomicEdge, AtomicEdgeId, OsmNodeId, OsmWayId, RailMode, ZClass};
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
-use geo::HaversineDistance;
 use log::{debug, info, warn};
 use osmpbfreader::{OsmObj, OsmPbfReader, Tags};
 use rstar::{RTree, primitives::GeomWithData, primitives::Rectangle};

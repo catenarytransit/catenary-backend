@@ -10,9 +10,9 @@ use diesel::dsl::sql;
 use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
 use futures::future::join_all;
-use geo::HaversineDistance;
 use geo::Point;
 use geo::coord;
+use geo::{Distance, Haversine};
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::hash_map::Entry;
@@ -251,7 +251,7 @@ pub async fn connections_lookup(
 
                 let base_point = Point::new(base_lon, base_lat);
                 let conn_point = Point::new(point.x, point.y);
-                let distance_m = base_point.haversine_distance(&conn_point);
+                let distance_m = Haversine.distance(base_point, conn_point);
 
                 if distance_m > max_distance_m {
                     continue;

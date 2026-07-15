@@ -37,7 +37,6 @@ use diesel::sql_types::Bool;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 use futures::future::join_all;
-use geo::HaversineDistance;
 use geo::Point;
 use geo::coord;
 use gtfs_realtime::Alert;

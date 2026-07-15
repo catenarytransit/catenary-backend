@@ -3,7 +3,8 @@ use geo::algorithm::convex_hull::ConvexHull;
 use geo::coord;
 use geo::prelude::*;
 use geo::{
-    Area, BooleanOps, BoundingRect, Coord, LineString, MultiPoint, MultiPolygon, Point, Polygon,
+    Area, BooleanOps, BoundingRect, Coord, Distance, Haversine, LineString, MultiPoint,
+    MultiPolygon, Point, Polygon,
 };
 use gtfs_structures::RouteType;
 use lazy_static::lazy_static;
@@ -100,10 +101,14 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
     let convex_hull = multi_point.convex_hull();
 
     let bbox = multi_point.bounding_rect().unwrap();
-    let width = Point::new(bbox.min().x, bbox.min().y)
-        .haversine_distance(&Point::new(bbox.max().x, bbox.min().y));
-    let height = Point::new(bbox.min().x, bbox.min().y)
-        .haversine_distance(&Point::new(bbox.min().x, bbox.max().y));
+    let width = Haversine.distance(
+        Point::new(bbox.min().x, bbox.min().y),
+        Point::new(bbox.max().x, bbox.min().y),
+    );
+    let height = Haversine.distance(
+        Point::new(bbox.min().x, bbox.min().y),
+        Point::new(bbox.min().x, bbox.max().y),
+    );
 
     let longest_side = width.max(height);
 
@@ -239,7 +244,7 @@ pub fn longest_side_length_metres(polygon: &geo::Polygon<f64>) -> PolygonSide {
 
         let next_point = points[index + 1];
 
-        let distance = point.haversine_distance(&next_point);
+        let distance = Haversine.distance(*point, next_point);
 
         if distance > longest_side.length {
             longest_side = PolygonSide {

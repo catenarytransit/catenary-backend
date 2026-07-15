@@ -18,7 +18,7 @@ use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use futures::stream::StreamExt;
-use geo::HaversineDistance;
+use geo::{Distance, Haversine};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -270,7 +270,7 @@ pub async fn nearby_from_coords_v3(
             stop.point.as_ref().unwrap().x,
             stop.point.as_ref().unwrap().y,
         );
-        let dist = input_point.haversine_distance(&stop_point);
+        let dist = Haversine.distance(input_point, stop_point);
 
         // Distance filtering
         if stop.primary_route_type == Some(3) {
@@ -530,7 +530,7 @@ pub async fn nearby_from_coords_v3(
                     new_group.lat = osm_info.point.y;
                     new_group.lon = osm_info.point.x;
                     let osm_point = geo::Point::new(osm_info.point.x, osm_info.point.y);
-                    new_group.distance_m = input_point.haversine_distance(&osm_point);
+                    new_group.distance_m = Haversine.distance(input_point, osm_point);
                 }
                 merged_ld_output.push(new_group);
                 osm_station_map.insert(osm_id, idx);

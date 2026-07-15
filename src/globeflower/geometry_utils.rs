@@ -1,5 +1,5 @@
 use geo::{
-    Coord, EuclideanDistance, EuclideanLength, HaversineDistance, HaversineLength, Line,
+    Coord, Distance, EuclideanDistance, EuclideanLength, Haversine, HaversineLength, Line,
     LineInterpolatePoint, LineLocatePoint, LineString, Point,
 };
 
@@ -238,7 +238,7 @@ pub fn hausdorff_distance(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
         .iter()
         .map(|&p| {
             b.iter()
-                .map(|&q| Point::new(p.0, p.1).haversine_distance(&Point::new(q.0, q.1)))
+                .map(|&q| Haversine.distance(Point::new(p.0, p.1), Point::new(q.0, q.1)))
                 .fold(f64::INFINITY, f64::min)
         })
         .fold(0.0f64, f64::max);
@@ -247,7 +247,7 @@ pub fn hausdorff_distance(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
         .iter()
         .map(|&p| {
             a.iter()
-                .map(|&q| Point::new(p.0, p.1).haversine_distance(&Point::new(q.0, q.1)))
+                .map(|&q| Haversine.distance(Point::new(p.0, p.1), Point::new(q.0, q.1)))
                 .fold(f64::INFINITY, f64::min)
         })
         .fold(0.0f64, f64::max);
@@ -270,8 +270,10 @@ pub fn project_point_to_polyline(
     // WARNING: This mixes Euclidean projection with Haversine conversion. Use with caution or switch to LTP.
     if coords.len() < 2 {
         if coords.len() == 1 {
-            let dist = Point::new(point.0, point.1)
-                .haversine_distance(&Point::new(coords[0].0, coords[0].1));
+            let dist = Haversine.distance(
+                Point::new(point.0, point.1),
+                Point::new(coords[0].0, coords[0].1),
+            );
             return Some((0.0, dist, coords[0]));
         }
         return None;
@@ -281,7 +283,7 @@ pub fn project_point_to_polyline(
     let fraction = ls.line_locate_point(&p)?;
     let projected = ls.line_interpolate_point(fraction)?;
     let distance_along = fraction * polyline_length(coords); // Approx
-    let distance_to_line = p.haversine_distance(&projected);
+    let distance_to_line = Haversine.distance(p, projected);
     Some((
         distance_along,
         distance_to_line,
