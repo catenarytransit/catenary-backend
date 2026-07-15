@@ -1249,11 +1249,11 @@ async fn fetch_chateau_data(
                                         let route_match = e
                                             .route_id
                                             .as_ref()
-                                            .is_some_and( |r_id| *r_id == trip.route_id);
-                                        let trip_match = e.trip.as_ref().is_some_and( |t| {
+                                            .is_some_and(|r_id| *r_id == trip.route_id);
+                                        let trip_match = e.trip.as_ref().is_some_and(|t| {
                                             t.trip_id
                                                 .as_ref()
-                                                .is_some_and( |t_id| *t_id == trip.trip_id)
+                                                .is_some_and(|t_id| *t_id == trip.trip_id)
                                         });
 
                                         route_match || trip_match

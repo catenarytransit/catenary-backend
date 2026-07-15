@@ -23,7 +23,6 @@
     clippy::single_char_pattern,
     clippy::for_kv_map,
     clippy::let_unit_value,
-    clippy::let_and_return,
     clippy::iter_nth,
     clippy::iter_cloned_collect,
     clippy::bytes_nth,
@@ -32,7 +31,8 @@
     clippy::cmp_owned,
     clippy::cmp_null,
     clippy::op_ref,
-    clippy::useless_vec
+    clippy::useless_vec,
+    clippy::module_inception
 )]
 
 #[cfg(not(target_env = "msvc"))]

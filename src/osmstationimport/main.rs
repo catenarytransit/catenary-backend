@@ -20,9 +20,16 @@
     clippy::single_char_pattern,
     clippy::for_kv_map,
     clippy::let_unit_value,
-    clippy::let_and_return,
     clippy::iter_nth,
-    clippy::iter_cloned_collect
+    clippy::iter_cloned_collect,
+    clippy::bytes_nth,
+    clippy::deprecated_clippy_cfg_attr,
+    clippy::match_result_ok,
+    clippy::cmp_owned,
+    clippy::cmp_null,
+    clippy::op_ref,
+    clippy::useless_vec,
+    clippy::module_inception
 )]
 
 #[cfg(not(target_env = "msvc"))]
@@ -125,62 +132,62 @@ fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
     }
 
     // Check for subway
-    if tags.get("subway").is_some_and( |v| v == "yes")
-        || tags.get("railway").is_some_and( |v| v == "subway")
+    if tags.get("subway").is_some_and(|v| v == "yes")
+        || tags.get("railway").is_some_and(|v| v == "subway")
     {
         return Some("subway".to_string());
     }
 
     // Check for monorail
-    if tags.get("monorail").is_some_and( |v| v == "yes")
-        || tags.get("railway").is_some_and( |v| v == "monorail")
+    if tags.get("monorail").is_some_and(|v| v == "yes")
+        || tags.get("railway").is_some_and(|v| v == "monorail")
     {
         return Some("monorail".to_string());
     }
 
     // Check for funicular
-    if tags.get("railway").is_some_and( |v| v == "funicular") {
+    if tags.get("railway").is_some_and(|v| v == "funicular") {
         return Some("funicular".to_string());
     }
 
     // Check for tram
-    if tags.get("tram").is_some_and( |v| v == "yes")
-        || tags.get("railway").is_some_and( |v| v == "tram_stop")
+    if tags.get("tram").is_some_and(|v| v == "yes")
+        || tags.get("railway").is_some_and(|v| v == "tram_stop")
     {
         return Some("tram".to_string());
     }
 
     // Check for rail (train)
-    if tags.get("train").is_some_and( |v| v == "yes")
+    if tags.get("train").is_some_and(|v| v == "yes")
         || tags
             .get("railway")
-            .is_some_and( |v| v == "station" || v == "halt")
+            .is_some_and(|v| v == "station" || v == "halt")
     {
         return Some("rail".to_string());
     }
 
     // Check for light_rail
-    if tags.get("light_rail").is_some_and( |v| v == "yes")
-        || tags.get("railway").is_some_and( |v| v == "light_rail")
+    if tags.get("light_rail").is_some_and(|v| v == "yes")
+        || tags.get("railway").is_some_and(|v| v == "light_rail")
     {
         return Some("light_rail".to_string());
     }
 
     // For public_transport tags, try to classify by additional tags
     if tags.get("public_transport").is_some() {
-        if tags.get("subway").is_some_and( |v| v == "yes") {
+        if tags.get("subway").is_some_and(|v| v == "yes") {
             return Some("subway".to_string());
         }
-        if tags.get("monorail").is_some_and( |v| v == "yes") {
+        if tags.get("monorail").is_some_and(|v| v == "yes") {
             return Some("monorail".to_string());
         }
-        if tags.get("tram").is_some_and( |v| v == "yes") {
+        if tags.get("tram").is_some_and(|v| v == "yes") {
             return Some("tram".to_string());
         }
-        if tags.get("train").is_some_and( |v| v == "yes") {
+        if tags.get("train").is_some_and(|v| v == "yes") {
             return Some("rail".to_string());
         }
-        if tags.get("light_rail").is_some_and( |v| v == "yes") {
+        if tags.get("light_rail").is_some_and(|v| v == "yes") {
             return Some("light_rail".to_string());
         }
         // Default to rail for unclassified public_transport stations
@@ -192,31 +199,28 @@ fn classify_mode(tags: &osmpbfreader::Tags) -> Option<String> {
 
 /// Determine station type from tags
 fn get_station_type(tags: &osmpbfreader::Tags) -> Option<String> {
-    if tags.get("railway").is_some_and( |v| v == "station") {
+    if tags.get("railway").is_some_and(|v| v == "station") {
         return Some("station".to_string());
     }
-    if tags.get("railway").is_some_and( |v| v == "halt") {
+    if tags.get("railway").is_some_and(|v| v == "halt") {
         return Some("halt".to_string());
     }
-    if tags.get("railway").is_some_and( |v| v == "tram_stop") {
+    if tags.get("railway").is_some_and(|v| v == "tram_stop") {
         return Some("tram_stop".to_string());
     }
     if tags
         .get("public_transport")
-        .is_some_and( |v| v == "stop_position")
+        .is_some_and(|v| v == "stop_position")
     {
         return Some("stop_position".to_string());
     }
     if tags
         .get("public_transport")
-        .is_some_and( |v| v == "platform")
+        .is_some_and(|v| v == "platform")
     {
         return Some("platform".to_string());
     }
-    if tags
-        .get("public_transport")
-        .is_some_and( |v| v == "station")
-    {
+    if tags.get("public_transport").is_some_and(|v| v == "station") {
         return Some("station".to_string());
     }
     None
@@ -232,12 +236,12 @@ fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
     }
 
     // Exclude railway=proposed
-    if tags.get("railway").is_some_and( |v| v == "proposed") {
+    if tags.get("railway").is_some_and(|v| v == "proposed") {
         return false;
     }
 
     // Exclude bus-only stations
-    if tags.get("highway").is_some_and( |v| v == "bus_stop")
+    if tags.get("highway").is_some_and(|v| v == "bus_stop")
         && tags.get("railway").is_none()
         && tags.get("train").is_none()
         && tags.get("tram").is_none()
@@ -256,7 +260,7 @@ fn is_railway_station_or_platform(tags: &osmpbfreader::Tags) -> bool {
     }
 
     // Include subway stations
-    if tags.get("station").is_some_and( |v| v == "subway") {
+    if tags.get("station").is_some_and(|v| v == "subway") {
         return true;
     }
 
@@ -301,10 +305,10 @@ fn is_excluded_way_id(id: i64) -> bool {
 /// Check if a relation is a stop_area relation (groups platforms with their parent station)
 fn is_stop_area_relation(tags: &osmpbfreader::Tags) -> bool {
     tags.get("public_transport")
-        .is_some_and( |v| v == "stop_area")
+        .is_some_and(|v| v == "stop_area")
         || tags
             .get("type")
-            .is_some_and( |v| v == "public_transport" || v == "site")
+            .is_some_and(|v| v == "public_transport" || v == "site")
 }
 
 /// Find the parent station node ID from a stop_area relation

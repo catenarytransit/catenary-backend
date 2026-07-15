@@ -20,7 +20,6 @@
     clippy::single_char_pattern,
     clippy::for_kv_map,
     clippy::let_unit_value,
-    clippy::let_and_return,
     clippy::iter_nth,
     clippy::iter_cloned_collect
 )]

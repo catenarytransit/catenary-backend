@@ -22,7 +22,6 @@
     clippy::single_char_pattern,
     clippy::for_kv_map,
     clippy::let_unit_value,
-    clippy::let_and_return,
     clippy::iter_nth,
     clippy::iter_cloned_collect,
     clippy::bytes_nth,
@@ -30,7 +29,9 @@
     clippy::match_result_ok,
     clippy::cmp_owned,
     clippy::cmp_null,
-    clippy::op_ref
+    clippy::op_ref,
+    clippy::useless_vec,
+    clippy::module_inception
 )]
 
 // https://en.wikipedia.org/wiki/Rhododendron_ferrugineum

@@ -71,7 +71,7 @@ fn delete_zip_files(dir_path: &str) -> std::io::Result<()> {
     for entry in read_dir(dir_path)? {
         let entry = entry?;
         let path = entry.path();
-        if path.is_file() && path.extension().is_some_and( |ext| ext == "zip") {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "zip") {
             // don't crash if you can't delete the zips
             let _ = remove_file(path);
         }

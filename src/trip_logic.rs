@@ -403,9 +403,7 @@ pub async fn fetch_trip_rt_update(
                                     .schedule_relationship
                                     .as_ref()
                                     .map(|x| x.clone().into()),
-                                gtfs_stop_sequence: stop_time_update
-                                    .stop_sequence
-                                    .map(|x| x as u16),
+                                gtfs_stop_sequence: stop_time_update.stop_sequence.map(|x| x),
                                 rt_platform_string: stop_time_update.platform_string.clone(),
                                 departure_occupancy_status: stop_time_update
                                     .departure_occupancy_status
@@ -923,8 +921,8 @@ pub async fn fetch_trip_information(
         return Err("Trip Itin not found".to_string());
     }
 
-    if calendar_req.is_err() {
-        eprintln!("{}", calendar_req.unwrap_err());
+    if let Err(calendar_req_err) = &calendar_req {
+        eprintln!("{}", calendar_req_err);
         return Err("Error fetching calendar data".to_string());
     }
 
@@ -1894,11 +1892,11 @@ pub async fn fetch_trip_information(
                                     let route_match = e
                                         .route_id
                                         .as_ref()
-                                        .is_some_and( |r_id| *r_id == itin_meta.route_id);
-                                    let trip_match = e.trip.as_ref().is_some_and( |t| {
+                                        .is_some_and(|r_id| *r_id == itin_meta.route_id);
+                                    let trip_match = e.trip.as_ref().is_some_and(|t| {
                                         t.trip_id
                                             .as_ref()
-                                            .is_some_and( |t_id| *t_id == query.trip_id)
+                                            .is_some_and(|t_id| *t_id == query.trip_id)
                                     });
                                     route_match || trip_match
                                 });
@@ -1911,11 +1909,11 @@ pub async fn fetch_trip_information(
                                         let route_match = e
                                             .route_id
                                             .as_ref()
-                                            .is_some_and( |r_id| *r_id == itin_meta.route_id);
-                                        let trip_match = e.trip.as_ref().is_some_and( |t| {
+                                            .is_some_and(|r_id| *r_id == itin_meta.route_id);
+                                        let trip_match = e.trip.as_ref().is_some_and(|t| {
                                             t.trip_id
                                                 .as_ref()
-                                                .is_some_and( |t_id| *t_id == query.trip_id)
+                                                .is_some_and(|t_id| *t_id == query.trip_id)
                                         });
 
                                         route_match || trip_match
