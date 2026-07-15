@@ -114,7 +114,7 @@ pub struct AspenServer {
     pub authoritative_data_store:
         Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     pub authoritative_trajectory_data_store:
-        Arc<SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>>,
+        Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
     pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
@@ -1614,18 +1614,14 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         params: catenary::pasque::lib::TrajectorySubscriptionParams,
     ) -> Result<Vec<catenary::aspen_dataset::AspenisedTrajectory>, String> {
-        let store = match self
-            .authoritative_trajectory_data_store
-            .get_async(&chateau_id)
-            .await
-        {
-            Some(guard) => guard.get().clone(),
-            None => {
-                return Err(format!(
-                    "No TrajectoryData found for chateau: {}",
-                    chateau_id
-                ));
-            }
+        let store = {
+            let guard = self
+                .authoritative_trajectory_data_store
+                .get_async(&chateau_id)
+                .await
+                .ok_or_else(|| format!("No trajectory data for {chateau_id}"))?;
+
+            Arc::clone(guard.get())
         };
         let trajectories_by_route_type = &store.rtree_by_route_type;
 
@@ -2183,7 +2179,7 @@ async fn main() -> anyhow::Result<()> {
     let raw_gtfs = Arc::new(SccHashMap::new());
     let authoritative_data_store = Arc::new(SccHashMap::new());
     let authoritative_trajectory_data_store: Arc<
-        SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
+        SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>,
     > = Arc::new(SccHashMap::new());
     let backup_data_store = Arc::new(SccHashMap::new());
     let backup_raw_gtfs = Arc::new(SccHashMap::new());
@@ -2229,7 +2225,7 @@ async fn main() -> anyhow::Result<()> {
                                                     authoritative_trajectory_data_store
                                                         .entry_async(chateau_id.to_string())
                                                         .await
-                                                        .or_insert(traj_data);
+                                                        .or_insert(Arc::new(traj_data));
                                                     //println!(
                                                     //    "Successfully loaded trajectory data for {}",
                                                     //    chateau_id

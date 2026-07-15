@@ -191,7 +191,7 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 pub async fn new_rt_data(
     authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
     authoritative_trajectory_data_store: Arc<
-        SccHashMap<String, catenary::aspen_dataset::AspenTrajectoryStore>,
+        SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>,
     >,
     authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
     chateau_id: &str,
@@ -4211,13 +4211,13 @@ pub async fn new_rt_data(
         );
     }
 
-    let store = catenary::aspen_dataset::AspenTrajectoryStore {
+    let store = Arc::new(catenary::aspen_dataset::AspenTrajectoryStore {
         geometries,
         patterns,
         trajectories,
         pattern_to_trajectories,
         rtree_by_route_type,
-    };
+    });
 
     set_stage(
         chateau_id,
@@ -4269,10 +4269,8 @@ pub async fn new_rt_data(
     authoritative_trajectory_data_store
         .entry_async(chateau_id.to_string())
         .await
-        .and_modify(|current| {
-            *current = store.clone();
-        })
-        .or_insert(store.clone());
+        .and_modify(|current| *current = Arc::clone(&store))
+        .or_insert_with(|| Arc::clone(&store));
 
     // tracing::info!(
     //     chateau_id,
@@ -4296,7 +4294,7 @@ pub async fn new_rt_data(
         {
             eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
         } else {
-            if let Err(e) = persistence::save_trajectory_data(chateau_id, &store, static_changed) {
+            if let Err(e) = persistence::save_trajectory_data(chateau_id, store.as_ref(), static_changed) {
                 eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
             }
             LAST_SAVE_TIME
