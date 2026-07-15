@@ -209,10 +209,17 @@ pub async fn get_single_chateau_trajectories(
                     5.0
                 };
 
-                match client
+                let call_start = std::time::Instant::now();
+                let call_res = client
                     .get_trajectories(tarpc::context::current(), chateau_clone.clone(), params)
-                    .await
-                {
+                    .await;
+                let call_elapsed = call_start.elapsed();
+                println!(
+                    "Aspen get_trajectories call for chateau {} took {:?}",
+                    chateau_clone, call_elapsed
+                );
+
+                match call_res {
                     Ok(Ok(trajectories)) => {
                         let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                         let res = tokio::task::spawn_blocking(move || {
@@ -222,7 +229,7 @@ pub async fn get_single_chateau_trajectories(
                             let t_end_str = (now + chrono::Duration::minutes(3))
                                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-                            trajectories
+                            let mut filtered: Vec<_> = trajectories
                                 .into_par_iter()
                                 .filter_map(|mut traj| {
                                     let mut keep = false;
@@ -307,63 +314,78 @@ pub async fn get_single_chateau_trajectories(
                                             seg.coordinates
                                                 .retain(|pt| !(pt[0] == 0.0 && pt[1] == 0.0));
                                         }
-
-                                        if simplify_meters > 0.0 {
-                                            // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
-                                            let web_mercator_scale =
-                                                (1.0 / avg_lat.to_radians().cos()).abs();
-                                            let wm_simplify_meters =
-                                                simplify_meters * web_mercator_scale;
-                                            let simplify_meters_sq =
-                                                wm_simplify_meters * wm_simplify_meters;
-
-                                            for seg in &mut traj.segments {
-                                                if seg.coordinates.len() > 2 {
-                                                    let projected: Vec<[f64; 2]> = seg
-                                                        .coordinates
-                                                        .iter()
-                                                        .map(|pt| {
-                                                            let r = 6378137.0;
-                                                            let x = pt[0].to_radians() * r;
-                                                            let y = ((std::f64::consts::PI / 4.0)
-                                                                + (pt[1].to_radians() / 2.0))
-                                                                .tan()
-                                                                .ln()
-                                                                * r;
-                                                            [x, y]
-                                                        })
-                                                        .collect();
-
-                                                    let indices =
-                                                        rdp_indices(&projected, simplify_meters_sq);
-                                                    let mut simplified =
-                                                        Vec::with_capacity(indices.len());
-                                                    for idx in indices {
-                                                        simplified.push(seg.coordinates[idx]);
-                                                    }
-                                                    seg.coordinates = simplified;
-                                                }
-                                            }
-                                        }
-
-                                        for seg in &mut traj.segments {
-                                            for pt in &mut seg.coordinates {
-                                                pt[0] = format_coordinate_precise(pt[0], zoom);
-                                                pt[1] = format_coordinate_precise(pt[1], zoom);
-                                            }
-                                        }
-
-                                        Some(TrajectoryWrapper {
-                                            source: "trajectory".to_string(),
-                                            timestamp: now_ms,
-                                            client_reference: client_reference.clone(),
-                                            content: traj,
-                                        })
+                                        Some(traj)
                                     } else {
                                         None
                                     }
                                 })
-                                .collect()
+                                .collect();
+
+                            let simplify_start = std::time::Instant::now();
+                            if simplify_meters > 0.0 {
+                                // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
+                                let web_mercator_scale =
+                                    (1.0 / avg_lat.to_radians().cos()).abs();
+                                let wm_simplify_meters =
+                                    simplify_meters * web_mercator_scale;
+                                let simplify_meters_sq =
+                                    wm_simplify_meters * wm_simplify_meters;
+
+                                filtered.par_iter_mut().for_each(|traj| {
+                                    for seg in &mut traj.segments {
+                                        if seg.coordinates.len() > 2 {
+                                            let projected: Vec<[f64; 2]> = seg
+                                                .coordinates
+                                                .iter()
+                                                .map(|pt| {
+                                                    let r = 6378137.0;
+                                                    let x = pt[0].to_radians() * r;
+                                                    let y = ((std::f64::consts::PI / 4.0)
+                                                        + (pt[1].to_radians() / 2.0))
+                                                        .tan()
+                                                        .ln()
+                                                        * r;
+                                                    [x, y]
+                                                })
+                                                .collect();
+
+                                            let indices =
+                                                rdp_indices(&projected, simplify_meters_sq);
+                                            let mut simplified =
+                                                Vec::with_capacity(indices.len());
+                                            for idx in indices {
+                                                simplified.push(seg.coordinates[idx]);
+                                            }
+                                            seg.coordinates = simplified;
+                                        }
+                                    }
+                                });
+                            }
+                            let simplify_elapsed = simplify_start.elapsed();
+                            println!(
+                                "Shape simplification for chateau {} took {:?}",
+                                chateau_clone, simplify_elapsed
+                            );
+
+                            let res: Vec<_> = filtered
+                                .into_par_iter()
+                                .map(|mut traj| {
+                                    for seg in &mut traj.segments {
+                                        for pt in &mut seg.coordinates {
+                                            pt[0] = format_coordinate_precise(pt[0], zoom);
+                                            pt[1] = format_coordinate_precise(pt[1], zoom);
+                                        }
+                                    }
+
+                                    TrajectoryWrapper {
+                                        source: "trajectory".to_string(),
+                                        timestamp: now_ms,
+                                        client_reference: client_reference.clone(),
+                                        content: traj,
+                                    }
+                                })
+                                .collect();
+                            res
                         })
                         .await
                         .unwrap_or_else(|_| vec![]);
@@ -480,14 +502,21 @@ pub async fn get_trajectories(
                             5.0
                         };
 
-                        match client
+                        let call_start = std::time::Instant::now();
+                        let call_res = client
                             .get_trajectories(
                                 tarpc::context::current(),
                                 ch_clone2.clone(),
                                 params_clone,
                             )
-                            .await
-                        {
+                            .await;
+                        let call_elapsed = call_start.elapsed();
+                        println!(
+                            "Aspen get_trajectories call for chateau {} took {:?}",
+                            ch_clone2, call_elapsed
+                        );
+
+                        match call_res {
                             Ok(Ok(trajectories)) => {
                                 let now_ms =
                                     catenary::duration_since_unix_epoch().as_millis() as u64;
@@ -498,7 +527,7 @@ pub async fn get_trajectories(
                                     let t_end_str = (now + chrono::Duration::minutes(3))
                                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
-                                    trajectories
+                                    let mut filtered: Vec<_> = trajectories
                                         .into_par_iter()
                                         .filter_map(|mut traj| {
                                             let mut keep = false;
@@ -590,70 +619,85 @@ pub async fn get_trajectories(
                                                         !(pt[0] == 0.0 && pt[1] == 0.0)
                                                     });
                                                 }
-
-                                                if simplify_meters > 0.0 {
-                                                    // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
-                                                    let web_mercator_scale =
-                                                        (1.0 / avg_lat.to_radians().cos()).abs();
-                                                    let wm_simplify_meters =
-                                                        simplify_meters * web_mercator_scale;
-                                                    let simplify_meters_sq =
-                                                        wm_simplify_meters * wm_simplify_meters;
-
-                                                    for seg in &mut traj.segments {
-                                                        if seg.coordinates.len() > 2 {
-                                                            let projected: Vec<[f64; 2]> = seg
-                                                                .coordinates
-                                                                .iter()
-                                                                .map(|pt| {
-                                                                    let r = 6378137.0;
-                                                                    let x = pt[0].to_radians() * r;
-                                                                    let y = ((std::f64::consts::PI
-                                                                        / 4.0)
-                                                                        + (pt[1].to_radians()
-                                                                            / 2.0))
-                                                                        .tan()
-                                                                        .ln()
-                                                                        * r;
-                                                                    [x, y]
-                                                                })
-                                                                .collect();
-
-                                                            let indices = rdp_indices(
-                                                                &projected,
-                                                                simplify_meters_sq,
-                                                            );
-                                                            let mut simplified =
-                                                                Vec::with_capacity(indices.len());
-                                                            for idx in indices {
-                                                                simplified
-                                                                    .push(seg.coordinates[idx]);
-                                                            }
-                                                            seg.coordinates = simplified;
-                                                        }
-                                                    }
-                                                }
-
-                                                for seg in &mut traj.segments {
-                                                    for pt in &mut seg.coordinates {
-                                                        pt[0] =
-                                                            format_coordinate_precise(pt[0], zoom);
-                                                        pt[1] =
-                                                            format_coordinate_precise(pt[1], zoom);
-                                                    }
-                                                }
-
-                                                Some(TrajectoryWrapper {
-                                                    source: "trajectory".to_string(),
-                                                    timestamp: now_ms,
-                                                    client_reference: client_reference.clone(),
-                                                    content: traj,
-                                                })
+                                                Some(traj)
                                             } else {
                                                 None
                                             }
                                         })
-                                        .collect()
+                                        .collect();
+
+                                    let simplify_start = std::time::Instant::now();
+                                    if simplify_meters > 0.0 {
+                                        // Adjust simplify_meters for Web Mercator scale distortion at avg_lat
+                                        let web_mercator_scale =
+                                            (1.0 / avg_lat.to_radians().cos()).abs();
+                                        let wm_simplify_meters =
+                                            simplify_meters * web_mercator_scale;
+                                        let simplify_meters_sq =
+                                            wm_simplify_meters * wm_simplify_meters;
+
+                                        filtered.par_iter_mut().for_each(|traj| {
+                                            for seg in &mut traj.segments {
+                                                if seg.coordinates.len() > 2 {
+                                                    let projected: Vec<[f64; 2]> = seg
+                                                        .coordinates
+                                                        .iter()
+                                                        .map(|pt| {
+                                                            let r = 6378137.0;
+                                                            let x = pt[0].to_radians() * r;
+                                                            let y = ((std::f64::consts::PI
+                                                                / 4.0)
+                                                                + (pt[1].to_radians()
+                                                                    / 2.0))
+                                                                .tan()
+                                                                .ln()
+                                                                * r;
+                                                            [x, y]
+                                                        })
+                                                        .collect();
+
+                                                    let indices = rdp_indices(
+                                                        &projected,
+                                                        simplify_meters_sq,
+                                                    );
+                                                    let mut simplified =
+                                                        Vec::with_capacity(indices.len());
+                                                    for idx in indices {
+                                                        simplified
+                                                            .push(seg.coordinates[idx]);
+                                                    }
+                                                    seg.coordinates = simplified;
+                                                }
+                                            }
+                                        });
+                                    }
+                                    let simplify_elapsed = simplify_start.elapsed();
+                                    println!(
+                                        "Shape simplification for chateau {} took {:?}",
+                                        ch_clone2, simplify_elapsed
+                                    );
+
+                                    let res: Vec<_> = filtered
+                                        .into_par_iter()
+                                        .map(|mut traj| {
+                                            for seg in &mut traj.segments {
+                                                for pt in &mut seg.coordinates {
+                                                    pt[0] =
+                                                        format_coordinate_precise(pt[0], zoom);
+                                                    pt[1] =
+                                                        format_coordinate_precise(pt[1], zoom);
+                                                }
+                                            }
+
+                                            TrajectoryWrapper {
+                                                source: "trajectory".to_string(),
+                                                timestamp: now_ms,
+                                                client_reference: client_reference.clone(),
+                                                content: traj,
+                                            }
+                                        })
+                                        .collect();
+                                    res
                                 })
                                 .await
                                 .unwrap_or_else(|_| vec![]);
