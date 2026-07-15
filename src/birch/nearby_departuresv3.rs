@@ -1421,9 +1421,7 @@ async fn fetch_chateau_data(
                                 delayed: is_delayed,
                                 chateau_id: chateau.clone(),
                                 last_stop: is_last_stop,
-                                final_station_name: itinerary_final_station_name
-                                    .get(&trip.itinerary_pattern_id)
-                                    .cloned(),
+                                final_station_name: itinerary_final_station_name.get(&trip.itinerary_pattern_id).cloned(),
                             };
                             ld_departures_by_group
                                 .entry((chateau.clone(), station_key.clone()))
