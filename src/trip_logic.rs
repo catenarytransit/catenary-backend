@@ -526,7 +526,7 @@ pub async fn fetch_trip_information(
         t.add("connect_to_etcd");
     }
 
-    let mut consist: Option<_> = None;
+    let mut consist: Option<crate::formation_v1::UnifiedConsist> = None;
 
     let assigned_node = aspen_chateau_cache.get(&chateau);
 
@@ -634,7 +634,7 @@ pub async fn fetch_trip_information(
                     }
 
                     if let Some(consist_rt) = &trip.consist {
-                        consist = Some(consist_rt.clone());
+                        consist = Some(*consist_rt.clone());
                     }
 
                     let stop_times: Vec<StopTimeIntroduction> = trip
@@ -820,7 +820,7 @@ pub async fn fetch_trip_information(
 
     // STATIC DB FETCHING
 
-    let mut consist: Option<_> = None;
+    let mut consist: Option<crate::formation_v1::UnifiedConsist> = None;
 
     if chateau == "irvine~ca~us" {
         println!("DEBUG: fetch_trip_information: Proceeding with STATIC DB FETCHING");
@@ -1330,7 +1330,7 @@ pub async fn fetch_trip_information(
                                     > = None;
 
                                     if let Some(consist_rt) = &rt_trip_update.consist {
-                                        consist = Some(consist_rt.clone());
+                                        consist = Some(*consist_rt.clone());
                                     }
 
                                     if rt_trip_update.trip.schedule_relationship == Some(crate::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) {

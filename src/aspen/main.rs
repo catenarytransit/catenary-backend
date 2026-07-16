@@ -1556,6 +1556,7 @@ impl AspenRpc for AspenServer {
                 .aspenised_alerts
                 .clone()
                 .into_iter()
+                .map(|(k, v)| (k.to_string(), v))
                 .collect(),
         )
     }

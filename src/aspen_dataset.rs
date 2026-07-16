@@ -60,10 +60,10 @@ pub struct AspenisedData {
         AHashMap<CompactString, Vec<CompactString>>,
     pub vehicle_positions_rtree_by_route_type:
         AHashMap<i16, rstar::RTree<AspenisedVehiclePositionBBox>>,
-    pub aspenised_alerts: AHashMap<String, AspenisedAlert>,
-    pub impacted_routes_alerts: AHashMap<String, Vec<String>>,
-    pub impacted_stops_alerts: AHashMap<String, Vec<String>>,
-    pub impacted_trips_alerts: AHashMap<String, Vec<String>>,
+    pub aspenised_alerts: AHashMap<Arc<str>, AspenisedAlert>,
+    pub impacted_routes_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,
+    pub impacted_stops_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,
+    pub impacted_trips_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,
     pub trip_id_to_vehicle_gtfs_rt_id: AHashMap<String, Vec<String>>,
     pub last_updated_time_ms: u64,
     #[serde(skip, default = "ItineraryPatternInternalCache::new")]
@@ -531,7 +531,7 @@ pub struct AspenisedTripUpdate {
     pub stop_time_update: Vec<AspenisedStopTimeUpdate>,
     pub trip_properties: Option<AspenTripProperties>,
     pub trip_headsign: Option<Arc<str>>,
-    pub consist: Option<crate::formation_v1::UnifiedConsist>,
+    pub consist: Option<Box<crate::formation_v1::UnifiedConsist>>,
     pub found_schedule_trip_id: bool,
     #[serde(default)]
     pub last_seen: u64,

@@ -5,6 +5,8 @@
 use ahash::AHashMap;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::convert_text_12h_to_24h;
+use compact_str::CompactString;
+use std::sync::Arc;
 
 /// Cleans alert text for specific chateaus (metrolinktrains, metro~losangeles).
 /// - Removes "Please " prefix and capitalizes the next word
@@ -91,31 +93,39 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
 
 pub fn index_alert(
     alert: &AspenisedAlert,
-    alert_id: &str,
-    impacted_route_id_to_alert_ids: &mut AHashMap<String, Vec<String>>,
-    impact_trip_id_to_alert_ids: &mut AHashMap<String, Vec<String>>,
+    alert_id: &Arc<str>,
+    impacted_route_id_to_alert_ids: &mut AHashMap<CompactString, Vec<Arc<str>>>,
+    impacted_stop_id_to_alert_ids: &mut AHashMap<CompactString, Vec<Arc<str>>>,
+    impact_trip_id_to_alert_ids: &mut AHashMap<CompactString, Vec<Arc<str>>>,
 ) {
     for informed_entity in alert.informed_entity.iter() {
         if let Some(route_id) = &informed_entity.route_id {
             impacted_route_id_to_alert_ids
-                .entry(route_id.clone())
-                .and_modify(|x| x.push(alert_id.to_string()))
-                .or_insert(vec![alert_id.to_string()]);
+                .entry(CompactString::new(route_id))
+                .and_modify(|x| x.push(Arc::clone(alert_id)))
+                .or_insert_with(|| vec![Arc::clone(alert_id)]);
+        }
+
+        if let Some(stop_id) = &informed_entity.stop_id {
+            impacted_stop_id_to_alert_ids
+                .entry(CompactString::new(stop_id))
+                .and_modify(|x| x.push(Arc::clone(alert_id)))
+                .or_insert_with(|| vec![Arc::clone(alert_id)]);
         }
 
         if let Some(trip) = &informed_entity.trip {
             if let Some(trip_id) = &trip.trip_id {
                 impact_trip_id_to_alert_ids
-                    .entry(trip_id.clone())
-                    .and_modify(|x| x.push(alert_id.to_string()))
-                    .or_insert(vec![alert_id.to_string()]);
+                    .entry(CompactString::new(trip_id))
+                    .and_modify(|x| x.push(Arc::clone(alert_id)))
+                    .or_insert_with(|| vec![Arc::clone(alert_id)]);
             }
 
             if let Some(route_id) = &trip.route_id {
                 impacted_route_id_to_alert_ids
-                    .entry(route_id.clone())
-                    .and_modify(|x| x.push(alert_id.to_string()))
-                    .or_insert(vec![alert_id.to_string()]);
+                    .entry(CompactString::new(route_id))
+                    .and_modify(|x| x.push(Arc::clone(alert_id)))
+                    .or_insert_with(|| vec![Arc::clone(alert_id)]);
             }
         }
     }
@@ -125,9 +135,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 pub fn deduplicate_alerts(
-    alerts: AHashMap<String, AspenisedAlert>,
-) -> AHashMap<String, AspenisedAlert> {
-    let mut alerts_by_content_hash: AHashMap<u64, Vec<(String, AspenisedAlert)>> = AHashMap::new();
+    alerts: AHashMap<Arc<str>, AspenisedAlert>,
+) -> AHashMap<Arc<str>, AspenisedAlert> {
+    let mut alerts_by_content_hash: AHashMap<u64, Vec<(Arc<str>, AspenisedAlert)>> =
+        AHashMap::new();
 
     for (id, alert) in alerts {
         let mut hasher = DefaultHasher::new();
@@ -381,19 +392,19 @@ mod tests {
 
         // Alert A: Time 1, Route 1
         let a = make_alert("Header", 100, 200, Some("R1"));
-        alerts.insert("A".to_string(), a.clone());
+        alerts.insert(Arc::from("A"), a.clone());
 
         // Alert B: Time 2, Route 1 (Matches A on Route)
         let b = make_alert("Header", 300, 400, Some("R1"));
-        alerts.insert("B".to_string(), b.clone());
+        alerts.insert(Arc::from("B"), b.clone());
 
         // Alert C: Time 2, Route 2 (Matches B on Time)
         let c = make_alert("Header", 300, 400, Some("R2"));
-        alerts.insert("C".to_string(), c.clone());
+        alerts.insert(Arc::from("C"), c.clone());
 
         // Alert D: Time 3, Route 3 (Disconnected)
         let d = make_alert("Header", 500, 600, Some("R3"));
-        alerts.insert("D".to_string(), d.clone());
+        alerts.insert(Arc::from("D"), d.clone());
 
         let deduped = deduplicate_alerts(alerts);
 

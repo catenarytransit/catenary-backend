@@ -18,12 +18,12 @@ pub fn get_alerts_from_route_id(
         Some(alerts) => {
             let mut alerts_vec = Vec::new();
 
-            for alert_id in alerts {
+            for alert_id in alerts.iter() {
                 let alert = snapshot.aspenised_alerts.get(alert_id);
 
                 match alert {
                     Some(alert) => {
-                        alerts_vec.push((alert_id.clone(), alert.clone()));
+                        alerts_vec.push((alert_id.to_string(), alert.clone()));
                     }
                     None => {
                         println!("Alert not found for alert id {}", alert_id);
@@ -54,12 +54,12 @@ pub fn get_alerts_from_stop_id(
         Some(alerts) => {
             let mut alerts_vec = Vec::new();
 
-            for alert_id in alerts {
+            for alert_id in alerts.iter() {
                 let alert = snapshot.aspenised_alerts.get(alert_id);
 
                 match alert {
                     Some(alert) => {
-                        alerts_vec.push((alert_id.clone(), alert.clone()));
+                        alerts_vec.push((alert_id.to_string(), alert.clone()));
                     }
                     None => {
                         println!("Alert not found for alert id {}", alert_id);
@@ -90,12 +90,12 @@ pub fn get_alert_from_trip_id(
         Some(alerts) => {
             let mut alerts_vec = Vec::new();
 
-            for alert_id in alerts {
+            for alert_id in alerts.iter() {
                 let alert = snapshot.aspenised_alerts.get(alert_id);
 
                 match alert {
                     Some(alert) => {
-                        alerts_vec.push((alert_id.clone(), alert.clone()));
+                        alerts_vec.push((alert_id.to_string(), alert.clone()));
                     }
                     None => {
                         println!("Alert not found for alert id {}", alert_id);

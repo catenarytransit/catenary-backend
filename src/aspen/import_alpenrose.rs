@@ -504,11 +504,12 @@ pub async fn new_rt_data(
         Vec<CompactString>,
     > = AHashMap::new();
 
-    let mut alerts: AHashMap<String, AspenisedAlert> = AHashMap::new();
+    let mut alerts: AHashMap<Arc<str>, AspenisedAlert> = AHashMap::new();
 
-    let mut impacted_route_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut impacted_stop_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
-    let mut impact_trip_id_to_alert_ids: AHashMap<String, Vec<String>> = AHashMap::new();
+    let mut impacted_route_id_to_alert_ids: AHashMap<CompactString, Vec<Arc<str>>> =
+        AHashMap::new();
+    let mut impacted_stop_id_to_alert_ids: AHashMap<CompactString, Vec<Arc<str>>> = AHashMap::new();
+    let mut impact_trip_id_to_alert_ids: AHashMap<CompactString, Vec<Arc<str>>> = AHashMap::new();
     let mut general_alerts: AHashMap<String, Vec<String>> = AHashMap::new();
 
     let mut stop_id_to_stop: AHashMap<CompactString, AspenisedStop> = AHashMap::new();
@@ -3036,7 +3037,7 @@ pub async fn new_rt_data(
                                 .clone()
                                 .map(|x| (*x).into()),
                             last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
-                            consist,
+                            consist: consist.map(Box::new),
                         };
 
                         let trip_update = match REALTIME_FEEDS_TO_USE_VEHICLE_IDS
@@ -3248,13 +3249,13 @@ pub async fn new_rt_data(
 
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
-                        let alert_id = alert_entity.id.clone();
+                        let alert_id = Arc::from(alert_entity.id.as_str());
                         let aspenised_alert: AspenisedAlert = (*alert.clone()).into();
 
                         let processed_alert =
                             crate::alerts_processing::process_alert(aspenised_alert, chateau_id);
 
-                        alerts.insert(alert_id.clone(), processed_alert);
+                        alerts.insert(alert_id, processed_alert);
                     }
                 }
             }
@@ -3270,7 +3271,7 @@ pub async fn new_rt_data(
                     for (alert_id, alert) in sncf_siri_alerts {
                         let processed_alert =
                             crate::alerts_processing::process_alert(alert, chateau_id);
-                        alerts.insert(alert_id, processed_alert);
+                        alerts.insert(Arc::from(alert_id.as_str()), processed_alert);
                     }
                 }
                 Err(error) => {
@@ -3279,7 +3280,7 @@ pub async fn new_rt_data(
                     if let Some(previous_data) = &previous_authoritative_data_store {
                         for (alert_id, alert) in &previous_data.aspenised_alerts {
                             if alert_id.starts_with("sncf-siri-sx:") {
-                                alerts.insert(alert_id.clone(), alert.clone());
+                                alerts.insert(Arc::clone(alert_id), alert.clone());
                             }
                         }
                     }
@@ -3427,6 +3428,7 @@ pub async fn new_rt_data(
                 alert,
                 alert_id,
                 &mut impacted_route_id_to_alert_ids,
+                &mut impacted_stop_id_to_alert_ids,
                 &mut impact_trip_id_to_alert_ids,
             );
         }
@@ -3636,10 +3638,19 @@ pub async fn new_rt_data(
         trip_updates_lookup_by_trip_id_to_trip_update_ids:
             trip_updates_lookup_by_trip_id_to_trip_update_ids,
         aspenised_alerts: alerts,
-        impacted_routes_alerts: impacted_route_id_to_alert_ids,
-        impacted_stops_alerts: AHashMap::new(),
+        impacted_routes_alerts: impacted_route_id_to_alert_ids
+            .into_iter()
+            .map(|(k, v)| (k, v.into_boxed_slice()))
+            .collect(),
+        impacted_stops_alerts: impacted_stop_id_to_alert_ids
+            .into_iter()
+            .map(|(k, v)| (k, v.into_boxed_slice()))
+            .collect(),
         vehicle_label_to_gtfs_id: gtfs_vehicle_labels_to_ids,
-        impacted_trips_alerts: impact_trip_id_to_alert_ids,
+        impacted_trips_alerts: impact_trip_id_to_alert_ids
+            .into_iter()
+            .map(|(k, v)| (k, v.into_boxed_slice()))
+            .collect(),
         compressed_trip_internal_cache,
         itinerary_pattern_internal_cache: ItineraryPatternInternalCache {
             itinerary_patterns: accumulated_itinerary_patterns,
