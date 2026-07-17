@@ -795,7 +795,7 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
-        "f-u0-switzerland" => {
+        /*"f-u0-switzerland" => {
             // 2 passes requried
             let _ = execute_pfaedle_rs(
                 path.as_str(),
@@ -819,7 +819,7 @@ pub async fn gtfs_process_feed(
                 true,
             )
             .await?;
-        }
+        }*/
         _ => {
             //no pfaedle needed
         }
