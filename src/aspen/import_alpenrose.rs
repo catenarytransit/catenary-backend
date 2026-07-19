@@ -40,7 +40,7 @@ const ALLOWED_CHATEAUX: &[&str] = &[
     "sncb",
     "tisséo",
     "vbb",
-    "rejseplanen~dk~gtfs",
+    "danmark",
     "busÉireann",
     "nederland",
 ];
