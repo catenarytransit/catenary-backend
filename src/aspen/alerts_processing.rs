@@ -7,6 +7,7 @@ use catenary::aspen_dataset::AspenisedAlert;
 use catenary::convert_text_12h_to_24h;
 use compact_str::CompactString;
 use std::sync::Arc;
+use html_escape;
 
 /// Cleans alert text for specific chateaus (metrolinktrains, metro~losangeles).
 /// - Removes "Please " prefix and capitalizes the next word
@@ -59,6 +60,9 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
                 .replace("Riders are encouraged to check current routing and stop locations on the Routes & Schedules page, use the Transit App for trip planning and real-time information and alerts, or visit rt.scmetro.org", "")
                 .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org.", "")
                 .replace("Se recomienda a los pasajeros consultar el recorrido y las paradas actuales en la página de Rutas y Horarios, usar la aplicación Transit para la planificación de viajes y obtener información y alertas en tiempo real, o visitar rt.scmetro.org", "");
+
+            a.text = html_escape::decode_html_entities(&a.text).to_string();
+
             a.text = clean_alert_text(&cleaned, chateau_id);
         }
     }
@@ -84,6 +88,9 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
                     "Para seguimiento en tiempo real, visite https://rt.scmetro.org.",
                     "",
                 );
+
+            a.text = html_escape::decode_html_entities(&a.text).to_string();
+
             a.text = clean_alert_text(&cleaned, chateau_id);
         }
     }
