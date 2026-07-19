@@ -2495,6 +2495,26 @@ pub async fn new_rt_data(
                                         }
                                     }
                                 }
+                                "danmark" => {
+                                    if let TrackData::Danmark(danmark_data) = &fetched_track_data {
+                                        if let (Some(trip_id), Some(stop_id)) =
+                                            (&trip_descriptor.trip_id, &stu.stop_id)
+                                        {
+                                            if let Some(platform_info) = danmark_data
+                                                .get(trip_id.as_str())
+                                                .and_then(|trip_platforms| {
+                                                    trip_platforms.iter().find(|platform| {
+                                                        platform.stop_id == stop_id.as_ref()
+                                                    })
+                                                })
+                                            {
+                                                platform_resp = Some(
+                                                    platform_info.platform_name.clone().into(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                                 "nmbs" | "sncb" => {
                                     // Extract platform from stop_id suffix pattern (e.g., "8833001_7" -> platform "7")
                                     if let Some(stop_id) = &stu.stop_id {

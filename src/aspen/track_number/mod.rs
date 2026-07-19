@@ -16,7 +16,7 @@ pub struct PlatformInfo {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IleDeFrancePlatformInfo {
+pub struct CommonPlatformInfo {
     pub stop_id: String,
     pub platform_name: String,
 }
@@ -27,7 +27,8 @@ pub enum TrackData {
     Metrolink(Option<MetrolinkOutputTrackData>),
     Amtrak(AmtrakTrackDataMultisource),
     NationalRail(HashMap<String, Vec<PlatformInfo>>),
-    IleDeFrance(HashMap<String, Vec<IleDeFrancePlatformInfo>>),
+    IleDeFrance(HashMap<String, Vec<CommonPlatformInfo>>),
+    Danmark(HashMap<String, Vec<CommonPlatformInfo>>),
     ViaRail(Option<viarail::ViaRailTrackData>),
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
@@ -294,10 +295,24 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             let url = "http://localhost:46299/platforms";
 
             match reqwest::get(url).await {
-                Ok(r) => match r
-                    .json::<HashMap<String, Vec<IleDeFrancePlatformInfo>>>()
-                    .await
-                {
+                Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
+                    Ok(response) => TrackData::IleDeFrance(response),
+                    Err(e) => {
+                        println!("Error decoding Île-de-France platform data: {}", e);
+                        TrackData::IleDeFrance(HashMap::new())
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching Île-de-France platform data: {}", e);
+                    TrackData::IleDeFrance(HashMap::new())
+                }
+            }
+        }
+        "danmark" => {
+            let url = "http://localhost:46372/platforms";
+
+            match reqwest::get(url).await {
+                Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
                     Ok(response) => TrackData::IleDeFrance(response),
                     Err(e) => {
                         println!("Error decoding Île-de-France platform data: {}", e);
