@@ -336,6 +336,18 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-rejseplanen~dk~gtfs" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![
+                    String::from("rail"),
+                ]),
+                true,
+                true,
+            )
+            .await?;
+        }
         "f-gtfs~de"
         | "f-gtfs~de~bayern"
         | "f-gtfs~de~berlin"
