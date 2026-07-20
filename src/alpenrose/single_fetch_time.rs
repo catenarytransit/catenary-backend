@@ -29,7 +29,7 @@ lazy_static! {
     static ref CUSTOM_FEEDS: HashSet<&'static str> = HashSet::from_iter([
         "f-amtrak~rt",
         "f-mta~nyc~rt~mnr",
-        //"f-mta~nyc~rt~lirr",
+        "f-mta~nyc~rt~lirr",
         "f-bus~dft~gov~uk~rt",
         //"f-dp3-cta~rt",
         //"f-dp3-cta~bus~rt",
@@ -106,7 +106,6 @@ pub async fn single_fetch_time(
     chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
-    mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>>,
@@ -196,7 +195,6 @@ pub async fn single_fetch_time(
                 let bridgeport_gtfs = bridgeport_gtfs.clone();
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
-                let mnr_gtfs = mnr_gtfs.clone();
                 let via_gtfs = via_gtfs.clone();
                 let cta_bus_gtfs = cta_bus_gtfs.clone();
                 let flixbus_us_aggregator = flixbus_us_aggregator.clone();
@@ -595,25 +593,21 @@ pub async fn single_fetch_time(
                                     .await;
                                 }
                             }
-                            // "f-mta~nyc~rt~lirr" => {
-                            //     let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(
-                            //         realtime_feed_cache.clone(),
-                            //         &feed_id,
-                            //         &client,
-                            //     )
-                            //     .await;
-                            // }
+                            "f-mta~nyc~rt~lirr" => {
+                                let _ = custom_rt_feeds::mta::fetch_mta_lirr_data(
+                                    realtime_feed_cache.clone(),
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
+                            }
                             "f-mta~nyc~rt~mnr" => {
-                                let mnr_lock = mnr_gtfs.read().await;
-                                if let Some(gtfs) = mnr_lock.as_ref() {
-                                    let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
-                                        realtime_feed_cache.clone(),
-                                        &feed_id,
-                                        &client,
-                                        gtfs,
-                                    )
-                                    .await;
-                                }
+                                let _ = custom_rt_feeds::mta::fetch_mta_metronorth_data(
+                                    realtime_feed_cache.clone(),
+                                    &feed_id,
+                                    &client,
+                                )
+                                .await;
                             }
                             "f-metrolinktrains~extra~rt" => {
                                 custom_rt_feeds::metrolink_extra::fetch_data(

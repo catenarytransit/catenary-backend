@@ -52,6 +52,12 @@ pub struct TrainTurf {
 pub struct TrainStop {
     pub code: String,
     pub sched_time: i32,
+    #[serde(default)]
+    pub act_arrive_time: Option<i64>,
+    #[serde(default)]
+    pub act_depart_time: Option<i64>,
+    #[serde(default)]
+    pub act_time: Option<i64>,
     pub sign_track: Option<String>,
     pub avps_track_id: Option<String>,
     pub posted: bool,

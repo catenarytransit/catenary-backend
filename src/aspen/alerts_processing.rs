@@ -6,8 +6,8 @@ use ahash::AHashMap;
 use catenary::aspen_dataset::AspenisedAlert;
 use catenary::convert_text_12h_to_24h;
 use compact_str::CompactString;
-use std::sync::Arc;
 use html_escape;
+use std::sync::Arc;
 
 /// Cleans alert text for specific chateaus (metrolinktrains, metro~losangeles).
 /// - Removes "Please " prefix and capitalizes the next word

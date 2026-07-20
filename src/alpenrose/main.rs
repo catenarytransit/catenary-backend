@@ -109,7 +109,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
-    let mnr_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let flixbus_us_aggregator: Arc<RwLock<Option<Aggregator>>> = Arc::new(RwLock::new(None));
@@ -638,41 +637,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     });
                 }
 
-                // MNR
-                if assigned_feeds.contains("f-mta~nyc~rt~mnr") && !downloads_started.contains("mnr")
-                {
-                    println!("Spawning MNR download task...");
-                    downloads_started.insert("mnr".to_string());
-                    let mnr_gtfs = mnr_gtfs.clone();
-                    let client_dl = client_dl.clone();
-                    tokio::spawn(async move {
-                        let url = "https://github.com/catenarytransit/agency-gtfs-mirror/raw/refs/heads/main/gtfsmnr.zip";
-                        println!("Downloading MNR GTFS...");
-                        match client_dl
-                            .get(url)
-                            .timeout(Duration::from_secs(120))
-                            .send()
-                            .await
-                        {
-                            Ok(resp) => match resp.bytes().await {
-                                Ok(bytes) => {
-                                    let gtfs =
-                                        gtfs_structures::Gtfs::from_reader(io::Cursor::new(bytes));
-                                    match gtfs {
-                                        Ok(gtfs) => {
-                                            println!("MNR GTFS loaded.");
-                                            *mnr_gtfs.write().await = Some(gtfs);
-                                        }
-                                        Err(e) => eprintln!("Failed to parse MNR GTFS: {}", e),
-                                    }
-                                }
-                                Err(e) => eprintln!("Failed to get bytes for MNR: {}", e),
-                            },
-                            Err(e) => eprintln!("Failed to download MNR: {}", e),
-                        }
-                    });
-                }
-
                 // Flixbus US
                 if assigned_feeds.contains("f-flixbus~us~rt")
                     && !downloads_started.contains("flixbus_us")
@@ -764,7 +728,6 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&chicago_gtfs),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&bridgeport_gtfs),
-                Arc::clone(&mnr_gtfs),
                 Arc::clone(&via_gtfs),
                 Arc::clone(&cta_bus_gtfs),
                 Arc::clone(&flixbus_us_aggregator),
