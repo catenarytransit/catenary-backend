@@ -1940,7 +1940,9 @@ pub async fn fetch_trip_information(
                                     if is_active {
                                         if alert.effect == Some(1) {
                                             if applies_to_trip_without_a_referenced_stop {
-                                                is_cancelled = true;
+                                                // Under the GTFS specification, this is not allowed to mark the trip as cancelled
+
+                                                
                                             }
                                         }
                                     }

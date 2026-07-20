@@ -850,8 +850,8 @@ pub async fn departures_at_stop(
                                                 stop_cancelled = true;
                                             }
                                         } else {
-                                            // No stop_id means it affects the whole trip/route
-                                            trip_cancelled = true;
+                                            // Under the GTFS specification, this is not allowed to mark the trip as cancelled
+
                                         }
                                     }
                                 }
@@ -1294,8 +1294,8 @@ pub async fn departures_at_stop(
                                                     stop_cancelled = true;
                                                 }
                                             } else {
-                                                // No stop_id means it affects the whole trip/route
-                                                trip_cancelled = true;
+                                                // Under the GTFS specification, this is not allowed to mark the trip as cancelled
+
                                             }
                                         }
                                     }
