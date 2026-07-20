@@ -571,6 +571,8 @@ pub async fn gtfs_process_feed(
         | "f-auvergne~rhône~alpes~oùra"
         | "f-lyneo2024~seau~lyneo~fr"
         | "f-rhdf02sco~seau~scolaire~fr"
+        | "f-gbqu-semitan"
+        | "f-gbwc-mobibreizh"
         | "f-hauts~de~france~loise~1" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
