@@ -1260,8 +1260,7 @@ async fn fetch_chateau_data(
                                     });
 
                                 if is_active && applies_to_trip_without_a_referenced_stop {
-                                     // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-
+                                    // Under the GTFS specification, this is not allowed to mark the trip as cancelled
                                 }
                             }
                         }

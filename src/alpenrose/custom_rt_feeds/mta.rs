@@ -219,7 +219,7 @@ fn empty_trip_feed(timestamp: u64) -> gtfs_realtime::FeedMessage {
 }
 
 fn latest_feed_timestamp(feed: &gtfs_realtime::FeedMessage) -> Option<u64> {
-    let mut latest = None;
+    let mut latest: Option<u64> = None;
 
     for entity in &feed.entity {
         if let Some(timestamp) = entity
@@ -484,6 +484,7 @@ fn stop_time_event(time: i64) -> gtfs_realtime::trip_update::StopTimeEvent {
         delay: None,
         time: Some(time),
         uncertainty: Some(0),
+        scheduled_time: None,
     }
 }
 

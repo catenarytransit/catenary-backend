@@ -1465,7 +1465,6 @@ async fn render_chateau_response(
                             });
                             if is_active {
                                 // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-
                             }
                         }
                     }

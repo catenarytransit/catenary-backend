@@ -851,7 +851,6 @@ pub async fn departures_at_stop(
                                             }
                                         } else {
                                             // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-
                                         }
                                     }
                                 }
@@ -1295,7 +1294,6 @@ pub async fn departures_at_stop(
                                                 }
                                             } else {
                                                 // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-
                                             }
                                         }
                                     }
