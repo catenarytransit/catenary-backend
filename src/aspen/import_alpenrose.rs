@@ -4371,19 +4371,13 @@ pub async fn new_rt_data(
 }
 
 fn parse_start_time(time_str: &str) -> Option<i32> {
-    let parts: Vec<&str> = time_str.split(':').collect();
-    if parts.len() >= 2 {
-        let hrs: i32 = parts[0].parse().ok()?;
-        let mins: i32 = parts[1].parse().ok()?;
-        let secs: i32 = if parts.len() >= 3 {
-            parts[2].parse().unwrap_or(0)
-        } else {
-            0
-        };
-        Some(hrs * 3600 + mins * 60 + secs)
-    } else {
-        None
-    }
+    let mut parts = time_str.split(':');
+
+    let hrs: i32 = parts.next()?.parse().ok()?;
+    let mins: i32 = parts.next()?.parse().ok()?;
+    let secs: i32 = parts.next()?.parse().ok()?;
+
+    Some(hrs * 3600 + mins * 60 + secs)
 }
 
 //Assisted-by: Gemini 3 via Google Antigravity
