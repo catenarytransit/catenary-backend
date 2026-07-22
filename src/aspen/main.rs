@@ -970,6 +970,17 @@ impl AspenRpc for AspenServer {
                 || chateau_id.as_str() == "dallasarearapidtransit"
                 || chateau_id.as_str() == "fortworthtransportationauthority"
             {
+                if std::env::var("DISABLE_ENQUEUE").as_deref()
+                    .map(|x| x == "true")
+                    .unwrap_or(false)
+                {
+                    println!("DISABLE_ENQUEUE is set to true, not enqueuing alpenrose work");
+
+                    return true;
+                } else {
+                    println!("Enqueuing alpenrose work for {} {}", chateau_id, realtime_feed_id);
+                }
+
                 self.enqueue_alpenrose_work(ProcessAlpenroseData {
                     chateau_id,
                     realtime_feed_id,
@@ -1249,6 +1260,17 @@ impl AspenRpc for AspenServer {
             //   println!("Saved FeedMessages for {}", realtime_feed_id);
 
             if new_data {
+                if std::env::var("DISABLE_ENQUEUE").as_deref()
+                    .map(|x| x == "true")
+                    .unwrap_or(false)
+                {
+                    println!("DISABLE_ENQUEUE is set to true, not enqueuing alpenrose work");
+
+                    return true;
+                } else {
+                    println!("Enqueuing alpenrose work for {} {}", chateau_id, realtime_feed_id);
+                }
+
                 self.enqueue_alpenrose_work(ProcessAlpenroseData {
                     chateau_id: chateau_id.clone(),
                     realtime_feed_id,
