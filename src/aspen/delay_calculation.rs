@@ -14,7 +14,7 @@ pub fn calculate_delay(
     scheduled_stop_ids_hashset: &Option<AHashSet<Arc<str>>>,
     itinerary_rows: Option<&Vec<CompactItineraryPatternRow>>,
     itinerary_meta: Option<&ItineraryPatternMeta>,
-    stop_time_update: &Vec<AspenisedStopTimeUpdate>,
+    stop_time_update: &[AspenisedStopTimeUpdate],
     current_time_unix_timestamp: u64,
     compressed_trip: Option<&CompressedTrip>,
     calendar_structure: &BTreeMap<String, CalendarUnified>,
@@ -24,68 +24,54 @@ pub fn calculate_delay(
         Some(delay) => Some(delay),
         None => match (scheduled_stop_ids_hashset, itinerary_rows, itinerary_meta) {
             (Some(scheduled_stop_ids_hashset), Some(itinerary_rows), Some(itinerary_meta)) => {
-                let filtered_stu = stop_time_update
-                    .clone()
-                    .into_iter()
-                    .filter(|stu| stu.arrival.is_some() || stu.departure.is_some())
-                    .filter(|stu| match &stu.stop_id {
+                let stu = stop_time_update.iter().find(|stu| {
+                    if stu.arrival.is_none() && stu.departure.is_none() {
+                        return false;
+                    }
+
+                    let is_scheduled_stop = match &stu.stop_id {
                         Some(stop_id) => scheduled_stop_ids_hashset.contains(stop_id),
                         None => false,
-                    })
-                    .collect::<Vec<AspenisedStopTimeUpdate>>();
+                    };
 
-                let filtered_stu_after_now = filtered_stu
-                    .clone()
-                    .into_iter()
-                    .filter(|stu| {
-                        let mut single_number = None;
+                    if !is_scheduled_stop {
+                        return false;
+                    }
 
-                        if let Some(departure) = &stu.departure {
-                            if let Some(time) = departure.time {
-                                single_number = Some(time);
-                            }
-                        }
+                    let realtime_time = stu
+                        .departure
+                        .as_ref()
+                        .and_then(|departure| departure.time)
+                        .or_else(|| stu.arrival.as_ref().and_then(|arrival| arrival.time));
 
-                        if single_number.is_none() {
-                            if let Some(arrival) = &stu.arrival {
-                                if let Some(time) = arrival.time {
-                                    single_number = Some(time);
-                                }
-                            }
-                        }
+                    match realtime_time {
+                        Some(realtime_time) => realtime_time as u64 >= current_time_unix_timestamp,
+                        None => false,
+                    }
+                });
 
-                        match single_number {
-                            None => false,
-                            Some(single_number) => {
-                                single_number as u64 >= current_time_unix_timestamp
-                            }
-                        }
-                    })
-                    .collect::<Vec<_>>();
-
-                match filtered_stu_after_now.len() > 0 {
-                    true => {
-                        let stu = &filtered_stu_after_now[0];
-
-                        let relevant_stop_rows = itinerary_rows
-                            .iter()
-                            .filter(|itinerary_row| match &stu.stop_id {
-                                Some(stu_stop_id) => itinerary_row.stop_id == stu_stop_id,
-                                _ => false,
-                            })
-                            .collect::<Vec<&_>>();
-
-                        let itinerary_stop_row = match relevant_stop_rows.len() {
-                            0 => None,
-                            1 => Some(relevant_stop_rows[0]),
-                            _ => relevant_stop_rows
+                match stu {
+                    Some(stu) => {
+                        let mut relevant_stop_rows =
+                            itinerary_rows
                                 .iter()
-                                .filter(|itinerary_row| {
-                                    stu.stop_sequence == Some(itinerary_row.stop_sequence as u16)
-                                })
-                                .collect::<Vec<_>>()
-                                .get(0)
-                                .map(|v| &***v),
+                                .filter(|itinerary_row| match &stu.stop_id {
+                                    Some(stu_stop_id) => itinerary_row.stop_id == stu_stop_id,
+                                    _ => false,
+                                });
+
+                        let itinerary_stop_row = match relevant_stop_rows.next() {
+                            None => None,
+                            Some(first_row) => match relevant_stop_rows.next() {
+                                None => Some(first_row),
+                                Some(second_row) => std::iter::once(first_row)
+                                    .chain(std::iter::once(second_row))
+                                    .chain(relevant_stop_rows)
+                                    .find(|itinerary_row| {
+                                        stu.stop_sequence
+                                            == Some(itinerary_row.stop_sequence as u16)
+                                    }),
+                            },
                         };
 
                         match itinerary_stop_row {
@@ -347,7 +333,7 @@ pub fn calculate_delay(
                             None => None,
                         }
                     }
-                    false => None,
+                    None => None,
                 }
             }
             _ => None,
