@@ -2884,7 +2884,6 @@ pub async fn new_rt_data(
                                                                         None => false,
                                                                     }
                                                                 })
-                                                                .cloned()
                                                                 .map(|old_stu| {
                                                                     let mut old_stu =
                                                                         old_stu.clone();
