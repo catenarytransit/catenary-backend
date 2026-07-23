@@ -75,7 +75,7 @@ struct ExportDocument {
     stops: Vec<ExportStop>,
 }
 
-#[actix_web::get("/export")]
+#[actix_web::get("/export_route_geom")]
 pub async fn export_route(
     query: web::Query<ExportQuery>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
