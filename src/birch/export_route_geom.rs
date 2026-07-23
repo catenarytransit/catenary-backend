@@ -76,7 +76,7 @@ struct ExportDocument {
 }
 
 #[actix_web::get("/export_route_geom")]
-pub async fn export_route(
+pub async fn export_route_geom(
     query: web::Query<ExportQuery>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
 ) -> HttpResponse {
@@ -95,7 +95,7 @@ pub async fn export_route(
     };
 
     let conn_pool = pool.as_ref();
-    let conn = match conn_pool.get().await {
+    let mut conn = match conn_pool.get().await {
         Ok(conn) => conn,
         Err(error) => {
             eprintln!("Error connecting to postgres for route export: {error}");
