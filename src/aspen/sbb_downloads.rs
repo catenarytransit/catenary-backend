@@ -51,7 +51,7 @@ pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
     let displayed_path = absolute_path(&path);
 
     match fs::read_to_string(&path) {
-        Ok(contents) => match serde_json::from_str::<SbbFormationData>(&contents) {
+        Ok(contents) => match serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents) {
             Ok(store) => {
                 tracing::info!(
                     cache_path = %displayed_path.display(),
