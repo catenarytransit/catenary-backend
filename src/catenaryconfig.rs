@@ -65,6 +65,7 @@ pub struct AspenConfig {
     pub channels: Option<usize>,
     pub alpenrose_thread_count: Option<usize>,
     pub port: Option<u16>,
+    pub sbb_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -285,6 +286,10 @@ impl AspenConfig {
 
         if let Ok(value) = std::env::var("PORT") {
             self.port = value.parse::<u16>().ok().or(self.port);
+        }
+
+        if let Ok(value) = std::env::var("SBB_API_KEY") {
+            self.sbb_api_key = Some(value);
         }
     }
 }

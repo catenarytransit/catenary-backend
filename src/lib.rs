@@ -36,6 +36,7 @@
 extern crate diesel_derive_newtype;
 
 pub mod formation_v1;
+pub mod sbb_formation_types;
 #[macro_use]
 extern crate serde;
 

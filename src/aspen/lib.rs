@@ -197,6 +197,11 @@ pub trait AspenRpc {
     async fn get_gtfs_rt_entity_counts(chateau_id: String) -> Option<HashMap<String, u64>>;
 
     async fn get_authoritative_store_counts(chateau_id: String) -> Option<HashMap<String, u64>>;
+
+    async fn get_sbb_formation(
+        train_number: u64,
+        operation_date: Option<String>,
+    ) -> Option<crate::sbb_formation_types::SbbFormationData>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

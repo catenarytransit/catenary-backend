@@ -27,6 +27,7 @@ alpenrose_thread_count = 4
 port = 40427
 etcd_username = ""
 etcd_password = ""
+sbb_api_key = "Bearer IchLiebeSbbJadoreCFF"
 
 [aspenleader]
 etcd_urls = ["localhost:2379"]

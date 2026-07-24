@@ -97,6 +97,7 @@ mod sncf_siri_alerts;
 
 mod persistence;
 mod track_number;
+mod sbb_downloads;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
@@ -133,6 +134,7 @@ pub struct AspenServer {
     pub etcd_connect_options: Arc<Option<etcd_client::ConnectOptions>>,
     pub worker_etcd_lease_id: i64,
     pub timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
+    pub sbb_formation_cache: sbb_downloads::SbbFormationStore,
 }
 
 impl AspenServer {
@@ -193,6 +195,18 @@ impl AspenRpc for AspenServer {
         }
 
         Some(stops)
+    }
+
+    async fn get_sbb_formation(
+        self,
+        _context: tarpc::context::Context,
+        train_number: u64,
+        operation_date: Option<String>,
+    ) -> Option<catenary::sbb_formation_types::SbbFormationData> {
+        let date = operation_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let key = format!("{}_{}", date, train_number);
+        let guard = self.sbb_formation_cache.read().await;
+        guard.get(&key).cloned().flatten()
     }
 
     async fn full_trip_updates_dataset_dump(
@@ -2404,6 +2418,17 @@ async fn main() -> anyhow::Result<()> {
         })
         .expect("Failed to spawn Alpenrose thread");
 
+    let sbb_formation_store: sbb_downloads::SbbFormationStore =
+        Arc::new(tokio::sync::RwLock::new(sbb_downloads::load_store_from_disk()));
+
+    let sbb_fetch_join_handle: tokio::task::JoinHandle<
+        Result<(), Box<dyn Error + Sync + Send>>,
+    > = tokio::task::spawn(sbb_downloads::bg_fetch_sbb_formations(
+        Arc::clone(&sbb_formation_store),
+        Arc::clone(&authoritative_data_store),
+    ));
+
+
     let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
     > = tokio::task::spawn(consist_cache_and_conversion::bg_fetch_nyct_consists(
@@ -2541,6 +2566,7 @@ async fn main() -> anyhow::Result<()> {
                                 SccHashMap::new(),
                             ),
                             backup_trip_updates_by_gtfs_feed_history: Arc::new(SccHashMap::new()),
+                            sbb_formation_cache: Arc::clone(&sbb_formation_store),
                         };
                         tokio::spawn(channel.execute(server.serve()).for_each(spawn));
                         future::ready(())
@@ -2567,7 +2593,8 @@ async fn main() -> anyhow::Result<()> {
         //flatten_stopping_is_err(async_from_alpenrose_processor_handler),
         flatten_stopping_is_err(tarpc_server),
         flatten_stopping_is_err(etcd_lease_renewer),
-        flatten_stopping_is_err(nyct_subway_fetch_join_handle)
+        flatten_stopping_is_err(nyct_subway_fetch_join_handle),
+        flatten_stopping_is_err(sbb_fetch_join_handle)
     )
     .unwrap();
 

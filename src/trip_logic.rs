@@ -110,6 +110,7 @@ pub struct TripIntroductionInformation {
     pub trip_id: Option<String>,
     pub chateau: Option<String>,
     pub consist: Option<crate::formation_v1::UnifiedConsist>,
+    pub sbb_formation: Option<crate::sbb_formation_types::SbbFormationData>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
@@ -806,6 +807,7 @@ pub async fn fetch_trip_information(
                         connections_per_stop: None,
                         trip_id: Some(query.trip_id.clone()),
                         chateau: Some(chateau.clone()),
+                        sbb_formation: None
                     };
 
                     return Ok(response);
@@ -821,10 +823,6 @@ pub async fn fetch_trip_information(
     // STATIC DB FETCHING
 
     let mut consist: Option<crate::formation_v1::UnifiedConsist> = None;
-
-    if chateau == "irvine~ca~us" {
-        println!("DEBUG: fetch_trip_information: Proceeding with STATIC DB FETCHING");
-    }
 
     let trip_compressed = trip_compressed[0].clone();
 
@@ -1234,13 +1232,9 @@ pub async fn fetch_trip_information(
 
     let mut vehicle = None;
     let mut cancelled_stop_times = vec![];
+    let mut sbb_formation = None;
 
     if let Some(assigned_chateau_data) = assigned_node.clone() {
-        if chateau == "irvine~ca~us" {
-            println!(
-                "DEBUG: fetch_trip_information: Static Path - Found assigned chateau in cache"
-            );
-        }
         {
             let socket = assigned_chateau_data.socket;
             let aspen_client = if let Some(client) = aspen_client_manager.get_client(socket).await {
@@ -1264,6 +1258,27 @@ pub async fn fetch_trip_information(
                     if chateau == "irvine~ca~us" {
                         println!("DEBUG: fetch_trip_information: Static Path - Connected to aspen");
                     }
+
+                    let train_number_opt = trip_compressed
+                        .trip_short_name
+                        .as_ref()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .or_else(|| query.trip_id.parse::<u64>().ok());
+
+                    if let Some(train_number) = train_number_opt {
+                        let op_date_str = start_naive_date.format("%Y-%m-%d").to_string();
+                        let sbb_res = aspen_client
+                            .get_sbb_formation(
+                                context::current(),
+                                train_number,
+                                Some(op_date_str),
+                            )
+                            .await;
+                        if let Ok(Some(formation)) = sbb_res {
+                            sbb_formation = Some(formation);
+                        }
+                    }
+
                     let get_trip = aspen_client
                         .get_trip_updates_from_trip_id(
                             context::current(),
@@ -2112,6 +2127,7 @@ pub async fn fetch_trip_information(
         trip_id: Some(query.trip_id.clone()),
         chateau: Some(chateau.clone()),
         consist: consist,
+        sbb_formation
     };
 
     Ok(response)
