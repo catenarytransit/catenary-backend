@@ -96,8 +96,8 @@ mod alerts_processing;
 mod sncf_siri_alerts;
 
 mod persistence;
-mod track_number;
 mod sbb_downloads;
+mod track_number;
 
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct GtfsRealtimeHashStore {
@@ -203,7 +203,8 @@ impl AspenRpc for AspenServer {
         train_number: u64,
         operation_date: Option<String>,
     ) -> Option<catenary::sbb_formation_types::SbbFormationData> {
-        let date = operation_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+        let date =
+            operation_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
         let key = format!("{}_{}", date, train_number);
         let guard = self.sbb_formation_cache.read().await;
         guard.get(&key).cloned().flatten()
@@ -984,7 +985,6 @@ impl AspenRpc for AspenServer {
                 || chateau_id.as_str() == "dallasarearapidtransit"
                 || chateau_id.as_str() == "fortworthtransportationauthority"
             {
-
                 self.enqueue_alpenrose_work(ProcessAlpenroseData {
                     chateau_id,
                     realtime_feed_id,
@@ -2418,16 +2418,15 @@ async fn main() -> anyhow::Result<()> {
         })
         .expect("Failed to spawn Alpenrose thread");
 
-    let sbb_formation_store: sbb_downloads::SbbFormationStore =
-        Arc::new(tokio::sync::RwLock::new(sbb_downloads::load_store_from_disk()));
-
-    let sbb_fetch_join_handle: tokio::task::JoinHandle<
-        Result<(), Box<dyn Error + Sync + Send>>,
-    > = tokio::task::spawn(sbb_downloads::bg_fetch_sbb_formations(
-        Arc::clone(&sbb_formation_store),
-        Arc::clone(&authoritative_data_store),
+    let sbb_formation_store: sbb_downloads::SbbFormationStore = Arc::new(tokio::sync::RwLock::new(
+        sbb_downloads::load_store_from_disk(),
     ));
 
+    let sbb_fetch_join_handle: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
+        tokio::task::spawn(sbb_downloads::bg_fetch_sbb_formations(
+            Arc::clone(&sbb_formation_store),
+            Arc::clone(&authoritative_data_store),
+        ));
 
     let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,

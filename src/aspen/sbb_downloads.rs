@@ -18,7 +18,9 @@ pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
     let path = Path::new(PERSISTENCE_PATH);
     if path.exists() {
         if let Ok(contents) = fs::read_to_string(path) {
-            if let Ok(store) = serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents) {
+            if let Ok(store) =
+                serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents)
+            {
                 println!("Loaded {} SBB formations from disk cache", store.len());
                 return store;
             }
@@ -136,7 +138,10 @@ pub async fn bg_fetch_sbb_formations(
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error fetching SBB formation for train {}: {}", train_number, e);
+                    eprintln!(
+                        "Error fetching SBB formation for train {}: {}",
+                        train_number, e
+                    );
                 }
             }
 
@@ -164,7 +169,10 @@ async fn evict_old_entries(store: &SbbFormationStore) {
 
     let evicted = before - write_guard.len();
     if evicted > 0 {
-        println!("Evicted {} SBB formation entries older than {}h", evicted, EVICTION_HOURS);
+        println!(
+            "Evicted {} SBB formation entries older than {}h",
+            evicted, EVICTION_HOURS
+        );
         save_store_to_disk(&write_guard);
     }
 }

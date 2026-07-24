@@ -83,10 +83,7 @@ pub async fn export_route_geom(
     let query = query.into_inner();
 
     if query.chateau.trim().is_empty() || query.route_id.trim().is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            "chateau and route_id are required",
-        );
+        return error_response(StatusCode::BAD_REQUEST, "chateau and route_id are required");
     }
 
     let format = match ExportFormat::parse(query.format.as_deref()) {
@@ -129,16 +126,15 @@ pub async fn export_route_geom(
         }
     };
 
-    let direction_patterns = catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-        .filter(
-            catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau),
-        )
-        .filter(
-            catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&query.route_id),
-        )
-        .select(DirectionPatternMeta::as_select())
-        .load::<DirectionPatternMeta>(conn)
-        .await;
+    let direction_patterns =
+        catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+            .filter(catenary::schema::gtfs::direction_pattern_meta::dsl::chateau.eq(&query.chateau))
+            .filter(
+                catenary::schema::gtfs::direction_pattern_meta::dsl::route_id.eq(&query.route_id),
+            )
+            .select(DirectionPatternMeta::as_select())
+            .load::<DirectionPatternMeta>(conn)
+            .await;
 
     let direction_patterns = match direction_patterns {
         Ok(patterns) => patterns,
@@ -157,7 +153,11 @@ pub async fn export_route_geom(
         .collect::<BTreeSet<String>>();
 
     if let Some(route_shape_ids) = &route.shapes_list {
-        shape_ids.extend(route_shape_ids.iter().filter_map(|shape_id| shape_id.clone()));
+        shape_ids.extend(
+            route_shape_ids
+                .iter()
+                .filter_map(|shape_id| shape_id.clone()),
+        );
     }
 
     if shape_ids.is_empty() {
@@ -197,10 +197,12 @@ pub async fn export_route_geom(
             .collect::<Vec<(f64, f64)>>();
 
         if coordinates.len() >= 2 {
-            shape_map.entry(shape.shape_id.clone()).or_insert(ExportShape {
-                shape_id: shape.shape_id,
-                coordinates,
-            });
+            shape_map
+                .entry(shape.shape_id.clone())
+                .or_insert(ExportShape {
+                    shape_id: shape.shape_id,
+                    coordinates,
+                });
         }
     }
 

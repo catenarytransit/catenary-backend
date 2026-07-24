@@ -807,7 +807,7 @@ pub async fn fetch_trip_information(
                         connections_per_stop: None,
                         trip_id: Some(query.trip_id.clone()),
                         chateau: Some(chateau.clone()),
-                        sbb_formation: None
+                        sbb_formation: None,
                     };
 
                     return Ok(response);
@@ -1268,11 +1268,7 @@ pub async fn fetch_trip_information(
                     if let Some(train_number) = train_number_opt {
                         let op_date_str = start_naive_date.format("%Y-%m-%d").to_string();
                         let sbb_res = aspen_client
-                            .get_sbb_formation(
-                                context::current(),
-                                train_number,
-                                Some(op_date_str),
-                            )
+                            .get_sbb_formation(context::current(), train_number, Some(op_date_str))
                             .await;
                         if let Ok(Some(formation)) = sbb_res {
                             sbb_formation = Some(formation);
@@ -2127,7 +2123,7 @@ pub async fn fetch_trip_information(
         trip_id: Some(query.trip_id.clone()),
         chateau: Some(chateau.clone()),
         consist: consist,
-        sbb_formation
+        sbb_formation,
     };
 
     Ok(response)
