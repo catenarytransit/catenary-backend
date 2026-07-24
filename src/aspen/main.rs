@@ -2428,6 +2428,10 @@ async fn main() -> anyhow::Result<()> {
         tokio::task::spawn(sbb_downloads::bg_fetch_sbb_formations(
             Arc::clone(&sbb_formation_store),
             Arc::clone(&authoritative_data_store),
+            Arc::clone(&arc_conn_pool),
+            Arc::clone(&this_worker_id),
+            Arc::clone(&etcd_addresses),
+            Arc::clone(&arc_etcd_connect_options),
         ));
 
     let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
