@@ -2299,6 +2299,10 @@ async fn main() -> anyhow::Result<()> {
     let timestamps_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>> =
         Arc::new(SccHashMap::new());
 
+    let sbb_formation_store: sbb_downloads::SbbFormationStore = Arc::new(tokio::sync::RwLock::new(
+        sbb_downloads::load_store_from_disk(),
+    ));
+
     //run both the leader and the listener simultaniously
     let b_alpenrose_to_process_queue = process_from_alpenrose_queue.clone();
     let b_authoritative_gtfs_rt_store = Arc::clone(&raw_gtfs);
@@ -2306,6 +2310,7 @@ async fn main() -> anyhow::Result<()> {
     let b_authoritative_trajectory_data_store = Arc::clone(&authoritative_trajectory_data_store);
     let b_conn_pool = Arc::clone(&arc_conn_pool);
     let b_thread_count = alpenrosethreadcount;
+    let b_sbb_formation_store = Arc::clone(&sbb_formation_store);
 
     // Load persisted data
     println!("Loading persisted data...");
@@ -2406,6 +2411,7 @@ async fn main() -> anyhow::Result<()> {
                     etcd_lease_id_for_this_worker,
                     redis_client.clone(),
                     alpenrose_thread_nyct,
+                    b_sbb_formation_store,
                 )
                 .await
                 {
@@ -2417,10 +2423,6 @@ async fn main() -> anyhow::Result<()> {
             });
         })
         .expect("Failed to spawn Alpenrose thread");
-
-    let sbb_formation_store: sbb_downloads::SbbFormationStore = Arc::new(tokio::sync::RwLock::new(
-        sbb_downloads::load_store_from_disk(),
-    ));
 
     let sbb_fetch_join_handle: tokio::task::JoinHandle<Result<(), Box<dyn Error + Sync + Send>>> =
         tokio::task::spawn(sbb_downloads::bg_fetch_sbb_formations(

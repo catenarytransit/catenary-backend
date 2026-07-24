@@ -174,6 +174,7 @@ pub async fn alpenrose_process_threads(
             >,
         >,
     >,
+    sbb_formation_store: crate::sbb_downloads::SbbFormationStore,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let concurrency = alpenrosethreadcount.max(1);
     let permits = Arc::new(Semaphore::new(concurrency));
@@ -222,6 +223,7 @@ pub async fn alpenrose_process_threads(
         let chateau_queue_list = Arc::clone(&chateau_queue_list);
         let redis_client = redis_client.clone();
         let nyct_cache = Arc::clone(&authoritative_nyct_subway_data_cache);
+        let sbb_formation_store = Arc::clone(&sbb_formation_store);
 
         let permits_for_log = Arc::clone(&permits);
 
@@ -238,6 +240,7 @@ pub async fn alpenrose_process_threads(
                 chateau_queue_list,
                 redis_client,
                 nyct_cache,
+                sbb_formation_store,
             )
             .await;
 
@@ -311,6 +314,7 @@ pub async fn process_one_alpenrose_task(
             >,
         >,
     >,
+    sbb_formation_store: crate::sbb_downloads::SbbFormationStore,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let feed_id = new_ingest_task.realtime_feed_id.clone();
     let chateau_id = new_ingest_task.chateau_id.clone();
@@ -346,6 +350,7 @@ pub async fn process_one_alpenrose_task(
         Arc::clone(&conn_pool),
         &redis_client,
         Arc::clone(&authoritative_nyct_subway_data_cache),
+        sbb_formation_store,
     ))
     .catch_unwind()
     .await;

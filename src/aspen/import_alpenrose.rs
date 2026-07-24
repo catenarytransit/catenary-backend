@@ -112,6 +112,87 @@ lazy_static! {
     static ref START_TIME: SccHashMap<String, Instant> = SccHashMap::new();
 }
 
+/// Extracts the base DIDOK (station/stop) code from a GTFS SLOID identifier string.
+/// Example input: "ch:1:sloid:3000:500:31" -> Some("3000")
+fn extract_sloid_station_id(stop_id: &str) -> Option<&str> {
+    stop_id
+        .strip_prefix("ch:1:sloid:")?
+        .split(':')
+        .next()
+}
+
+/// Normalises a Swiss UIC station code (e.g., 8500010 or 8503000) to its core 
+/// DIDOK station identifier without the Swiss country prefix ("85") or leading zeros.
+fn uic_to_didok_str(uic: u64) -> String {
+    let uic_str = uic.to_string();
+    
+    // Swiss UIC codes consist of country prefix '85' followed by 5 DIDOK digits
+    let didok_raw = if uic_str.starts_with("85") && uic_str.len() == 7 {
+        &uic_str[2..]
+    } else {
+        &uic_str[..]
+    };
+
+    // Trim leading zeros to allow matching against unpadded GTFS SLOID elements
+    didok_raw.trim_start_matches('0').to_string()
+}
+
+/// Determines whether a GTFS stop_id corresponds to a given UIC station identifier.
+fn sbb_stop_id_matches_uic(stop_id: &str, uic: u64) -> bool {
+    let target_didok = uic_to_didok_str(uic);
+
+    if let Some(station_id) = extract_sloid_station_id(stop_id) {
+        let station_id_trimmed = station_id.trim_start_matches('0');
+        if station_id_trimmed == target_didok {
+            return true;
+        }
+    }
+
+    // Fallback: Check all numeric components of the GTFS string against target_didok
+    stop_id
+        .split(|c: char| !c.is_ascii_digit())
+        .any(|component| !component.is_empty() && component.trim_start_matches('0') == target_didok)
+}
+
+fn sbb_platform_for_stop(
+    formation_data: &catenary::sbb_formation_types::SbbFormationData,
+    stop_id: &str,
+) -> Option<String> {
+    // 1. Search scheduled stops at the formation level
+    if let Some(track) = formation_data
+        .formations_at_scheduled_stops
+        .iter()
+        .find_map(|formation_at_stop| {
+            let scheduled_stop = formation_at_stop.scheduled_stop.as_ref()?;
+            let uic = scheduled_stop.stop_point.as_ref()?.uic?;
+
+            if sbb_stop_id_matches_uic(stop_id, uic) {
+                scheduled_stop.track.clone()
+            } else {
+                None
+            }
+        })
+    {
+        return Some(track);
+    }
+
+    // 2. Search vehicle-level scheduled stops as a fallback
+    formation_data
+        .formations
+        .iter()
+        .flat_map(|formation| &formation.formation_vehicles)
+        .flat_map(|vehicle| &vehicle.formation_vehicle_at_scheduled_stops)
+        .find_map(|vehicle_at_stop| {
+            let uic = vehicle_at_stop.stop_point.as_ref()?.uic?;
+
+            if sbb_stop_id_matches_uic(stop_id, uic) {
+                vehicle_at_stop.track.clone()
+            } else {
+                None
+            }
+        })
+}
+
 const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 // Used to prevent data flickering when a feed momentarily drops a trip that was present
 // in the previous fetch cycle.
@@ -214,6 +295,7 @@ pub async fn new_rt_data(
             >,
         >,
     >,
+    sbb_formation_store: crate::sbb_downloads::SbbFormationStore,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let total_started = Instant::now();
     set_stage(chateau_id, realtime_feed_id, "start", total_started);
@@ -2211,6 +2293,33 @@ pub async fn new_rt_data(
                             }
                         }
 
+                        let sbb_formation = if chateau_id == "schweiz" {
+                            let train_number = trip_descriptor
+                                .trip_id
+                                .as_deref()
+                                .and_then(|trip_id| trip_id.parse::<u64>().ok())
+                                .or_else(|| {
+                                    compressed_trip
+                                        .and_then(|trip| trip.trip_short_name.as_ref())
+                                        .and_then(|short_name| short_name.parse::<u64>().ok())
+                                });
+
+                            match (trip_descriptor.start_date.as_ref(), train_number) {
+                                (Some(operation_date), Some(train_number)) => {
+                                    let key = format!(
+                                        "{}_{}",
+                                        operation_date.format("%Y-%m-%d"),
+                                        train_number
+                                    );
+                                    let read_guard = sbb_formation_store.read().await;
+                                    read_guard.get(&key).cloned().flatten()
+                                }
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+
                         let mut stop_time_updates_vec = Vec::new();
 
                         let mut propagated_delay: Option<i32> = None;
@@ -2366,6 +2475,15 @@ pub async fn new_rt_data(
                             > = None;
 
                             match chateau_id {
+                                "schweiz" => {
+                                    if let (Some(sbb_formation), Some(stop_id)) =
+                                        (&sbb_formation, resolved_stop_id.as_deref())
+                                    {
+                                        platform_resp =
+                                            sbb_platform_for_stop(sbb_formation, stop_id)
+                                                .map(Into::into);
+                                    }
+                                }
                                 "metrolinktrains" => {
                                     if let TrackData::Metrolink(Some(track_data_scax)) =
                                         &fetched_track_data
