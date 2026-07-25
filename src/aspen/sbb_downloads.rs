@@ -14,6 +14,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::RwLock;
 use tokio::time::{Duration, sleep};
 
@@ -29,6 +30,8 @@ const ASSIGNMENT_KEY: &str = "/aspen_assigned_chateaux/schweiz";
 const TRAIN_ROUTE_TYPE: i16 = 2;
 const EVICTION_HOURS: i64 = 72;
 const LOOP_INTERVAL: Duration = Duration::from_secs(60);
+const NO_FORMATION_RETRY_DELAY: Duration = Duration::from_secs(60 * 60);
+const NO_FORMATION_ERROR: &str = "There were no formation data";
 
 fn persistence_path() -> PathBuf {
     env::var_os(PERSISTENCE_PATH_ENV)
@@ -337,6 +340,71 @@ fn response_preview(body: &str) -> String {
     body.chars().take(500).collect()
 }
 
+fn is_no_formation_error(error: &str) -> bool {
+    error
+        .trim()
+        .trim_end_matches('.')
+        .eq_ignore_ascii_case(NO_FORMATION_ERROR)
+}
+
+async fn record_no_formation(
+    store: &SbbFormationStore,
+    no_formation_retry_after: &mut HashMap<String, Instant>,
+    key: &str,
+) {
+    no_formation_retry_after.insert(
+        key.to_string(),
+        Instant::now() + NO_FORMATION_RETRY_DELAY,
+    );
+
+    let mut write_guard = store.write().await;
+    write_guard.insert(key.to_string(), None);
+    persist_store(&write_guard);
+}
+
+async fn order_train_requests(
+    store: &SbbFormationStore,
+    train_requests: HashSet<(String, u64)>,
+    no_formation_retry_after: &mut HashMap<String, Instant>,
+) -> Vec<(String, u64)> {
+    let now = Instant::now();
+    let cached_states = {
+        let read_guard = store.read().await;
+        read_guard
+            .iter()
+            .map(|(key, value)| (key.clone(), value.is_some()))
+            .collect::<HashMap<String, bool>>()
+    };
+    let mut active_keys = HashSet::with_capacity(train_requests.len());
+    let mut fresh_requests = Vec::new();
+    let mut retry_requests = Vec::new();
+
+    for (operation_date, train_number) in train_requests {
+        let key = format!("{}_{}", operation_date, train_number);
+        active_keys.insert(key.clone());
+
+        if cached_states.get(&key) == Some(&true) {
+            continue;
+        }
+
+        match no_formation_retry_after.get(&key) {
+            Some(retry_after) if *retry_after > now => continue,
+            Some(_) => retry_requests.push((operation_date, train_number)),
+            None if cached_states.contains_key(&key) => {
+                retry_requests.push((operation_date, train_number));
+            }
+            None => fresh_requests.push((operation_date, train_number)),
+        }
+    }
+
+    no_formation_retry_after
+        .retain(|key, retry_after| *retry_after > now || active_keys.contains(key));
+    fresh_requests.sort_unstable();
+    retry_requests.sort_unstable();
+    fresh_requests.extend(retry_requests);
+    fresh_requests
+}
+
 pub async fn bg_fetch_sbb_formations(
     store: SbbFormationStore,
     authoritative_data_store: Arc<SccHashMap<String, Arc<AspenisedData>>>,
@@ -352,6 +420,20 @@ pub async fn bg_fetch_sbb_formations(
     let cache_path = absolute_path(&persistence_path());
     let mut previous_assignment = None;
     let mut missing_api_key_logged = false;
+    let mut no_formation_retry_after = {
+        let retry_after = Instant::now() + NO_FORMATION_RETRY_DELAY;
+        let read_guard = store.read().await;
+        read_guard
+            .iter()
+            .filter_map(|(key, value)| {
+                if value.is_none() {
+                    Some((key.clone(), retry_after))
+                } else {
+                    None
+                }
+            })
+            .collect::<HashMap<String, Instant>>()
+    };
     let mut etcd = connect_to_etcd_with_retry(
         etcd_addresses.as_slice(),
         etcd_connect_options.as_ref(),
@@ -456,15 +538,15 @@ pub async fn bg_fetch_sbb_formations(
 
         evict_old_entries(&store).await;
 
-        for (operation_date, train_number) in &train_requests {
-            let key = format!("{}_{}", operation_date, train_number);
+        let train_requests = order_train_requests(
+            &store,
+            train_requests,
+            &mut no_formation_retry_after,
+        )
+        .await;
 
-            {
-                let read_guard = store.read().await;
-                if read_guard.contains_key(&key) {
-                    continue;
-                }
-            }
+        for (operation_date, train_number) in train_requests {
+            let key = format!("{}_{}", operation_date, train_number);
 
             let url = format!(
                 "https://api.opentransportdata.swiss/formation/v2/formations_full?evu=SBBP&operationDate={}&trainNumber={}",
@@ -521,17 +603,45 @@ pub async fn bg_fetch_sbb_formations(
             };
 
             if !status.is_success() {
-                tracing::error!(
-                    status = %status,
-                    response = %response_preview(&body),
-                    operation_date = %operation_date,
-                    train_number,
-                    "SBB formation API returned an unsuccessful response"
-                );
+                let no_formation_error =
+                    match serde_json::from_str::<SbbFormationApiResponse>(&body) {
+                        Ok(SbbFormationApiResponse::Error { error })
+                            if is_no_formation_error(&error) =>
+                        {
+                            Some(error)
+                        }
+                        _ => None,
+                    };
+
+                if let Some(error) = no_formation_error {
+                    record_no_formation(
+                        &store,
+                        &mut no_formation_retry_after,
+                        &key,
+                    )
+                    .await;
+                    tracing::warn!(
+                        error = %error,
+                        status = %status,
+                        operation_date = %operation_date,
+                        train_number,
+                        retry_after_seconds = NO_FORMATION_RETRY_DELAY.as_secs(),
+                        "SBB formation API reported no formation data; deferring retry"
+                    );
+                } else {
+                    tracing::error!(
+                        status = %status,
+                        response = %response_preview(&body),
+                        operation_date = %operation_date,
+                        train_number,
+                        "SBB formation API returned an unsuccessful response"
+                    );
+                }
 
                 if status.as_u16() == 401 || status.as_u16() == 403 {
                     break;
                 }
+                sleep(Duration::from_secs(2)).await;
                 continue;
             }
 
@@ -539,6 +649,7 @@ pub async fn bg_fetch_sbb_formations(
                 Ok(SbbFormationApiResponse::Data(data)) => {
                     let formation_count = data.formations.len();
                     let scheduled_stop_count = data.formations_at_scheduled_stops.len();
+                    no_formation_retry_after.remove(&key);
                     let mut write_guard = store.write().await;
                     write_guard.insert(key, Some(data));
                     persist_store(&write_guard);
@@ -551,16 +662,28 @@ pub async fn bg_fetch_sbb_formations(
                         "Downloaded SBB train formation"
                     );
                 }
-                Ok(SbbFormationApiResponse::Error { error }) => {
-                    let mut write_guard = store.write().await;
-                    write_guard.insert(key, None);
-                    persist_store(&write_guard);
+                Ok(SbbFormationApiResponse::Error { error }) if is_no_formation_error(&error) => {
+                    record_no_formation(
+                        &store,
+                        &mut no_formation_retry_after,
+                        &key,
+                    )
+                    .await;
 
                     tracing::warn!(
                         error = %error,
                         operation_date = %operation_date,
                         train_number,
-                        "SBB formation API reported no formation data"
+                        retry_after_seconds = NO_FORMATION_RETRY_DELAY.as_secs(),
+                        "SBB formation API reported no formation data; deferring retry"
+                    );
+                }
+                Ok(SbbFormationApiResponse::Error { error }) => {
+                    tracing::error!(
+                        error = %error,
+                        operation_date = %operation_date,
+                        train_number,
+                        "SBB formation API returned an error payload; the request will be retried"
                     );
                 }
                 Err(error) => {
