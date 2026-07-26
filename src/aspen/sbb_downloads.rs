@@ -22,8 +22,7 @@ use tokio::time::{Duration, sleep};
 
 pub type SbbFormationStore = Arc<RwLock<HashMap<String, Option<SbbFormationData>>>>;
 
-type RealtimeTripRequests =
-    HashMap<String, HashMap<chrono::NaiveDate, RealtimeTripTiming>>;
+type RealtimeTripRequests = HashMap<String, HashMap<chrono::NaiveDate, RealtimeTripTiming>>;
 type TrainRequests = HashMap<(String, u64), TrainRequest>;
 type AgencyKey = (String, String, String);
 
@@ -114,23 +113,25 @@ pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
     let displayed_path = absolute_path(&path);
 
     match fs::read_to_string(&path) {
-        Ok(contents) => match serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents) {
-            Ok(store) => {
-                tracing::info!(
-                    cache_path = %displayed_path.display(),
-                    "Loaded SBB formations from disk cache"
-                );
-                store
+        Ok(contents) => {
+            match serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents) {
+                Ok(store) => {
+                    tracing::info!(
+                        cache_path = %displayed_path.display(),
+                        "Loaded SBB formations from disk cache"
+                    );
+                    store
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        cache_path = %displayed_path.display(),
+                        "Failed to parse SBB formation disk cache; starting with an empty cache"
+                    );
+                    HashMap::new()
+                }
             }
-            Err(error) => {
-                tracing::error!(
-                    error = %error,
-                    cache_path = %displayed_path.display(),
-                    "Failed to parse SBB formation disk cache; starting with an empty cache"
-                );
-                HashMap::new()
-            }
-        },
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             tracing::info!(
                 cache_path = %displayed_path.display(),
@@ -190,7 +191,12 @@ fn normalize_api_keys(keys: impl IntoIterator<Item = String>) -> Vec<String> {
 fn configured_api_keys() -> Vec<String> {
     let environment_keys = env::var(SBB_API_KEYS_ENV)
         .ok()
-        .map(|value| value.split(',').map(ToString::to_string).collect::<Vec<_>>())
+        .map(|value| {
+            value
+                .split(',')
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
         .map(normalize_api_keys)
         .unwrap_or_default();
     if !environment_keys.is_empty() {
@@ -232,18 +238,26 @@ fn insert_realtime_trip_request(
 }
 
 fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
-    let first_stop_time = trip_update.stop_time_update.first().and_then(|stop| {
-        stop.departure
-            .as_ref()
-            .and_then(|event| event.time)
-            .or_else(|| stop.arrival.as_ref().and_then(|event| event.time))
-    });
-    let last_stop_time = trip_update.stop_time_update.last().and_then(|stop| {
-        stop.arrival
-            .as_ref()
-            .and_then(|event| event.time)
-            .or_else(|| stop.departure.as_ref().and_then(|event| event.time))
-    });
+    let first_stop_time = trip_update
+        .stop_time_update
+        .as_slice()
+        .first()
+        .and_then(|stop| {
+            stop.departure
+                .as_ref()
+                .and_then(|event| event.time)
+                .or_else(|| stop.arrival.as_ref().and_then(|event| event.time))
+        });
+    let last_stop_time = trip_update
+        .stop_time_update
+        .as_slice()
+        .last()
+        .and_then(|stop| {
+            stop.arrival
+                .as_ref()
+                .and_then(|event| event.time)
+                .or_else(|| stop.departure.as_ref().and_then(|event| event.time))
+        });
 
     RealtimeTripTiming {
         first_stop_time,
@@ -398,12 +412,10 @@ async fn resolve_train_requests(
     if !unresolved_trip_ids.is_empty() {
         let compressed_trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(
-                catenary::schema::gtfs::trips_compressed::dsl::chateau
-                    .eq(SWITZERLAND_CHATEAU_ID),
+                catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID),
             )
             .filter(
-                catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                    .eq_any(&unresolved_trip_ids),
+                catenary::schema::gtfs::trips_compressed::dsl::trip_id.eq_any(&unresolved_trip_ids),
             )
             .load::<CompressedTrip>(&mut conn)
             .await?;
@@ -419,9 +431,7 @@ async fn resolve_train_requests(
             Vec::new()
         } else {
             catenary::schema::gtfs::routes::dsl::routes
-                .filter(
-                    catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID),
-                )
+                .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID))
                 .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
                 .load::<Route>(&mut conn)
                 .await?
@@ -484,9 +494,7 @@ async fn resolve_train_requests(
         HashMap::new()
     } else {
         catenary::schema::gtfs::agencies::dsl::agencies
-            .filter(
-                catenary::schema::gtfs::agencies::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID),
-            )
+            .filter(catenary::schema::gtfs::agencies::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID))
             .filter(catenary::schema::gtfs::agencies::dsl::agency_id.eq_any(&agency_ids))
             .load::<Agency>(&mut conn)
             .await?
@@ -567,10 +575,7 @@ async fn record_no_formation(
     no_formation_retry_after: &mut HashMap<String, Instant>,
     key: &str,
 ) {
-    no_formation_retry_after.insert(
-        key.to_string(),
-        Instant::now() + NO_FORMATION_RETRY_DELAY,
-    );
+    no_formation_retry_after.insert(key.to_string(), Instant::now() + NO_FORMATION_RETRY_DELAY);
 
     let mut write_guard = store.write().await;
     write_guard.insert(key.to_string(), None);
@@ -832,11 +837,8 @@ pub async fn bg_fetch_sbb_formations(
             })
             .collect::<HashMap<String, Instant>>()
     };
-    let mut etcd = connect_to_etcd_with_retry(
-        etcd_addresses.as_slice(),
-        etcd_connect_options.as_ref(),
-    )
-    .await;
+    let mut etcd =
+        connect_to_etcd_with_retry(etcd_addresses.as_slice(), etcd_connect_options.as_ref()).await;
 
     tracing::info!(
         worker_id = %worker_id.as_str(),
@@ -927,7 +929,7 @@ pub async fn bg_fetch_sbb_formations(
                 worker_id = %worker_id.as_str(),
                 "This worker owns schweiz, but no authoritative schweiz dataset is loaded yet"
             );
-            HashSet::new()
+            TrainRequests::new()
         };
 
         if !train_requests.is_empty() {
@@ -939,12 +941,8 @@ pub async fn bg_fetch_sbb_formations(
 
         evict_old_entries(&store).await;
 
-        let train_requests = order_train_requests(
-            &store,
-            train_requests,
-            &mut no_formation_retry_after,
-        )
-        .await;
+        let train_requests =
+            order_train_requests(&store, train_requests, &mut no_formation_retry_after).await;
 
         let mut queues = vec![Vec::new(); api_keys.len()];
         for (index, request) in train_requests.into_iter().enumerate() {
@@ -999,12 +997,7 @@ pub async fn bg_fetch_sbb_formations(
                         );
                     }
                     FormationFetchOutcome::NoFormation(error) => {
-                        record_no_formation(
-                            &store,
-                            &mut no_formation_retry_after,
-                            &key,
-                        )
-                        .await;
+                        record_no_formation(&store, &mut no_formation_retry_after, &key).await;
 
                         tracing::warn!(
                             error = %error,

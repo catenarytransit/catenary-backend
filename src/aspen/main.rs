@@ -55,11 +55,11 @@ use tarpc::{
 use tokio::sync::Mutex;
 
 use uuid::Uuid;
-mod train_formation_cache_and_conversion;
 mod delay_calculation;
 mod import_alpenrose;
 mod route_type_overrides;
 mod stop_time_logic;
+mod train_formation_cache_and_conversion;
 pub mod trip_id_assigner_with_known_route_and_known_trip_updates;
 use ahash::AHashMap;
 use catenary::agency_specific_types::mta_subway;
@@ -2436,9 +2436,11 @@ async fn main() -> anyhow::Result<()> {
 
     let nyct_subway_fetch_join_handle: tokio::task::JoinHandle<
         Result<(), Box<dyn Error + Sync + Send>>,
-    > = tokio::task::spawn(consist_cache_and_conversion::bg_fetch_nyct_consists(
-        Arc::clone(&authoritative_nyct_subway_data_cache),
-    ));
+    > = tokio::task::spawn(
+        train_formation_cache_and_conversion::bg_fetch_nyct_consists(Arc::clone(
+            &authoritative_nyct_subway_data_cache,
+        )),
+    );
 
     let this_worker_id_copy = this_worker_id.clone();
 

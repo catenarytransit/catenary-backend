@@ -115,17 +115,14 @@ lazy_static! {
 /// Extracts the base DIDOK (station/stop) code from a GTFS SLOID identifier string.
 /// Example input: "ch:1:sloid:3000:500:31" -> Some("3000")
 fn extract_sloid_station_id(stop_id: &str) -> Option<&str> {
-    stop_id
-        .strip_prefix("ch:1:sloid:")?
-        .split(':')
-        .next()
+    stop_id.strip_prefix("ch:1:sloid:")?.split(':').next()
 }
 
-/// Normalises a Swiss UIC station code (e.g., 8500010 or 8503000) to its core 
+/// Normalises a Swiss UIC station code (e.g., 8500010 or 8503000) to its core
 /// DIDOK station identifier without the Swiss country prefix ("85") or leading zeros.
 fn uic_to_didok_str(uic: u64) -> String {
     let uic_str = uic.to_string();
-    
+
     // Swiss UIC codes consist of country prefix '85' followed by 5 DIDOK digits
     let didok_raw = if uic_str.starts_with("85") && uic_str.len() == 7 {
         &uic_str[2..]
@@ -404,17 +401,17 @@ pub async fn new_rt_data(
 
     let mut darwin_trip_id_to_formation: AHashMap<
         String,
-        crate::consist_cache_and_conversion::DarwinScheduleFormations,
+        crate::train_formation_cache_and_conversion::DarwinScheduleFormations,
     > = AHashMap::new();
 
     let mut darwin_trip_id_to_formation_v1: AHashMap<
         String,
-        crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
+        crate::train_formation_cache_and_conversion::DarwinScheduleFormationsV1,
     > = AHashMap::new();
 
     let mut metrolinx_trip_id_to_consist: AHashMap<
         String,
-        crate::consist_cache_and_conversion::MetrolinxTrip,
+        crate::train_formation_cache_and_conversion::MetrolinxTrip,
     > = AHashMap::new();
 
     if chateau_id == "gotransit" || chateau_id == "upexpress" {
@@ -425,7 +422,7 @@ pub async fn new_rt_data(
             .await;
         if let Ok(res) = metrolinx_res {
             if let Ok(data) = res
-                .json::<crate::consist_cache_and_conversion::MetrolinxTrainResponse>()
+                .json::<crate::train_formation_cache_and_conversion::MetrolinxTrainResponse>()
                 .await
             {
                 for trip in data.trips {
@@ -466,13 +463,13 @@ pub async fn new_rt_data(
                     f_resp
                         .json::<AHashMap<
                             String,
-                            crate::consist_cache_and_conversion::DarwinScheduleFormations,
+                            crate::train_formation_cache_and_conversion::DarwinScheduleFormations,
                         >>()
                         .await,
                     fv1_resp
                         .json::<AHashMap<
                             String,
-                            crate::consist_cache_and_conversion::DarwinScheduleFormationsV1,
+                            crate::train_formation_cache_and_conversion::DarwinScheduleFormationsV1,
                         >>()
                         .await,
                 )
@@ -2187,7 +2184,7 @@ pub async fn new_rt_data(
                                                             );
                                                         }
                                                         Some(associated_helium_data) => {
-                                                            consist = Some(crate::consist_cache_and_conversion::map_nyct_trip_to_consist(&associated_helium_data));
+                                                            consist = Some(crate::train_formation_cache_and_conversion::map_nyct_trip_to_consist(&associated_helium_data));
 
                                                             if let (Some(lat), Some(lon)) = (
                                                                 associated_helium_data
@@ -3069,14 +3066,14 @@ pub async fn new_rt_data(
                                 if let Some(formation) =
                                     darwin_trip_id_to_formation.get(trip_id_str)
                                 {
-                                    consist = Some(crate::consist_cache_and_conversion::map_darwin_formation_to_consist(
+                                    consist = Some(crate::train_formation_cache_and_conversion::map_darwin_formation_to_consist(
                                         trip_id_str,
                                         formation
                                     ));
                                 } else if let Some(formation_v1) =
                                     darwin_trip_id_to_formation_v1.get(trip_id_str)
                                 {
-                                    consist = Some(crate::consist_cache_and_conversion::map_darwin_v1_formation_to_consist(
+                                    consist = Some(crate::train_formation_cache_and_conversion::map_darwin_v1_formation_to_consist(
                                         trip_id_str,
                                         formation_v1
                                     ));
@@ -3093,7 +3090,7 @@ pub async fn new_rt_data(
                                     if let Some(metrolinx_trip) =
                                         metrolinx_trip_id_to_consist.get(*trip_short_name)
                                     {
-                                        consist = Some(crate::consist_cache_and_conversion::map_metrolinx_trip_to_consist(
+                                        consist = Some(crate::train_formation_cache_and_conversion::map_metrolinx_trip_to_consist(
                                         trip_id_str,
                                         metrolinx_trip
                                     ));
