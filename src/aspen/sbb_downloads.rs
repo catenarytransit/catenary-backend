@@ -350,10 +350,29 @@ fn evu_for_candidate(
         agency_id.to_string(),
     );
 
-    if agency_names
-        .get(&agency_key)
-        .is_some_and(|agency_name| agency_name.to_ascii_uppercase().contains("BLS"))
-    {
+    let Some(agency_name) = agency_names.get(&agency_key) else {
+        return "SBBP";
+    };
+
+    let agency_name = agency_name.to_lowercase();
+
+    if agency_name.contains("südostbahn") {
+        "SOB"
+    } else if agency_name.contains("thurbo") {
+        "THURBO"
+    } else if agency_name.contains("zentralbahn") {
+        "ZB"
+    } else if agency_name.contains("fribourgeois") {
+        "TPF"
+    } else if agency_name.contains("verein dampfbahn bern") {
+        "VDBB"
+    } else if agency_name.contains("neuchâtelois") {
+        "TRN"
+    } else if agency_name.contains("oensingen-balsthal-bahn") {
+        "OeBB"
+    } else if agency_name.contains("morges-bière-cossonay") {
+        "MBC"
+    } else if agency_name.contains("bls") {
         "BLS"
     } else {
         "SBBP"
