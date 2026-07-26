@@ -3,18 +3,18 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SbbFormationApiResponse {
-    Data(SbbFormationData),
     Error { error: String },
+    Data(SbbFormationData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SbbFormationData {
     pub vehicle_journey_type: Option<String>,
-    #[serde(default)]
-    pub formations: Vec<SbbFormation>,
-    #[serde(default)]
-    pub formations_at_scheduled_stops: Vec<SbbFormationAtScheduledStop>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formations: Option<Vec<SbbFormation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formations_at_scheduled_stops: Option<Vec<SbbFormationAtScheduledStop>>,
     #[serde(default)]
     pub hints: Vec<serde_json::Value>,
     pub journey_meta_information: Option<SbbJourneyMetaInformation>,

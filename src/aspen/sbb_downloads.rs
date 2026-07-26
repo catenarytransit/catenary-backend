@@ -91,6 +91,8 @@ const LOOP_INTERVAL: Duration = Duration::from_secs(60);
 const API_KEY_REQUEST_INTERVAL: Duration = Duration::from_secs(2);
 const NO_FORMATION_RETRY_DELAY: Duration = Duration::from_secs(60 * 60);
 const NO_FORMATION_ERROR: &str = "There were no formation data";
+const CUS_FOS_VEHICLE_COUNT_MISMATCH_ERROR: &str =
+    "Failed, because CUS and FOS suggest different numbers of vehicles";
 
 fn persistence_path() -> PathBuf {
     env::var_os(PERSISTENCE_PATH_ENV)
@@ -582,11 +584,41 @@ fn response_preview(body: &str) -> String {
     body.chars().take(500).collect()
 }
 
-fn is_no_formation_error(error: &str) -> bool {
+fn api_error_matches(error: &str, expected: &str) -> bool {
     error
         .trim()
         .trim_end_matches('.')
-        .eq_ignore_ascii_case(NO_FORMATION_ERROR)
+        .eq_ignore_ascii_case(expected)
+}
+
+fn is_no_formation_error(error: &str) -> bool {
+    api_error_matches(error, NO_FORMATION_ERROR)
+}
+
+fn is_cus_fos_vehicle_count_mismatch(error: &str) -> bool {
+    api_error_matches(error, CUS_FOS_VEHICLE_COUNT_MISMATCH_ERROR)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FormationEndpoint {
+    Full,
+    StopBased,
+}
+
+impl FormationEndpoint {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Full => "formations_full",
+            Self::StopBased => "formations_stop_based",
+        }
+    }
+
+    fn log_name(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::StopBased => "stop_based",
+        }
+    }
 }
 
 async fn record_no_formation(
@@ -683,17 +715,22 @@ async fn order_train_requests(
         .collect()
 }
 
-async fn fetch_formation(
+async fn fetch_formation_endpoint(
     http_client: &Client,
     api_key: &str,
     request: &TrainRequest,
-) -> FormationFetchOutcome {
+    endpoint: FormationEndpoint,
+) -> Result<FormationFetchOutcome, String> {
     let url = format!(
-        "https://api.opentransportdata.swiss/formation/v2/formations_full?evu={}&operationDate={}&trainNumber={}",
-        request.evu, request.operation_date, request.train_number
+        "https://api.opentransportdata.swiss/formation/v2/{}?evu={}&operationDate={}&trainNumber={}",
+        endpoint.path(),
+        request.evu,
+        request.operation_date,
+        request.train_number
     );
 
     tracing::info!(
+        endpoint = endpoint.log_name(),
         operation_date = %request.operation_date,
         train_number = request.train_number,
         evu = %request.evu,
@@ -710,24 +747,26 @@ async fn fetch_formation(
         Err(error) => {
             tracing::error!(
                 error = %error,
+                endpoint = endpoint.log_name(),
                 operation_date = %request.operation_date,
                 train_number = request.train_number,
                 evu = %request.evu,
                 "Failed to download Swiss formation"
             );
-            return FormationFetchOutcome::Retry;
+            return Ok(FormationFetchOutcome::Retry);
         }
     };
 
     let status = response.status();
     if status.as_u16() == 429 {
         tracing::warn!(
+            endpoint = endpoint.log_name(),
             operation_date = %request.operation_date,
             train_number = request.train_number,
             evu = %request.evu,
             "Swiss formation API rate limited an API key; backing off that key"
         );
-        return FormationFetchOutcome::RateLimited;
+        return Ok(FormationFetchOutcome::RateLimited);
     }
 
     let body = match response.text().await {
@@ -736,65 +775,146 @@ async fn fetch_formation(
             tracing::error!(
                 error = %error,
                 status = %status,
+                endpoint = endpoint.log_name(),
                 operation_date = %request.operation_date,
                 train_number = request.train_number,
                 evu = %request.evu,
                 "Failed to read Swiss formation response body"
             );
-            return FormationFetchOutcome::Retry;
+            return Ok(FormationFetchOutcome::Retry);
         }
     };
 
-    if !status.is_success() {
-        if let Ok(SbbFormationApiResponse::Error { error }) =
-            serde_json::from_str::<SbbFormationApiResponse>(&body)
-        {
-            if is_no_formation_error(&error) {
-                return FormationFetchOutcome::NoFormation(error);
-            }
-        }
-
+    if status.as_u16() == 401 || status.as_u16() == 403 {
         tracing::error!(
             status = %status,
             response = %response_preview(&body),
+            endpoint = endpoint.log_name(),
             operation_date = %request.operation_date,
             train_number = request.train_number,
             evu = %request.evu,
-            "Swiss formation API returned an unsuccessful response"
+            "Swiss formation API rejected an API key"
         );
-
-        return if status.as_u16() == 401 || status.as_u16() == 403 {
-            FormationFetchOutcome::DisableApiKey
-        } else {
-            FormationFetchOutcome::Retry
-        };
+        return Ok(FormationFetchOutcome::DisableApiKey);
     }
 
-    match serde_json::from_str::<SbbFormationApiResponse>(&body) {
-        Ok(SbbFormationApiResponse::Data(data)) => FormationFetchOutcome::Data(data),
+    let decoded = serde_json::from_str::<SbbFormationApiResponse>(&body);
+
+    if !status.is_success() {
+        if let Ok(SbbFormationApiResponse::Error { error }) = decoded {
+            if is_no_formation_error(&error) {
+                return Ok(FormationFetchOutcome::NoFormation(error));
+            }
+
+            if endpoint == FormationEndpoint::Full && is_cus_fos_vehicle_count_mismatch(&error) {
+                return Err(error);
+            }
+
+            tracing::error!(
+                error = %error,
+                status = %status,
+                endpoint = endpoint.log_name(),
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Swiss formation API returned an error payload"
+            );
+        } else {
+            tracing::error!(
+                status = %status,
+                response = %response_preview(&body),
+                endpoint = endpoint.log_name(),
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Swiss formation API returned an unsuccessful response"
+            );
+        }
+
+        return Ok(FormationFetchOutcome::Retry);
+    }
+
+    match decoded {
+        Ok(SbbFormationApiResponse::Data(data)) => Ok(FormationFetchOutcome::Data(data)),
         Ok(SbbFormationApiResponse::Error { error }) if is_no_formation_error(&error) => {
-            FormationFetchOutcome::NoFormation(error)
+            Ok(FormationFetchOutcome::NoFormation(error))
+        }
+        Ok(SbbFormationApiResponse::Error { error })
+            if endpoint == FormationEndpoint::Full && is_cus_fos_vehicle_count_mismatch(&error) =>
+        {
+            Err(error)
         }
         Ok(SbbFormationApiResponse::Error { error }) => {
             tracing::error!(
                 error = %error,
+                endpoint = endpoint.log_name(),
                 operation_date = %request.operation_date,
                 train_number = request.train_number,
                 evu = %request.evu,
                 "Swiss formation API returned an error payload; the request will be retried"
             );
-            FormationFetchOutcome::Retry
+            Ok(FormationFetchOutcome::Retry)
         }
         Err(error) => {
             tracing::error!(
                 error = %error,
                 response = %response_preview(&body),
+                endpoint = endpoint.log_name(),
                 operation_date = %request.operation_date,
                 train_number = request.train_number,
                 evu = %request.evu,
                 "Failed to decode Swiss formation response; the request will be retried"
             );
-            FormationFetchOutcome::Retry
+            Ok(FormationFetchOutcome::Retry)
+        }
+    }
+}
+
+async fn fetch_formation(
+    http_client: &Client,
+    api_key: &str,
+    request: &TrainRequest,
+) -> FormationFetchOutcome {
+    match fetch_formation_endpoint(http_client, api_key, request, FormationEndpoint::Full).await {
+        Ok(outcome) => outcome,
+        Err(full_error) => {
+            tracing::warn!(
+                error = %full_error,
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Full Swiss formation is unavailable because CUS and FOS disagree; trying the stop-based endpoint"
+            );
+
+            match fetch_formation_endpoint(
+                http_client,
+                api_key,
+                request,
+                FormationEndpoint::StopBased,
+            )
+            .await
+            {
+                Ok(FormationFetchOutcome::Data(data)) => {
+                    tracing::info!(
+                        operation_date = %request.operation_date,
+                        train_number = request.train_number,
+                        evu = %request.evu,
+                        "Downloaded stop-based Swiss formation fallback"
+                    );
+                    FormationFetchOutcome::Data(data)
+                }
+                Ok(outcome) => outcome,
+                Err(fallback_error) => {
+                    tracing::error!(
+                        error = %fallback_error,
+                        operation_date = %request.operation_date,
+                        train_number = request.train_number,
+                        evu = %request.evu,
+                        "Stop-based Swiss formation fallback unexpectedly reported a CUS/FOS mismatch"
+                    );
+                    FormationFetchOutcome::Retry
+                }
+            }
         }
     }
 }
@@ -999,8 +1119,15 @@ pub async fn bg_fetch_sbb_formations(
 
                 match outcome {
                     FormationFetchOutcome::Data(data) => {
-                        let formation_count = data.formations.len();
-                        let scheduled_stop_count = data.formations_at_scheduled_stops.len();
+                        let formation_count = data.formations.as_ref().map_or(0, Vec::len);
+                        let scheduled_stop_count = data
+                            .formations_at_scheduled_stops
+                            .as_ref()
+                            .map_or(0, Vec::len);
+                        let vehicle_journey_type = data
+                            .vehicle_journey_type
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string());
                         no_formation_retry_after.remove(&key);
                         let mut write_guard = store.write().await;
                         write_guard.insert(key, Some(data));
@@ -1012,6 +1139,7 @@ pub async fn bg_fetch_sbb_formations(
                             evu = %request.evu,
                             formation_count,
                             scheduled_stop_count,
+                            vehicle_journey_type = %vehicle_journey_type,
                             "Downloaded Swiss train formation"
                         );
                     }

@@ -158,6 +158,8 @@ fn sbb_platform_for_stop(
     // 1. Search scheduled stops at the formation level
     if let Some(track) = formation_data
         .formations_at_scheduled_stops
+        .as_deref()
+        .unwrap_or_default()
         .iter()
         .find_map(|formation_at_stop| {
             let scheduled_stop = formation_at_stop.scheduled_stop.as_ref()?;
@@ -176,6 +178,8 @@ fn sbb_platform_for_stop(
     // 2. Search vehicle-level scheduled stops as a fallback
     formation_data
         .formations
+        .as_deref()
+        .unwrap_or_default()
         .iter()
         .flat_map(|formation| &formation.formation_vehicles)
         .flat_map(|vehicle| &vehicle.formation_vehicle_at_scheduled_stops)
