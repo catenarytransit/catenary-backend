@@ -244,17 +244,17 @@ pub async fn alpenrose_process_threads(
             )
             .await;
 
-            tracing::info!(
-                available_permits_before_drop = permits_for_log.available_permits(),
-                "Alpenrose processing function returned; releasing permit"
-            );
+            // tracing::info!(
+            //     available_permits_before_drop = permits_for_log.available_permits(),
+            //     "Alpenrose processing function returned; releasing permit"
+            // );
 
             drop(permit);
 
-            tracing::info!(
-                available_permits_after_drop = permits_for_log.available_permits(),
-                "Alpenrose concurrency permit released"
-            );
+            // tracing::info!(
+            //     available_permits_after_drop = permits_for_log.available_permits(),
+            //     "Alpenrose concurrency permit released"
+            // );
 
             if let Err(error) = result {
                 tracing::error!(
