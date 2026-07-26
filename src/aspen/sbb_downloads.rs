@@ -270,16 +270,6 @@ fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
 fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests {
     let mut requests = HashMap::new();
 
-    for vehicle_position in data.vehicle_positions.values() {
-        if let Some(trip) = &vehicle_position.trip {
-            insert_realtime_trip_request(
-                &mut requests,
-                trip.trip_id.as_deref(),
-                trip.start_date,
-                RealtimeTripTiming::default(),
-            );
-        }
-    }
 
     for trip_update in data.trip_updates.values() {
         insert_realtime_trip_request(
@@ -453,6 +443,7 @@ async fn resolve_train_requests(
         } else {
             catenary::schema::gtfs::routes::dsl::routes
                 .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID))
+                .filter(catenary::schema::gtfs::routes::dsl::route_type.eq(TRAIN_ROUTE_TYPE))
                 .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
                 .load::<Route>(&mut conn)
                 .await?
