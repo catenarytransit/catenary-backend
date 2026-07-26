@@ -1,13 +1,14 @@
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::aspen_dataset::AspenisedData;
+use catenary::aspen_dataset::{AspenisedData, AspenisedTripUpdate};
 use catenary::catenaryconfig;
-use catenary::models::{CompressedTrip, Route};
+use catenary::models::{Agency, CompressedTrip, Route};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::sbb_formation_types::{SbbFormationApiResponse, SbbFormationData};
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use reqwest::Client;
 use scc::HashMap as SccHashMap;
+use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -16,20 +17,79 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
 
 pub type SbbFormationStore = Arc<RwLock<HashMap<String, Option<SbbFormationData>>>>;
 
-type RealtimeTripRequests = HashMap<String, HashSet<chrono::NaiveDate>>;
+type RealtimeTripRequests =
+    HashMap<String, HashMap<chrono::NaiveDate, RealtimeTripTiming>>;
+type TrainRequests = HashMap<(String, u64), TrainRequest>;
+type AgencyKey = (String, String, String);
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RealtimeTripTiming {
+    first_stop_time: Option<i64>,
+    last_stop_time: Option<i64>,
+}
+
+impl RealtimeTripTiming {
+    fn merge(&mut self, other: Self) {
+        self.first_stop_time = match (self.first_stop_time, other.first_stop_time) {
+            (Some(existing), Some(incoming)) => Some(existing.min(incoming)),
+            (None, incoming) => incoming,
+            (existing, None) => existing,
+        };
+        self.last_stop_time = match (self.last_stop_time, other.last_stop_time) {
+            (Some(existing), Some(incoming)) => Some(existing.max(incoming)),
+            (None, incoming) => incoming,
+            (existing, None) => existing,
+        };
+    }
+}
+
+#[derive(Clone, Debug)]
+struct ScheduledTrainCandidate {
+    trip_id: String,
+    operation_dates: HashMap<chrono::NaiveDate, RealtimeTripTiming>,
+    trip_short_name: Option<String>,
+    onestop_feed_id: String,
+    attempt_id: String,
+    agency_id: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+struct TrainRequest {
+    operation_date: String,
+    train_number: u64,
+    evu: String,
+    timing: RealtimeTripTiming,
+}
+
+impl TrainRequest {
+    fn cache_key(&self) -> String {
+        format!("{}_{}", self.operation_date, self.train_number)
+    }
+}
+
+enum FormationFetchOutcome {
+    Data(SbbFormationData),
+    NoFormation(String),
+    Retry,
+    RateLimited,
+    DisableApiKey,
+}
 
 const PERSISTENCE_PATH: &str = "sbb_formations_cache.json";
 const PERSISTENCE_PATH_ENV: &str = "SBB_FORMATIONS_CACHE_PATH";
 const SBB_API_KEY_ENV: &str = "SBB_API_KEY";
+const SBB_API_KEYS_ENV: &str = "SBB_API_KEYS";
 const SWITZERLAND_CHATEAU_ID: &str = "schweiz";
 const ASSIGNMENT_KEY: &str = "/aspen_assigned_chateaux/schweiz";
 const TRAIN_ROUTE_TYPE: i16 = 2;
 const EVICTION_HOURS: i64 = 72;
 const LOOP_INTERVAL: Duration = Duration::from_secs(60);
+const API_KEY_REQUEST_INTERVAL: Duration = Duration::from_secs(2);
 const NO_FORMATION_RETRY_DELAY: Duration = Duration::from_secs(60 * 60);
 const NO_FORMATION_ERROR: &str = "There were no formation data";
 
@@ -117,23 +177,47 @@ fn persist_store(store: &HashMap<String, Option<SbbFormationData>>) {
     }
 }
 
-fn configured_api_key() -> Option<String> {
-    env::var(SBB_API_KEY_ENV)
+fn normalize_api_keys(keys: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = HashSet::new();
+
+    keys.into_iter()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+        .filter(|key| seen.insert(key.clone()))
+        .collect()
+}
+
+fn configured_api_keys() -> Vec<String> {
+    let environment_keys = env::var(SBB_API_KEYS_ENV)
         .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| {
-            catenaryconfig::config()
-                .aspen
-                .sbb_api_key
-                .clone()
-                .filter(|value| !value.trim().is_empty())
-        })
+        .map(|value| value.split(',').map(ToString::to_string).collect::<Vec<_>>())
+        .map(normalize_api_keys)
+        .unwrap_or_default();
+    if !environment_keys.is_empty() {
+        return environment_keys;
+    }
+
+    if let Ok(api_key) = env::var(SBB_API_KEY_ENV) {
+        let api_keys = normalize_api_keys([api_key]);
+        if !api_keys.is_empty() {
+            return api_keys;
+        }
+    }
+
+    let config = &catenaryconfig::config().aspen;
+    let configured_keys = normalize_api_keys(config.sbb_api_keys.clone().unwrap_or_default());
+    if !configured_keys.is_empty() {
+        return configured_keys;
+    }
+
+    normalize_api_keys(config.sbb_api_key.clone())
 }
 
 fn insert_realtime_trip_request(
     requests: &mut RealtimeTripRequests,
     trip_id: Option<&str>,
     operation_date: Option<chrono::NaiveDate>,
+    timing: RealtimeTripTiming,
 ) {
     let (Some(trip_id), Some(operation_date)) = (trip_id, operation_date) else {
         return;
@@ -142,7 +226,29 @@ fn insert_realtime_trip_request(
     requests
         .entry(trip_id.to_string())
         .or_default()
-        .insert(operation_date);
+        .entry(operation_date)
+        .and_modify(|existing| existing.merge(timing))
+        .or_insert(timing);
+}
+
+fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
+    let first_stop_time = trip_update.stop_time_update.first().and_then(|stop| {
+        stop.departure
+            .as_ref()
+            .and_then(|event| event.time)
+            .or_else(|| stop.arrival.as_ref().and_then(|event| event.time))
+    });
+    let last_stop_time = trip_update.stop_time_update.last().and_then(|stop| {
+        stop.arrival
+            .as_ref()
+            .and_then(|event| event.time)
+            .or_else(|| stop.departure.as_ref().and_then(|event| event.time))
+    });
+
+    RealtimeTripTiming {
+        first_stop_time,
+        last_stop_time,
+    }
 }
 
 fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests {
@@ -154,6 +260,7 @@ fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests 
                 &mut requests,
                 trip.trip_id.as_deref(),
                 trip.start_date,
+                RealtimeTripTiming::default(),
             );
         }
     }
@@ -163,6 +270,7 @@ fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests 
             &mut requests,
             trip_update.trip.trip_id.as_deref(),
             trip_update.trip.start_date,
+            trip_update_timing(trip_update),
         );
     }
 
@@ -172,8 +280,9 @@ fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests 
 fn add_train_requests_from_trip_short_name(
     trip_id: &str,
     trip_short_name: Option<&str>,
-    operation_dates: &HashSet<chrono::NaiveDate>,
-    train_requests: &mut HashSet<(String, u64)>,
+    operation_dates: &HashMap<chrono::NaiveDate, RealtimeTripTiming>,
+    evu: &str,
+    train_requests: &mut TrainRequests,
 ) {
     let Some(trip_short_name) = trip_short_name.map(str::trim) else {
         return;
@@ -188,11 +297,52 @@ fn add_train_requests_from_trip_short_name(
         return;
     };
 
-    for operation_date in operation_dates {
-        train_requests.insert((
-            operation_date.format("%Y-%m-%d").to_string(),
+    for (operation_date, timing) in operation_dates {
+        let operation_date = operation_date.format("%Y-%m-%d").to_string();
+        let request = TrainRequest {
+            operation_date: operation_date.clone(),
             train_number,
-        ));
+            evu: evu.to_string(),
+            timing: *timing,
+        };
+
+        train_requests
+            .entry((operation_date, train_number))
+            .and_modify(|existing| {
+                existing.timing.merge(*timing);
+                if existing.evu == "SBBP" && evu != "SBBP" {
+                    existing.evu = evu.to_string();
+                }
+            })
+            .or_insert(request);
+    }
+}
+
+fn evu_for_candidate(
+    candidate: &ScheduledTrainCandidate,
+    agency_names: &HashMap<AgencyKey, String>,
+) -> &'static str {
+    let Some(agency_id) = candidate.agency_id.as_deref() else {
+        return "SBBP";
+    };
+
+    if agency_id == "72" {
+        return "RhB";
+    }
+
+    let agency_key = (
+        candidate.onestop_feed_id.clone(),
+        candidate.attempt_id.clone(),
+        agency_id.to_string(),
+    );
+
+    if agency_names
+        .get(&agency_key)
+        .is_some_and(|agency_name| agency_name.to_ascii_uppercase().contains("BLS"))
+    {
+        "BLS"
+    } else {
+        "SBBP"
     }
 }
 
@@ -200,8 +350,8 @@ async fn resolve_train_requests(
     data: &AspenisedData,
     conn_pool: &CatenaryPostgresPool,
     realtime_trip_requests: &RealtimeTripRequests,
-) -> Result<HashSet<(String, u64)>, Box<dyn std::error::Error + Sync + Send>> {
-    let mut train_requests = HashSet::new();
+) -> Result<TrainRequests, Box<dyn std::error::Error + Sync + Send>> {
+    let mut candidates = Vec::new();
     let mut unresolved_trip_ids = Vec::new();
 
     for (trip_id, operation_dates) in realtime_trip_requests {
@@ -226,77 +376,142 @@ async fn resolve_train_requests(
             continue;
         }
 
-        add_train_requests_from_trip_short_name(
-            trip_id,
-            compressed_trip.trip_short_name.as_deref(),
-            operation_dates,
-            &mut train_requests,
-        );
+        candidates.push(ScheduledTrainCandidate {
+            trip_id: trip_id.clone(),
+            operation_dates: operation_dates.clone(),
+            trip_short_name: compressed_trip
+                .trip_short_name
+                .as_deref()
+                .map(ToString::to_string),
+            onestop_feed_id: compressed_trip.onestop_feed_id.clone(),
+            attempt_id: compressed_trip.attempt_id.clone(),
+            agency_id: route.agency_id.clone(),
+        });
     }
 
-    if unresolved_trip_ids.is_empty() {
-        return Ok(train_requests);
+    if candidates.is_empty() && unresolved_trip_ids.is_empty() {
+        return Ok(HashMap::new());
     }
 
     let mut conn = conn_pool.get().await?;
-    let compressed_trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-        .filter(
-            catenary::schema::gtfs::trips_compressed::dsl::chateau
-                .eq(SWITZERLAND_CHATEAU_ID),
-        )
-        .filter(
-            catenary::schema::gtfs::trips_compressed::dsl::trip_id
-                .eq_any(&unresolved_trip_ids),
-        )
-        .load::<CompressedTrip>(&mut conn)
-        .await?;
 
-    let route_ids = compressed_trips
+    if !unresolved_trip_ids.is_empty() {
+        let compressed_trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+            .filter(
+                catenary::schema::gtfs::trips_compressed::dsl::chateau
+                    .eq(SWITZERLAND_CHATEAU_ID),
+            )
+            .filter(
+                catenary::schema::gtfs::trips_compressed::dsl::trip_id
+                    .eq_any(&unresolved_trip_ids),
+            )
+            .load::<CompressedTrip>(&mut conn)
+            .await?;
+
+        let route_ids = compressed_trips
+            .iter()
+            .map(|trip| trip.route_id.clone())
+            .collect::<HashSet<String>>()
+            .into_iter()
+            .collect::<Vec<String>>();
+
+        let routes = if route_ids.is_empty() {
+            Vec::new()
+        } else {
+            catenary::schema::gtfs::routes::dsl::routes
+                .filter(
+                    catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID),
+                )
+                .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
+                .load::<Route>(&mut conn)
+                .await?
+        };
+
+        let routes_by_key = routes
+            .into_iter()
+            .map(|route| {
+                (
+                    (
+                        route.onestop_feed_id.clone(),
+                        route.attempt_id.clone(),
+                        route.route_id.clone(),
+                    ),
+                    route,
+                )
+            })
+            .collect::<HashMap<(String, String, String), Route>>();
+
+        for compressed_trip in compressed_trips {
+            let Some(operation_dates) = realtime_trip_requests.get(&compressed_trip.trip_id) else {
+                continue;
+            };
+            let route_key = (
+                compressed_trip.onestop_feed_id.clone(),
+                compressed_trip.attempt_id.clone(),
+                compressed_trip.route_id.clone(),
+            );
+            let Some(route) = routes_by_key.get(&route_key) else {
+                continue;
+            };
+
+            if route.route_type != TRAIN_ROUTE_TYPE {
+                continue;
+            }
+
+            candidates.push(ScheduledTrainCandidate {
+                trip_id: compressed_trip.trip_id,
+                operation_dates: operation_dates.clone(),
+                trip_short_name: compressed_trip
+                    .trip_short_name
+                    .as_deref()
+                    .map(ToString::to_string),
+                onestop_feed_id: compressed_trip.onestop_feed_id,
+                attempt_id: compressed_trip.attempt_id,
+                agency_id: route.agency_id.clone(),
+            });
+        }
+    }
+
+    let agency_ids = candidates
         .iter()
-        .map(|trip| trip.route_id.clone())
+        .filter_map(|candidate| candidate.agency_id.clone())
+        .filter(|agency_id| agency_id != "72")
         .collect::<HashSet<String>>()
         .into_iter()
         .collect::<Vec<String>>();
 
-    if route_ids.is_empty() {
-        return Ok(train_requests);
-    }
-
-    let routes = catenary::schema::gtfs::routes::dsl::routes
-        .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID))
-        .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
-        .load::<Route>(&mut conn)
-        .await?;
-
-    let route_types = routes
-        .into_iter()
-        .map(|route| {
-            (
-                (route.onestop_feed_id, route.attempt_id, route.route_id),
-                route.route_type,
+    let agency_names = if agency_ids.is_empty() {
+        HashMap::new()
+    } else {
+        catenary::schema::gtfs::agencies::dsl::agencies
+            .filter(
+                catenary::schema::gtfs::agencies::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID),
             )
-        })
-        .collect::<HashMap<(String, String, String), i16>>();
+            .filter(catenary::schema::gtfs::agencies::dsl::agency_id.eq_any(&agency_ids))
+            .load::<Agency>(&mut conn)
+            .await?
+            .into_iter()
+            .map(|agency| {
+                (
+                    (
+                        agency.static_onestop_id,
+                        agency.attempt_id,
+                        agency.agency_id,
+                    ),
+                    agency.agency_name,
+                )
+            })
+            .collect::<HashMap<AgencyKey, String>>()
+    };
 
-    for compressed_trip in compressed_trips {
-        let Some(operation_dates) = realtime_trip_requests.get(&compressed_trip.trip_id) else {
-            continue;
-        };
-
-        let route_key = (
-            compressed_trip.onestop_feed_id.clone(),
-            compressed_trip.attempt_id.clone(),
-            compressed_trip.route_id.clone(),
-        );
-
-        if route_types.get(&route_key).copied() != Some(TRAIN_ROUTE_TYPE) {
-            continue;
-        }
-
+    let mut train_requests = HashMap::new();
+    for candidate in candidates {
+        let evu = evu_for_candidate(&candidate, &agency_names);
         add_train_requests_from_trip_short_name(
-            &compressed_trip.trip_id,
-            compressed_trip.trip_short_name.as_deref(),
-            operation_dates,
+            &candidate.trip_id,
+            candidate.trip_short_name.as_deref(),
+            &candidate.operation_dates,
+            evu,
             &mut train_requests,
         );
     }
@@ -362,12 +577,51 @@ async fn record_no_formation(
     persist_store(&write_guard);
 }
 
+fn trip_phase(timing: RealtimeTripTiming, now: i64) -> u8 {
+    match (timing.first_stop_time, timing.last_stop_time) {
+        (Some(first), Some(last)) if first <= now && now <= last => 0,
+        (Some(first), _) if first > now => 1,
+        (_, Some(last)) if last < now => 3,
+        _ => 2,
+    }
+}
+
+fn compare_train_request_priority(a: &TrainRequest, b: &TrainRequest, now: i64) -> Ordering {
+    let a_phase = trip_phase(a.timing, now);
+    let b_phase = trip_phase(b.timing, now);
+
+    a_phase
+        .cmp(&b_phase)
+        .then_with(|| match a_phase {
+            0 => a
+                .timing
+                .last_stop_time
+                .unwrap_or(i64::MAX)
+                .cmp(&b.timing.last_stop_time.unwrap_or(i64::MAX)),
+            1 => a
+                .timing
+                .first_stop_time
+                .unwrap_or(i64::MAX)
+                .cmp(&b.timing.first_stop_time.unwrap_or(i64::MAX)),
+            3 => b
+                .timing
+                .last_stop_time
+                .unwrap_or(i64::MIN)
+                .cmp(&a.timing.last_stop_time.unwrap_or(i64::MIN)),
+            _ => Ordering::Equal,
+        })
+        .then_with(|| a.operation_date.cmp(&b.operation_date))
+        .then_with(|| a.train_number.cmp(&b.train_number))
+        .then_with(|| a.evu.cmp(&b.evu))
+}
+
 async fn order_train_requests(
     store: &SbbFormationStore,
-    train_requests: HashSet<(String, u64)>,
+    train_requests: TrainRequests,
     no_formation_retry_after: &mut HashMap<String, Instant>,
-) -> Vec<(String, u64)> {
+) -> Vec<TrainRequest> {
     let now = Instant::now();
+    let now_unix = chrono::Utc::now().timestamp();
     let cached_states = {
         let read_guard = store.read().await;
         read_guard
@@ -376,33 +630,177 @@ async fn order_train_requests(
             .collect::<HashMap<String, bool>>()
     };
     let mut active_keys = HashSet::with_capacity(train_requests.len());
-    let mut fresh_requests = Vec::new();
-    let mut retry_requests = Vec::new();
+    let mut pending_requests = Vec::new();
 
-    for (operation_date, train_number) in train_requests {
-        let key = format!("{}_{}", operation_date, train_number);
+    for request in train_requests.into_values() {
+        let key = request.cache_key();
         active_keys.insert(key.clone());
 
         if cached_states.get(&key) == Some(&true) {
             continue;
         }
 
-        match no_formation_retry_after.get(&key) {
+        let retry = match no_formation_retry_after.get(&key) {
             Some(retry_after) if *retry_after > now => continue,
-            Some(_) => retry_requests.push((operation_date, train_number)),
-            None if cached_states.contains_key(&key) => {
-                retry_requests.push((operation_date, train_number));
-            }
-            None => fresh_requests.push((operation_date, train_number)),
-        }
+            Some(_) => true,
+            None => cached_states.contains_key(&key),
+        };
+        pending_requests.push((retry, request));
     }
 
     no_formation_retry_after
         .retain(|key, retry_after| *retry_after > now || active_keys.contains(key));
-    fresh_requests.sort_unstable();
-    retry_requests.sort_unstable();
-    fresh_requests.extend(retry_requests);
-    fresh_requests
+    pending_requests.sort_unstable_by(|(a_retry, a), (b_retry, b)| {
+        compare_train_request_priority(a, b, now_unix).then_with(|| a_retry.cmp(b_retry))
+    });
+    pending_requests
+        .into_iter()
+        .map(|(_, request)| request)
+        .collect()
+}
+
+async fn fetch_formation(
+    http_client: &Client,
+    api_key: &str,
+    request: &TrainRequest,
+) -> FormationFetchOutcome {
+    let url = format!(
+        "https://api.opentransportdata.swiss/formation/v2/formations_full?evu={}&operationDate={}&trainNumber={}",
+        request.evu, request.operation_date, request.train_number
+    );
+
+    tracing::info!(
+        operation_date = %request.operation_date,
+        train_number = request.train_number,
+        evu = %request.evu,
+        "Downloading Swiss train formation"
+    );
+
+    let response = match http_client
+        .get(&url)
+        .header("Authorization", api_key)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Failed to download Swiss formation"
+            );
+            return FormationFetchOutcome::Retry;
+        }
+    };
+
+    let status = response.status();
+    if status.as_u16() == 429 {
+        tracing::warn!(
+            operation_date = %request.operation_date,
+            train_number = request.train_number,
+            evu = %request.evu,
+            "Swiss formation API rate limited an API key; backing off that key"
+        );
+        return FormationFetchOutcome::RateLimited;
+    }
+
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                status = %status,
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Failed to read Swiss formation response body"
+            );
+            return FormationFetchOutcome::Retry;
+        }
+    };
+
+    if !status.is_success() {
+        if let Ok(SbbFormationApiResponse::Error { error }) =
+            serde_json::from_str::<SbbFormationApiResponse>(&body)
+        {
+            if is_no_formation_error(&error) {
+                return FormationFetchOutcome::NoFormation(error);
+            }
+        }
+
+        tracing::error!(
+            status = %status,
+            response = %response_preview(&body),
+            operation_date = %request.operation_date,
+            train_number = request.train_number,
+            evu = %request.evu,
+            "Swiss formation API returned an unsuccessful response"
+        );
+
+        return if status.as_u16() == 401 || status.as_u16() == 403 {
+            FormationFetchOutcome::DisableApiKey
+        } else {
+            FormationFetchOutcome::Retry
+        };
+    }
+
+    match serde_json::from_str::<SbbFormationApiResponse>(&body) {
+        Ok(SbbFormationApiResponse::Data(data)) => FormationFetchOutcome::Data(data),
+        Ok(SbbFormationApiResponse::Error { error }) if is_no_formation_error(&error) => {
+            FormationFetchOutcome::NoFormation(error)
+        }
+        Ok(SbbFormationApiResponse::Error { error }) => {
+            tracing::error!(
+                error = %error,
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Swiss formation API returned an error payload; the request will be retried"
+            );
+            FormationFetchOutcome::Retry
+        }
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                response = %response_preview(&body),
+                operation_date = %request.operation_date,
+                train_number = request.train_number,
+                evu = %request.evu,
+                "Failed to decode Swiss formation response; the request will be retried"
+            );
+            FormationFetchOutcome::Retry
+        }
+    }
+}
+
+async fn fetch_requests_for_api_key(
+    http_client: Client,
+    api_key: String,
+    requests: Vec<TrainRequest>,
+) -> Vec<(TrainRequest, FormationFetchOutcome)> {
+    let mut outcomes = Vec::with_capacity(requests.len());
+
+    for (index, request) in requests.into_iter().enumerate() {
+        if index > 0 {
+            sleep(API_KEY_REQUEST_INTERVAL).await;
+        }
+
+        let outcome = fetch_formation(&http_client, &api_key, &request).await;
+        let rate_limited = matches!(&outcome, FormationFetchOutcome::RateLimited);
+        let stop_key = rate_limited || matches!(&outcome, FormationFetchOutcome::DisableApiKey);
+        outcomes.push((request, outcome));
+
+        if rate_limited {
+            sleep(Duration::from_secs(30)).await;
+        }
+        if stop_key {
+            break;
+        }
+    }
+
+    outcomes
 }
 
 pub async fn bg_fetch_sbb_formations(
@@ -488,18 +886,21 @@ pub async fn bg_fetch_sbb_formations(
             continue;
         }
 
-        let Some(api_key) = configured_api_key() else {
+        let api_keys = configured_api_keys();
+        if api_keys.is_empty() {
             if !missing_api_key_logged {
                 tracing::error!(
-                    config_key = "aspen.sbb_api_key",
-                    environment_variable = SBB_API_KEY_ENV,
-                    "SBB formation downloading is enabled but no API key is configured"
+                    config_key = "aspen.sbb_api_keys",
+                    legacy_config_key = "aspen.sbb_api_key",
+                    environment_variable = SBB_API_KEYS_ENV,
+                    legacy_environment_variable = SBB_API_KEY_ENV,
+                    "SBB formation downloading is enabled but no API keys are configured"
                 );
                 missing_api_key_logged = true;
             }
             sleep(LOOP_INTERVAL).await;
             continue;
-        };
+        }
         missing_api_key_logged = false;
 
         let train_requests = if let Some(guard) = authoritative_data_store
@@ -545,159 +946,80 @@ pub async fn bg_fetch_sbb_formations(
         )
         .await;
 
-        for (operation_date, train_number) in train_requests {
-            let key = format!("{}_{}", operation_date, train_number);
+        let mut queues = vec![Vec::new(); api_keys.len()];
+        for (index, request) in train_requests.into_iter().enumerate() {
+            let queue_index = index % queues.len();
+            queues[queue_index].push(request);
+        }
 
-            let url = format!(
-                "https://api.opentransportdata.swiss/formation/v2/formations_full?evu=SBBP&operationDate={}&trainNumber={}",
-                operation_date, train_number
-            );
-
-            tracing::info!(
-                operation_date = %operation_date,
-                train_number,
-                "Downloading SBB train formation"
-            );
-
-            let response = match http_client
-                .get(&url)
-                .header("Authorization", &api_key)
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        operation_date = %operation_date,
-                        train_number,
-                        "Failed to download SBB formation"
-                    );
-                    continue;
-                }
-            };
-
-            let status = response.status();
-            if status.as_u16() == 429 {
-                tracing::warn!(
-                    operation_date = %operation_date,
-                    train_number,
-                    "SBB formation API rate limited this worker; backing off"
-                );
-                sleep(Duration::from_secs(30)).await;
-                break;
-            }
-
-            let body = match response.text().await {
-                Ok(body) => body,
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        status = %status,
-                        operation_date = %operation_date,
-                        train_number,
-                        "Failed to read SBB formation response body"
-                    );
-                    continue;
-                }
-            };
-
-            if !status.is_success() {
-                let no_formation_error =
-                    match serde_json::from_str::<SbbFormationApiResponse>(&body) {
-                        Ok(SbbFormationApiResponse::Error { error })
-                            if is_no_formation_error(&error) =>
-                        {
-                            Some(error)
-                        }
-                        _ => None,
-                    };
-
-                if let Some(error) = no_formation_error {
-                    record_no_formation(
-                        &store,
-                        &mut no_formation_retry_after,
-                        &key,
-                    )
-                    .await;
-                    tracing::warn!(
-                        error = %error,
-                        status = %status,
-                        operation_date = %operation_date,
-                        train_number,
-                        retry_after_seconds = NO_FORMATION_RETRY_DELAY.as_secs(),
-                        "SBB formation API reported no formation data; deferring retry"
-                    );
-                } else {
-                    tracing::error!(
-                        status = %status,
-                        response = %response_preview(&body),
-                        operation_date = %operation_date,
-                        train_number,
-                        "SBB formation API returned an unsuccessful response"
-                    );
-                }
-
-                if status.as_u16() == 401 || status.as_u16() == 403 {
-                    break;
-                }
-                sleep(Duration::from_secs(2)).await;
+        let mut fetch_tasks = JoinSet::new();
+        for (api_key, requests) in api_keys.into_iter().zip(queues) {
+            if requests.is_empty() {
                 continue;
             }
 
-            match serde_json::from_str::<SbbFormationApiResponse>(&body) {
-                Ok(SbbFormationApiResponse::Data(data)) => {
-                    let formation_count = data.formations.len();
-                    let scheduled_stop_count = data.formations_at_scheduled_stops.len();
-                    no_formation_retry_after.remove(&key);
-                    let mut write_guard = store.write().await;
-                    write_guard.insert(key, Some(data));
-                    persist_store(&write_guard);
+            fetch_tasks.spawn(fetch_requests_for_api_key(
+                http_client.clone(),
+                api_key,
+                requests,
+            ));
+        }
 
-                    tracing::info!(
-                        operation_date = %operation_date,
-                        train_number,
-                        formation_count,
-                        scheduled_stop_count,
-                        "Downloaded SBB train formation"
-                    );
-                }
-                Ok(SbbFormationApiResponse::Error { error }) if is_no_formation_error(&error) => {
-                    record_no_formation(
-                        &store,
-                        &mut no_formation_retry_after,
-                        &key,
-                    )
-                    .await;
-
-                    tracing::warn!(
-                        error = %error,
-                        operation_date = %operation_date,
-                        train_number,
-                        retry_after_seconds = NO_FORMATION_RETRY_DELAY.as_secs(),
-                        "SBB formation API reported no formation data; deferring retry"
-                    );
-                }
-                Ok(SbbFormationApiResponse::Error { error }) => {
-                    tracing::error!(
-                        error = %error,
-                        operation_date = %operation_date,
-                        train_number,
-                        "SBB formation API returned an error payload; the request will be retried"
-                    );
-                }
+        while let Some(task_result) = fetch_tasks.join_next().await {
+            let outcomes = match task_result {
+                Ok(outcomes) => outcomes,
                 Err(error) => {
                     tracing::error!(
                         error = %error,
-                        response = %response_preview(&body),
-                        operation_date = %operation_date,
-                        train_number,
-                        "Failed to decode SBB formation response; the request will be retried"
+                        "An SBB formation API-key worker failed"
                     );
+                    continue;
+                }
+            };
+
+            for (request, outcome) in outcomes {
+                let key = request.cache_key();
+
+                match outcome {
+                    FormationFetchOutcome::Data(data) => {
+                        let formation_count = data.formations.len();
+                        let scheduled_stop_count = data.formations_at_scheduled_stops.len();
+                        no_formation_retry_after.remove(&key);
+                        let mut write_guard = store.write().await;
+                        write_guard.insert(key, Some(data));
+                        persist_store(&write_guard);
+
+                        tracing::info!(
+                            operation_date = %request.operation_date,
+                            train_number = request.train_number,
+                            evu = %request.evu,
+                            formation_count,
+                            scheduled_stop_count,
+                            "Downloaded Swiss train formation"
+                        );
+                    }
+                    FormationFetchOutcome::NoFormation(error) => {
+                        record_no_formation(
+                            &store,
+                            &mut no_formation_retry_after,
+                            &key,
+                        )
+                        .await;
+
+                        tracing::warn!(
+                            error = %error,
+                            operation_date = %request.operation_date,
+                            train_number = request.train_number,
+                            evu = %request.evu,
+                            retry_after_seconds = NO_FORMATION_RETRY_DELAY.as_secs(),
+                            "Swiss formation API reported no formation data; deferring retry"
+                        );
+                    }
+                    FormationFetchOutcome::Retry
+                    | FormationFetchOutcome::RateLimited
+                    | FormationFetchOutcome::DisableApiKey => {}
                 }
             }
-
-            sleep(Duration::from_secs(2)).await;
         }
 
         sleep(LOOP_INTERVAL).await;

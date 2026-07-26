@@ -66,6 +66,7 @@ pub struct AspenConfig {
     pub alpenrose_thread_count: Option<usize>,
     pub port: Option<u16>,
     pub sbb_api_key: Option<String>,
+    pub sbb_api_keys: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -286,6 +287,10 @@ impl AspenConfig {
 
         if let Ok(value) = std::env::var("PORT") {
             self.port = value.parse::<u16>().ok().or(self.port);
+        }
+
+        if let Ok(value) = std::env::var("SBB_API_KEYS") {
+            self.sbb_api_keys = Some(parse_comma_separated(&value));
         }
 
         if let Ok(value) = std::env::var("SBB_API_KEY") {
