@@ -201,6 +201,7 @@ pub trait AspenRpc {
     async fn get_sbb_formation(
         train_number: u64,
         operation_date: Option<String>,
+        agency_name: String,
     ) -> Option<crate::sbb_formation_types::SbbFormationData>;
 }
 

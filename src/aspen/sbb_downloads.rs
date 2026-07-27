@@ -23,7 +23,7 @@ use tokio::time::{Duration, sleep};
 pub type SbbFormationStore = Arc<RwLock<HashMap<String, Option<SbbFormationData>>>>;
 
 type RealtimeTripRequests = HashMap<String, HashMap<chrono::NaiveDate, RealtimeTripTiming>>;
-type TrainRequests = HashMap<(String, u64), TrainRequest>;
+type TrainRequests = HashMap<(String, u64, String), TrainRequest>;
 type AgencyKey = (String, String, String);
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -65,9 +65,13 @@ struct TrainRequest {
     timing: RealtimeTripTiming,
 }
 
+pub(super) fn formation_cache_key(operation_date: &str, evu: &str, train_number: u64) -> String {
+    format!("{}_{}_{}", operation_date, evu, train_number)
+}
+
 impl TrainRequest {
     fn cache_key(&self) -> String {
-        format!("{}_{}", self.operation_date, self.train_number)
+        formation_cache_key(&self.operation_date, &self.evu, self.train_number)
     }
 }
 
@@ -313,81 +317,64 @@ fn add_train_requests_from_trip_short_name(
         };
 
         train_requests
-            .entry((operation_date, train_number))
-            .and_modify(|existing| {
-                existing.timing.merge(*timing);
-                if existing.evu == "SBBP" && evu != "SBBP" {
-                    existing.evu = evu.to_string();
-                }
-            })
+            .entry((operation_date, train_number, evu.to_string()))
+            .and_modify(|existing| existing.timing.merge(*timing))
             .or_insert(request);
     }
 }
 
-fn should_block_candidate(
-    &candidate: &ScheduledTrainCandidate,
-    &agency_names: &HashMap<AgencyKey, String>,
-) -> bool {
-    let agency_key = (
-        candidate.onestop_feed_id.clone(),
-        candidate.attempt_id.clone(),
-        agency_id.to_string(),
-    );
+pub(super) fn evu_for_agency_name(agency_name: &str) -> Option<&'static str> {
+    let agency_name = agency_name.trim().to_lowercase();
 
-        if let Some(agency_name) = agency_names.get(&agency_key) {
-            if agency_name.contains("Aargau Verkehr") || agency_name.contains("Aare Seeland mobil") {
-                return true;
-            }
-        }
 
-    return false;
+    if agency_name.contains("sbb")
+        || agency_name.contains("schweizerische bundesbahnen")
+        || agency_name.contains("sbb cff ffs")
+        || agency_name.contains("cff voyageurs")
+        || agency_name.contains("ffs viaggiatori")
+    {
+        Some("SBBP")
+    } else if agency_name.contains("südostbahn") {
+        Some("SOB")
+    } else if agency_name.contains("thurbo") {
+        Some("THURBO")
+    } else if agency_name.contains("zentralbahn") {
+        Some("ZB")
+    } else if agency_name.contains("fribourgeois") {
+        Some("TPF")
+    } else if agency_name.contains("verein dampfbahn bern") {
+        Some("VDBB")
+    } else if agency_name.contains("neuchâtelois") {
+        Some("TRN")
+    } else if agency_name.contains("oensingen-balsthal-bahn") {
+        Some("OeBB")
+    } else if agency_name.contains("morges-bière-cossonay") {
+        Some("MBC")
+    } else if agency_name == "rhb"
+        || agency_name.contains("rhätische bahn")
+        || agency_name.contains("rhaetische bahn")
+    {
+        Some("RhB")
+    } else if agency_name.contains("bls") {
+        Some("BLSP")
+    } else {
+        None
+    }
 }
 
 fn evu_for_candidate(
     candidate: &ScheduledTrainCandidate,
     agency_names: &HashMap<AgencyKey, String>,
-) -> &'static str {
-    let Some(agency_id) = candidate.agency_id.as_deref() else {
-        return "SBBP";
-    };
-
-    if agency_id == "72" {
-        return "RhB";
-    }
-
+) -> Option<&'static str> {
+    let agency_id = candidate.agency_id.as_ref()?;
     let agency_key = (
         candidate.onestop_feed_id.clone(),
         candidate.attempt_id.clone(),
-        agency_id.to_string(),
+        agency_id.clone(),
     );
+    let agency_name = agency_names.get(&agency_key)?;
 
-    let Some(agency_name) = agency_names.get(&agency_key) else {
-        return "SBBP";
-    };
-
-    let agency_name = agency_name.to_lowercase();
-
-    if agency_name.contains("südostbahn") {
-        "SOB"
-    } else if agency_name.contains("thurbo") {
-        "THURBO"
-    } else if agency_name.contains("zentralbahn") {
-        "ZB"
-    } else if agency_name.contains("fribourgeois") {
-        "TPF"
-    } else if agency_name.contains("verein dampfbahn bern") {
-        "VDBB"
-    } else if agency_name.contains("neuchâtelois") {
-        "TRN"
-    } else if agency_name.contains("oensingen-balsthal-bahn") {
-        "OeBB"
-    } else if agency_name.contains("morges-bière-cossonay") {
-        "MBC"
-    } else if agency_name.contains("bls") {
-        "BLS"
-    } else {
-        "SBBP"
-    }
+    evu_for_agency_name(agency_name)
 }
 
 async fn resolve_train_requests(
@@ -516,7 +503,6 @@ async fn resolve_train_requests(
     let agency_ids = candidates
         .iter()
         .filter_map(|candidate| candidate.agency_id.clone())
-        .filter(|agency_id| agency_id != "72")
         .collect::<HashSet<String>>()
         .into_iter()
         .collect::<Vec<String>>();
@@ -545,13 +531,17 @@ async fn resolve_train_requests(
 
     let mut train_requests = HashMap::new();
     for candidate in candidates {
-        let should_block = should_block_candidate(&candidate, &agency_names);
-
-        if should_block {
+        let Some(evu) = evu_for_candidate(&candidate, &agency_names) else {
+            tracing::debug!(
+                trip_id = %candidate.trip_id,
+                onestop_feed_id = %candidate.onestop_feed_id,
+                attempt_id = %candidate.attempt_id,
+                agency_id = ?candidate.agency_id,
+                "Skipping Swiss formation lookup because the GTFS agency does not map to a supported EVU"
+            );
             continue;
-        }
+        };
 
-        let evu = evu_for_candidate(&candidate, &agency_names);
         add_train_requests_from_trip_short_name(
             &candidate.trip_id,
             candidate.trip_short_name.as_deref(),

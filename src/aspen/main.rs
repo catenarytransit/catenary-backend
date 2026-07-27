@@ -202,10 +202,12 @@ impl AspenRpc for AspenServer {
         _context: tarpc::context::Context,
         train_number: u64,
         operation_date: Option<String>,
+        agency_name: String,
     ) -> Option<catenary::sbb_formation_types::SbbFormationData> {
         let date =
             operation_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
-        let key = format!("{}_{}", date, train_number);
+        let evu = sbb_downloads::evu_for_agency_name(&agency_name)?;
+        let key = sbb_downloads::formation_cache_key(&date, evu, train_number);
         let guard = self.sbb_formation_cache.read().await;
         guard.get(&key).cloned().flatten()
     }

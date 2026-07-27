@@ -881,20 +881,25 @@ pub async fn fetch_trip_information(
     let mut agency_name = String::new();
     let agencies_query = crate::schema::gtfs::agencies::dsl::agencies
         .filter(crate::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
+        .filter(
+            crate::schema::gtfs::agencies::dsl::static_onestop_id
+                .eq(&route.onestop_feed_id),
+        )
+        .filter(crate::schema::gtfs::agencies::dsl::attempt_id.eq(&route.attempt_id))
         .select(crate::models::Agency::as_select())
         .load(conn)
         .await;
 
     if let Ok(agencies) = agencies_query {
-        if !agencies.is_empty() {
-            let mut selected_agency = &agencies[0];
-            if let Some(route_agency_id) = &route.agency_id {
-                if let Some(matching_agency) =
-                    agencies.iter().find(|a| a.agency_id == *route_agency_id)
-                {
-                    selected_agency = matching_agency;
-                }
-            }
+        let selected_agency = match &route.agency_id {
+            Some(route_agency_id) => agencies
+                .iter()
+                .find(|agency| agency.agency_id == *route_agency_id),
+            None if agencies.len() == 1 => agencies.get(0),
+            None => None,
+        };
+
+        if let Some(selected_agency) = selected_agency {
             agency_id = selected_agency.agency_id.clone();
             agency_name = selected_agency.agency_name.clone();
         }
@@ -1268,7 +1273,12 @@ pub async fn fetch_trip_information(
                     if let Some(train_number) = train_number_opt {
                         let op_date_str = start_naive_date.format("%Y-%m-%d").to_string();
                         let sbb_res = aspen_client
-                            .get_sbb_formation(context::current(), train_number, Some(op_date_str))
+                            .get_sbb_formation(
+                                context::current(),
+                                train_number,
+                                Some(op_date_str),
+                                agency_name.clone(),
+                            )
                             .await;
                         if let Ok(Some(formation)) = sbb_res {
                             sbb_formation = Some(formation);
