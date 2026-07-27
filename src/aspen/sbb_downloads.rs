@@ -328,7 +328,13 @@ fn should_block_candidate(
     &candidate: &ScheduledTrainCandidate,
     &agency_names: &HashMap<AgencyKey, String>,
 ) -> bool {
-        let Some(agency_name) = agency_names.get(&agency_key) {
+    let agency_key = (
+        candidate.onestop_feed_id.clone(),
+        candidate.attempt_id.clone(),
+        agency_id.to_string(),
+    );
+
+        if let Some(agency_name) = agency_names.get(&agency_key) {
             if agency_name.contains("Aargau Verkehr") || agency_name.contains("Aare Seeland mobil") {
                 return true;
             }
