@@ -324,6 +324,19 @@ fn add_train_requests_from_trip_short_name(
     }
 }
 
+fn should_block_candidate(
+    &candidate: &ScheduledTrainCandidate,
+    &agency_names: &HashMap<AgencyKey, String>,
+) -> bool {
+        let Some(agency_name) = agency_names.get(&agency_key) {
+            if agency_name.contains("Aargau Verkehr") || agency_name.contains("Aare Seeland mobil") {
+                return true;
+            }
+        }
+
+    return false;
+}
+
 fn evu_for_candidate(
     candidate: &ScheduledTrainCandidate,
     agency_names: &HashMap<AgencyKey, String>,
@@ -526,6 +539,12 @@ async fn resolve_train_requests(
 
     let mut train_requests = HashMap::new();
     for candidate in candidates {
+        let should_block = should_block_candidate(&candidate, &agency_names);
+
+        if should_block {
+            continue;
+        }
+
         let evu = evu_for_candidate(&candidate, &agency_names);
         add_train_requests_from_trip_short_name(
             &candidate.trip_id,
