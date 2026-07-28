@@ -4383,13 +4383,16 @@ pub async fn new_rt_data(
         );
     }
 
-    let store = Arc::new(catenary::aspen_dataset::AspenTrajectoryStore {
+    let store = catenary::aspen_dataset::AspenTrajectoryStore {
         geometries,
         patterns,
         trajectories,
         pattern_to_trajectories,
         rtree_by_route_type,
-    });
+    };
+    let (store, compacted_static_data) = persistence::compact_trajectory_store(store);
+    static_changed |= compacted_static_data;
+    let store = Arc::new(store);
 
     set_stage(
         chateau_id,
