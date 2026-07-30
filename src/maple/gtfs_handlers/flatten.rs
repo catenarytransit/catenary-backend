@@ -46,6 +46,10 @@ fn fix_fares(
             .map(|line| line.expect("Failed to read line!"))
             .collect();
 
+        if rider_categories_file_lines.is_empty() {
+            valid_rider_categories = false;
+        }
+
         let first_line = rider_categories_file_lines[0]
             .split(",")
             .map(|x| x.to_string())
