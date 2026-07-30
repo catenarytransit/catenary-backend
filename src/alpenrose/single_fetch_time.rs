@@ -625,7 +625,6 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-                            /*
                             "f-dp3-cta~rt" => {
                                 let chicago_text_lock = chicago_text_str.read().await;
                                 let chicago_gtfs_lock = chicago_gtfs.read().await;
@@ -643,7 +642,6 @@ pub async fn single_fetch_time(
                                     }
                                 }
                             },
-                            */
                              "f-rtcquebec~rt" => {
                                 let rtc_lock = rtcquebec_gtfs.read().await;
                                 if let Some(gtfs) = rtc_lock.as_ref() {
@@ -678,7 +676,7 @@ pub async fn single_fetch_time(
                                 )
                                 .await;
                             }
-                            /* "f-dp3-cta~bus~rt" => {
+                            "f-dp3-cta~bus~rt" => {
                                 let cta_bus_lock = cta_bus_gtfs.read().await;
                                 if let Some(gtfs) = cta_bus_lock.as_ref() {
                                     custom_rt_feeds::cta_bus::fetch_cta_bus_data(
@@ -689,7 +687,7 @@ pub async fn single_fetch_time(
                                     )
                                     .await;
                                 }
-                            }*/
+                            }
                             "f-f244-sto~rt" => {
                                  let _ = custom_rt_feeds::sto_ca::recuperer_les_donnees_sto(
                                      realtime_feed_cache.clone(),
