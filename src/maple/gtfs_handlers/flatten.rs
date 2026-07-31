@@ -48,9 +48,8 @@ fn fix_fares(
 
         if rider_categories_file_lines.is_empty() {
             valid_rider_categories = false;
-        }
-
-        let first_line = rider_categories_file_lines[0]
+        } else {
+             let first_line = rider_categories_file_lines[0]
             .split(",")
             .map(|x| x.to_string())
             .collect::<HashSet<String>>();
@@ -61,6 +60,7 @@ fn fix_fares(
         {
         } else {
             valid_rider_categories = false;
+        }
         }
     }
 
