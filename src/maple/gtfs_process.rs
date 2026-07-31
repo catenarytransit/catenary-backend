@@ -7,6 +7,7 @@ use crate::DownloadedFeedsInformation;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemalloc_ctl::{epoch, thread};
 
+use crate::agency_metadata::CountryIndex;
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
@@ -133,6 +134,7 @@ pub async fn gtfs_process_feed(
     chateau_id: &str,
     attempt_id: &str,
     this_download_data: &DownloadedFeedsInformation,
+    country_index: &CountryIndex,
     elasticclient: Option<&elasticsearch::Elasticsearch>,
 ) -> Result<GtfsSummary, Box<dyn Error + Send + Sync>> {
     let regex_train_starting = regex::RegexBuilder::new(r"^(train)")
@@ -1579,6 +1581,8 @@ pub async fn gtfs_process_feed(
     let timer_stop_id_table = Instant::now();
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
+    let agency_level_0s =
+        country_index.level_0s_for_gtfs(&gtfs, &stop_ids_to_route_ids);
 
     let original_gtfs_nyc_file: Option<Gtfs> = match feed_id {
         "f-dr5r-mtasubway" => {
@@ -1638,9 +1642,10 @@ pub async fn gtfs_process_feed(
             use catenary::schema::gtfs::agencies::dsl::agencies;
 
             if !agency_id_already_done.contains(&agency.id.as_ref()) {
+                let agency_id = agency.id.clone().unwrap_or_default();
                 let agency_row = catenary::models::Agency {
                     static_onestop_id: feed_id.to_string(),
-                    agency_id: agency.id.clone().unwrap_or_else(|| "".to_string()),
+                    agency_id: agency_id.clone(),
                     attempt_id: attempt_id.to_string(),
                     agency_name: agency.name.clone(),
                     agency_name_translations: None,
@@ -1649,6 +1654,19 @@ pub async fn gtfs_process_feed(
                     agency_fare_url: agency.fare_url.clone(),
                     agency_fare_url_translations: None,
                     chateau: chateau_id.to_string(),
+                    unified_agency_id: Some(agency.name.replace(' ', "_")),
+                    level_0s: Some(
+                        agency_level_0s
+                            .get(&agency_id)
+                            .cloned()
+                            .unwrap_or_default(),
+                    ),
+                    level_1s: None,
+                    has_rail: false,
+                    has_tram: false,
+                    has_metro: false,
+                    has_ferry: false,
+                    has_bus: false,
                     agency_lang: agency.lang.clone(),
                     agency_phone: agency.phone.clone(),
                     agency_timezone: agency.timezone.clone(),

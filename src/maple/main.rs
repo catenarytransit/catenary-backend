@@ -60,12 +60,14 @@ use std::error::Error;
 use std::fs;
 mod anteater_express_gtfs;
 mod delete_overlapping_feeds_dmfr;
+use std::path::PathBuf;
 use std::sync::Arc;
 pub mod correction_of_transfers;
 use crate::cleanup::delete_attempt_objects;
 use crate::cleanup::wipe_whole_feed;
 use discord_webhook_rs::{Author, Embed, Field, Footer, Webhook};
 
+mod agency_metadata;
 mod assign_production_tables;
 mod chateau_postprocess;
 mod cleanup;
@@ -80,6 +82,7 @@ mod shapes_reader;
 mod transitland_download;
 mod update_schedules_with_new_chateau_id;
 
+use agency_metadata::CountryIndex;
 use gtfs_process::gtfs_process_feed;
 
 use chateau::chateau;
@@ -100,6 +103,12 @@ struct Args {
     use_girolle: Option<bool>,
     #[arg(long)]
     no_elastic: bool,
+    #[arg(
+        long,
+        env = "COUNTRY_GEOJSON",
+        default_value = "CNTR_RG_03M_2024_4326.geojson"
+    )]
+    country_geojson: PathBuf,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -117,6 +126,8 @@ enum Commands {
         #[arg(long)]
         feed_id: String,
     },
+    /// Recompute agency country coverage and refresh generated unified IDs
+    RefreshAgencyMetadata,
 }
 
 fn get_threads_gtfs(maple_config: &catenaryconfig::MapleConfig) -> usize {
@@ -138,6 +149,24 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         .or_else(|| maple_config.discord_log.clone());
 
     // Check for subcommand
+    if let Some(Commands::RefreshAgencyMetadata) = &args.command {
+        let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
+        let country_index = CountryIndex::from_geojson(&args.country_geojson)?;
+        let updated_level_0s = agency_metadata::backfill_all_agency_level_0s(
+            &conn_pool,
+            &country_index,
+        )
+        .await?;
+        let updated_unified_ids =
+            agency_metadata::refresh_unified_agency_ids(&conn_pool).await?;
+
+        println!(
+            "Refreshed level_0s for {} agencies and unified_agency_id for {} agencies",
+            updated_level_0s, updated_unified_ids
+        );
+        return Ok(());
+    }
+
     if let Some(Commands::MatchOsm { feed_id }) = &args.command {
         return run_match_only(feed_id.clone()).await;
     }
@@ -285,6 +314,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // get connection pool from database pool
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
+    let country_index = Arc::new(CountryIndex::from_geojson(&args.country_geojson)?);
 
     //Download Girolle data if it exists and deserialise it with Ron Btreemap<string, girollefeeddownloadresult>
 
@@ -761,6 +791,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 let arc_conn_pool = Arc::clone(&arc_conn_pool);
                 let download_feed_info_hashmap = Arc::clone(&download_feed_info_hashmap);
                 let ingest_progress = Arc::clone(&ingest_progress);
+                let country_index = Arc::clone(&country_index);
                 let elasticclient = elasticclient.clone();
                 let discord_log_env = discord_log_env.clone();
 
@@ -839,6 +870,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             &chateau_id,
                             &attempt_id,
                             this_download_data,
+                            country_index.as_ref(),
                             elasticclient.as_deref(),
                         )
                         .await;
@@ -1257,6 +1289,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     } else {
         eprintln!("Not enough data in transitland!");
     }
+
+    let updated_unified_ids =
+        agency_metadata::refresh_unified_agency_ids(arc_conn_pool.as_ref()).await?;
+    println!(
+        "Refreshed unified_agency_id for {} agency rows",
+        updated_unified_ids
+    );
 
     println!("Maple ingest completed");
 

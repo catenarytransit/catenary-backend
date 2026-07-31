@@ -252,6 +252,35 @@ pub struct Agency {
     pub agency_fare_url: Option<String>,
     pub agency_fare_url_translations: Option<Value>,
     pub chateau: String,
+    pub unified_agency_id: Option<String>,
+    pub level_0s: Option<Vec<Option<String>>>,
+    pub level_1s: Option<Vec<Option<String>>>,
+    pub has_rail: bool,
+    pub has_tram: bool,
+    pub has_metro: bool,
+    pub has_ferry: bool,
+    pub has_bus: bool,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::unified_agency)]
+#[diesel(check_for_backend(diesel::pg::Pg))]
+pub struct UnifiedAgency {
+    pub id: String,
+    pub name: String,
+    pub name_translations: Option<Value>,
+    pub primary_level_0: Option<String>,
+    pub primary_level_1: Option<String>,
+    pub has_rail: bool,
+    pub has_tram: bool,
+    pub has_metro: bool,
+    pub has_ferry: bool,
+    pub has_bus: bool,
+    pub is_national_railway_operator: bool,
+    pub no_home_country_europe: bool,
+    pub chateaux: Vec<Option<String>>,
+    pub level_0s: Option<Vec<Option<String>>>,
+    pub level_1s: Option<Vec<Option<String>>>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]
