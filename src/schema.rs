@@ -34,6 +34,13 @@ pub mod gtfs {
             agency_fare_url_translations -> Nullable<Jsonb>,
             chateau -> Text,
             unified_agency_id -> Nullable<Text>,
+            level_0s -> Nullable<Array<Nullable<Text>>>,
+            level_1s -> Nullable<Array<Nullable<Text>>>,
+            has_rail -> Bool,
+            has_tram -> Bool,
+            has_metro -> Bool,
+            has_ferry -> Bool,
+            has_bus -> Bool,
         }
     }
 

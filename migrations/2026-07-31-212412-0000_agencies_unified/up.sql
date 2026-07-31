@@ -18,5 +18,12 @@ CREATE TABLE gtfs.unified_agency (
 );
 
 ALTER TABLE gtfs.agencies ADD COLUMN unified_agency_id TEXT;
+ALTER TABLE gtfs.agencies ADD COLUMN level_0s TEXT[];
+ALTER TABLE gtfs.agencies ADD COLUMN level_1s TEXT[];
+ALTER TABLE gtfs.agencies ADD COLUMN has_rail BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE gtfs.agencies ADD COLUMN has_tram BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE gtfs.agencies ADD COLUMN has_metro BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE gtfs.agencies ADD COLUMN has_ferry BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE gtfs.agencies ADD COLUMN has_bus BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX idx_agencies_unified_agency_id ON gtfs.agencies (unified_agency_id);
