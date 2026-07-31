@@ -33,6 +33,7 @@ pub mod gtfs {
             agency_fare_url -> Nullable<Text>,
             agency_fare_url_translations -> Nullable<Jsonb>,
             chateau -> Text,
+            unified_agency_id -> Nullable<Text>,
         }
     }
 
@@ -649,6 +650,30 @@ pub mod gtfs {
         use diesel::sql_types::*;
         use crate::custom_pg_types::*;
 
+        gtfs.unified_agency (id) {
+            id -> Text,
+            name -> Text,
+            name_translations -> Nullable<Jsonb>,
+            primary_level_0 -> Nullable<Text>,
+            primary_level_1 -> Nullable<Text>,
+            has_rail -> Bool,
+            has_tram -> Bool,
+            has_metro -> Bool,
+            has_ferry -> Bool,
+            has_bus -> Bool,
+            is_national_railway_operator -> Bool,
+            no_home_country_europe -> Bool,
+            chateaux -> Array<Nullable<Text>>,
+            level_0s -> Nullable<Array<Nullable<Text>>>,
+            level_1s -> Nullable<Array<Nullable<Text>>>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
         gtfs.vehicles (file_path, key_str) {
             file_path -> Text,
             starting_range -> Nullable<Int4>,
@@ -704,6 +729,7 @@ pub mod gtfs {
         tile_storage,
         trip_frequencies,
         trips_compressed,
+        unified_agency,
         vehicles,
     );
 }
