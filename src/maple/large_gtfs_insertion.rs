@@ -3,6 +3,7 @@
 // Removal of attribution is not allowed, AGPL license
 
 use crate::DownloadedFeedsInformation;
+use crate::agency_metadata::unified_agency_id_for;
 use crate::gtfs_handlers::colour_correction::{
     fix_background_colour_rgb_feed_route, fix_foreground_colour_rgb_feed,
 };
@@ -347,7 +348,7 @@ pub async fn gtfs_process_large_feed(
                     agency_fare_url: agency.fare_url.clone(),
                     agency_fare_url_translations: None,
                     chateau: chateau_id.to_string(),
-                    unified_agency_id: Some(agency.name.replace(' ', "_")),
+                    unified_agency_id: Some(unified_agency_id_for(&agency.name, &agency.url)),
                     level_0s: None,
                     level_1s: None,
                     has_rail: false,

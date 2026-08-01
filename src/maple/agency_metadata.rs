@@ -7,12 +7,142 @@ use geo::{BoundingRect, Intersects};
 use geo_types::{Geometry, Point};
 use geojson::GeoJson;
 use rstar::{AABB, RTree, RTreeObject};
+use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::convert::TryInto;
 use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::LazyLock;
+use url::{Host, Url};
+
+#[derive(Debug, Deserialize)]
+struct UnifiedAgencyIdRules {
+    #[serde(default)]
+    generic_names: Vec<String>,
+    #[serde(default)]
+    exceptions: Vec<UnifiedAgencyIdException>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnifiedAgencyIdException {
+    unified_id: String,
+    #[serde(default)]
+    agency_name_equals: Vec<String>,
+    #[serde(default)]
+    agency_name_contains: Vec<String>,
+    #[serde(default)]
+    agency_url_host_suffixes: Vec<String>,
+}
+
+static UNIFIED_AGENCY_ID_RULES: LazyLock<UnifiedAgencyIdRules> = LazyLock::new(|| {
+    toml::from_str(include_str!("unified_agency_id_exceptions.toml"))
+        .expect("invalid unified agency ID exception definitions")
+});
+
+impl UnifiedAgencyIdException {
+    fn matches(&self, agency_name: &str, agency_url_host: Option<&str>) -> bool {
+        let normalized_name = agency_name.trim().to_lowercase();
+        let has_matcher = !self.agency_name_equals.is_empty()
+            || !self.agency_name_contains.is_empty()
+            || !self.agency_url_host_suffixes.is_empty();
+
+        has_matcher
+            && (self.agency_name_equals.is_empty()
+                || self
+                    .agency_name_equals
+                    .iter()
+                    .any(|name| agency_name.trim().eq_ignore_ascii_case(name.trim())))
+            && (self.agency_name_contains.is_empty()
+                || self
+                    .agency_name_contains
+                    .iter()
+                    .any(|fragment| normalized_name.contains(&fragment.trim().to_lowercase())))
+            && (self.agency_url_host_suffixes.is_empty()
+                || agency_url_host.is_some_and(|host| {
+                    self.agency_url_host_suffixes
+                        .iter()
+                        .any(|suffix| host_matches_suffix(host, suffix))
+                }))
+    }
+}
+
+fn host_matches_suffix(host: &str, suffix: &str) -> bool {
+    let suffix = suffix
+        .trim()
+        .trim_start_matches('.')
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+
+    !suffix.is_empty() && (host == suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn agency_url_host(agency_url: &str) -> Option<String> {
+    let parsed = Url::parse(agency_url)
+        .or_else(|_| Url::parse(&format!("https://{agency_url}")))
+        .ok()?;
+
+    match parsed.host()? {
+        Host::Domain(host) => Some(host.trim_end_matches('.').to_ascii_lowercase()),
+        Host::Ipv4(_) | Host::Ipv6(_) => None,
+    }
+}
+
+fn domain_name_without_tld(host: &str) -> Option<&str> {
+    const COMMON_SECOND_LEVEL_DOMAINS: &[&str] =
+        &["ac", "co", "com", "edu", "gov", "net", "org"];
+
+    let labels = host
+        .split('.')
+        .filter(|label| !label.is_empty())
+        .collect::<Vec<_>>();
+
+    match labels.len() {
+        0 => None,
+        1 => labels.first().copied(),
+        len => {
+            let tld = labels[len - 1];
+            let second_level = labels[len - 2];
+            let domain_index = if len >= 3
+                && tld.len() == 2
+                && COMMON_SECOND_LEVEL_DOMAINS.contains(&second_level)
+            {
+                len - 3
+            } else {
+                len - 2
+            };
+
+            labels.get(domain_index).copied()
+        }
+    }
+}
+
+pub fn unified_agency_id_for(agency_name: &str, agency_url: &str) -> String {
+    let agency_url_host = agency_url_host(agency_url);
+
+    if let Some(exception) = UNIFIED_AGENCY_ID_RULES
+        .exceptions
+        .iter()
+        .find(|exception| exception.matches(agency_name, agency_url_host.as_deref()))
+    {
+        return exception.unified_id.clone();
+    }
+
+    if UNIFIED_AGENCY_ID_RULES
+        .generic_names
+        .iter()
+        .any(|name| agency_name.trim().eq_ignore_ascii_case(name.trim()))
+    {
+        if let Some(host) = agency_url_host.as_deref() {
+            if let Some(domain_name) = domain_name_without_tld(host) {
+                return domain_name.to_string();
+            }
+        }
+    }
+
+    agency_name.replace(' ', "_")
+}
 
 #[derive(Clone)]
 struct IndexedCountry {
@@ -192,17 +322,47 @@ struct AgencyStopPoint {
 pub async fn refresh_unified_agency_ids(
     pool: &CatenaryPostgresPool,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    let mut conn = pool.get().await?;
+    use catenary::schema::gtfs::agencies::dsl;
 
-    let updated = diesel::sql_query(
-        r#"
-        UPDATE gtfs.agencies
-        SET unified_agency_id = replace(agency_name, ' ', '_')
-        WHERE unified_agency_id IS DISTINCT FROM replace(agency_name, ' ', '_')
-        "#,
-    )
-    .execute(&mut conn)
-    .await?;
+    let mut conn = pool.get().await?;
+    let agency_rows = dsl::agencies
+        .select((
+            dsl::static_onestop_id,
+            dsl::attempt_id,
+            dsl::agency_id,
+            dsl::agency_name,
+            dsl::agency_url,
+            dsl::unified_agency_id,
+        ))
+        .load::<(String, String, String, String, String, Option<String>)>(&mut conn)
+        .await?;
+
+    let mut updated = 0;
+
+    for (
+        static_onestop_id,
+        attempt_id,
+        agency_id,
+        agency_name,
+        agency_url,
+        current_unified_agency_id,
+    ) in agency_rows
+    {
+        let generated_unified_agency_id = unified_agency_id_for(&agency_name, &agency_url);
+        if current_unified_agency_id.as_deref() == Some(generated_unified_agency_id.as_str()) {
+            continue;
+        }
+
+        updated += diesel::update(
+            dsl::agencies
+                .filter(dsl::static_onestop_id.eq(static_onestop_id))
+                .filter(dsl::attempt_id.eq(attempt_id))
+                .filter(dsl::agency_id.eq(agency_id)),
+        )
+        .set(dsl::unified_agency_id.eq(Some(generated_unified_agency_id)))
+        .execute(&mut conn)
+        .await?;
+    }
 
     Ok(updated)
 }
@@ -291,4 +451,53 @@ pub async fn backfill_all_agency_level_0s(
     }
 
     Ok(refreshed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unified_agency_id_for;
+
+    #[test]
+    fn separates_translink_agencies_by_url() {
+        assert_eq!(
+            unified_agency_id_for("TransLink", "https://translink.com.au/"),
+            "translink-au"
+        );
+        assert_eq!(
+            unified_agency_id_for("Translink", "https://www.translink.ca/"),
+            "translink-ca"
+        );
+    }
+
+    #[test]
+    fn collapses_sbb_names() {
+        assert_eq!(
+            unified_agency_id_for("SBB CFF FFS", "https://www.sbb.ch/"),
+            "sbb"
+        );
+    }
+
+    #[test]
+    fn generic_names_use_the_url_domain() {
+        assert_eq!(
+            unified_agency_id_for("Metro", "https://www.metro.net/"),
+            "metro"
+        );
+        assert_eq!(
+            unified_agency_id_for("Metrolink", "https://metrolinktrains.com/"),
+            "metrolinktrains"
+        );
+        assert_eq!(
+            unified_agency_id_for("Metro", "https://www.example.co.uk/metro"),
+            "example"
+        );
+    }
+
+    #[test]
+    fn preserves_the_existing_default_format() {
+        assert_eq!(
+            unified_agency_id_for("Los Angeles Metro", "https://www.metro.net/"),
+            "Los_Angeles_Metro"
+        );
+    }
 }

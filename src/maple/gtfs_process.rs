@@ -7,7 +7,7 @@ use crate::DownloadedFeedsInformation;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemalloc_ctl::{epoch, thread};
 
-use crate::agency_metadata::CountryIndex;
+use crate::agency_metadata::{CountryIndex, unified_agency_id_for};
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
@@ -1654,7 +1654,7 @@ pub async fn gtfs_process_feed(
                     agency_fare_url: agency.fare_url.clone(),
                     agency_fare_url_translations: None,
                     chateau: chateau_id.to_string(),
-                    unified_agency_id: Some(agency.name.replace(' ', "_")),
+                    unified_agency_id: Some(unified_agency_id_for(&agency.name, &agency.url)),
                     level_0s: Some(
                         agency_level_0s
                             .get(&agency_id)

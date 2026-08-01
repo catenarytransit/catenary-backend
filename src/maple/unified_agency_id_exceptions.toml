@@ -1,0 +1,18 @@
+# Rules are evaluated in order before the generic-name fallback.
+# Name matching is case-insensitive; URL hosts match exact domains or subdomains.
+
+generic_names = ["metro", "metrolink"]
+
+[[exceptions]]
+unified_id = "translink-au"
+agency_name_equals = ["translink"]
+agency_url_host_suffixes = ["translink.com.au"]
+
+[[exceptions]]
+unified_id = "translink-ca"
+agency_name_equals = ["translink"]
+agency_url_host_suffixes = ["translink.ca"]
+
+[[exceptions]]
+unified_id = "sbb"
+agency_name_contains = ["sbb"]
