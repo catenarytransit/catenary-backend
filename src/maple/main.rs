@@ -1444,6 +1444,6 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
 }
 
 #[tokio::main]
-async fn main() {
-    let _ = run_ingest().await;
+async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
+    run_ingest().await
 }
