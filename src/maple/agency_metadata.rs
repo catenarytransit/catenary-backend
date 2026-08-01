@@ -3,8 +3,9 @@ use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use futures::{stream, StreamExt, TryStreamExt};
 use geo::{BoundingRect, Intersects};
-use geo_types::{Geometry, Point};
+use geo_types::{Geometry, Point as GeoPoint};
 use geojson::GeoJson;
+use postgis_diesel::types::Point as PgPoint;
 use rayon::prelude::*;
 use rstar::{AABB, RTree, RTreeObject};
 use serde::Deserialize;
@@ -13,10 +14,12 @@ use std::convert::TryInto;
 use std::error::Error;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use std::time::Instant;
 use url::{Host, Url};
+
+pub(crate) type PgPolygon = postgis_diesel::types::Polygon<PgPoint>;
 
 #[derive(Debug, Deserialize)]
 struct UnifiedAgencyIdRules {
@@ -153,13 +156,13 @@ pub fn unified_agency_id_for(agency_name: &str, agency_url: &str) -> String {
 }
 
 #[derive(Clone)]
-struct IndexedCountry {
+struct IndexedArea {
     id: String,
     geometry: Geometry<f64>,
     envelope: AABB<[f64; 2]>,
 }
 
-impl RTreeObject for IndexedCountry {
+impl RTreeObject for IndexedArea {
     type Envelope = AABB<[f64; 2]>;
 
     fn envelope(&self) -> Self::Envelope {
@@ -167,55 +170,182 @@ impl RTreeObject for IndexedCountry {
     }
 }
 
-pub struct CountryIndex {
-    countries: RTree<IndexedCountry>,
+#[derive(Clone, Copy, Debug)]
+struct CoordinateBounds {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
 }
 
-impl CountryIndex {
-    pub fn from_geojson(
-        path: &Path,
-    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
-        let raw = fs::read_to_string(path)?;
-        let geojson = raw.parse::<GeoJson>()?;
-        let GeoJson::FeatureCollection(collection) = geojson else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "country boundary GeoJSON must be a FeatureCollection",
-            )
-            .into());
+impl CoordinateBounds {
+    fn from_coordinate(longitude: f64, latitude: f64) -> Option<Self> {
+        (longitude.is_finite() && latitude.is_finite()).then_some(Self {
+            min_x: longitude,
+            min_y: latitude,
+            max_x: longitude,
+            max_y: latitude,
+        })
+    }
+
+    fn add_coordinate(target: &mut Option<Self>, longitude: f64, latitude: f64) {
+        Self::add_bounds(target, Self::from_coordinate(longitude, latitude));
+    }
+
+    fn add_bounds(target: &mut Option<Self>, additional: Option<Self>) {
+        let Some(additional) = additional else {
+            return;
         };
 
-        let mut countries = Vec::with_capacity(collection.features.len());
+        match target {
+            Some(current) => {
+                current.min_x = current.min_x.min(additional.min_x);
+                current.min_y = current.min_y.min(additional.min_y);
+                current.max_x = current.max_x.max(additional.max_x);
+                current.max_y = current.max_y.max(additional.max_y);
+            }
+            None => *target = Some(additional),
+        }
+    }
 
-        for feature in collection.features {
-            let Some(country_id) = feature
+    fn from_polygon(polygon: &PgPolygon) -> Option<Self> {
+        let mut bounds = None;
+        for point in polygon.rings.iter().flatten() {
+            Self::add_coordinate(&mut bounds, point.x, point.y);
+        }
+        bounds
+    }
+
+    fn to_polygon(self) -> PgPolygon {
+        let srid = Some(4326);
+        PgPolygon {
+            rings: vec![vec![
+                PgPoint::new(self.min_x, self.min_y, srid),
+                PgPoint::new(self.max_x, self.min_y, srid),
+                PgPoint::new(self.max_x, self.max_y, srid),
+                PgPoint::new(self.min_x, self.max_y, srid),
+                PgPoint::new(self.min_x, self.min_y, srid),
+            ]],
+            srid,
+        }
+    }
+
+    fn as_array(self) -> [f64; 4] {
+        [self.min_x, self.min_y, self.max_x, self.max_y]
+    }
+}
+
+#[derive(Clone, Default)]
+struct SpatialAccumulator {
+    level_0s: BTreeSet<String>,
+    level_1s: BTreeSet<String>,
+    bbox: Option<CoordinateBounds>,
+}
+
+impl SpatialAccumulator {
+    fn merge(&mut self, other: Self) {
+        self.level_0s.extend(other.level_0s);
+        self.level_1s.extend(other.level_1s);
+        CoordinateBounds::add_bounds(&mut self.bbox, other.bbox);
+    }
+
+    fn into_metadata(self) -> AgencySpatialMetadata {
+        AgencySpatialMetadata {
+            level_0s: self.level_0s.into_iter().map(Some).collect(),
+            level_1s: self.level_1s.into_iter().map(Some).collect(),
+            bbox: self.bbox.map(CoordinateBounds::to_polygon),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AgencySpatialMetadata {
+    pub(crate) level_0s: Vec<Option<String>>,
+    pub(crate) level_1s: Vec<Option<String>>,
+    pub(crate) bbox: Option<PgPolygon>,
+}
+
+fn indexed_areas_from_geojson(
+    path: &Path,
+    id_property: &str,
+) -> Result<Vec<IndexedArea>, Box<dyn Error + Send + Sync>> {
+    let raw = fs::read_to_string(path)?;
+    let geojson = raw.parse::<GeoJson>()?;
+    let GeoJson::FeatureCollection(collection) = geojson else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} must contain a GeoJSON FeatureCollection", path.display()),
+        )
+        .into());
+    };
+
+    collection
+        .features
+        .into_iter()
+        .filter_map(|feature| {
+            let area_id = feature
                 .properties
                 .as_ref()
-                .and_then(|properties| properties.get("CNTR_ID"))
-                .and_then(|value| value.as_str())
-            else {
-                continue;
-            };
+                .and_then(|properties| properties.get(id_property))
+                .and_then(|value| value.as_str())?
+                .trim();
+            if area_id.is_empty() {
+                return None;
+            }
 
-            let Some(geometry) = feature.geometry else {
-                continue;
-            };
-
+            let geometry = feature.geometry?;
+            Some((area_id.to_string(), geometry))
+        })
+        .map(|(id, geometry)| {
             let geometry: Geometry<f64> = geometry.try_into()?;
-            let Some(bounds) = geometry.bounding_rect() else {
-                continue;
-            };
+            let bounds = geometry.bounding_rect().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{id_property}={id} has an empty geometry"),
+                )
+            })?;
 
-            countries.push(IndexedCountry {
-                id: country_id.to_string(),
+            Ok(IndexedArea {
+                id,
                 envelope: AABB::from_corners(
                     [bounds.min().x, bounds.min().y],
                     [bounds.max().x, bounds.max().y],
                 ),
                 geometry,
-            });
-        }
+            })
+        })
+        .collect()
+}
 
+fn level_1_geojson_paths(
+    directory: &Path,
+) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
+    let mut paths = fs::read_dir(directory)?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    paths.retain(|path| {
+        path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("gadm41_") && name.ends_with("_1.json"))
+    });
+    paths.sort();
+    Ok(paths)
+}
+
+pub struct CountryIndex {
+    countries: RTree<IndexedArea>,
+    level_1s: RTree<IndexedArea>,
+}
+
+impl CountryIndex {
+    pub fn from_geojson(
+        country_path: &Path,
+        level_1_directory: &Path,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let countries = indexed_areas_from_geojson(country_path, "CNTR_ID")?;
         if countries.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -224,36 +354,78 @@ impl CountryIndex {
             .into());
         }
 
+        let level_1_paths = level_1_geojson_paths(level_1_directory)?;
+        if level_1_paths.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} does not contain any gadm41_*_1.json files",
+                    level_1_directory.display()
+                ),
+            )
+            .into());
+        }
+
+        let level_1_groups = level_1_paths
+            .par_iter()
+            .map(|path| indexed_areas_from_geojson(path, "ISO_1"))
+            .collect::<Result<Vec<_>, _>>()?;
+        let level_1s = level_1_groups.into_iter().flatten().collect::<Vec<_>>();
+        if level_1s.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "level-1 boundary files did not contain any ISO_1 geometries",
+            )
+            .into());
+        }
+
         Ok(Self {
             countries: RTree::bulk_load(countries),
+            level_1s: RTree::bulk_load(level_1s),
         })
     }
 
-    fn country_ids_for_coordinate(&self, longitude: f64, latitude: f64) -> Vec<String> {
-        let point = Point::new(longitude, latitude);
+    fn area_ids_for_coordinate(
+        index: &RTree<IndexedArea>,
+        longitude: f64,
+        latitude: f64,
+    ) -> Vec<String> {
+        if !longitude.is_finite() || !latitude.is_finite() {
+            return Vec::new();
+        }
+
+        let point = GeoPoint::new(longitude, latitude);
         let envelope = AABB::from_point([longitude, latitude]);
 
-        self.countries
+        index
             .locate_in_envelope_intersecting(&envelope)
-            .filter(|country| country.geometry.intersects(&point))
-            .map(|country| country.id.clone())
+            .filter(|area| area.geometry.intersects(&point))
+            .map(|area| area.id.clone())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect()
     }
 
-    pub fn level_0s_for_gtfs(
+    fn country_ids_for_coordinate(&self, longitude: f64, latitude: f64) -> Vec<String> {
+        Self::area_ids_for_coordinate(&self.countries, longitude, latitude)
+    }
+
+    fn level_1_ids_for_coordinate(&self, longitude: f64, latitude: f64) -> Vec<String> {
+        Self::area_ids_for_coordinate(&self.level_1s, longitude, latitude)
+    }
+
+    pub fn spatial_metadata_for_gtfs(
         &self,
         gtfs: &gtfs_structures::Gtfs,
         stop_ids_to_route_ids: &HashMap<String, Vec<String>>,
-    ) -> HashMap<String, Vec<Option<String>>> {
-        let mut countries_by_agency: HashMap<String, BTreeSet<String>> = gtfs
+    ) -> HashMap<String, AgencySpatialMetadata> {
+        let mut metadata_by_agency: HashMap<String, SpatialAccumulator> = gtfs
             .agencies
             .iter()
             .map(|agency| {
                 (
                     agency.id.clone().unwrap_or_default(),
-                    BTreeSet::<String>::new(),
+                    SpatialAccumulator::default(),
                 )
             })
             .collect();
@@ -268,9 +440,7 @@ impl CountryIndex {
             let (Some(latitude), Some(longitude)) = (stop.latitude, stop.longitude) else {
                 continue;
             };
-
-            let country_ids = self.country_ids_for_coordinate(longitude, latitude);
-            if country_ids.is_empty() {
+            if !latitude.is_finite() || !longitude.is_finite() {
                 continue;
             }
 
@@ -285,55 +455,57 @@ impl CountryIndex {
                     .map(str::to_owned)
                 })
                 .collect::<HashSet<_>>();
+            if agency_ids.is_empty() {
+                continue;
+            }
+
+            let country_ids = self.country_ids_for_coordinate(longitude, latitude);
+            let level_1_ids = self.level_1_ids_for_coordinate(longitude, latitude);
 
             for agency_id in agency_ids {
-                countries_by_agency
-                    .entry(agency_id)
-                    .or_default()
-                    .extend(country_ids.iter().cloned());
+                let metadata = metadata_by_agency.entry(agency_id).or_default();
+                metadata.level_0s.extend(country_ids.iter().cloned());
+                metadata.level_1s.extend(level_1_ids.iter().cloned());
+                CoordinateBounds::add_coordinate(&mut metadata.bbox, longitude, latitude);
             }
         }
 
-        countries_by_agency
+        metadata_by_agency
             .into_iter()
-            .map(|(agency_id, country_ids)| {
-                (
-                    agency_id,
-                    country_ids.into_iter().map(Some).collect::<Vec<_>>(),
-                )
-            })
+            .map(|(agency_id, metadata)| (agency_id, metadata.into_metadata()))
             .collect()
     }
 }
 
 const STOP_CHUNK_SIZE: i64 = 5_000;
+const AGENCY_ROW_CHUNK_SIZE: i64 = 5_000;
 const MAX_CONCURRENT_FEEDS: usize = 8;
 
 struct FeedChunkAccumulator {
-    countries_by_agency: Vec<BTreeSet<String>>,
+    spatial_by_agency: Vec<SpatialAccumulator>,
     stop_counts_by_agency: Vec<usize>,
 }
 
 impl FeedChunkAccumulator {
     fn new(agency_count: usize) -> Self {
         Self {
-            countries_by_agency: vec![BTreeSet::new(); agency_count],
+            spatial_by_agency: vec![SpatialAccumulator::default(); agency_count],
             stop_counts_by_agency: vec![0; agency_count],
         }
     }
 
     fn merge(mut self, other: Self) -> Self {
         let Self {
-            countries_by_agency,
+            spatial_by_agency,
             stop_counts_by_agency,
         } = other;
 
         for (current, additional) in self
-            .countries_by_agency
+            .spatial_by_agency
             .iter_mut()
-            .zip(countries_by_agency)
+            .zip(spatial_by_agency)
         {
-            current.extend(additional);
+            current.merge(additional);
         }
 
         for (current, additional) in self
@@ -354,61 +526,97 @@ pub async fn refresh_unified_agency_ids(
     use catenary::schema::gtfs::agencies::dsl;
 
     let mut conn = pool.get().await?;
-    let agency_rows = dsl::agencies
-        .select((
-            dsl::static_onestop_id,
-            dsl::attempt_id,
-            dsl::agency_id,
-            dsl::agency_name,
-            dsl::agency_url,
-            dsl::unified_agency_id,
-        ))
-        .load::<(String, String, String, String, String, Option<String>)>(&mut conn)
-        .await?;
+    let mut updated = 0usize;
+    let mut offset = 0i64;
 
-    let mut updated = 0;
+    loop {
+        let agency_rows = dsl::agencies
+            .order((
+                dsl::static_onestop_id.asc(),
+                dsl::attempt_id.asc(),
+                dsl::agency_id.asc(),
+            ))
+            .limit(AGENCY_ROW_CHUNK_SIZE)
+            .offset(offset)
+            .select((
+                dsl::static_onestop_id,
+                dsl::attempt_id,
+                dsl::agency_id,
+                dsl::agency_name,
+                dsl::agency_url,
+                dsl::unified_agency_id,
+            ))
+            .load::<(String, String, String, String, String, Option<String>)>(&mut conn)
+            .await?;
 
-    for (
-        static_onestop_id,
-        attempt_id,
-        agency_id,
-        agency_name,
-        agency_url,
-        current_unified_agency_id,
-    ) in agency_rows
-    {
-        let generated_unified_agency_id = unified_agency_id_for(&agency_name, &agency_url);
-        if current_unified_agency_id.as_deref() == Some(generated_unified_agency_id.as_str()) {
-            continue;
+        if agency_rows.is_empty() {
+            break;
         }
 
-        updated += diesel::update(
-            dsl::agencies
-                .filter(dsl::static_onestop_id.eq(static_onestop_id))
-                .filter(dsl::attempt_id.eq(attempt_id))
-                .filter(dsl::agency_id.eq(agency_id)),
-        )
-        .set(dsl::unified_agency_id.eq(Some(generated_unified_agency_id)))
-        .execute(&mut conn)
-        .await?;
+        let row_count = agency_rows.len();
+        let pending_updates = agency_rows
+            .into_par_iter()
+            .filter_map(
+                |(
+                    static_onestop_id,
+                    attempt_id,
+                    agency_id,
+                    agency_name,
+                    agency_url,
+                    current_unified_agency_id,
+                )| {
+                    let generated_unified_agency_id =
+                        unified_agency_id_for(&agency_name, &agency_url);
+                    (current_unified_agency_id.as_deref()
+                        != Some(generated_unified_agency_id.as_str()))
+                    .then_some((
+                        static_onestop_id,
+                        attempt_id,
+                        agency_id,
+                        generated_unified_agency_id,
+                    ))
+                },
+            )
+            .collect::<Vec<_>>();
+
+        for (static_onestop_id, attempt_id, agency_id, generated_unified_agency_id) in
+            pending_updates
+        {
+            updated += diesel::update(
+                dsl::agencies
+                    .filter(dsl::static_onestop_id.eq(static_onestop_id))
+                    .filter(dsl::attempt_id.eq(attempt_id))
+                    .filter(dsl::agency_id.eq(agency_id)),
+            )
+            .set(dsl::unified_agency_id.eq(Some(generated_unified_agency_id)))
+            .execute(&mut conn)
+            .await?;
+        }
+
+        if row_count < AGENCY_ROW_CHUNK_SIZE as usize {
+            break;
+        }
+        offset += row_count as i64;
     }
 
     Ok(updated)
 }
 
-async fn process_feed_agency_level_0s(
+async fn process_feed_agency_spatial_metadata(
     pool: &CatenaryPostgresPool,
     country_index: &CountryIndex,
     static_onestop_id: String,
     attempt_id: String,
     agency_ids: Vec<String>,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    use catenary::schema::gtfs::{agencies, routes, stops};
+    use catenary::schema::gtfs::agencies::dsl as agencies;
+    use catenary::schema::gtfs::routes::dsl as routes;
+    use catenary::schema::gtfs::stops::dsl as stops;
 
     let started = Instant::now();
     for agency_id in &agency_ids {
         println!(
-            "[agency-level-0s] processing agency static_onestop_id={} attempt_id={} agency_id={}",
+            "[agency-spatial-metadata] processing agency static_onestop_id={} attempt_id={} agency_id={}",
             static_onestop_id, attempt_id, agency_id
         );
     }
@@ -500,12 +708,25 @@ async fn process_feed_agency_level_0s(
                         let Some(point) = point.as_ref() else {
                             return accumulator;
                         };
+                        if !point.x.is_finite() || !point.y.is_finite() {
+                            return accumulator;
+                        }
+
                         let country_ids =
                             country_index.country_ids_for_coordinate(point.x, point.y);
+                        let level_1_ids =
+                            country_index.level_1_ids_for_coordinate(point.x, point.y);
 
                         for agency_index in stop_agency_indices {
-                            accumulator.countries_by_agency[agency_index]
-                                .extend(country_ids.iter().cloned());
+                            let metadata =
+                                &mut accumulator.spatial_by_agency[agency_index];
+                            metadata.level_0s.extend(country_ids.iter().cloned());
+                            metadata.level_1s.extend(level_1_ids.iter().cloned());
+                            CoordinateBounds::add_coordinate(
+                                &mut metadata.bbox,
+                                point.x,
+                                point.y,
+                            );
                         }
 
                         accumulator
@@ -526,11 +747,13 @@ async fn process_feed_agency_level_0s(
 
     let mut updated = 0usize;
     for (agency_index, agency_id) in agency_ids.into_iter().enumerate() {
-        let country_ids = aggregate.countries_by_agency[agency_index]
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let metadata = &aggregate.spatial_by_agency[agency_index];
+        let country_ids = metadata.level_0s.iter().cloned().collect::<Vec<_>>();
+        let level_1_ids = metadata.level_1s.iter().cloned().collect::<Vec<_>>();
         let level_0s = country_ids.iter().cloned().map(Some).collect::<Vec<_>>();
+        let level_1s = level_1_ids.iter().cloned().map(Some).collect::<Vec<_>>();
+        let bbox = metadata.bbox.map(CoordinateBounds::to_polygon);
+        let bbox_summary = metadata.bbox.map(CoordinateBounds::as_array);
 
         updated += diesel::update(
             agencies::agencies
@@ -538,18 +761,24 @@ async fn process_feed_agency_level_0s(
                 .filter(agencies::attempt_id.eq(&attempt_id))
                 .filter(agencies::agency_id.eq(&agency_id)),
         )
-        .set(agencies::level_0s.eq(Some(level_0s)))
+        .set((
+            agencies::level_0s.eq(Some(level_0s)),
+            agencies::level_1s.eq(Some(level_1s)),
+            agencies::bbox.eq(bbox),
+        ))
         .execute(&mut conn)
         .await?;
 
         println!(
-            "[agency-level-0s] finished agency static_onestop_id={} attempt_id={} agency_id={} routes={} stops={} countries={:?} elapsed_ms={}",
+            "[agency-spatial-metadata] finished agency static_onestop_id={} attempt_id={} agency_id={} routes={} stops={} countries={:?} level_1s={:?} bbox={:?} elapsed_ms={}",
             static_onestop_id,
             attempt_id,
             agency_id,
             route_counts_by_agency[agency_index],
             aggregate.stop_counts_by_agency[agency_index],
             country_ids,
+            level_1_ids,
+            bbox_summary,
             started.elapsed().as_millis()
         );
     }
@@ -557,30 +786,51 @@ async fn process_feed_agency_level_0s(
     Ok(updated)
 }
 
-pub async fn backfill_all_agency_level_0s(
+pub async fn backfill_all_agency_spatial_metadata(
     pool: &CatenaryPostgresPool,
     country_index: &CountryIndex,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
-    use catenary::schema::gtfs::agencies;
+    use catenary::schema::gtfs::agencies::dsl as agencies;
 
     let mut conn = pool.get().await?;
-    let agency_rows = agencies::agencies
-        .select((
-            agencies::static_onestop_id,
-            agencies::attempt_id,
-            agencies::agency_id,
-        ))
-        .load::<(String, String, String)>(&mut conn)
-        .await?;
-    drop(conn);
-
     let mut agencies_by_feed = HashMap::<(String, String), Vec<String>>::new();
-    for (static_onestop_id, attempt_id, agency_id) in agency_rows {
-        agencies_by_feed
-            .entry((static_onestop_id, attempt_id))
-            .or_default()
-            .push(agency_id);
+    let mut offset = 0i64;
+
+    loop {
+        let agency_rows = agencies::agencies
+            .order((
+                agencies::static_onestop_id.asc(),
+                agencies::attempt_id.asc(),
+                agencies::agency_id.asc(),
+            ))
+            .limit(AGENCY_ROW_CHUNK_SIZE)
+            .offset(offset)
+            .select((
+                agencies::static_onestop_id,
+                agencies::attempt_id,
+                agencies::agency_id,
+            ))
+            .load::<(String, String, String)>(&mut conn)
+            .await?;
+
+        if agency_rows.is_empty() {
+            break;
+        }
+
+        let row_count = agency_rows.len();
+        for (static_onestop_id, attempt_id, agency_id) in agency_rows {
+            agencies_by_feed
+                .entry((static_onestop_id, attempt_id))
+                .or_default()
+                .push(agency_id);
+        }
+
+        if row_count < AGENCY_ROW_CHUNK_SIZE as usize {
+            break;
+        }
+        offset += row_count as i64;
     }
+    drop(conn);
 
     for agency_ids in agencies_by_feed.values_mut() {
         agency_ids.sort();
@@ -591,7 +841,7 @@ pub async fn backfill_all_agency_level_0s(
 
     let updated_by_feed = stream::iter(feed_work.into_iter().map(
         |((static_onestop_id, attempt_id), agency_ids)| async move {
-            process_feed_agency_level_0s(
+            process_feed_agency_spatial_metadata(
                 pool,
                 country_index,
                 static_onestop_id,
@@ -606,6 +856,103 @@ pub async fn backfill_all_agency_level_0s(
     .await?;
 
     Ok(updated_by_feed.into_iter().sum())
+}
+
+pub async fn refresh_unified_agency_spatial_metadata(
+    pool: &CatenaryPostgresPool,
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    use catenary::schema::gtfs::agencies::dsl as agencies;
+    use catenary::schema::gtfs::unified_agency::dsl as unified_agencies;
+
+    let mut conn = pool.get().await?;
+    let mut metadata_by_unified_id = HashMap::<String, SpatialAccumulator>::new();
+    let mut offset = 0i64;
+
+    loop {
+        let agency_rows = agencies::agencies
+            .filter(agencies::unified_agency_id.is_not_null())
+            .order((
+                agencies::static_onestop_id.asc(),
+                agencies::attempt_id.asc(),
+                agencies::agency_id.asc(),
+            ))
+            .limit(AGENCY_ROW_CHUNK_SIZE)
+            .offset(offset)
+            .select((
+                agencies::unified_agency_id,
+                agencies::level_0s,
+                agencies::level_1s,
+                agencies::bbox,
+            ))
+            .load::<(
+                Option<String>,
+                Option<Vec<Option<String>>>,
+                Option<Vec<Option<String>>>,
+                Option<PgPolygon>,
+            )>(&mut conn)
+            .await?;
+
+        if agency_rows.is_empty() {
+            break;
+        }
+
+        let row_count = agency_rows.len();
+        for (unified_agency_id, level_0s, level_1s, bbox) in agency_rows {
+            let Some(unified_agency_id) = unified_agency_id else {
+                continue;
+            };
+
+            let metadata = metadata_by_unified_id.entry(unified_agency_id).or_default();
+            if let Some(level_0s) = level_0s {
+                metadata.level_0s.extend(level_0s.into_iter().flatten());
+            }
+            if let Some(level_1s) = level_1s {
+                metadata.level_1s.extend(level_1s.into_iter().flatten());
+            }
+            CoordinateBounds::add_bounds(
+                &mut metadata.bbox,
+                bbox.as_ref().and_then(CoordinateBounds::from_polygon),
+            );
+        }
+
+        if row_count < AGENCY_ROW_CHUNK_SIZE as usize {
+            break;
+        }
+        offset += row_count as i64;
+    }
+
+    diesel::update(unified_agencies::unified_agency)
+        .set((
+            unified_agencies::level_0s.eq(None::<Vec<Option<String>>>),
+            unified_agencies::level_1s.eq(None::<Vec<Option<String>>>),
+            unified_agencies::bbox.eq(None::<PgPolygon>),
+        ))
+        .execute(&mut conn)
+        .await?;
+
+    let mut metadata_by_unified_id = metadata_by_unified_id.into_iter().collect::<Vec<_>>();
+    metadata_by_unified_id.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut updated = 0usize;
+    for (unified_agency_id, metadata) in metadata_by_unified_id {
+        let level_0s = metadata.level_0s.into_iter().map(Some).collect::<Vec<_>>();
+        let level_1s = metadata.level_1s.into_iter().map(Some).collect::<Vec<_>>();
+        let bbox = metadata.bbox.map(CoordinateBounds::to_polygon);
+
+        updated += diesel::update(
+            unified_agencies::unified_agency
+                .filter(unified_agencies::id.eq(unified_agency_id)),
+        )
+        .set((
+            unified_agencies::level_0s.eq(Some(level_0s)),
+            unified_agencies::level_1s.eq(Some(level_1s)),
+            unified_agencies::bbox.eq(bbox),
+        ))
+        .execute(&mut conn)
+        .await?;
+    }
+
+    Ok(updated)
 }
 
 #[cfg(test)]

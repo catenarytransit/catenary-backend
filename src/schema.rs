@@ -35,6 +35,7 @@ pub mod gtfs {
             chateau -> Text,
             unified_agency_id -> Nullable<Text>,
             level_0s -> Nullable<Array<Nullable<Text>>>,
+            bbox -> Nullable<Geometry>,
             level_1s -> Nullable<Array<Nullable<Text>>>,
             has_rail -> Bool,
             has_tram -> Bool,
@@ -672,6 +673,7 @@ pub mod gtfs {
             no_home_country_europe -> Bool,
             chateaux -> Array<Nullable<Text>>,
             level_0s -> Nullable<Array<Nullable<Text>>>,
+            bbox -> Nullable<Geometry>,
             level_1s -> Nullable<Array<Nullable<Text>>>,
         }
     }

@@ -109,6 +109,12 @@ struct Args {
         default_value = "CNTR_RG_03M_2024_4326.geojson"
     )]
     country_geojson: PathBuf,
+    #[arg(
+        long,
+        env = "COUNTRIES_LEVEL_1_DIR",
+        default_value = "countries_level_1"
+    )]
+    countries_level_1_dir: PathBuf,
 
     #[command(subcommand)]
     command: Option<Commands>,
@@ -151,18 +157,23 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // Check for subcommand
     if let Some(Commands::RefreshAgencyMetadata) = &args.command {
         let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
-        let country_index = CountryIndex::from_geojson(&args.country_geojson)?;
-        let updated_level_0s = agency_metadata::backfill_all_agency_level_0s(
+        let country_index = CountryIndex::from_geojson(
+            &args.country_geojson,
+            &args.countries_level_1_dir,
+        )?;
+        let updated_unified_ids =
+            agency_metadata::refresh_unified_agency_ids(&conn_pool).await?;
+        let updated_agencies = agency_metadata::backfill_all_agency_spatial_metadata(
             &conn_pool,
             &country_index,
         )
         .await?;
-        let updated_unified_ids =
-            agency_metadata::refresh_unified_agency_ids(&conn_pool).await?;
+        let updated_unified_agencies =
+            agency_metadata::refresh_unified_agency_spatial_metadata(&conn_pool).await?;
 
         println!(
-            "Refreshed level_0s for {} agencies and unified_agency_id for {} agencies",
-            updated_level_0s, updated_unified_ids
+            "Refreshed unified_agency_id for {} agencies, spatial metadata for {} agencies, and spatial metadata for {} unified agencies",
+            updated_unified_ids, updated_agencies, updated_unified_agencies
         );
         return Ok(());
     }
@@ -314,7 +325,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // get connection pool from database pool
     let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
     let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
-    let country_index = Arc::new(CountryIndex::from_geojson(&args.country_geojson)?);
+    let country_index = Arc::new(CountryIndex::from_geojson(
+        &args.country_geojson,
+        &args.countries_level_1_dir,
+    )?);
 
     //Download Girolle data if it exists and deserialise it with Ron Btreemap<string, girollefeeddownloadresult>
 
@@ -1296,6 +1310,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         "Refreshed unified_agency_id for {} agency rows",
         updated_unified_ids
     );
+    let updated_unified_agencies =
+        agency_metadata::refresh_unified_agency_spatial_metadata(arc_conn_pool.as_ref()).await?;
+    println!(
+        "Refreshed spatial metadata for {} unified agencies",
+        updated_unified_agencies
+    );
+
 
     println!("Maple ingest completed");
 

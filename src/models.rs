@@ -254,6 +254,8 @@ pub struct Agency {
     pub chateau: String,
     pub unified_agency_id: Option<String>,
     pub level_0s: Option<Vec<Option<String>>>,
+    #[serde(skip)]
+    pub bbox: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
     pub level_1s: Option<Vec<Option<String>>>,
     pub has_rail: bool,
     pub has_tram: bool,
@@ -280,6 +282,8 @@ pub struct UnifiedAgency {
     pub no_home_country_europe: bool,
     pub chateaux: Vec<Option<String>>,
     pub level_0s: Option<Vec<Option<String>>>,
+    #[serde(skip)]
+    pub bbox: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
     pub level_1s: Option<Vec<Option<String>>>,
 }
 

@@ -1581,8 +1581,8 @@ pub async fn gtfs_process_feed(
     let timer_stop_id_table = Instant::now();
     let (stop_ids_to_route_types, stop_ids_to_route_ids) =
         make_hashmap_stops_to_route_types_and_ids(&gtfs);
-    let agency_level_0s =
-        country_index.level_0s_for_gtfs(&gtfs, &stop_ids_to_route_ids);
+    let agency_spatial_metadata =
+        country_index.spatial_metadata_for_gtfs(&gtfs, &stop_ids_to_route_ids);
 
     let original_gtfs_nyc_file: Option<Gtfs> = match feed_id {
         "f-dr5r-mtasubway" => {
@@ -1643,6 +1643,10 @@ pub async fn gtfs_process_feed(
 
             if !agency_id_already_done.contains(&agency.id.as_ref()) {
                 let agency_id = agency.id.clone().unwrap_or_default();
+                let spatial_metadata = agency_spatial_metadata
+                    .get(&agency_id)
+                    .cloned()
+                    .unwrap_or_default();
                 let agency_row = catenary::models::Agency {
                     static_onestop_id: feed_id.to_string(),
                     agency_id: agency_id.clone(),
@@ -1655,13 +1659,9 @@ pub async fn gtfs_process_feed(
                     agency_fare_url_translations: None,
                     chateau: chateau_id.to_string(),
                     unified_agency_id: Some(unified_agency_id_for(&agency.name, &agency.url)),
-                    level_0s: Some(
-                        agency_level_0s
-                            .get(&agency_id)
-                            .cloned()
-                            .unwrap_or_default(),
-                    ),
-                    level_1s: None,
+                    level_0s: Some(spatial_metadata.level_0s),
+                    level_1s: Some(spatial_metadata.level_1s),
+                    bbox: spatial_metadata.bbox,
                     has_rail: false,
                     has_tram: false,
                     has_metro: false,
