@@ -552,8 +552,9 @@ pub(crate) fn unified_agency_row(
         no_home_country_europe: false,
         chateaux,
         level_0s: None,
-        bbox: None,
         level_1s: None,
+        bbox: None,
+        has_vehicle_histories: false,
     }
 }
 

@@ -55,6 +55,7 @@ use tarpc::{
 use tokio::sync::Mutex;
 
 use uuid::Uuid;
+mod basic_vehicle_history;
 mod delay_calculation;
 mod import_alpenrose;
 mod route_type_overrides;

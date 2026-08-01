@@ -236,6 +236,34 @@ pub struct InProgressStaticIngest {
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::basic_vehicle_history)]
+#[diesel(check_for_backend(Pg))]
+pub struct BasicVehicleHistory {
+    pub realtime_feed_id: String,
+    pub chateau: String,
+    pub route_id: String,
+    pub agency_id: Option<String>,
+    pub unified_agency_id: Option<String>,
+    pub vehicle_label: String,
+    pub trip_id: String,
+    pub block_id: Option<String>,
+    pub operation_date: chrono::NaiveDate,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
+#[diesel(table_name = crate::schema::gtfs::basic_vehicles)]
+#[diesel(check_for_backend(Pg))]
+pub struct BasicVehicle {
+    pub unified_agency_id: String,
+    pub vehicle_label: String,
+    pub trip_id: Option<String>,
+    pub block_id: Option<String>,
+    pub model: Option<String>,
+    pub manufacturer: Option<String>,
+    pub manufacture_year: Option<i32>,
+}
+
+#[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
 #[diesel(table_name = crate::schema::gtfs::agencies)]
 #[diesel(check_for_backend(diesel::pg::Pg))]
 pub struct Agency {
@@ -254,14 +282,14 @@ pub struct Agency {
     pub chateau: String,
     pub unified_agency_id: Option<String>,
     pub level_0s: Option<Vec<Option<String>>>,
-    #[serde(skip)]
-    pub bbox: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
     pub level_1s: Option<Vec<Option<String>>>,
     pub has_rail: bool,
     pub has_tram: bool,
     pub has_metro: bool,
     pub has_ferry: bool,
     pub has_bus: bool,
+    #[serde(skip)]
+    pub bbox: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone, Serialize, Deserialize)]
@@ -282,9 +310,10 @@ pub struct UnifiedAgency {
     pub no_home_country_europe: bool,
     pub chateaux: Vec<Option<String>>,
     pub level_0s: Option<Vec<Option<String>>>,
+    pub level_1s: Option<Vec<Option<String>>>,
     #[serde(skip)]
     pub bbox: Option<postgis_diesel::types::Polygon<postgis_diesel::types::Point>>,
-    pub level_1s: Option<Vec<Option<String>>>,
+    pub has_vehicle_histories: bool,
 }
 
 #[derive(Queryable, Selectable, Insertable, Debug, Clone)]

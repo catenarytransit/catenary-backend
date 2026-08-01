@@ -3760,6 +3760,23 @@ pub async fn new_rt_data(
         vehicle_positions_rtree_by_route_type.insert(route_type, rstar::RTree::bulk_load(elements));
     }
 
+    if let Err(error) = crate::basic_vehicle_history::upsert_basic_vehicle_history(
+        pool.as_ref(),
+        chateau_id,
+        realtime_feed_id,
+        &aspenised_vehicle_positions,
+        &trip_updates,
+        &vehicle_routes_cache,
+        &compressed_trip_internal_cache,
+    )
+    .await
+    {
+        eprintln!(
+            "Failed to upsert basic vehicle history for chateau {} realtime feed {}: {}",
+            chateau_id, realtime_feed_id, error
+        );
+    }
+
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
