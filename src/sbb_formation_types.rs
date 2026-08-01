@@ -341,9 +341,7 @@ pub fn parse_sbb_formation_short(value: &str) -> Vec<SbbFormationShortVehicle> {
             {
                 index += 1;
             }
-            let service_string = characters[services_start..index]
-                .iter()
-                .collect::<String>();
+            let service_string = characters[services_start..index].iter().collect::<String>();
             for service in service_string.split(';') {
                 let service = service.trim().to_ascii_uppercase();
                 if !service.is_empty() && !services.contains(&service) {

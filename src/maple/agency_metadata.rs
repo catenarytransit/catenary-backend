@@ -4,7 +4,7 @@ use diesel::prelude::*;
 use diesel::sql_types::{Array, Nullable, Text};
 use diesel::upsert::excluded;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
-use futures::{stream, StreamExt, TryStreamExt};
+use futures::{StreamExt, TryStreamExt, stream};
 use geo::{BoundingRect, Intersects};
 use geo_types::{Geometry, Point as GeoPoint};
 use geojson::GeoJson;
@@ -97,8 +97,7 @@ fn agency_url_host(agency_url: &str) -> Option<String> {
 }
 
 fn domain_name_without_tld(host: &str) -> Option<&str> {
-    const COMMON_SECOND_LEVEL_DOMAINS: &[&str] =
-        &["ac", "co", "com", "edu", "gov", "net", "org"];
+    const COMMON_SECOND_LEVEL_DOMAINS: &[&str] = &["ac", "co", "com", "edu", "gov", "net", "org"];
 
     let labels = host
         .split('.')
@@ -277,7 +276,10 @@ fn indexed_areas_from_geojson(
     let GeoJson::FeatureCollection(collection) = geojson else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("{} must contain a GeoJSON FeatureCollection", path.display()),
+            format!(
+                "{} must contain a GeoJSON FeatureCollection",
+                path.display()
+            ),
         )
         .into());
     };
@@ -320,9 +322,7 @@ fn indexed_areas_from_geojson(
         .collect()
 }
 
-fn level_1_geojson_paths(
-    directory: &Path,
-) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
+fn level_1_geojson_paths(directory: &Path) -> Result<Vec<PathBuf>, Box<dyn Error + Send + Sync>> {
     let mut paths = fs::read_dir(directory)?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<Result<Vec<_>, _>>()?;
@@ -433,8 +433,8 @@ impl CountryIndex {
             })
             .collect();
 
-        let sole_agency_id = (gtfs.agencies.len() == 1)
-            .then(|| gtfs.agencies[0].id.clone().unwrap_or_default());
+        let sole_agency_id =
+            (gtfs.agencies.len() == 1).then(|| gtfs.agencies[0].id.clone().unwrap_or_default());
 
         for (stop_id, route_ids) in stop_ids_to_route_ids {
             let Some(stop) = gtfs.stops.get(stop_id) else {
@@ -451,11 +451,8 @@ impl CountryIndex {
                 .iter()
                 .filter_map(|route_id| gtfs.routes.get(route_id))
                 .filter_map(|route| {
-                    effective_route_agency_id(
-                        route.agency_id.as_deref(),
-                        sole_agency_id.as_deref(),
-                    )
-                    .map(str::to_owned)
+                    effective_route_agency_id(route.agency_id.as_deref(), sole_agency_id.as_deref())
+                        .map(str::to_owned)
                 })
                 .collect::<HashSet<_>>();
             if agency_ids.is_empty() {
@@ -503,11 +500,7 @@ impl FeedChunkAccumulator {
             stop_counts_by_agency,
         } = other;
 
-        for (current, additional) in self
-            .spatial_by_agency
-            .iter_mut()
-            .zip(spatial_by_agency)
-        {
+        for (current, additional) in self.spatial_by_agency.iter_mut().zip(spatial_by_agency) {
             current.merge(additional);
         }
 
@@ -611,7 +604,15 @@ pub async fn refresh_unified_agency_ids(
                 dsl::chateau,
                 dsl::unified_agency_id,
             ))
-            .load::<(String, String, String, String, String, String, Option<String>)>(&mut conn)
+            .load::<(
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                Option<String>,
+            )>(&mut conn)
             .await?;
 
         if agency_rows.is_empty() {
@@ -647,8 +648,7 @@ pub async fn refresh_unified_agency_ids(
             )
             .collect::<Vec<_>>();
 
-        let mut unified_agencies_by_id =
-            HashMap::<String, (String, BTreeSet<String>)>::new();
+        let mut unified_agencies_by_id = HashMap::<String, (String, BTreeSet<String>)>::new();
 
         for (_, _, _, agency_name, chateau, _, generated_unified_agency_id) in &assignments {
             // Keep the first deterministic name from the ordered agency query, but merge every
@@ -843,15 +843,10 @@ async fn process_feed_agency_spatial_metadata(
                             country_index.level_1_ids_for_coordinate(point.x, point.y);
 
                         for agency_index in stop_agency_indices {
-                            let metadata =
-                                &mut accumulator.spatial_by_agency[agency_index];
+                            let metadata = &mut accumulator.spatial_by_agency[agency_index];
                             metadata.level_0s.extend(country_ids.iter().cloned());
                             metadata.level_1s.extend(level_1_ids.iter().cloned());
-                            CoordinateBounds::add_coordinate(
-                                &mut metadata.bbox,
-                                point.x,
-                                point.y,
-                            );
+                            CoordinateBounds::add_coordinate(&mut metadata.bbox, point.x, point.y);
                         }
 
                         accumulator
@@ -1065,8 +1060,7 @@ pub async fn refresh_unified_agency_spatial_metadata(
         let bbox = metadata.bbox.map(CoordinateBounds::to_polygon);
 
         updated += diesel::update(
-            unified_agencies::unified_agency
-                .filter(unified_agencies::id.eq(unified_agency_id)),
+            unified_agencies::unified_agency.filter(unified_agencies::id.eq(unified_agency_id)),
         )
         .set((
             unified_agencies::level_0s.eq(Some(level_0s)),

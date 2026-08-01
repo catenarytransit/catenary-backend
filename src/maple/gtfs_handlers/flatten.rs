@@ -49,18 +49,18 @@ fn fix_fares(
         if rider_categories_file_lines.is_empty() {
             valid_rider_categories = false;
         } else {
-             let first_line = rider_categories_file_lines[0]
-            .split(",")
-            .map(|x| x.to_string())
-            .collect::<HashSet<String>>();
+            let first_line = rider_categories_file_lines[0]
+                .split(",")
+                .map(|x| x.to_string())
+                .collect::<HashSet<String>>();
 
-        if first_line.contains("is_default_fare_category")
-            && first_line.contains("rider_category_name")
-            && first_line.contains("rider_category_id")
-        {
-        } else {
-            valid_rider_categories = false;
-        }
+            if first_line.contains("is_default_fare_category")
+                && first_line.contains("rider_category_name")
+                && first_line.contains("rider_category_id")
+            {
+            } else {
+                valid_rider_categories = false;
+            }
         }
     }
 

@@ -17,10 +17,7 @@ struct AspenRealtimeTrajectoryDataRef<'a> {
     pattern_to_trajectories: &'a Vec<Vec<u32>>,
 }
 
-fn encode_into_writer<T, W>(
-    value: &T,
-    writer: &mut W,
-) -> Result<usize, bincode::error::EncodeError>
+fn encode_into_writer<T, W>(value: &T, writer: &mut W) -> Result<usize, bincode::error::EncodeError>
 where
     T: serde::Serialize,
     W: Write,
@@ -96,12 +93,8 @@ pub fn compact_trajectory_store(
     }
 
     let mut geometry_remap = vec![None; geometries.len()];
-    let mut compacted_geometries = Vec::with_capacity(
-        used_geometries
-            .iter()
-            .filter(|is_used| **is_used)
-            .count(),
-    );
+    let mut compacted_geometries =
+        Vec::with_capacity(used_geometries.iter().filter(|is_used| **is_used).count());
     for (old_geometry_id, geometry) in geometries.into_iter().enumerate() {
         if used_geometries[old_geometry_id] {
             geometry_remap[old_geometry_id] = Some(compacted_geometries.len() as u32);
@@ -297,9 +290,7 @@ pub fn load_trajectory_data(
         let file = File::open(static_path)?;
         let reader = BufReader::new(file);
         let mut decoder = flate2::read::ZlibDecoder::new(reader);
-        decode_from_reader::<catenary::aspen_dataset::AspenStaticTrajectoryData, _>(
-            &mut decoder,
-        )?
+        decode_from_reader::<catenary::aspen_dataset::AspenStaticTrajectoryData, _>(&mut decoder)?
     } else {
         catenary::aspen_dataset::AspenStaticTrajectoryData {
             geometries: Vec::new(),
@@ -312,9 +303,7 @@ pub fn load_trajectory_data(
         let file = File::open(rt_path)?;
         let reader = BufReader::new(file);
         let mut decoder = flate2::read::ZlibDecoder::new(reader);
-        decode_from_reader::<catenary::aspen_dataset::AspenRealtimeTrajectoryData, _>(
-            &mut decoder,
-        )?
+        decode_from_reader::<catenary::aspen_dataset::AspenRealtimeTrajectoryData, _>(&mut decoder)?
     } else {
         catenary::aspen_dataset::AspenRealtimeTrajectoryData {
             trajectories: Vec::new(),
@@ -480,8 +469,7 @@ mod tests {
     #[test]
     fn test_compact_trajectory_store_removes_unused_static_data() {
         use catenary::aspen_dataset::{
-            AspenTrajectoryStore, PackedGeometry, PatternBBox, PatternGeometry,
-            TrajectoryInstance,
+            AspenTrajectoryStore, PackedGeometry, PatternBBox, PatternGeometry, TrajectoryInstance,
         };
         use compact_str::CompactString;
 

@@ -100,6 +100,7 @@ pub mod stop_matching;
 mod stop_preview;
 mod text_search;
 mod vehicle_api;
+mod vehicle_history_lookup;
 
 #[derive(Clone, Debug)]
 struct ChateauCache {
@@ -1021,6 +1022,7 @@ async fn main() -> std::io::Result<()> {
             .service(proxy_for_maptiler_coutours_tiles)
             .service(proxy_for_mapbox_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
+            .service(vehicle_history_lookup::vehicle_history_lookup)
             .service(feed_metadata::feed_metadata_endpoint)
             .service(export_route_geom::export_route_geom)
             .service(block_api::block_api)

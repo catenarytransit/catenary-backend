@@ -274,7 +274,6 @@ fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
 fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests {
     let mut requests = HashMap::new();
 
-
     for trip_update in data.trip_updates.values() {
         insert_realtime_trip_request(
             &mut requests,
@@ -325,7 +324,6 @@ fn add_train_requests_from_trip_short_name(
 
 pub(super) fn evu_for_agency_name(agency_name: &str) -> Option<&'static str> {
     let agency_name = agency_name.trim().to_lowercase();
-
 
     if agency_name.contains("sbb")
         || agency_name.contains("schweizerische bundesbahnen")

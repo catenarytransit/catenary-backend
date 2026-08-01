@@ -157,17 +157,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     // Check for subcommand
     if let Some(Commands::RefreshAgencyMetadata) = &args.command {
         let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
-        let country_index = CountryIndex::from_geojson(
-            &args.country_geojson,
-            &args.countries_level_1_dir,
-        )?;
-        let updated_unified_ids =
-            agency_metadata::refresh_unified_agency_ids(&conn_pool).await?;
-        let updated_agencies = agency_metadata::backfill_all_agency_spatial_metadata(
-            &conn_pool,
-            &country_index,
-        )
-        .await?;
+        let country_index =
+            CountryIndex::from_geojson(&args.country_geojson, &args.countries_level_1_dir)?;
+        let updated_unified_ids = agency_metadata::refresh_unified_agency_ids(&conn_pool).await?;
+        let updated_agencies =
+            agency_metadata::backfill_all_agency_spatial_metadata(&conn_pool, &country_index)
+                .await?;
         let updated_unified_agencies =
             agency_metadata::refresh_unified_agency_spatial_metadata(&conn_pool).await?;
 
@@ -1316,7 +1311,6 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         "Refreshed spatial metadata for {} unified agencies",
         updated_unified_agencies
     );
-
 
     println!("Maple ingest completed");
 

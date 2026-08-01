@@ -654,7 +654,6 @@ impl AspenRpc for AspenServer {
         time_of_submission_ms: u64,
         alerts_dupe_trips: bool,
     ) -> bool {
-        
         //decompress using flate2
 
         //   if new_data_status_from_timestamps {

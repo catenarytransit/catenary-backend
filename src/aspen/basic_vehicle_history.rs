@@ -3,13 +3,13 @@ use catenary::aspen_dataset::{
     AspenisedTripUpdate, AspenisedVehiclePosition, AspenisedVehicleRouteCache,
     CompressedTripInternalCache,
 };
-use compact_str::CompactString;
 use catenary::models::{BasicVehicle, BasicVehicleHistory};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::{
     agencies, basic_vehicle_history, basic_vehicles, ingested_static, unified_agency,
 };
 use chrono::NaiveDate;
+use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
 use diesel_async::RunQueryDsl;
@@ -133,11 +133,11 @@ async fn load_agency_scopes(
     chateau_id: &str,
 ) -> Result<BTreeMap<String, AgencyScope>, diesel::result::Error> {
     let rows = agencies::table
-        .inner_join(ingested_static::table.on(
-            ingested_static::onestop_feed_id
+        .inner_join(
+            ingested_static::table.on(ingested_static::onestop_feed_id
                 .eq(agencies::static_onestop_id)
-                .and(ingested_static::attempt_id.eq(agencies::attempt_id)),
-        ))
+                .and(ingested_static::attempt_id.eq(agencies::attempt_id))),
+        )
         .filter(agencies::chateau.eq(chateau_id))
         .filter(ingested_static::production.eq(true))
         .filter(ingested_static::deleted.eq(false))
@@ -209,16 +209,12 @@ async fn upsert_history_rows(
             ))
             .do_update()
             .set((
-                basic_vehicle_history::chateau
-                    .eq(excluded(basic_vehicle_history::chateau)),
-                basic_vehicle_history::route_id
-                    .eq(excluded(basic_vehicle_history::route_id)),
-                basic_vehicle_history::agency_id
-                    .eq(excluded(basic_vehicle_history::agency_id)),
+                basic_vehicle_history::chateau.eq(excluded(basic_vehicle_history::chateau)),
+                basic_vehicle_history::route_id.eq(excluded(basic_vehicle_history::route_id)),
+                basic_vehicle_history::agency_id.eq(excluded(basic_vehicle_history::agency_id)),
                 basic_vehicle_history::unified_agency_id
                     .eq(excluded(basic_vehicle_history::unified_agency_id)),
-                basic_vehicle_history::block_id
-                    .eq(excluded(basic_vehicle_history::block_id)),
+                basic_vehicle_history::block_id.eq(excluded(basic_vehicle_history::block_id)),
             ))
             .execute(conn)
             .await?;
@@ -273,8 +269,7 @@ pub async fn upsert_basic_vehicle_history(
     vehicle_routes_cache: &AHashMap<String, AspenisedVehicleRouteCache>,
     compressed_trip_cache: &CompressedTripInternalCache,
 ) -> Result<(), DynError> {
-    let observations =
-        collect_observations(vehicle_positions, trip_updates, compressed_trip_cache);
+    let observations = collect_observations(vehicle_positions, trip_updates, compressed_trip_cache);
     if observations.is_empty() {
         return Ok(());
     }
@@ -321,10 +316,7 @@ pub async fn upsert_basic_vehicle_history(
             // observations is ordered by label, operation date, and trip id, so a later
             // insert deterministically keeps the newest operation date for this vehicle.
             vehicle_rows.insert(
-                (
-                    unified_agency_id.clone(),
-                    observation.vehicle_label.clone(),
-                ),
+                (unified_agency_id.clone(), observation.vehicle_label.clone()),
                 BasicVehicle {
                     unified_agency_id: unified_agency_id.clone(),
                     vehicle_label: observation.vehicle_label,

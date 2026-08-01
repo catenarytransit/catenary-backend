@@ -881,10 +881,7 @@ pub async fn fetch_trip_information(
     let mut agency_name = String::new();
     let agencies_query = crate::schema::gtfs::agencies::dsl::agencies
         .filter(crate::schema::gtfs::agencies::dsl::chateau.eq(&chateau))
-        .filter(
-            crate::schema::gtfs::agencies::dsl::static_onestop_id
-                .eq(&route.onestop_feed_id),
-        )
+        .filter(crate::schema::gtfs::agencies::dsl::static_onestop_id.eq(&route.onestop_feed_id))
         .filter(crate::schema::gtfs::agencies::dsl::attempt_id.eq(&route.attempt_id))
         .select(crate::models::Agency::as_select())
         .load(conn)

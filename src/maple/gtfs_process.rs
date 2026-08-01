@@ -1687,9 +1687,7 @@ pub async fn gtfs_process_feed(
 
         let mut unified_agency_rows = unified_agency_names
             .into_iter()
-            .map(|(id, name)| {
-                unified_agency_row(id, name, vec![chateau_id.to_string()])
-            })
+            .map(|(id, name)| unified_agency_row(id, name, vec![chateau_id.to_string()]))
             .collect::<Vec<_>>();
         unified_agency_rows.sort_by(|left, right| left.id.cmp(&right.id));
 
