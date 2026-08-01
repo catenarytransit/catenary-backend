@@ -7,7 +7,9 @@ use crate::DownloadedFeedsInformation;
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemalloc_ctl::{epoch, thread};
 
-use crate::agency_metadata::{CountryIndex, unified_agency_id_for};
+use crate::agency_metadata::{
+    CountryIndex, unified_agency_id_for, unified_agency_row, upsert_unified_agencies,
+};
 use crate::gtfs_handlers::colour_correction;
 use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
 use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
@@ -1634,19 +1636,24 @@ pub async fn gtfs_process_feed(
 
     // insert agencies
     {
-        let mut agency_id_already_done: HashSet<Option<&String>> = HashSet::new();
-
-        let mut conn = conn_pool.get().await?;
+        let mut agency_ids_already_done = HashSet::<String>::new();
+        let mut agency_rows = Vec::<catenary::models::Agency>::new();
+        let mut unified_agency_names = HashMap::<String, String>::new();
 
         for agency in &gtfs.agencies {
-            use catenary::schema::gtfs::agencies::dsl::agencies;
+            let agency_id = agency.id.clone().unwrap_or_default();
 
-            if !agency_id_already_done.contains(&agency.id.as_ref()) {
-                let agency_id = agency.id.clone().unwrap_or_default();
+            if agency_ids_already_done.insert(agency_id.clone()) {
                 let spatial_metadata = agency_spatial_metadata
                     .get(&agency_id)
                     .cloned()
                     .unwrap_or_default();
+                let unified_agency_id = unified_agency_id_for(&agency.name, &agency.url);
+
+                unified_agency_names
+                    .entry(unified_agency_id.clone())
+                    .or_insert_with(|| agency.name.clone());
+
                 let agency_row = catenary::models::Agency {
                     static_onestop_id: feed_id.to_string(),
                     agency_id: agency_id.clone(),
@@ -1658,7 +1665,7 @@ pub async fn gtfs_process_feed(
                     agency_fare_url: agency.fare_url.clone(),
                     agency_fare_url_translations: None,
                     chateau: chateau_id.to_string(),
-                    unified_agency_id: Some(unified_agency_id_for(&agency.name, &agency.url)),
+                    unified_agency_id: Some(unified_agency_id),
                     level_0s: Some(spatial_metadata.level_0s),
                     level_1s: Some(spatial_metadata.level_1s),
                     bbox: spatial_metadata.bbox,
@@ -1672,16 +1679,42 @@ pub async fn gtfs_process_feed(
                     agency_timezone: agency.timezone.clone(),
                 };
 
-                diesel::insert_into(agencies)
-                    .values(agency_row)
-                    .execute(&mut conn)
-                    .await?;
-
-                agency_id_already_done.insert(agency.id.as_ref());
+                agency_rows.push(agency_row);
             } else {
                 eprintln!("Warning! Duplicate agency id found: \n{:?}", agency);
             }
         }
+
+        let mut unified_agency_rows = unified_agency_names
+            .into_iter()
+            .map(|(id, name)| {
+                unified_agency_row(id, name, vec![chateau_id.to_string()])
+            })
+            .collect::<Vec<_>>();
+        unified_agency_rows.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut conn = conn_pool.get().await?;
+
+        conn.build_transaction()
+            .run::<(), diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    use catenary::schema::gtfs::agencies::dsl::agencies;
+
+                    // Insert or refresh the referenced parent rows before writing agencies, so
+                    // agencies.unified_agency_id never points at a missing unified agency.
+                    upsert_unified_agencies(conn, &unified_agency_rows).await?;
+
+                    for agency_chunk in agency_rows.chunks(1_000) {
+                        diesel::insert_into(agencies)
+                            .values(agency_chunk)
+                            .execute(conn)
+                            .await?;
+                    }
+
+                    Ok(())
+                })
+            })
+            .await?;
 
         println!("Agency insertion done for {}", feed_id);
     }

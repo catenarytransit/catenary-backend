@@ -1,6 +1,9 @@
 use catenary::postgres_tools::CatenaryPostgresPool;
+use diesel::dsl::sql;
 use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
+use diesel::sql_types::{Array, Nullable, Text};
+use diesel::upsert::excluded;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 use futures::{stream, StreamExt, TryStreamExt};
 use geo::{BoundingRect, Intersects};
 use geo_types::{Geometry, Point as GeoPoint};
@@ -520,6 +523,66 @@ impl FeedChunkAccumulator {
     }
 }
 
+const UNIFIED_AGENCY_UPSERT_CHUNK_SIZE: usize = 1_000;
+
+pub(crate) fn unified_agency_row(
+    id: String,
+    name: String,
+    chateaux: Vec<String>,
+) -> catenary::models::UnifiedAgency {
+    let chateaux = chateaux
+        .into_iter()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(Some)
+        .collect();
+
+    catenary::models::UnifiedAgency {
+        id,
+        name,
+        name_translations: None,
+        primary_level_0: None,
+        primary_level_1: None,
+        has_rail: false,
+        has_tram: false,
+        has_metro: false,
+        has_ferry: false,
+        has_bus: false,
+        is_national_railway_operator: false,
+        no_home_country_europe: false,
+        chateaux,
+        level_0s: None,
+        bbox: None,
+        level_1s: None,
+    }
+}
+
+pub(crate) async fn upsert_unified_agencies(
+    conn: &mut AsyncPgConnection,
+    rows: &[catenary::models::UnifiedAgency],
+) -> diesel::QueryResult<usize> {
+    use catenary::schema::gtfs::unified_agency::dsl as unified_agencies;
+
+    let mut affected_rows = 0usize;
+
+    for chunk in rows.chunks(UNIFIED_AGENCY_UPSERT_CHUNK_SIZE) {
+        affected_rows += diesel::insert_into(unified_agencies::unified_agency)
+            .values(chunk)
+            .on_conflict(unified_agencies::id)
+            .do_update()
+            .set((
+                unified_agencies::name.eq(excluded(unified_agencies::name)),
+                unified_agencies::chateaux.eq(sql::<Array<Nullable<Text>>>(
+                    "ARRAY(SELECT DISTINCT chateau FROM unnest(unified_agency.chateaux || excluded.chateaux) AS merged(chateau) WHERE chateau IS NOT NULL ORDER BY chateau)",
+                )),
+            ))
+            .execute(conn)
+            .await?;
+    }
+
+    Ok(affected_rows)
+}
+
 pub async fn refresh_unified_agency_ids(
     pool: &CatenaryPostgresPool,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
@@ -544,9 +607,10 @@ pub async fn refresh_unified_agency_ids(
                 dsl::agency_id,
                 dsl::agency_name,
                 dsl::agency_url,
+                dsl::chateau,
                 dsl::unified_agency_id,
             ))
-            .load::<(String, String, String, String, String, Option<String>)>(&mut conn)
+            .load::<(String, String, String, String, String, String, Option<String>)>(&mut conn)
             .await?;
 
         if agency_rows.is_empty() {
@@ -554,19 +618,67 @@ pub async fn refresh_unified_agency_ids(
         }
 
         let row_count = agency_rows.len();
-        let pending_updates = agency_rows
+        let assignments = agency_rows
             .into_par_iter()
-            .filter_map(
+            .map(
                 |(
                     static_onestop_id,
                     attempt_id,
                     agency_id,
                     agency_name,
                     agency_url,
+                    chateau,
                     current_unified_agency_id,
                 )| {
                     let generated_unified_agency_id =
                         unified_agency_id_for(&agency_name, &agency_url);
+
+                    (
+                        static_onestop_id,
+                        attempt_id,
+                        agency_id,
+                        agency_name,
+                        chateau,
+                        current_unified_agency_id,
+                        generated_unified_agency_id,
+                    )
+                },
+            )
+            .collect::<Vec<_>>();
+
+        let mut unified_agencies_by_id =
+            HashMap::<String, (String, BTreeSet<String>)>::new();
+
+        for (_, _, _, agency_name, chateau, _, generated_unified_agency_id) in &assignments {
+            // Keep the first deterministic name from the ordered agency query, but merge every
+            // chateau represented by this unified agency in the current chunk.
+            unified_agencies_by_id
+                .entry(generated_unified_agency_id.clone())
+                .or_insert_with(|| (agency_name.clone(), BTreeSet::new()))
+                .1
+                .insert(chateau.clone());
+        }
+
+        let mut unified_agency_rows = unified_agencies_by_id
+            .into_iter()
+            .map(|(id, (name, chateaux))| {
+                unified_agency_row(id, name, chateaux.into_iter().collect())
+            })
+            .collect::<Vec<_>>();
+        unified_agency_rows.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let pending_updates = assignments
+            .into_iter()
+            .filter_map(
+                |(
+                    static_onestop_id,
+                    attempt_id,
+                    agency_id,
+                    _,
+                    _,
+                    current_unified_agency_id,
+                    generated_unified_agency_id,
+                )| {
                     (current_unified_agency_id.as_deref()
                         != Some(generated_unified_agency_id.as_str()))
                     .then_some((
@@ -579,19 +691,31 @@ pub async fn refresh_unified_agency_ids(
             )
             .collect::<Vec<_>>();
 
-        for (static_onestop_id, attempt_id, agency_id, generated_unified_agency_id) in
-            pending_updates
-        {
-            updated += diesel::update(
-                dsl::agencies
-                    .filter(dsl::static_onestop_id.eq(static_onestop_id))
-                    .filter(dsl::attempt_id.eq(attempt_id))
-                    .filter(dsl::agency_id.eq(agency_id)),
-            )
-            .set(dsl::unified_agency_id.eq(Some(generated_unified_agency_id)))
-            .execute(&mut conn)
+        updated += conn
+            .build_transaction()
+            .run::<usize, diesel::result::Error, _>(|conn| {
+                Box::pin(async move {
+                    upsert_unified_agencies(conn, &unified_agency_rows).await?;
+
+                    let mut updated_in_chunk = 0usize;
+                    for (static_onestop_id, attempt_id, agency_id, unified_agency_id) in
+                        pending_updates
+                    {
+                        updated_in_chunk += diesel::update(
+                            dsl::agencies
+                                .filter(dsl::static_onestop_id.eq(static_onestop_id))
+                                .filter(dsl::attempt_id.eq(attempt_id))
+                                .filter(dsl::agency_id.eq(agency_id)),
+                        )
+                        .set(dsl::unified_agency_id.eq(Some(unified_agency_id)))
+                        .execute(conn)
+                        .await?;
+                    }
+
+                    Ok(updated_in_chunk)
+                })
+            })
             .await?;
-        }
 
         if row_count < AGENCY_ROW_CHUNK_SIZE as usize {
             break;
