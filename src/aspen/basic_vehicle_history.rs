@@ -165,7 +165,7 @@ async fn load_agency_scopes(
 
         scopes
             .entry(agency_id)
-            .and_modify(|existing| {
+            .and_modify(|existing: &mut AgencyScope| {
                 // A duplicated agency_id with conflicting metadata is ambiguous. Do not
                 // persist it until the route can be tied to one agency unambiguously.
                 if existing != &candidate {
