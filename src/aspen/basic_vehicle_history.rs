@@ -6,7 +6,7 @@ use catenary::aspen_dataset::{
 use catenary::models::{BasicVehicle, BasicVehicleHistory};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::{
-    agencies, basic_vehicle_history, basic_vehicles, ingested_static, unified_agency,
+    agencies, basic_vehicle_history, basic_vehicles, ingested_static, routes, unified_agency,
 };
 use chrono::NaiveDate;
 use compact_str::CompactString;
@@ -34,6 +34,12 @@ struct VehicleTripObservation {
 struct AgencyScope {
     unified_agency_id: Option<String>,
     rollout_enabled: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AgencyLookups {
+    scopes_by_agency_id: BTreeMap<String, AgencyScope>,
+    agency_id_by_static_feed: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -145,7 +151,7 @@ fn collect_observations(
 async fn load_agency_scopes(
     conn: &mut diesel_async::AsyncPgConnection,
     chateau_id: &str,
-) -> Result<BTreeMap<String, AgencyScope>, diesel::result::Error> {
+) -> Result<AgencyLookups, diesel::result::Error> {
     let rows = agencies::table
         .inner_join(
             ingested_static::table.on(ingested_static::onestop_feed_id
@@ -156,12 +162,14 @@ async fn load_agency_scopes(
         .filter(ingested_static::production.eq(true))
         .filter(ingested_static::deleted.eq(false))
         .select((
+            agencies::static_onestop_id,
             agencies::agency_id,
             agencies::unified_agency_id,
             agencies::level_0s,
             agencies::level_1s,
         ))
         .load::<(
+            String,
             String,
             Option<String>,
             Option<Vec<Option<String>>>,
@@ -175,7 +183,7 @@ async fn load_agency_scopes(
     // individual static-feed agency row has NULL level_0s/level_1s.
     let unified_agency_ids = rows
         .iter()
-        .filter_map(|(_, unified_agency_id, _, _)| unified_agency_id.as_deref())
+        .filter_map(|(_, _, unified_agency_id, _, _)| unified_agency_id.as_deref())
         .map(str::trim)
         .filter(|unified_agency_id| !unified_agency_id.is_empty())
         .map(str::to_owned)
@@ -209,7 +217,13 @@ async fn load_agency_scopes(
     // another duplicate. Merge eligibility with OR and only drop the unified ID itself if
     // genuinely conflicting unified IDs are present.
     let mut accumulators = BTreeMap::<String, AgencyScopeAccumulator>::new();
-    for (agency_id, unified_agency_id, level_0s, level_1s) in rows {
+    let mut feed_agency_ids = BTreeMap::<String, BTreeSet<String>>::new();
+    for (static_onestop_id, agency_id, unified_agency_id, level_0s, level_1s) in rows {
+        feed_agency_ids
+            .entry(static_onestop_id)
+            .or_default()
+            .insert(agency_id.clone());
+
         let unified_agency_id = unified_agency_id.filter(|value| !value.trim().is_empty());
         let is_rollout_enabled = rollout_enabled(&level_0s, &level_1s)
             || unified_agency_id
@@ -225,7 +239,7 @@ async fn load_agency_scopes(
         }
     }
 
-    Ok(accumulators
+    let scopes_by_agency_id = accumulators
         .into_iter()
         .map(|(agency_id, accumulator)| {
             let unified_agency_id = if accumulator.unified_agency_ids.len() == 1 {
@@ -242,22 +256,105 @@ async fn load_agency_scopes(
                 },
             )
         })
+        .collect::<BTreeMap<_, _>>();
+
+    let agency_id_by_static_feed = feed_agency_ids
+        .into_iter()
+        .filter_map(|(static_onestop_id, agency_ids)| {
+            if agency_ids.len() != 1 {
+                return None;
+            }
+
+            let agency_id = agency_ids.into_iter().next()?;
+            scopes_by_agency_id
+                .contains_key(&agency_id)
+                .then_some((static_onestop_id, agency_id))
+        })
+        .collect();
+
+    Ok(AgencyLookups {
+        scopes_by_agency_id,
+        agency_id_by_static_feed,
+    })
+}
+
+async fn load_route_static_feed_ids(
+    conn: &mut diesel_async::AsyncPgConnection,
+    chateau_id: &str,
+    route_ids: &[String],
+) -> Result<BTreeMap<String, String>, diesel::result::Error> {
+    let mut static_feeds_by_route = BTreeMap::<String, BTreeSet<String>>::new();
+
+    for chunk in route_ids.chunks(UPSERT_BATCH_SIZE) {
+        let rows = routes::table
+            .inner_join(
+                ingested_static::table.on(ingested_static::onestop_feed_id
+                    .eq(routes::onestop_feed_id)
+                    .and(ingested_static::attempt_id.eq(routes::attempt_id))),
+            )
+            .filter(routes::chateau.eq(chateau_id))
+            .filter(routes::route_id.eq_any(chunk))
+            .filter(ingested_static::production.eq(true))
+            .filter(ingested_static::deleted.eq(false))
+            .select((routes::route_id, routes::onestop_feed_id))
+            .load::<(String, String)>(conn)
+            .await?;
+
+        for (route_id, static_onestop_id) in rows {
+            static_feeds_by_route
+                .entry(route_id)
+                .or_default()
+                .insert(static_onestop_id);
+        }
+    }
+
+    Ok(static_feeds_by_route
+        .into_iter()
+        .filter_map(|(route_id, static_feed_ids)| {
+            if static_feed_ids.len() != 1 {
+                return None;
+            }
+
+            static_feed_ids
+                .into_iter()
+                .next()
+                .map(|static_feed_id| (route_id, static_feed_id))
+        })
         .collect())
 }
 
 fn resolve_agency<'a>(
     route_agency_id: Option<&str>,
-    agency_scopes: &'a BTreeMap<String, AgencyScope>,
+    route_static_feed_id: Option<&str>,
+    agency_lookups: &'a AgencyLookups,
 ) -> Option<(&'a str, &'a AgencyScope)> {
-    match route_agency_id {
-        Some(agency_id) => agency_scopes
+    if let Some(agency_id) = route_agency_id {
+        return agency_lookups
+            .scopes_by_agency_id
             .get_key_value(agency_id)
-            .map(|(agency_id, scope)| (agency_id.as_str(), scope)),
-        None if agency_scopes.len() == 1 => agency_scopes
-            .first_key_value()
-            .map(|(agency_id, scope)| (agency_id.as_str(), scope)),
-        None => None,
+            .map(|(agency_id, scope)| (agency_id.as_str(), scope));
     }
+
+    if let Some(static_feed_id) = route_static_feed_id {
+        if let Some(agency_id) = agency_lookups
+            .agency_id_by_static_feed
+            .get(static_feed_id)
+        {
+            return agency_lookups
+                .scopes_by_agency_id
+                .get_key_value(agency_id)
+                .map(|(agency_id, scope)| (agency_id.as_str(), scope));
+        }
+    }
+
+    if agency_lookups.scopes_by_agency_id.len() == 1 {
+        return agency_lookups
+            .scopes_by_agency_id
+            .first_key_value()
+            .map(|(agency_id, scope)| (agency_id.as_str(), scope));
+    }
+
+    None
 }
 
 async fn upsert_history_rows(
@@ -341,10 +438,33 @@ pub async fn upsert_basic_vehicle_history(
     }
 
     let mut conn = pool.get().await?;
-    let agency_scopes = load_agency_scopes(&mut conn, chateau_id).await?;
-    if agency_scopes.is_empty() {
+    let agency_lookups = load_agency_scopes(&mut conn, chateau_id).await?;
+    if agency_lookups.scopes_by_agency_id.is_empty() {
         return Ok(());
     }
+
+    // GTFS permits route.agency_id to be NULL when a static feed contains one agency.
+    // Resolve those routes through the production static feed that owns the route instead
+    // of requiring the entire chateau to contain only one agency.
+    let route_ids_needing_feed_lookup = observations
+        .values()
+        .filter(|observation| {
+            vehicle_routes_cache
+                .get(observation.route_id.as_str())
+                .and_then(|route| route.agency_id.as_deref())
+                .filter(|agency_id| !agency_id.trim().is_empty())
+                .is_none()
+        })
+        .map(|observation| observation.route_id.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    let route_static_feed_ids = load_route_static_feed_ids(
+        &mut conn,
+        chateau_id,
+        &route_ids_needing_feed_lookup,
+    )
+    .await?;
 
     let mut history_rows = Vec::new();
     let mut vehicle_rows = BTreeMap::new();
@@ -352,9 +472,16 @@ pub async fn upsert_basic_vehicle_history(
     for observation in observations.into_values() {
         let route_agency_id = vehicle_routes_cache
             .get(observation.route_id.as_str())
-            .and_then(|route| route.agency_id.as_deref());
-        let Some((agency_id, agency_scope)) = resolve_agency(route_agency_id, &agency_scopes)
-        else {
+            .and_then(|route| route.agency_id.as_deref())
+            .filter(|agency_id| !agency_id.trim().is_empty());
+        let route_static_feed_id = route_static_feed_ids
+            .get(observation.route_id.as_str())
+            .map(String::as_str);
+        let Some((agency_id, agency_scope)) = resolve_agency(
+            route_agency_id,
+            route_static_feed_id,
+            &agency_lookups,
+        ) else {
             continue;
         };
         if !agency_scope.rollout_enabled {
