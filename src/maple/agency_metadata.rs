@@ -1,11 +1,11 @@
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::prelude::*;
-use diesel::sql_types::{Double, Text};
 use diesel_async::RunQueryDsl;
-use futures::TryStreamExt;
+use futures::{stream, StreamExt, TryStreamExt};
 use geo::{BoundingRect, Intersects};
 use geo_types::{Geometry, Point};
 use geojson::GeoJson;
+use rayon::prelude::*;
 use rstar::{AABB, RTree, RTreeObject};
 use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -15,6 +15,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::LazyLock;
+use std::time::Instant;
 use url::{Host, Url};
 
 #[derive(Debug, Deserialize)]
@@ -305,25 +306,46 @@ impl CountryIndex {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq)]
-struct AgencyKey {
-    static_onestop_id: String,
-    attempt_id: String,
-    agency_id: String,
+const STOP_CHUNK_SIZE: i64 = 5_000;
+const MAX_CONCURRENT_FEEDS: usize = 8;
+
+struct FeedChunkAccumulator {
+    countries_by_agency: Vec<BTreeSet<String>>,
+    stop_counts_by_agency: Vec<usize>,
 }
 
-#[derive(QueryableByName)]
-struct AgencyStopPoint {
-    #[diesel(sql_type = Text)]
-    static_onestop_id: String,
-    #[diesel(sql_type = Text)]
-    attempt_id: String,
-    #[diesel(sql_type = Text)]
-    agency_id: String,
-    #[diesel(sql_type = Double)]
-    longitude: f64,
-    #[diesel(sql_type = Double)]
-    latitude: f64,
+impl FeedChunkAccumulator {
+    fn new(agency_count: usize) -> Self {
+        Self {
+            countries_by_agency: vec![BTreeSet::new(); agency_count],
+            stop_counts_by_agency: vec![0; agency_count],
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        let Self {
+            countries_by_agency,
+            stop_counts_by_agency,
+        } = other;
+
+        for (current, additional) in self
+            .countries_by_agency
+            .iter_mut()
+            .zip(countries_by_agency)
+        {
+            current.extend(additional);
+        }
+
+        for (current, additional) in self
+            .stop_counts_by_agency
+            .iter_mut()
+            .zip(stop_counts_by_agency)
+        {
+            *current += additional;
+        }
+
+        self
+    }
 }
 
 pub async fn refresh_unified_agency_ids(
@@ -374,90 +396,216 @@ pub async fn refresh_unified_agency_ids(
     Ok(updated)
 }
 
+async fn process_feed_agency_level_0s(
+    pool: &CatenaryPostgresPool,
+    country_index: &CountryIndex,
+    static_onestop_id: String,
+    attempt_id: String,
+    agency_ids: Vec<String>,
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    use catenary::schema::gtfs::{agencies, routes, stops};
+
+    let started = Instant::now();
+    for agency_id in &agency_ids {
+        println!(
+            "[agency-level-0s] processing agency static_onestop_id={} attempt_id={} agency_id={}",
+            static_onestop_id, attempt_id, agency_id
+        );
+    }
+
+    let mut conn = pool.get().await?;
+    let route_rows = routes::routes
+        .filter(routes::onestop_feed_id.eq(&static_onestop_id))
+        .filter(routes::attempt_id.eq(&attempt_id))
+        .select((routes::route_id, routes::agency_id))
+        .load::<(String, Option<String>)>(&mut conn)
+        .await?;
+
+    let agency_index_by_id = agency_ids
+        .iter()
+        .enumerate()
+        .map(|(index, agency_id)| (agency_id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    let sole_agency_index = (agency_ids.len() == 1).then_some(0);
+    let mut route_counts_by_agency = vec![0usize; agency_ids.len()];
+    let mut route_to_agency_index = HashMap::with_capacity(route_rows.len());
+
+    for (route_id, route_agency_id) in route_rows {
+        let agency_index = match route_agency_id.as_deref() {
+            Some(agency_id) => agency_index_by_id.get(agency_id).copied(),
+            None => sole_agency_index,
+        };
+
+        if let Some(agency_index) = agency_index {
+            route_counts_by_agency[agency_index] += 1;
+            route_to_agency_index.insert(route_id, agency_index);
+        }
+    }
+
+    let agency_count = agency_ids.len();
+    let mut aggregate = FeedChunkAccumulator::new(agency_count);
+    let mut last_stop_id: Option<String> = None;
+
+    if !route_to_agency_index.is_empty() {
+        loop {
+            let mut query = stops::stops
+                .filter(stops::onestop_feed_id.eq(&static_onestop_id))
+                .filter(stops::attempt_id.eq(&attempt_id))
+                .filter(stops::point.is_not_null())
+                .order(stops::gtfs_id.asc())
+                .select((stops::gtfs_id, stops::point, stops::routes))
+                .into_boxed();
+
+            if let Some(last_stop_id) = last_stop_id.as_deref() {
+                query = query.filter(stops::gtfs_id.gt(last_stop_id));
+            }
+
+            let stop_chunk = query
+                .limit(STOP_CHUNK_SIZE)
+                .load::<(
+                    String,
+                    Option<postgis_diesel::types::Point>,
+                    Vec<Option<String>>,
+                )>(&mut conn)
+                .await?;
+
+            if stop_chunk.is_empty() {
+                break;
+            }
+
+            let is_final_chunk = stop_chunk.len() < STOP_CHUNK_SIZE as usize;
+            last_stop_id = stop_chunk.last().map(|row| row.0.clone());
+
+            let chunk_accumulator = stop_chunk
+                .par_iter()
+                .fold(
+                    || FeedChunkAccumulator::new(agency_count),
+                    |mut accumulator, (_, point, route_ids)| {
+                        let mut stop_agency_indices = route_ids
+                            .iter()
+                            .filter_map(|route_id| route_id.as_deref())
+                            .filter_map(|route_id| route_to_agency_index.get(route_id).copied())
+                            .collect::<Vec<_>>();
+                        stop_agency_indices.sort_unstable();
+                        stop_agency_indices.dedup();
+
+                        if stop_agency_indices.is_empty() {
+                            return accumulator;
+                        }
+
+                        for &agency_index in &stop_agency_indices {
+                            accumulator.stop_counts_by_agency[agency_index] += 1;
+                        }
+
+                        let Some(point) = point.as_ref() else {
+                            return accumulator;
+                        };
+                        let country_ids =
+                            country_index.country_ids_for_coordinate(point.x, point.y);
+
+                        for agency_index in stop_agency_indices {
+                            accumulator.countries_by_agency[agency_index]
+                                .extend(country_ids.iter().cloned());
+                        }
+
+                        accumulator
+                    },
+                )
+                .reduce(
+                    || FeedChunkAccumulator::new(agency_count),
+                    FeedChunkAccumulator::merge,
+                );
+
+            aggregate = aggregate.merge(chunk_accumulator);
+
+            if is_final_chunk {
+                break;
+            }
+        }
+    }
+
+    let mut updated = 0usize;
+    for (agency_index, agency_id) in agency_ids.into_iter().enumerate() {
+        let country_ids = aggregate.countries_by_agency[agency_index]
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let level_0s = country_ids.iter().cloned().map(Some).collect::<Vec<_>>();
+
+        updated += diesel::update(
+            agencies::agencies
+                .filter(agencies::static_onestop_id.eq(&static_onestop_id))
+                .filter(agencies::attempt_id.eq(&attempt_id))
+                .filter(agencies::agency_id.eq(&agency_id)),
+        )
+        .set(agencies::level_0s.eq(Some(level_0s)))
+        .execute(&mut conn)
+        .await?;
+
+        println!(
+            "[agency-level-0s] finished agency static_onestop_id={} attempt_id={} agency_id={} routes={} stops={} countries={:?} elapsed_ms={}",
+            static_onestop_id,
+            attempt_id,
+            agency_id,
+            route_counts_by_agency[agency_index],
+            aggregate.stop_counts_by_agency[agency_index],
+            country_ids,
+            started.elapsed().as_millis()
+        );
+    }
+
+    Ok(updated)
+}
+
 pub async fn backfill_all_agency_level_0s(
     pool: &CatenaryPostgresPool,
     country_index: &CountryIndex,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    use catenary::schema::gtfs::agencies;
+
     let mut conn = pool.get().await?;
-
-    let refreshed =
-        diesel::sql_query("UPDATE gtfs.agencies SET level_0s = ARRAY[]::TEXT[]")
-            .execute(&mut conn)
-            .await?;
-
-    let query = diesel::sql_query(
-        r#"
-        WITH agency_counts AS (
-            SELECT static_onestop_id, attempt_id, COUNT(*) AS agency_count
-            FROM gtfs.agencies
-            GROUP BY static_onestop_id, attempt_id
-        )
-        SELECT DISTINCT
-            a.static_onestop_id,
-            a.attempt_id,
-            a.agency_id,
-            ST_X(s.point) AS longitude,
-            ST_Y(s.point) AS latitude
-        FROM gtfs.agencies AS a
-        JOIN agency_counts AS counts
-          ON counts.static_onestop_id = a.static_onestop_id
-         AND counts.attempt_id = a.attempt_id
-        JOIN gtfs.routes AS r
-          ON r.onestop_feed_id = a.static_onestop_id
-         AND r.attempt_id = a.attempt_id
-         AND (
-             r.agency_id = a.agency_id
-             OR (r.agency_id IS NULL AND counts.agency_count = 1)
-         )
-        JOIN gtfs.stops AS s
-          ON s.onestop_feed_id = r.onestop_feed_id
-         AND s.attempt_id = r.attempt_id
-         AND r.route_id = ANY(s.routes)
-        WHERE s.point IS NOT NULL
-        "#,
-    );
-
-    let mut rows = query.load_stream::<AgencyStopPoint>(&mut conn).await?;
-    let mut countries_by_agency: HashMap<AgencyKey, BTreeSet<String>> = HashMap::new();
-
-    while let Some(row) = rows.try_next().await? {
-        let country_ids =
-            country_index.country_ids_for_coordinate(row.longitude, row.latitude);
-        if country_ids.is_empty() {
-            continue;
-        }
-
-        countries_by_agency
-            .entry(AgencyKey {
-                static_onestop_id: row.static_onestop_id,
-                attempt_id: row.attempt_id,
-                agency_id: row.agency_id,
-            })
-            .or_default()
-            .extend(country_ids);
-    }
-
-    drop(rows);
-
-    for (key, country_ids) in countries_by_agency {
-        use catenary::schema::gtfs::agencies::dsl;
-
-        diesel::update(
-            dsl::agencies
-                .filter(dsl::static_onestop_id.eq(key.static_onestop_id))
-                .filter(dsl::attempt_id.eq(key.attempt_id))
-                .filter(dsl::agency_id.eq(key.agency_id)),
-        )
-        .set(
-            dsl::level_0s.eq(Some(
-                country_ids.into_iter().map(Some).collect::<Vec<_>>(),
-            )),
-        )
-        .execute(&mut conn)
+    let agency_rows = agencies::agencies
+        .select((
+            agencies::static_onestop_id,
+            agencies::attempt_id,
+            agencies::agency_id,
+        ))
+        .load::<(String, String, String)>(&mut conn)
         .await?;
+    drop(conn);
+
+    let mut agencies_by_feed = HashMap::<(String, String), Vec<String>>::new();
+    for (static_onestop_id, attempt_id, agency_id) in agency_rows {
+        agencies_by_feed
+            .entry((static_onestop_id, attempt_id))
+            .or_default()
+            .push(agency_id);
     }
 
-    Ok(refreshed)
+    for agency_ids in agencies_by_feed.values_mut() {
+        agency_ids.sort();
+    }
+
+    let mut feed_work = agencies_by_feed.into_iter().collect::<Vec<_>>();
+    feed_work.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let updated_by_feed = stream::iter(feed_work.into_iter().map(
+        |((static_onestop_id, attempt_id), agency_ids)| async move {
+            process_feed_agency_level_0s(
+                pool,
+                country_index,
+                static_onestop_id,
+                attempt_id,
+                agency_ids,
+            )
+            .await
+        },
+    ))
+    .buffer_unordered(MAX_CONCURRENT_FEEDS)
+    .try_collect::<Vec<_>>()
+    .await?;
+
+    Ok(updated_by_feed.into_iter().sum())
 }
 
 #[cfg(test)]
