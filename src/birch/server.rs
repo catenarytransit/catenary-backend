@@ -1023,6 +1023,7 @@ async fn main() -> std::io::Result<()> {
             .service(proxy_for_mapbox_terrain_tiles)
             .service(vehicle_api::get_vehicle_data_endpoint)
             .service(vehicle_history_lookup::vehicle_history_lookup)
+            .service(vehicle_history_lookup::vehicle_history_of_route)
             .service(feed_metadata::feed_metadata_endpoint)
             .service(export_route_geom::export_route_geom)
             .service(block_api::block_api)

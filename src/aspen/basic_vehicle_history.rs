@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 const CANADA_COUNTRY_CODE: &str = "CA";
-const CALIFORNIA_LEVEL_1_CODE: &str = "US-CA";
+const ENABLED_US_LEVEL_1_CODES: &[&str] = &["US-CA", "US-IL", "US-NY", "US-DC", "US-MA"];
 const UPSERT_BATCH_SIZE: usize = 1_000;
 
 type DynError = Box<dyn Error + Send + Sync>;
@@ -62,7 +62,18 @@ fn rollout_enabled(
     level_1s: &Option<Vec<Option<String>>>,
 ) -> bool {
     contains_area_code(level_0s, CANADA_COUNTRY_CODE)
-        || contains_area_code(level_1s, CALIFORNIA_LEVEL_1_CODE)
+        || ENABLED_US_LEVEL_1_CODES
+            .iter()
+            .any(|code| contains_area_code(level_1s, code))
+}
+
+fn route_history_is_excluded(chateau_id: &str, route_type: Option<i16>) -> bool {
+    match chateau_id {
+        "metrolinktrains" => true,
+        "san-diego-mts" => route_type == Some(0),
+        "nyct" => matches!(route_type, Some(1) | Some(2)),
+        _ => false,
+    }
 }
 
 fn observation_from_trip(
@@ -336,10 +347,7 @@ fn resolve_agency<'a>(
     }
 
     if let Some(static_feed_id) = route_static_feed_id {
-        if let Some(agency_id) = agency_lookups
-            .agency_id_by_static_feed
-            .get(static_feed_id)
-        {
+        if let Some(agency_id) = agency_lookups.agency_id_by_static_feed.get(static_feed_id) {
             return agency_lookups
                 .scopes_by_agency_id
                 .get_key_value(agency_id)
@@ -432,6 +440,10 @@ pub async fn upsert_basic_vehicle_history(
     vehicle_routes_cache: &AHashMap<String, AspenisedVehicleRouteCache>,
     compressed_trip_cache: &CompressedTripInternalCache,
 ) -> Result<(), DynError> {
+    if route_history_is_excluded(chateau_id, None) {
+        return Ok(());
+    }
+
     let observations = collect_observations(vehicle_positions, trip_updates, compressed_trip_cache);
     if observations.is_empty() {
         return Ok(());
@@ -459,29 +471,27 @@ pub async fn upsert_basic_vehicle_history(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let route_static_feed_ids = load_route_static_feed_ids(
-        &mut conn,
-        chateau_id,
-        &route_ids_needing_feed_lookup,
-    )
-    .await?;
+    let route_static_feed_ids =
+        load_route_static_feed_ids(&mut conn, chateau_id, &route_ids_needing_feed_lookup).await?;
 
     let mut history_rows = Vec::new();
     let mut vehicle_rows = BTreeMap::new();
 
     for observation in observations.into_values() {
-        let route_agency_id = vehicle_routes_cache
-            .get(observation.route_id.as_str())
+        let route = vehicle_routes_cache.get(observation.route_id.as_str());
+        if route_history_is_excluded(chateau_id, route.map(|route| route.route_type)) {
+            continue;
+        }
+
+        let route_agency_id = route
             .and_then(|route| route.agency_id.as_deref())
             .filter(|agency_id| !agency_id.trim().is_empty());
         let route_static_feed_id = route_static_feed_ids
             .get(observation.route_id.as_str())
             .map(String::as_str);
-        let Some((agency_id, agency_scope)) = resolve_agency(
-            route_agency_id,
-            route_static_feed_id,
-            &agency_lookups,
-        ) else {
+        let Some((agency_id, agency_scope)) =
+            resolve_agency(route_agency_id, route_static_feed_id, &agency_lookups)
+        else {
             continue;
         };
         if !agency_scope.rollout_enabled {

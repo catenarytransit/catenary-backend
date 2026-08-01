@@ -1,3 +1,4 @@
+use actix_web::http::StatusCode;
 use actix_web::web::Query;
 use actix_web::{HttpResponse, Responder, web};
 use catenary::models::{BasicVehicleHistory, Route};
@@ -13,10 +14,18 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct VehicleHistoryLookupQuery {
-    vehicle: String,
+    vehicle: Option<String>,
     chateau: Option<String>,
     route_id: Option<String>,
     unified_agency_id: Option<String>,
+    start_date: Option<String>,
+    end_date: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct VehicleHistoryOfRouteQuery {
+    chateau: Option<String>,
+    route_id: Option<String>,
     start_date: Option<String>,
     end_date: Option<String>,
 }
@@ -31,6 +40,16 @@ pub struct RouteHistoryRow {
     block_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+pub struct VehicleHistoryOfRouteRow {
+    operation_date: NaiveDate,
+    vehicle_label: String,
+    trip_id: String,
+    trip_short_name: Option<String>,
+    direction_headsign: Option<String>,
+    block_id: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct VehicleHistoryLookupResponse {
     trip_history: Vec<RouteHistoryRow>,
@@ -38,7 +57,13 @@ pub struct VehicleHistoryLookupResponse {
     agency_timezone: String,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug, Serialize)]
+pub struct VehicleHistoryOfRouteResponse {
+    trip_history: Vec<VehicleHistoryOfRouteRow>,
+    agency_timezone: String,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct ResolvedAgency {
     unified_agency_id: String,
     timezone: String,
@@ -53,25 +78,59 @@ struct TripMetadata {
     block_id: Option<String>,
 }
 
+#[derive(Clone, Debug)]
+struct EnrichedHistoryRow {
+    operation_date: NaiveDate,
+    vehicle_label: String,
+    trip_id: String,
+    route_id: String,
+    trip_short_name: Option<String>,
+    direction_headsign: Option<String>,
+    block_id: Option<String>,
+}
+
 #[derive(Debug)]
 enum LookupError {
     BadRequest(String),
     NotFound(String),
     Conflict(String),
     Database(diesel::result::Error),
+    Internal(String),
+}
+
+#[derive(Debug, Serialize)]
+struct LookupErrorResponse {
+    error: LookupErrorBody,
+}
+
+#[derive(Debug, Serialize)]
+struct LookupErrorBody {
+    code: &'static str,
+    message: String,
 }
 
 impl LookupError {
     fn into_response(self) -> HttpResponse {
-        match self {
-            Self::BadRequest(message) => HttpResponse::BadRequest().body(message),
-            Self::NotFound(message) => HttpResponse::NotFound().body(message),
-            Self::Conflict(message) => HttpResponse::Conflict().body(message),
+        let (status, code, message) = match self {
+            Self::BadRequest(message) => (StatusCode::BAD_REQUEST, "bad_request", message),
+            Self::NotFound(message) => (StatusCode::NOT_FOUND, "not_found", message),
+            Self::Conflict(message) => (StatusCode::CONFLICT, "conflict", message),
             Self::Database(error) => {
-                eprintln!("vehicle_history_lookup database error: {error}");
-                HttpResponse::InternalServerError().body("Database query failed")
+                eprintln!("vehicle history lookup database error: {error}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "database_error",
+                    "Database query failed".to_string(),
+                )
             }
-        }
+            Self::Internal(message) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
+            }
+        };
+
+        HttpResponse::build(status).json(LookupErrorResponse {
+            error: LookupErrorBody { code, message },
+        })
     }
 }
 
@@ -94,6 +153,14 @@ fn non_empty_parameter<'a>(
     }
 }
 
+fn required_parameter<'a>(
+    value: &'a Option<String>,
+    field_name: &str,
+) -> Result<&'a str, LookupError> {
+    non_empty_parameter(value, field_name)?
+        .ok_or_else(|| LookupError::BadRequest(format!("{field_name} is required")))
+}
+
 fn parse_optional_date(
     value: Option<&str>,
     field_name: &str,
@@ -111,10 +178,31 @@ fn parse_optional_date(
         })
 }
 
+fn parse_date_range(
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+) -> Result<(Option<NaiveDate>, Option<NaiveDate>), LookupError> {
+    let start_date = parse_optional_date(start_date, "start_date")?;
+    let end_date = parse_optional_date(end_date, "end_date")?;
+
+    if matches!(
+        (start_date.as_ref(), end_date.as_ref()),
+        (Some(start), Some(end)) if start > end
+    ) {
+        return Err(LookupError::BadRequest(
+            "start_date cannot be after end_date".to_string(),
+        ));
+    }
+
+    Ok((start_date, end_date))
+}
+
+type ProductionAgency = (String, String, Option<String>, String);
+
 async fn production_agencies_for_chateau(
     conn: &mut diesel_async::AsyncPgConnection,
     chateau_id: &str,
-) -> Result<BTreeSet<(String, Option<String>, String)>, LookupError> {
+) -> Result<BTreeSet<ProductionAgency>, LookupError> {
     use catenary::schema::gtfs::{agencies, ingested_static};
 
     let rows = agencies::table
@@ -127,48 +215,60 @@ async fn production_agencies_for_chateau(
         .filter(ingested_static::production.eq(true))
         .filter(ingested_static::deleted.eq(false))
         .select((
+            agencies::static_onestop_id,
             agencies::agency_id,
             agencies::unified_agency_id,
             agencies::agency_timezone,
         ))
-        .load::<(String, Option<String>, String)>(conn)
+        .load::<ProductionAgency>(conn)
         .await?;
 
     Ok(rows.into_iter().collect())
 }
 
 fn resolve_one_agency(
-    agencies: BTreeSet<(String, Option<String>, String)>,
-    required_agency_id: Option<&str>,
+    agencies: BTreeSet<ProductionAgency>,
     no_match_message: &str,
 ) -> Result<ResolvedAgency, LookupError> {
-    let mut candidates = agencies
-        .into_iter()
-        .filter(|(agency_id, _, _)| {
-            required_agency_id.map_or(true, |required| agency_id == required)
-        })
-        .collect::<Vec<_>>();
-
-    if candidates.is_empty() {
+    if agencies.is_empty() {
         return Err(LookupError::NotFound(no_match_message.to_string()));
     }
 
-    candidates.sort();
-    candidates.dedup();
+    let candidates = agencies
+        .into_iter()
+        .filter_map(|(_, _, unified_agency_id, timezone)| {
+            unified_agency_id
+                .filter(|value| !value.trim().is_empty())
+                .map(|unified_agency_id| (unified_agency_id, timezone))
+        })
+        .collect::<BTreeSet<_>>();
 
-    if candidates.len() != 1 {
-        return Err(LookupError::Conflict(
-            "The lookup resolves to multiple agencies; provide chateau and route_id, or unified_agency_id"
-                .to_string(),
+    if candidates.is_empty() {
+        return Err(LookupError::NotFound(
+            "The resolved agency has no unified_agency_id".to_string(),
         ));
     }
 
-    let (_, unified_agency_id, timezone) = candidates.remove(0);
-    let unified_agency_id = unified_agency_id
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            LookupError::NotFound("The resolved agency has no unified_agency_id".to_string())
-        })?;
+    let unified_agency_ids = candidates
+        .iter()
+        .map(|(unified_agency_id, _)| unified_agency_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if unified_agency_ids.len() != 1 {
+        return Err(LookupError::Conflict(
+            "The lookup resolves to multiple unified agencies".to_string(),
+        ));
+    }
+
+    if candidates.len() != 1 {
+        return Err(LookupError::Conflict(
+            "The resolved unified agency has multiple agency timezones".to_string(),
+        ));
+    }
+
+    let (unified_agency_id, timezone) = candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| LookupError::NotFound("No production agency was found".to_string()))?;
 
     Ok(ResolvedAgency {
         unified_agency_id,
@@ -176,24 +276,20 @@ fn resolve_one_agency(
     })
 }
 
-async fn resolve_from_chateau(
+async fn candidate_agencies_from_chateau(
     conn: &mut diesel_async::AsyncPgConnection,
     chateau_id: &str,
     route_id_filter: Option<&str>,
-) -> Result<ResolvedAgency, LookupError> {
+) -> Result<BTreeSet<ProductionAgency>, LookupError> {
     use catenary::schema::gtfs::{ingested_static, routes};
 
     let agencies = production_agencies_for_chateau(conn, chateau_id).await?;
 
     let Some(route_id_filter) = route_id_filter else {
-        return resolve_one_agency(
-            agencies,
-            None,
-            "No production agency was found for the chateau",
-        );
+        return Ok(agencies);
     };
 
-    let route_agency_ids = routes::table
+    let route_owners = routes::table
         .inner_join(
             ingested_static::table.on(ingested_static::onestop_feed_id
                 .eq(routes::onestop_feed_id)
@@ -203,30 +299,51 @@ async fn resolve_from_chateau(
         .filter(routes::route_id.eq(route_id_filter))
         .filter(ingested_static::production.eq(true))
         .filter(ingested_static::deleted.eq(false))
-        .select(routes::agency_id)
-        .load::<Option<String>>(conn)
+        .select((routes::agency_id, routes::onestop_feed_id))
+        .load::<(Option<String>, String)>(conn)
         .await?
         .into_iter()
         .collect::<BTreeSet<_>>();
 
-    if route_agency_ids.is_empty() {
+    if route_owners.is_empty() {
         return Err(LookupError::NotFound(
             "No production route was found for chateau and route_id".to_string(),
         ));
     }
 
-    if route_agency_ids.len() != 1 {
-        return Err(LookupError::Conflict(
-            "The route_id resolves to multiple agencies in this chateau".to_string(),
+    let candidates = agencies
+        .into_iter()
+        .filter(|(static_onestop_id, agency_id, _, _)| {
+            route_owners.iter().any(|(route_agency_id, route_feed_id)| {
+                if route_feed_id != static_onestop_id {
+                    return false;
+                }
+
+                route_agency_id
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map_or(true, |route_agency_id| route_agency_id == agency_id)
+            })
+        })
+        .collect::<BTreeSet<_>>();
+
+    if candidates.is_empty() {
+        return Err(LookupError::NotFound(
+            "No production agency was found for the route".to_string(),
         ));
     }
 
-    let route_agency_id = route_agency_ids.into_iter().next().flatten();
-    resolve_one_agency(
-        agencies,
-        route_agency_id.as_deref(),
-        "No production agency was found for the route",
-    )
+    Ok(candidates)
+}
+
+async fn resolve_from_chateau(
+    conn: &mut diesel_async::AsyncPgConnection,
+    chateau_id: &str,
+    route_id_filter: Option<&str>,
+) -> Result<ResolvedAgency, LookupError> {
+    let candidates = candidate_agencies_from_chateau(conn, chateau_id, route_id_filter).await?;
+    resolve_one_agency(candidates, "No production agency was found for the chateau")
 }
 
 async fn resolve_from_unified_agency(
@@ -273,21 +390,107 @@ async fn resolve_from_unified_agency(
     })
 }
 
-async fn resolve_agency(
+async fn resolve_vehicle_from_candidates(
+    conn: &mut diesel_async::AsyncPgConnection,
+    agencies: BTreeSet<ProductionAgency>,
+    vehicle: &str,
+) -> Result<ResolvedAgency, LookupError> {
+    use catenary::schema::gtfs::basic_vehicles;
+
+    let candidate_unified_agency_ids = agencies
+        .iter()
+        .filter_map(|(_, _, unified_agency_id, _)| unified_agency_id.as_deref())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    if candidate_unified_agency_ids.is_empty() {
+        return Err(LookupError::NotFound(
+            "The resolved agency has no unified_agency_id".to_string(),
+        ));
+    }
+
+    let matching_unified_agency_ids = basic_vehicles::table
+        .filter(basic_vehicles::vehicle_label.eq(vehicle))
+        .filter(basic_vehicles::unified_agency_id.eq_any(&candidate_unified_agency_ids))
+        .select(basic_vehicles::unified_agency_id)
+        .load::<String>(conn)
+        .await?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+    if matching_unified_agency_ids.is_empty() {
+        return Err(LookupError::NotFound(
+            "No vehicle was found for the requested agency scope and vehicle label".to_string(),
+        ));
+    }
+
+    if matching_unified_agency_ids.len() != 1 {
+        return Err(LookupError::Conflict(
+            "The vehicle label exists under multiple unified agency ids".to_string(),
+        ));
+    }
+
+    let matching_unified_agency_id = matching_unified_agency_ids
+        .into_iter()
+        .next()
+        .ok_or_else(|| LookupError::NotFound("No matching vehicle was found".to_string()))?;
+    let matching_agencies = agencies
+        .into_iter()
+        .filter(|(_, _, unified_agency_id, _)| {
+            unified_agency_id.as_deref() == Some(matching_unified_agency_id.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+
+    resolve_one_agency(matching_agencies, "No matching production agency was found")
+}
+
+async fn ensure_vehicle_exists(
+    conn: &mut diesel_async::AsyncPgConnection,
+    resolved_agency: ResolvedAgency,
+    vehicle: &str,
+) -> Result<ResolvedAgency, LookupError> {
+    use catenary::schema::gtfs::basic_vehicles;
+
+    let vehicle_exists = basic_vehicles::table
+        .filter(basic_vehicles::unified_agency_id.eq(&resolved_agency.unified_agency_id))
+        .filter(basic_vehicles::vehicle_label.eq(vehicle))
+        .select(basic_vehicles::vehicle_label)
+        .first::<String>(conn)
+        .await
+        .optional()?;
+
+    vehicle_exists.map(|_| resolved_agency).ok_or_else(|| {
+        LookupError::NotFound(
+            "No vehicle was found for unified agency and vehicle label".to_string(),
+        )
+    })
+}
+
+async fn resolve_agency_for_vehicle(
     conn: &mut diesel_async::AsyncPgConnection,
     query: &VehicleHistoryLookupQuery,
+    vehicle: &str,
 ) -> Result<ResolvedAgency, LookupError> {
     let chateau = non_empty_parameter(&query.chateau, "chateau")?;
     let route_id = non_empty_parameter(&query.route_id, "route_id")?;
     let unified_agency_id = non_empty_parameter(&query.unified_agency_id, "unified_agency_id")?;
 
     match (chateau, route_id, unified_agency_id) {
-        (Some(chateau), None, None) => resolve_from_chateau(conn, chateau, None).await,
+        (Some(chateau), None, None) => {
+            let candidates = candidate_agencies_from_chateau(conn, chateau, None).await?;
+            resolve_vehicle_from_candidates(conn, candidates, vehicle).await
+        }
         (Some(chateau), Some(route_id), None) => {
-            resolve_from_chateau(conn, chateau, Some(route_id)).await
+            let candidates = candidate_agencies_from_chateau(conn, chateau, Some(route_id)).await?;
+            resolve_vehicle_from_candidates(conn, candidates, vehicle).await
         }
         (None, None, Some(unified_agency_id)) => {
-            resolve_from_unified_agency(conn, unified_agency_id).await
+            let resolved_agency = resolve_from_unified_agency(conn, unified_agency_id).await?;
+            ensure_vehicle_exists(conn, resolved_agency, vehicle).await
         }
         (None, Some(_), None) => Err(LookupError::BadRequest(
             "route_id requires chateau".to_string(),
@@ -511,101 +714,71 @@ async fn load_routes(
     Ok(route_map)
 }
 
-#[actix_web::get("/vehicle_history_lookup")]
-pub async fn vehicle_history_lookup(
-    pool: web::Data<Arc<CatenaryPostgresPool>>,
-    query: Query<VehicleHistoryLookupQuery>,
-) -> impl Responder {
-    use catenary::schema::gtfs::{basic_vehicle_history, basic_vehicles};
+enum HistoryLookup<'a> {
+    Vehicle {
+        unified_agency_id: &'a str,
+        vehicle_label: &'a str,
+    },
+    Route {
+        chateau: &'a str,
+        route_id: &'a str,
+        unified_agency_id: &'a str,
+    },
+}
 
-    let vehicle = query.vehicle.trim();
-    if vehicle.is_empty() {
-        return HttpResponse::BadRequest().body("vehicle cannot be empty");
-    }
+async fn load_history(
+    conn: &mut diesel_async::AsyncPgConnection,
+    lookup: HistoryLookup<'_>,
+    start_date: Option<NaiveDate>,
+    end_date: Option<NaiveDate>,
+) -> Result<Vec<BasicVehicleHistory>, LookupError> {
+    use catenary::schema::gtfs::basic_vehicle_history;
 
-    let start_date = match parse_optional_date(query.start_date.as_deref(), "start_date") {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
+    let mut query = basic_vehicle_history::table.into_boxed();
+    query = match lookup {
+        HistoryLookup::Vehicle {
+            unified_agency_id,
+            vehicle_label,
+        } => query
+            .filter(basic_vehicle_history::unified_agency_id.eq(unified_agency_id))
+            .filter(basic_vehicle_history::vehicle_label.eq(vehicle_label)),
+        HistoryLookup::Route {
+            chateau,
+            route_id,
+            unified_agency_id,
+        } => query
+            .filter(basic_vehicle_history::chateau.eq(chateau))
+            .filter(basic_vehicle_history::route_id.eq(route_id))
+            .filter(basic_vehicle_history::unified_agency_id.eq(unified_agency_id)),
     };
-    let end_date = match parse_optional_date(query.end_date.as_deref(), "end_date") {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
-
-    if matches!(
-        (start_date.as_ref(), end_date.as_ref()),
-        (Some(start), Some(end)) if start > end
-    ) {
-        return HttpResponse::BadRequest().body("start_date cannot be after end_date");
-    }
-
-    let mut conn = match pool.get().await {
-        Ok(conn) => conn,
-        Err(error) => {
-            eprintln!("vehicle_history_lookup pool error: {error}");
-            return HttpResponse::InternalServerError().body("Error connecting to postgres");
-        }
-    };
-
-    let resolved_agency = match resolve_agency(&mut conn, &query).await {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
-
-    let vehicle_exists = basic_vehicles::table
-        .filter(basic_vehicles::unified_agency_id.eq(&resolved_agency.unified_agency_id))
-        .filter(basic_vehicles::vehicle_label.eq(vehicle))
-        .select(basic_vehicles::vehicle_label)
-        .first::<String>(&mut conn)
-        .await
-        .optional();
-
-    match vehicle_exists {
-        Ok(Some(_)) => {}
-        Ok(None) => {
-            return HttpResponse::NotFound()
-                .body("No vehicle was found for unified agency and vehicle label");
-        }
-        Err(error) => return LookupError::Database(error).into_response(),
-    }
-
-    let mut history_query = basic_vehicle_history::table
-        .filter(basic_vehicle_history::unified_agency_id.eq(&resolved_agency.unified_agency_id))
-        .filter(basic_vehicle_history::vehicle_label.eq(vehicle))
-        .into_boxed();
 
     if let Some(start_date) = start_date {
-        history_query = history_query.filter(basic_vehicle_history::operation_date.ge(start_date));
+        query = query.filter(basic_vehicle_history::operation_date.ge(start_date));
     }
     if let Some(end_date) = end_date {
-        history_query = history_query.filter(basic_vehicle_history::operation_date.le(end_date));
+        query = query.filter(basic_vehicle_history::operation_date.le(end_date));
     }
 
-    let history = match history_query
+    query
         .order((
             basic_vehicle_history::operation_date.desc(),
+            basic_vehicle_history::vehicle_label.asc(),
             basic_vehicle_history::trip_id.asc(),
             basic_vehicle_history::route_id.asc(),
         ))
         .select(BasicVehicleHistory::as_select())
-        .load::<BasicVehicleHistory>(&mut conn)
+        .load::<BasicVehicleHistory>(conn)
         .await
-    {
-        Ok(rows) => rows,
-        Err(error) => return LookupError::Database(error).into_response(),
-    };
+        .map_err(LookupError::Database)
+}
 
-    let (trip_metadata, headsigns) = match load_trip_metadata(&mut conn, &history).await {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
-    let routes = match load_routes(&mut conn, &history).await {
-        Ok(value) => value,
-        Err(error) => return error.into_response(),
-    };
-
+async fn enrich_history(
+    conn: &mut diesel_async::AsyncPgConnection,
+    history: &[BasicVehicleHistory],
+) -> Result<Vec<EnrichedHistoryRow>, LookupError> {
+    let (trip_metadata, headsigns) = load_trip_metadata(conn, history).await?;
     let mut seen_history = HashSet::new();
-    let mut trip_history = Vec::new();
+    let mut enriched_history = Vec::new();
 
     for history_row in history {
         let metadata_key = (
@@ -630,6 +803,7 @@ pub async fn vehicle_history_lookup(
             .or_else(|| metadata.and_then(|metadata| metadata.block_id.clone()));
         let dedupe_key = (
             history_row.operation_date,
+            history_row.vehicle_label.clone(),
             history_row.trip_id.clone(),
             history_row.route_id.clone(),
             block_id.clone(),
@@ -639,19 +813,155 @@ pub async fn vehicle_history_lookup(
             continue;
         }
 
-        trip_history.push(RouteHistoryRow {
+        enriched_history.push(EnrichedHistoryRow {
             operation_date: history_row.operation_date,
-            trip_id: history_row.trip_id,
-            route_id: history_row.route_id,
+            vehicle_label: history_row.vehicle_label.clone(),
+            trip_id: history_row.trip_id.clone(),
+            route_id: history_row.route_id.clone(),
             trip_short_name: metadata.and_then(|metadata| metadata.trip_short_name.clone()),
             direction_headsign,
             block_id,
         });
     }
 
+    Ok(enriched_history)
+}
+
+#[actix_web::get("/vehicle_history_lookup")]
+pub async fn vehicle_history_lookup(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    query: Query<VehicleHistoryLookupQuery>,
+) -> impl Responder {
+    let vehicle = match required_parameter(&query.vehicle, "vehicle") {
+        Ok(vehicle) => vehicle,
+        Err(error) => return error.into_response(),
+    };
+    let (start_date, end_date) =
+        match parse_date_range(query.start_date.as_deref(), query.end_date.as_deref()) {
+            Ok(value) => value,
+            Err(error) => return error.into_response(),
+        };
+
+    let mut conn = match pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("vehicle_history_lookup pool error: {error}");
+            return LookupError::Internal("Error connecting to postgres".to_string())
+                .into_response();
+        }
+    };
+
+    let resolved_agency = match resolve_agency_for_vehicle(&mut conn, &query, vehicle).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+
+    let history = match load_history(
+        &mut conn,
+        HistoryLookup::Vehicle {
+            unified_agency_id: &resolved_agency.unified_agency_id,
+            vehicle_label: vehicle,
+        },
+        start_date,
+        end_date,
+    )
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return error.into_response(),
+    };
+
+    let enriched_history = match enrich_history(&mut conn, &history).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let routes = match load_routes(&mut conn, &history).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let trip_history = enriched_history
+        .into_iter()
+        .map(|history_row| RouteHistoryRow {
+            operation_date: history_row.operation_date,
+            trip_id: history_row.trip_id,
+            route_id: history_row.route_id,
+            trip_short_name: history_row.trip_short_name,
+            direction_headsign: history_row.direction_headsign,
+            block_id: history_row.block_id,
+        })
+        .collect();
+
     HttpResponse::Ok().json(VehicleHistoryLookupResponse {
         trip_history,
         routes,
+        agency_timezone: resolved_agency.timezone,
+    })
+}
+
+#[actix_web::get("/vehicle_history_of_route")]
+pub async fn vehicle_history_of_route(
+    pool: web::Data<Arc<CatenaryPostgresPool>>,
+    query: Query<VehicleHistoryOfRouteQuery>,
+) -> impl Responder {
+    let chateau = match required_parameter(&query.chateau, "chateau") {
+        Ok(chateau) => chateau,
+        Err(error) => return error.into_response(),
+    };
+    let route_id = match required_parameter(&query.route_id, "route_id") {
+        Ok(route_id) => route_id,
+        Err(error) => return error.into_response(),
+    };
+    let (start_date, end_date) =
+        match parse_date_range(query.start_date.as_deref(), query.end_date.as_deref()) {
+            Ok(value) => value,
+            Err(error) => return error.into_response(),
+        };
+
+    let mut conn = match pool.get().await {
+        Ok(conn) => conn,
+        Err(error) => {
+            eprintln!("vehicle_history_of_route pool error: {error}");
+            return LookupError::Internal("Error connecting to postgres".to_string())
+                .into_response();
+        }
+    };
+
+    let resolved_agency = match resolve_from_chateau(&mut conn, chateau, Some(route_id)).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let history = match load_history(
+        &mut conn,
+        HistoryLookup::Route {
+            chateau,
+            route_id,
+            unified_agency_id: &resolved_agency.unified_agency_id,
+        },
+        start_date,
+        end_date,
+    )
+    .await
+    {
+        Ok(rows) => rows,
+        Err(error) => return error.into_response(),
+    };
+    let trip_history = match enrich_history(&mut conn, &history).await {
+        Ok(rows) => rows
+            .into_iter()
+            .map(|history_row| VehicleHistoryOfRouteRow {
+                operation_date: history_row.operation_date,
+                vehicle_label: history_row.vehicle_label,
+                trip_id: history_row.trip_id,
+                trip_short_name: history_row.trip_short_name,
+                direction_headsign: history_row.direction_headsign,
+                block_id: history_row.block_id,
+            })
+            .collect(),
+        Err(error) => return error.into_response(),
+    };
+
+    HttpResponse::Ok().json(VehicleHistoryOfRouteResponse {
+        trip_history,
         agency_timezone: resolved_agency.timezone,
     })
 }
