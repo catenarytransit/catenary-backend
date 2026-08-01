@@ -13,7 +13,7 @@ use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
 use diesel_async::RunQueryDsl;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 const CANADA_COUNTRY_CODE: &str = "CA";
@@ -36,6 +36,12 @@ struct AgencyScope {
     rollout_enabled: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct AgencyScopeAccumulator {
+    unified_agency_ids: BTreeSet<String>,
+    rollout_enabled: bool,
+}
+
 fn contains_area_code(values: &Option<Vec<Option<String>>>, expected: &str) -> bool {
     values
         .as_deref()
@@ -43,6 +49,14 @@ fn contains_area_code(values: &Option<Vec<Option<String>>>, expected: &str) -> b
         .iter()
         .flatten()
         .any(|value| value.eq_ignore_ascii_case(expected))
+}
+
+fn rollout_enabled(
+    level_0s: &Option<Vec<Option<String>>>,
+    level_1s: &Option<Vec<Option<String>>>,
+) -> bool {
+    contains_area_code(level_0s, CANADA_COUNTRY_CODE)
+        || contains_area_code(level_1s, CALIFORNIA_LEVEL_1_CODE)
 }
 
 fn observation_from_trip(
@@ -81,7 +95,7 @@ fn collect_observations(
                 vehicle_position
                     .vehicle
                     .as_ref()
-                    .and_then(|vehicle| vehicle.label.as_deref()),
+                    .and_then(|vehicle| vehicle.label.as_deref().or(vehicle.id.as_deref())),
                 trip.trip_id.as_deref(),
                 trip.route_id.as_deref(),
                 trip.start_date.clone(),
@@ -106,7 +120,7 @@ fn collect_observations(
             trip_update
                 .vehicle
                 .as_ref()
-                .and_then(|vehicle| vehicle.label.as_deref()),
+                .and_then(|vehicle| vehicle.label.as_deref().or(vehicle.id.as_deref())),
             trip_update.trip.trip_id.as_deref(),
             trip_update.trip.route_id.as_deref(),
             trip_update.trip.start_date.clone(),
@@ -155,28 +169,80 @@ async fn load_agency_scopes(
         )>(conn)
         .await?;
 
-    let mut scopes = BTreeMap::new();
-    for (agency_id, unified_agency_id, level_0s, level_1s) in rows {
-        let candidate = AgencyScope {
-            unified_agency_id: unified_agency_id.filter(|value| !value.trim().is_empty()),
-            rollout_enabled: contains_area_code(&level_0s, CANADA_COUNTRY_CODE)
-                || contains_area_code(&level_1s, CALIFORNIA_LEVEL_1_CODE),
-        };
+    // The rollout metadata is sometimes available on gtfs.unified_agency before it has
+    // been copied onto every production gtfs.agencies row. Metro Los Angeles is one such
+    // case: its unified agency is US-CA, so it must be considered eligible even when an
+    // individual static-feed agency row has NULL level_0s/level_1s.
+    let unified_agency_ids = rows
+        .iter()
+        .filter_map(|(_, unified_agency_id, _, _)| unified_agency_id.as_deref())
+        .map(str::trim)
+        .filter(|unified_agency_id| !unified_agency_id.is_empty())
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
 
-        scopes
-            .entry(agency_id)
-            .and_modify(|existing: &mut AgencyScope| {
-                // A duplicated agency_id with conflicting metadata is ambiguous. Do not
-                // persist it until the route can be tied to one agency unambiguously.
-                if existing != &candidate {
-                    existing.unified_agency_id = None;
-                    existing.rollout_enabled = false;
-                }
-            })
-            .or_insert(candidate);
+    let unified_rollout = if unified_agency_ids.is_empty() {
+        BTreeMap::new()
+    } else {
+        unified_agency::table
+            .filter(unified_agency::id.eq_any(&unified_agency_ids))
+            .select((
+                unified_agency::id,
+                unified_agency::level_0s,
+                unified_agency::level_1s,
+            ))
+            .load::<(
+                String,
+                Option<Vec<Option<String>>>,
+                Option<Vec<Option<String>>>,
+            )>(conn)
+            .await?
+            .into_iter()
+            .map(|(id, level_0s, level_1s)| (id, rollout_enabled(&level_0s, &level_1s)))
+            .collect::<BTreeMap<_, _>>()
+    };
+
+    // A chateau can contain more than one production static feed with the same agency_id.
+    // Missing spatial metadata in one duplicate must not disable a valid agency found in
+    // another duplicate. Merge eligibility with OR and only drop the unified ID itself if
+    // genuinely conflicting unified IDs are present.
+    let mut accumulators = BTreeMap::<String, AgencyScopeAccumulator>::new();
+    for (agency_id, unified_agency_id, level_0s, level_1s) in rows {
+        let unified_agency_id = unified_agency_id.filter(|value| !value.trim().is_empty());
+        let is_rollout_enabled = rollout_enabled(&level_0s, &level_1s)
+            || unified_agency_id
+                .as_ref()
+                .and_then(|id| unified_rollout.get(id))
+                .copied()
+                .unwrap_or(false);
+
+        let accumulator = accumulators.entry(agency_id).or_default();
+        accumulator.rollout_enabled |= is_rollout_enabled;
+        if let Some(unified_agency_id) = unified_agency_id {
+            accumulator.unified_agency_ids.insert(unified_agency_id);
+        }
     }
 
-    Ok(scopes)
+    Ok(accumulators
+        .into_iter()
+        .map(|(agency_id, accumulator)| {
+            let unified_agency_id = if accumulator.unified_agency_ids.len() == 1 {
+                accumulator.unified_agency_ids.into_iter().next()
+            } else {
+                None
+            };
+
+            (
+                agency_id,
+                AgencyScope {
+                    unified_agency_id,
+                    rollout_enabled: accumulator.rollout_enabled,
+                },
+            )
+        })
+        .collect())
 }
 
 fn resolve_agency<'a>(

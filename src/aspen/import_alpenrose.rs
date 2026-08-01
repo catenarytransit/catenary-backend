@@ -3760,21 +3760,61 @@ pub async fn new_rt_data(
         vehicle_positions_rtree_by_route_type.insert(route_type, rstar::RTree::bulk_load(elements));
     }
 
-    if let Err(error) = crate::basic_vehicle_history::upsert_basic_vehicle_history(
-        pool.as_ref(),
-        chateau_id,
-        realtime_feed_id,
-        &aspenised_vehicle_positions,
-        &trip_updates,
-        &vehicle_routes_cache,
-        &compressed_trip_internal_cache,
-    )
-    .await
-    {
-        eprintln!(
-            "Failed to upsert basic vehicle history for chateau {} realtime feed {}: {}",
-            chateau_id, realtime_feed_id, error
-        );
+    // new_rt_data rebuilds the complete chateau and therefore the maps above contain
+    // entities from every realtime feed in the chateau. Do not stamp all of those rows
+    // with the one feed that happened to trigger this rebuild. That previously caused
+    // vehicle histories to be written under alert-only feeds and could starve the actual
+    // Los Angeles vehicle feed when work was coalesced by chateau.
+    for source_realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
+        let mut history_vehicle_positions = AHashMap::new();
+        if let Some(vehicle_feed) = authoritative_gtfs_rt
+            .get_async(&(
+                source_realtime_feed_id.clone(),
+                GtfsRtType::VehiclePositions,
+            ))
+            .await
+        {
+            for entity in &vehicle_feed.get().entity {
+                if let Some(vehicle_position) = aspenised_vehicle_positions.get(entity.id.as_str())
+                {
+                    history_vehicle_positions.insert(entity.id.clone(), vehicle_position.clone());
+                }
+            }
+        }
+
+        let mut history_trip_updates = AHashMap::new();
+        if let Some(trip_feed) = authoritative_gtfs_rt
+            .get_async(&(source_realtime_feed_id.clone(), GtfsRtType::TripUpdates))
+            .await
+        {
+            for entity in &trip_feed.get().entity {
+                if let Some(trip_update) = trip_updates.get(entity.id.as_str()) {
+                    history_trip_updates
+                        .insert(CompactString::new(&entity.id), trip_update.clone());
+                }
+            }
+        }
+
+        if history_vehicle_positions.is_empty() && history_trip_updates.is_empty() {
+            continue;
+        }
+
+        if let Err(error) = crate::basic_vehicle_history::upsert_basic_vehicle_history(
+            pool.as_ref(),
+            chateau_id,
+            source_realtime_feed_id,
+            &history_vehicle_positions,
+            &history_trip_updates,
+            &vehicle_routes_cache,
+            &compressed_trip_internal_cache,
+        )
+        .await
+        {
+            eprintln!(
+                "Failed to upsert basic vehicle history for chateau {} realtime feed {}: {}",
+                chateau_id, source_realtime_feed_id, error
+            );
+        }
     }
 
     let fast_hash_of_routes =
