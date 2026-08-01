@@ -35,13 +35,47 @@ pub mod gtfs {
             chateau -> Text,
             unified_agency_id -> Nullable<Text>,
             level_0s -> Nullable<Array<Nullable<Text>>>,
-            bbox -> Nullable<Geometry>,
             level_1s -> Nullable<Array<Nullable<Text>>>,
             has_rail -> Bool,
             has_tram -> Bool,
             has_metro -> Bool,
             has_ferry -> Bool,
             has_bus -> Bool,
+            bbox -> Nullable<Geometry>,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.basic_vehicle_history (realtime_feed_id, vehicle_label, operation_date, trip_id) {
+            realtime_feed_id -> Text,
+            chateau -> Text,
+            route_id -> Text,
+            agency_id -> Nullable<Text>,
+            unified_agency_id -> Nullable<Text>,
+            vehicle_label -> Text,
+            trip_id -> Text,
+            block_id -> Nullable<Text>,
+            operation_date -> Date,
+        }
+    }
+
+    diesel::table! {
+        use postgis_diesel::sql_types::*;
+        use diesel::sql_types::*;
+        use crate::custom_pg_types::*;
+
+        gtfs.basic_vehicles (unified_agency_id, vehicle_label) {
+            unified_agency_id -> Text,
+            vehicle_label -> Text,
+            trip_id -> Nullable<Text>,
+            block_id -> Nullable<Text>,
+            model -> Nullable<Text>,
+            manufacturer -> Nullable<Text>,
+            manufacture_year -> Nullable<Int4>,
         }
     }
 
@@ -673,8 +707,9 @@ pub mod gtfs {
             no_home_country_europe -> Bool,
             chateaux -> Array<Nullable<Text>>,
             level_0s -> Nullable<Array<Nullable<Text>>>,
-            bbox -> Nullable<Geometry>,
             level_1s -> Nullable<Array<Nullable<Text>>>,
+            bbox -> Nullable<Geometry>,
+            has_vehicle_histories -> Bool,
         }
     }
 
@@ -706,6 +741,8 @@ pub mod gtfs {
     diesel::allow_tables_to_appear_in_same_query!(
         admin_credentials,
         agencies,
+        basic_vehicle_history,
+        basic_vehicles,
         calendar,
         calendar_dates,
         chateau_metadata_last_updated_time,
