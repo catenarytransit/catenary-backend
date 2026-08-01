@@ -100,7 +100,7 @@ fn domain_name_without_tld(host: &str) -> Option<&str> {
 
     match labels.len() {
         0 => None,
-        1 => labels.first().copied(),
+        1 => labels.as_slice().first().copied(),
         len => {
             let tld = labels[len - 1];
             let second_level = labels[len - 2];
@@ -116,6 +116,13 @@ fn domain_name_without_tld(host: &str) -> Option<&str> {
             labels.get(domain_index).copied()
         }
     }
+}
+
+fn effective_route_agency_id<'a>(
+    route_agency_id: Option<&'a str>,
+    sole_agency_id: Option<&'a str>,
+) -> Option<&'a str> {
+    route_agency_id.or(sole_agency_id)
 }
 
 pub fn unified_agency_id_for(agency_name: &str, agency_url: &str) -> String {
@@ -270,11 +277,11 @@ impl CountryIndex {
                 .iter()
                 .filter_map(|route_id| gtfs.routes.get(route_id))
                 .filter_map(|route| {
-                    route
-                        .agency_id
-                        .as_deref()
-                        .map(str::to_owned)
-                        .or_else(|| sole_agency_id.clone())
+                    effective_route_agency_id(
+                        route.agency_id.as_deref(),
+                        sole_agency_id.as_deref(),
+                    )
+                    .map(str::to_owned)
                 })
                 .collect::<HashSet<_>>();
 
@@ -455,7 +462,25 @@ pub async fn backfill_all_agency_level_0s(
 
 #[cfg(test)]
 mod tests {
-    use super::unified_agency_id_for;
+    use super::{effective_route_agency_id, unified_agency_id_for};
+
+    #[test]
+    fn routes_without_agency_id_use_the_only_feed_agency() {
+        assert_eq!(effective_route_agency_id(None, Some("")), Some(""));
+        assert_eq!(
+            effective_route_agency_id(None, Some("sole-agency")),
+            Some("sole-agency")
+        );
+    }
+
+    #[test]
+    fn route_agency_fallback_is_not_used_for_multi_agency_feeds() {
+        assert_eq!(effective_route_agency_id(None, None), None);
+        assert_eq!(
+            effective_route_agency_id(Some("explicit-agency"), Some("sole-agency")),
+            Some("explicit-agency")
+        );
+    }
 
     #[test]
     fn separates_translink_agencies_by_url() {
