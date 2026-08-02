@@ -3,7 +3,7 @@ use actix_web::web::Query;
 use actix_web::{HttpResponse, Responder, web};
 use catenary::models::{BasicVehicleHistory, Route};
 use catenary::postgres_tools::CatenaryPostgresPool;
-use chrono::NaiveDate;
+use chrono::{Duration, LocalResult, NaiveDate, TimeZone};
 use compact_str::CompactString;
 use diesel::SelectableHelper;
 use diesel::prelude::*;
@@ -33,6 +33,7 @@ pub struct VehicleHistoryOfRouteQuery {
 #[derive(Clone, Debug, Serialize)]
 pub struct RouteHistoryRow {
     operation_date: NaiveDate,
+    unix_start_time: Option<u64>,
     trip_id: String,
     route_id: String,
     trip_short_name: Option<String>,
@@ -76,11 +77,13 @@ struct TripMetadata {
     itinerary_pattern_id: String,
     trip_short_name: Option<String>,
     block_id: Option<String>,
+    start_time: u32,
 }
 
 #[derive(Clone, Debug)]
 struct EnrichedHistoryRow {
     operation_date: NaiveDate,
+    start_time: Option<u32>,
     vehicle_label: String,
     trip_id: String,
     route_id: String,
@@ -195,6 +198,42 @@ fn parse_date_range(
     }
 
     Ok((start_date, end_date))
+}
+
+fn gtfs_start_time_to_unix_start_time(
+    operation_date: NaiveDate,
+    gtfs_start_time: u32,
+    timezone: &chrono_tz::Tz,
+) -> Result<u64, LookupError> {
+    let local_noon = operation_date.and_hms_opt(12, 0, 0).ok_or_else(|| {
+        LookupError::Internal("Invalid vehicle history operation date".to_string())
+    })?;
+    let local_noon = match timezone.from_local_datetime(&local_noon) {
+        LocalResult::Single(noon) => noon,
+        LocalResult::Ambiguous(first, _) => first,
+        LocalResult::None => {
+            return Err(LookupError::Internal(
+                "Could not resolve local noon for the agency timezone".to_string(),
+            ));
+        }
+    };
+
+    // Resolve local noon first, then use the instant exactly 12 hours earlier as
+    // the service-day reference midnight. GTFS start_time remains elapsed seconds
+    // from that reference, including values greater than 24:00:00.
+    let reference_midnight = local_noon
+        .checked_sub_signed(Duration::hours(12))
+        .ok_or_else(|| {
+            LookupError::Internal("Vehicle history reference time overflowed".to_string())
+        })?;
+    let unix_start_time = reference_midnight
+        .checked_add_signed(Duration::seconds(i64::from(gtfs_start_time)))
+        .ok_or_else(|| LookupError::Internal("Vehicle history start time overflowed".to_string()))?
+        .timestamp();
+
+    u64::try_from(unix_start_time).map_err(|_| {
+        LookupError::Internal("Vehicle history start time is before the Unix epoch".to_string())
+    })
 }
 
 type ProductionAgency = (String, String, Option<String>, String);
@@ -560,6 +599,7 @@ async fn load_trip_metadata(
             trips_compressed::trip_short_name,
             trips_compressed::block_id,
             trips_compressed::itinerary_pattern_id,
+            trips_compressed::start_time,
         ))
         .load::<(
             String,
@@ -570,6 +610,7 @@ async fn load_trip_metadata(
             Option<CompactString>,
             Option<String>,
             String,
+            u32,
         )>(conn)
         .await?;
 
@@ -588,6 +629,7 @@ async fn load_trip_metadata(
         trip_short_name,
         block_id,
         itinerary_pattern_id,
+        start_time,
     ) in trip_rows
     {
         let key = (chateau, trip_id, route_id);
@@ -601,6 +643,7 @@ async fn load_trip_metadata(
             itinerary_pattern_id,
             trip_short_name: trip_short_name.map(|value| value.to_string()),
             block_id,
+            start_time,
         });
     }
 
@@ -815,6 +858,7 @@ async fn enrich_history(
 
         enriched_history.push(EnrichedHistoryRow {
             operation_date: history_row.operation_date,
+            start_time: metadata.map(|metadata| metadata.start_time),
             vehicle_label: history_row.vehicle_label.clone(),
             trip_id: history_row.trip_id.clone(),
             route_id: history_row.route_id.clone(),
@@ -879,17 +923,53 @@ pub async fn vehicle_history_lookup(
         Ok(value) => value,
         Err(error) => return error.into_response(),
     };
-    let trip_history = enriched_history
-        .into_iter()
-        .map(|history_row| RouteHistoryRow {
+    let agency_timezone = match resolved_agency.timezone.parse::<chrono_tz::Tz>() {
+        Ok(timezone) => timezone,
+        Err(_) => {
+            return LookupError::Internal(format!(
+                "Invalid agency timezone: {}",
+                resolved_agency.timezone
+            ))
+            .into_response();
+        }
+    };
+    let mut trip_history = Vec::with_capacity(enriched_history.len());
+
+    for history_row in enriched_history {
+        let unix_start_time = match history_row.start_time {
+            Some(start_time) => match gtfs_start_time_to_unix_start_time(
+                history_row.operation_date,
+                start_time,
+                &agency_timezone,
+            ) {
+                Ok(unix_start_time) => Some(unix_start_time),
+                Err(error) => return error.into_response(),
+            },
+            None => None,
+        };
+
+        trip_history.push(RouteHistoryRow {
             operation_date: history_row.operation_date,
+            unix_start_time,
             trip_id: history_row.trip_id,
             route_id: history_row.route_id,
             trip_short_name: history_row.trip_short_name,
             direction_headsign: history_row.direction_headsign,
             block_id: history_row.block_id,
-        })
-        .collect();
+        });
+    }
+
+    trip_history.sort_by(|left, right| {
+        right
+            .operation_date
+            .cmp(&left.operation_date)
+            .then_with(|| {
+                left.unix_start_time
+                    .unwrap_or(u64::MAX)
+                    .cmp(&right.unix_start_time.unwrap_or(u64::MAX))
+            })
+            .then_with(|| left.trip_id.cmp(&right.trip_id))
+    });
 
     HttpResponse::Ok().json(VehicleHistoryLookupResponse {
         trip_history,
