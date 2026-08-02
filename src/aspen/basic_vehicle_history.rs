@@ -8,17 +8,19 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::schema::gtfs::{
     agencies, basic_vehicle_history, basic_vehicles, ingested_static, routes, unified_agency,
 };
-use chrono::NaiveDate;
+use chrono::{DateTime, Days, Duration, LocalResult, NaiveDate, NaiveTime, TimeZone, Utc};
 use compact_str::CompactString;
 use diesel::prelude::*;
 use diesel::upsert::excluded;
 use diesel_async::RunQueryDsl;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 const CANADA_COUNTRY_CODE: &str = "CA";
 const ENABLED_US_LEVEL_1_CODES: &[&str] = &["US-CA", "US-IL", "US-NY", "US-DC", "US-MA"];
 const UPSERT_BATCH_SIZE: usize = 1_000;
+const MAX_EARLY_START_SECONDS: i64 = 2 * 60 * 60;
 
 type DynError = Box<dyn Error + Send + Sync>;
 
@@ -27,13 +29,16 @@ struct VehicleTripObservation {
     vehicle_label: String,
     trip_id: String,
     route_id: String,
-    operation_date: NaiveDate,
+    operation_date: Option<NaiveDate>,
+    observed_at_unix: Option<u64>,
+    gtfs_start_time: Option<u32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct AgencyScope {
     unified_agency_id: Option<String>,
     rollout_enabled: bool,
+    agency_timezone: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +50,7 @@ struct AgencyLookups {
 #[derive(Clone, Debug, Default)]
 struct AgencyScopeAccumulator {
     unified_agency_ids: BTreeSet<String>,
+    agency_timezones: BTreeSet<String>,
     rollout_enabled: bool,
 }
 
@@ -69,41 +75,89 @@ fn rollout_enabled(
 
 fn route_history_is_excluded(chateau_id: &str, route_type: Option<i16>) -> bool {
     match chateau_id {
-        "metrolinktrains" => true,
+        "gotransit" | "metrolinktrains" | "upexpress" => true,
         "san-diego-mts" => route_type == Some(0),
         "nyct" => matches!(route_type, Some(1) | Some(2)),
         _ => false,
     }
 }
 
+fn parse_gtfs_start_time(value: Option<&str>) -> Option<u32> {
+    let mut parts = value?.split(':');
+    let hours = parts.next()?.parse::<u32>().ok()?;
+    let minutes = parts.next()?.parse::<u32>().ok()?;
+    let seconds = parts.next()?.parse::<u32>().ok()?;
+    if parts.next().is_some() || minutes >= 60 || seconds >= 60 {
+        return None;
+    }
+
+    hours
+        .checked_mul(60 * 60)?
+        .checked_add(minutes.checked_mul(60)?)?
+        .checked_add(seconds)
+}
+
 fn observation_from_trip(
     vehicle_label: Option<&str>,
     trip_id: Option<&str>,
     route_id: Option<&str>,
+    start_time: Option<&str>,
     operation_date: Option<NaiveDate>,
+    observed_at_unix: Option<u64>,
     compressed_trip_cache: &CompressedTripInternalCache,
 ) -> Option<VehicleTripObservation> {
     let vehicle_label = vehicle_label.filter(|value| !value.trim().is_empty())?;
     let trip_id = trip_id.filter(|value| !value.trim().is_empty())?;
-    let operation_date = operation_date?;
     let compressed_trip = compressed_trip_cache.compressed_trips.get(trip_id);
     let route_id = route_id
         .filter(|value| !value.trim().is_empty())
         .or_else(|| compressed_trip.map(|trip| trip.route_id.as_str()))?;
+    let gtfs_start_time = parse_gtfs_start_time(start_time)
+        .or_else(|| compressed_trip.map(|trip| trip.start_time));
 
     Some(VehicleTripObservation {
         vehicle_label: vehicle_label.to_string(),
         trip_id: trip_id.to_string(),
         route_id: route_id.to_string(),
         operation_date,
+        observed_at_unix,
+        gtfs_start_time,
     })
+}
+
+fn merge_observation(
+    observations: &mut BTreeMap<(String, String), VehicleTripObservation>,
+    observation: VehicleTripObservation,
+) {
+    let key = (
+        observation.vehicle_label.clone(),
+        observation.trip_id.clone(),
+    );
+
+    match observations.entry(key) {
+        Entry::Vacant(entry) => {
+            entry.insert(observation);
+        }
+        Entry::Occupied(mut entry) => {
+            let existing = entry.get_mut();
+            if existing.operation_date.is_none() {
+                existing.operation_date = observation.operation_date;
+            }
+            if existing.gtfs_start_time.is_none() {
+                existing.gtfs_start_time = observation.gtfs_start_time;
+            }
+            if observation.observed_at_unix > existing.observed_at_unix {
+                existing.observed_at_unix = observation.observed_at_unix;
+            }
+        }
+    }
 }
 
 fn collect_observations(
     vehicle_positions: &AHashMap<String, AspenisedVehiclePosition>,
     trip_updates: &AHashMap<CompactString, AspenisedTripUpdate>,
     compressed_trip_cache: &CompressedTripInternalCache,
-) -> BTreeMap<(String, NaiveDate, String), VehicleTripObservation> {
+) -> BTreeMap<(String, String), VehicleTripObservation> {
     let mut observations = BTreeMap::new();
 
     for vehicle_position in vehicle_positions.values() {
@@ -115,24 +169,20 @@ fn collect_observations(
                     .and_then(|vehicle| vehicle.label.as_deref().or(vehicle.id.as_deref())),
                 trip.trip_id.as_deref(),
                 trip.route_id.as_deref(),
-                trip.start_date.clone(),
+                trip.start_time.as_deref(),
+                trip.start_date,
+                vehicle_position.timestamp,
                 compressed_trip_cache,
             )
         });
 
         if let Some(observation) = observation {
-            observations.insert(
-                (
-                    observation.vehicle_label.clone(),
-                    observation.operation_date,
-                    observation.trip_id.clone(),
-                ),
-                observation,
-            );
+            merge_observation(&mut observations, observation);
         }
     }
 
     for trip_update in trip_updates.values() {
+        let trip_properties = trip_update.trip_properties.as_ref();
         let observation = observation_from_trip(
             trip_update
                 .vehicle
@@ -140,23 +190,102 @@ fn collect_observations(
                 .and_then(|vehicle| vehicle.label.as_deref().or(vehicle.id.as_deref())),
             trip_update.trip.trip_id.as_deref(),
             trip_update.trip.route_id.as_deref(),
-            trip_update.trip.start_date.clone(),
+            trip_update
+                .trip
+                .start_time
+                .as_deref()
+                .or_else(|| trip_properties.and_then(|properties| properties.start_time.as_deref())),
+            trip_update
+                .trip
+                .start_date
+                .or_else(|| trip_properties.and_then(|properties| properties.start_date)),
+            trip_update.timestamp,
             compressed_trip_cache,
         );
 
         if let Some(observation) = observation {
-            observations.insert(
-                (
-                    observation.vehicle_label.clone(),
-                    observation.operation_date,
-                    observation.trip_id.clone(),
-                ),
-                observation,
-            );
+            merge_observation(&mut observations, observation);
         }
     }
 
     observations
+}
+
+fn local_service_start(
+    service_date: NaiveDate,
+    gtfs_start_time: u32,
+    timezone: chrono_tz::Tz,
+) -> Option<DateTime<chrono_tz::Tz>> {
+    let service_day_offset = u64::from(gtfs_start_time / (24 * 60 * 60));
+    let seconds_after_midnight = gtfs_start_time % (24 * 60 * 60);
+    let local_date = service_date.checked_add_days(Days::new(service_day_offset))?;
+    let local_time = NaiveTime::from_num_seconds_from_midnight_opt(seconds_after_midnight, 0)?;
+    let local_start = local_date.and_time(local_time);
+
+    match timezone.from_local_datetime(&local_start) {
+        LocalResult::Single(value) => Some(value),
+        LocalResult::Ambiguous(first, second) => Some(first.min(second)),
+        LocalResult::None => None,
+    }
+}
+
+fn infer_operation_date(
+    explicit_operation_date: Option<NaiveDate>,
+    observed_at_unix: Option<u64>,
+    gtfs_start_time: Option<u32>,
+    agency_timezone: Option<&str>,
+) -> NaiveDate {
+    if let Some(operation_date) = explicit_operation_date {
+        return operation_date;
+    }
+
+    let observed_at = observed_at_unix
+        .and_then(|timestamp| i64::try_from(timestamp).ok())
+        .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
+        .unwrap_or_else(Utc::now);
+    let Some(timezone) = agency_timezone.and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+    else {
+        return observed_at.date_naive();
+    };
+    let local_observed_at = observed_at.with_timezone(&timezone);
+    let local_date = local_observed_at.date_naive();
+    let Some(gtfs_start_time) = gtfs_start_time else {
+        return local_date;
+    };
+
+    // A vehicle can appear shortly before its scheduled start, but a trip observed just
+    // after midnight may still belong to the previous GTFS service day. Check nearby
+    // service dates and choose the latest scheduled start that is not implausibly future.
+    let latest_allowed_start = local_observed_at + Duration::seconds(MAX_EARLY_START_SECONDS);
+    let mut best_match = None;
+    for day_offset in -4_i64..=1 {
+        let service_date = if day_offset < 0 {
+            local_date.checked_sub_days(Days::new(day_offset.unsigned_abs()))
+        } else {
+            local_date.checked_add_days(Days::new(day_offset as u64))
+        };
+        let Some(service_date) = service_date else {
+            continue;
+        };
+        let Some(scheduled_start) = local_service_start(service_date, gtfs_start_time, timezone)
+        else {
+            continue;
+        };
+        if scheduled_start > latest_allowed_start {
+            continue;
+        }
+
+        let should_replace = best_match
+            .as_ref()
+            .is_none_or(|(_, best_start)| scheduled_start > *best_start);
+        if should_replace {
+            best_match = Some((service_date, scheduled_start));
+        }
+    }
+
+    best_match
+        .map(|(service_date, _)| service_date)
+        .unwrap_or(local_date)
 }
 
 async fn load_agency_scopes(
@@ -178,6 +307,7 @@ async fn load_agency_scopes(
             agencies::unified_agency_id,
             agencies::level_0s,
             agencies::level_1s,
+            agencies::agency_timezone,
         ))
         .load::<(
             String,
@@ -185,6 +315,7 @@ async fn load_agency_scopes(
             Option<String>,
             Option<Vec<Option<String>>>,
             Option<Vec<Option<String>>>,
+            String,
         )>(conn)
         .await?;
 
@@ -194,7 +325,7 @@ async fn load_agency_scopes(
     // individual static-feed agency row has NULL level_0s/level_1s.
     let unified_agency_ids = rows
         .iter()
-        .filter_map(|(_, _, unified_agency_id, _, _)| unified_agency_id.as_deref())
+        .filter_map(|(_, _, unified_agency_id, _, _, _)| unified_agency_id.as_deref())
         .map(str::trim)
         .filter(|unified_agency_id| !unified_agency_id.is_empty())
         .map(str::to_owned)
@@ -229,7 +360,15 @@ async fn load_agency_scopes(
     // genuinely conflicting unified IDs are present.
     let mut accumulators = BTreeMap::<String, AgencyScopeAccumulator>::new();
     let mut feed_agency_ids = BTreeMap::<String, BTreeSet<String>>::new();
-    for (static_onestop_id, agency_id, unified_agency_id, level_0s, level_1s) in rows {
+    for (
+        static_onestop_id,
+        agency_id,
+        unified_agency_id,
+        level_0s,
+        level_1s,
+        agency_timezone,
+    ) in rows
+    {
         feed_agency_ids
             .entry(static_onestop_id)
             .or_default()
@@ -245,6 +384,12 @@ async fn load_agency_scopes(
 
         let accumulator = accumulators.entry(agency_id).or_default();
         accumulator.rollout_enabled |= is_rollout_enabled;
+        let agency_timezone = agency_timezone.trim();
+        if !agency_timezone.is_empty() {
+            accumulator
+                .agency_timezones
+                .insert(agency_timezone.to_string());
+        }
         if let Some(unified_agency_id) = unified_agency_id {
             accumulator.unified_agency_ids.insert(unified_agency_id);
         }
@@ -258,12 +403,18 @@ async fn load_agency_scopes(
             } else {
                 None
             };
+            let agency_timezone = if accumulator.agency_timezones.len() == 1 {
+                accumulator.agency_timezones.into_iter().next()
+            } else {
+                None
+            };
 
             (
                 agency_id,
                 AgencyScope {
                     unified_agency_id,
                     rollout_enabled: accumulator.rollout_enabled,
+                    agency_timezone,
                 },
             )
         })
@@ -498,6 +649,12 @@ pub async fn upsert_basic_vehicle_history(
             continue;
         }
 
+        let operation_date = infer_operation_date(
+            observation.operation_date,
+            observation.observed_at_unix,
+            observation.gtfs_start_time,
+            agency_scope.agency_timezone.as_deref(),
+        );
         let block_id = compressed_trip_cache
             .compressed_trips
             .get(observation.trip_id.as_str())
@@ -512,24 +669,29 @@ pub async fn upsert_basic_vehicle_history(
             vehicle_label: observation.vehicle_label.clone(),
             trip_id: observation.trip_id.clone(),
             block_id: block_id.clone(),
-            operation_date: observation.operation_date,
+            operation_date,
         });
 
         if let Some(unified_agency_id) = &agency_scope.unified_agency_id {
-            // observations is ordered by label, operation date, and trip id, so a later
-            // insert deterministically keeps the newest operation date for this vehicle.
-            vehicle_rows.insert(
-                (unified_agency_id.clone(), observation.vehicle_label.clone()),
-                BasicVehicle {
-                    unified_agency_id: unified_agency_id.clone(),
-                    vehicle_label: observation.vehicle_label,
-                    trip_id: Some(observation.trip_id),
-                    block_id,
-                    model: None,
-                    manufacturer: None,
-                    manufacture_year: None,
-                },
-            );
+            let key = (unified_agency_id.clone(), observation.vehicle_label.clone());
+            let vehicle = BasicVehicle {
+                unified_agency_id: unified_agency_id.clone(),
+                vehicle_label: observation.vehicle_label,
+                trip_id: Some(observation.trip_id),
+                block_id,
+                model: None,
+                manufacturer: None,
+                manufacture_year: None,
+            };
+            match vehicle_rows.entry(key) {
+                Entry::Vacant(entry) => {
+                    entry.insert((operation_date, vehicle));
+                }
+                Entry::Occupied(mut entry) if operation_date >= entry.get().0 => {
+                    entry.insert((operation_date, vehicle));
+                }
+                Entry::Occupied(_) => {}
+            }
         }
     }
 
@@ -537,7 +699,10 @@ pub async fn upsert_basic_vehicle_history(
         return Ok(());
     }
 
-    let vehicle_rows = vehicle_rows.into_values().collect::<Vec<_>>();
+    let vehicle_rows = vehicle_rows
+        .into_values()
+        .map(|(_, vehicle)| vehicle)
+        .collect::<Vec<_>>();
     let unified_agency_ids = vehicle_rows
         .iter()
         .map(|vehicle| vehicle.unified_agency_id.clone())
@@ -550,4 +715,71 @@ pub async fn upsert_basic_vehicle_history(
     mark_unified_agencies_with_histories(&mut conn, &unified_agency_ids).await?;
 
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toronto_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> u64 {
+        let timezone = "America/Toronto".parse::<chrono_tz::Tz>().unwrap();
+        timezone
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .single()
+            .unwrap()
+            .timestamp() as u64
+    }
+
+    #[test]
+    fn preserves_explicit_operation_date() {
+        let explicit = NaiveDate::from_ymd_opt(2026, 7, 31).unwrap();
+        let inferred = infer_operation_date(
+            Some(explicit),
+            Some(toronto_timestamp(2026, 8, 1, 12, 0)),
+            Some(12 * 60 * 60),
+            Some("America/Toronto"),
+        );
+        assert_eq!(inferred, explicit);
+    }
+
+    #[test]
+    fn infers_toronto_operation_date_when_start_date_is_missing() {
+        let inferred = infer_operation_date(
+            None,
+            Some(toronto_timestamp(2026, 8, 1, 15, 0)),
+            Some(14 * 60 * 60),
+            Some("America/Toronto"),
+        );
+        assert_eq!(inferred, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap());
+    }
+
+    #[test]
+    fn assigns_after_midnight_trip_to_previous_service_day() {
+        let inferred = infer_operation_date(
+            None,
+            Some(toronto_timestamp(2026, 8, 2, 0, 30)),
+            Some(23 * 60 * 60),
+            Some("America/Toronto"),
+        );
+        assert_eq!(inferred, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap());
+    }
+
+    #[test]
+    fn handles_gtfs_start_times_above_24_hours() {
+        let inferred = infer_operation_date(
+            None,
+            Some(toronto_timestamp(2026, 8, 2, 1, 10)),
+            Some(25 * 60 * 60),
+            Some("America/Toronto"),
+        );
+        assert_eq!(inferred, NaiveDate::from_ymd_opt(2026, 8, 1).unwrap());
+    }
+
+    #[test]
+    fn excludes_go_transit_and_up_express() {
+        assert!(route_history_is_excluded("gotransit", None));
+        assert!(route_history_is_excluded("upexpress", None));
+        assert!(!route_history_is_excluded("ttc", Some(3)));
+    }
 }
