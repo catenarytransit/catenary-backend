@@ -56,12 +56,14 @@ pub struct VehicleHistoryLookupResponse {
     trip_history: Vec<RouteHistoryRow>,
     routes: HashMap<String, Route>,
     agency_timezone: String,
+    agency_name: String,
 }
 
 #[derive(Debug, Serialize)]
 pub struct VehicleHistoryOfRouteResponse {
     trip_history: Vec<VehicleHistoryOfRouteRow>,
     agency_timezone: String,
+    agency_name: String,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -141,6 +143,25 @@ impl From<diesel::result::Error> for LookupError {
     fn from(error: diesel::result::Error) -> Self {
         Self::Database(error)
     }
+}
+
+async fn load_agency_name(
+    conn: &mut diesel_async::AsyncPgConnection,
+    unified_agency_id: &str,
+) -> Result<String, LookupError> {
+    use catenary::schema::gtfs::unified_agency;
+
+    unified_agency::table
+        .filter(unified_agency::id.eq(unified_agency_id))
+        .select(unified_agency::name)
+        .first::<String>(conn)
+        .await
+        .optional()?
+        .ok_or_else(|| {
+            LookupError::Internal(format!(
+                "No unified agency metadata was found for {unified_agency_id}"
+            ))
+        })
 }
 
 fn non_empty_parameter<'a>(
@@ -899,6 +920,10 @@ pub async fn vehicle_history_lookup(
         Ok(value) => value,
         Err(error) => return error.into_response(),
     };
+    let agency_name = match load_agency_name(&mut conn, &resolved_agency.unified_agency_id).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
 
     let history = match load_history(
         &mut conn,
@@ -975,6 +1000,7 @@ pub async fn vehicle_history_lookup(
         trip_history,
         routes,
         agency_timezone: resolved_agency.timezone,
+        agency_name,
     })
 }
 
@@ -1007,6 +1033,10 @@ pub async fn vehicle_history_of_route(
     };
 
     let resolved_agency = match resolve_from_chateau(&mut conn, chateau, Some(route_id)).await {
+        Ok(value) => value,
+        Err(error) => return error.into_response(),
+    };
+    let agency_name = match load_agency_name(&mut conn, &resolved_agency.unified_agency_id).await {
         Ok(value) => value,
         Err(error) => return error.into_response(),
     };
@@ -1043,5 +1073,6 @@ pub async fn vehicle_history_of_route(
     HttpResponse::Ok().json(VehicleHistoryOfRouteResponse {
         trip_history,
         agency_timezone: resolved_agency.timezone,
+        agency_name,
     })
 }
