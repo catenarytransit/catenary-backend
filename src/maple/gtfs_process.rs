@@ -812,14 +812,8 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-u2s1vm0ergtc~bratislava" | "f-bratislave~regionálnej" => {
-            let _ = execute_pfaedle_rs(
-                path.as_str(),
-                "./bratislava.osm.pbf",
-                None,
-                true,
-                true,
-            )
-            .await?;
+            let _ =
+                execute_pfaedle_rs(path.as_str(), "./bratislava.osm.pbf", None, true, true).await?;
         }
         /*"f-u0-switzerland" => {
             // 2 passes requried

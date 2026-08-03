@@ -112,8 +112,8 @@ fn observation_from_trip(
     let route_id = route_id
         .filter(|value| !value.trim().is_empty())
         .or_else(|| compressed_trip.map(|trip| trip.route_id.as_str()))?;
-    let gtfs_start_time = parse_gtfs_start_time(start_time)
-        .or_else(|| compressed_trip.map(|trip| trip.start_time));
+    let gtfs_start_time =
+        parse_gtfs_start_time(start_time).or_else(|| compressed_trip.map(|trip| trip.start_time));
 
     Some(VehicleTripObservation {
         vehicle_label: vehicle_label.to_string(),
@@ -190,11 +190,9 @@ fn collect_observations(
                 .and_then(|vehicle| vehicle.label.as_deref().or(vehicle.id.as_deref())),
             trip_update.trip.trip_id.as_deref(),
             trip_update.trip.route_id.as_deref(),
-            trip_update
-                .trip
-                .start_time
-                .as_deref()
-                .or_else(|| trip_properties.and_then(|properties| properties.start_time.as_deref())),
+            trip_update.trip.start_time.as_deref().or_else(|| {
+                trip_properties.and_then(|properties| properties.start_time.as_deref())
+            }),
             trip_update
                 .trip
                 .start_date
@@ -360,14 +358,8 @@ async fn load_agency_scopes(
     // genuinely conflicting unified IDs are present.
     let mut accumulators = BTreeMap::<String, AgencyScopeAccumulator>::new();
     let mut feed_agency_ids = BTreeMap::<String, BTreeSet<String>>::new();
-    for (
-        static_onestop_id,
-        agency_id,
-        unified_agency_id,
-        level_0s,
-        level_1s,
-        agency_timezone,
-    ) in rows
+    for (static_onestop_id, agency_id, unified_agency_id, level_0s, level_1s, agency_timezone) in
+        rows
     {
         feed_agency_ids
             .entry(static_onestop_id)
@@ -716,7 +708,6 @@ pub async fn upsert_basic_vehicle_history(
 
     Ok(())
 }
-
 
 #[cfg(test)]
 mod tests {
