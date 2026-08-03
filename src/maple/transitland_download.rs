@@ -1079,10 +1079,6 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
                 "a8c6d35e-f2c1-4f72-b902-831fa9215009".parse().unwrap(),
             );
         }
-        "f-9qh-omnitrans" => headers.insert(
-            "x-umo-iq-api-key",
-            "60cf3070-b8fc-4be5-9b7a-adf155c68581".parse().unwrap(),
-        ),
         _ => {}
     };
 
