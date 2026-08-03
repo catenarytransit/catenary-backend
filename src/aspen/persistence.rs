@@ -3,6 +3,12 @@ use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
+// Temporary production kill switch for Aspen disk persistence.
+#[cfg(not(test))]
+const PERSISTENCE_DISK_WRITES_ENABLED: bool = false;
+#[cfg(test)]
+const PERSISTENCE_DISK_WRITES_ENABLED: bool = true;
+
 #[derive(serde::Serialize)]
 struct AspenStaticTrajectoryDataRef<'a> {
     geometries: &'a Vec<catenary::aspen_dataset::PackedGeometry>,
@@ -167,6 +173,10 @@ pub fn save_chateau_data(
     chateau_id: &str,
     data: &AspenisedData,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !PERSISTENCE_DISK_WRITES_ENABLED {
+        return Ok(());
+    }
+
     let dir = "data/aspen_data";
     std::fs::create_dir_all(dir)?;
 
@@ -213,6 +223,10 @@ pub fn save_trajectory_data(
     data: &catenary::aspen_dataset::AspenTrajectoryStore,
     static_changed: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if !PERSISTENCE_DISK_WRITES_ENABLED {
+        return Ok(());
+    }
+
     let dir = "data/aspen_trajectories";
     std::fs::create_dir_all(dir)?;
 
