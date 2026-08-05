@@ -82,6 +82,49 @@ const METRA_MINI_IDS: &[&str] = &[
     "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
 ];
 
+async fn execute_pfaedle_brosi(
+    gtfs_path: &str,
+    osm_path: &str,
+    mots: Option<Vec<String>>,
+    drop_shapes: bool,
+    write_colours: bool,
+) -> Result<(), Box<dyn Error + Sync + Send>> {
+    let mut command_pfaedle = Command::new("pfaedle");
+
+    let mut run = command_pfaedle
+        .arg("--gtfs-dir")
+        .arg(&gtfs_path)
+        .arg("--osm-file")
+        .arg(&osm_path);
+
+    if drop_shapes {
+        run = run.arg("--wipe-shapes");
+    }
+
+    if write_colours {
+        run = run.arg("--write-colors");
+    }
+
+    if let Some(mots) = mots {
+        run = run.arg("--mots").arg(mots.iter().join(","));
+    }
+
+    // Use spawn() with inherited stdio to stream output in real-time
+    run = run.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+
+    let mut child = run.spawn()?;
+
+    println!("ran pfaedle for {}", gtfs_path);
+
+    let status = child.wait().await?;
+
+    if !status.success() {
+        return Err(format!("Patrick Brosi's Pfaedle exited with status: {}", status).into());
+    }
+
+    Ok(())
+}
+
 async fn execute_pfaedle_rs(
     gtfs_path: &str,
     osm_path: &str,
@@ -507,7 +550,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-dr5r-path~nj~us" => {
-            let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
