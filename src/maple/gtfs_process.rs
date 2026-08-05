@@ -506,6 +506,16 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-dr5r-path~nj~us" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                None,
+                true,
+                false,
+            )
+            .await?;
+        }
         "f-amtrak~gold~runner" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
