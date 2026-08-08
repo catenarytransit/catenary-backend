@@ -590,7 +590,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-dp3-cta" => {
-            let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./cta-rail-filtered-illinois-latest.osm.pbf",
                 Some(vec!["metro".to_string()]),
