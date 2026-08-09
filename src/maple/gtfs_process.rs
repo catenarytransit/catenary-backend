@@ -99,7 +99,7 @@ async fn execute_pfaedle_brosi(
         .arg("--inplace");
 
     if drop_shapes {
-        run = run.arg("--wipe-shapes");
+        run = run.arg("--drop-shapes");
     }
 
     if write_colours {
