@@ -92,10 +92,11 @@ async fn execute_pfaedle_brosi(
     let mut command_pfaedle = Command::new("pfaedle");
 
     let mut run = command_pfaedle
-        .arg("--gtfs-dir")
+        .arg("--input")
         .arg(&gtfs_path)
         .arg("--osm-file")
-        .arg(&osm_path);
+        .arg(&osm_path)
+        .arg("--inplace");
 
     if drop_shapes {
         run = run.arg("--wipe-shapes");
