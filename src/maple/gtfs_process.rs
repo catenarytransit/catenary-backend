@@ -852,10 +852,19 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-networkrail"
-        | "f-czptt"
         | "f-oebb~at"
         | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
             let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                None,
+                true,
+                true,
+            )
+            .await?;
+        }
+        "f-czptt" => {
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
