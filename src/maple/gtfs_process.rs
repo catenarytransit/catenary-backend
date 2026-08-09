@@ -551,7 +551,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-dr5r-path~nj~us" => {
-            let _ = execute_pfaedle_brosi(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
@@ -591,7 +591,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-dp3-cta" => {
-            let _ = execute_pfaedle_brosi(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./cta-rail-filtered-illinois-latest.osm.pbf",
                 Some(vec!["metro".to_string()]),
@@ -865,7 +865,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-czptt" => {
-            let _ = execute_pfaedle_brosi(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,
