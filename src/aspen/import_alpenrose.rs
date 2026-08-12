@@ -250,6 +250,52 @@ impl CpuTimings {
     }
 }
 
+#[derive(Default)]
+struct TripUpdateCpuTimings {
+    lookup_descriptor: Duration,
+    consist_sources: Duration,
+    stop_time_merge: Duration,
+    stop_time_processing: Duration,
+    previous_rt_merge: Duration,
+    delay_calculation: Duration,
+    consist_mapping: Duration,
+    vehicle_merge: Duration,
+    build_record: Duration,
+    indexing: Duration,
+    entity_extras: Duration,
+}
+
+impl TripUpdateCpuTimings {
+    fn add_to(self, timings: &mut CpuTimings) {
+        for (section, duration) in [
+            ("trip_updates.lookup_descriptor", self.lookup_descriptor),
+            ("trip_updates.consist_sources", self.consist_sources),
+            ("trip_updates.stop_time_merge", self.stop_time_merge),
+            (
+                "trip_updates.stop_time_processing",
+                self.stop_time_processing,
+            ),
+            ("trip_updates.previous_rt_merge", self.previous_rt_merge),
+            ("trip_updates.delay_calculation", self.delay_calculation),
+            ("trip_updates.consist_mapping", self.consist_mapping),
+            ("trip_updates.vehicle_merge", self.vehicle_merge),
+            ("trip_updates.build_record", self.build_record),
+            ("trip_updates.indexing", self.indexing),
+            ("trip_updates.entity_extras", self.entity_extras),
+        ] {
+            if !duration.is_zero() {
+                timings.add_duration(section, duration);
+            }
+        }
+    }
+}
+
+fn cpu_lap(accumulator: &mut Duration, started: &mut Duration) {
+    let now = current_thread_cpu_time();
+    *accumulator += now.saturating_sub(*started);
+    *started = now;
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetrolinkPosRaw {
     pub symbol: CompactString,
@@ -1530,8 +1576,10 @@ pub async fn new_rt_data(
         let cpu_started = current_thread_cpu_time();
         let calendar_structure =
             catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
+        cpu_timings.add_since("post_query.calendar_structure", cpu_started);
 
         // Build parent-child mappings from parent_stops query results
+        let cpu_started = current_thread_cpu_time();
         for (stop_id, parent) in &parent_stops {
             if let Some(parent_id) = parent {
                 stop_id_to_parent_id.insert(stop_id.clone().into(), parent_id.clone().into());
@@ -1541,13 +1589,17 @@ pub async fn new_rt_data(
                     .push(stop_id.clone().into());
             }
         }
+        cpu_timings.add_since("post_query.parent_stop_indexes", cpu_started);
 
+        let cpu_started = current_thread_cpu_time();
         let stop_id_to_stop_from_postgres: AHashMap<String, catenary::models::Stop> = stops
             .into_iter()
             .map(|stop| (stop.gtfs_id.clone(), stop))
             .collect();
+        cpu_timings.add_since("post_query.stop_map", cpu_started);
 
         // Populate stop_id_to_stop with fetched stops so trajectory calculation has coordinates
+        let cpu_started = current_thread_cpu_time();
         for (stop_id, stop) in &stop_id_to_stop_from_postgres {
             stop_id_to_stop
                 .entry(stop_id.as_str().into())
@@ -1603,7 +1655,9 @@ pub async fn new_rt_data(
                     }),
                 });
         }
+        cpu_timings.add_since("post_query.stop_aspenisation", cpu_started);
 
+        let cpu_started = current_thread_cpu_time();
         let mut itinerary_pattern_id_to_itinerary_pattern_meta: AHashMap<
             String,
             catenary::models::ItineraryPatternMeta,
@@ -1623,7 +1677,7 @@ pub async fn new_rt_data(
                 .map(|x| x.direction_pattern_id.clone())
                 .flatten()
                 .collect();
-        cpu_timings.add_since("post_query_indexes", cpu_started);
+        cpu_timings.add_since("post_query.itinerary_meta", cpu_started);
 
         // Direction Patterns (dependent on previous result, so we run it now)
         let direction_patterns =
@@ -1654,9 +1708,11 @@ pub async fn new_rt_data(
 
         let direction_pattern_id_to_direction_pattern_meta =
             direction_pattern_id_to_direction_pattern_meta;
+        cpu_timings.add_since("post_query.direction_meta", cpu_started);
 
         // Group itinerary rows by pattern ID to allow efficient lookups,
         // and enforce strict sorting by stop_sequence for linear interpolation.
+        let cpu_started = current_thread_cpu_time();
         let mut newly_added_patterns = AHashSet::new();
 
         for (id, meta) in itinerary_pattern_id_to_itinerary_pattern_meta {
@@ -1686,9 +1742,13 @@ pub async fn new_rt_data(
                 }
             }
         }
+        cpu_timings.add_since("post_query.itinerary_merge", cpu_started);
+
+        let cpu_started = current_thread_cpu_time();
         for (_, rows) in accumulated_itinerary_patterns.values_mut() {
             rows.sort_by(|a, b| a.stop_sequence.cmp(&b.stop_sequence));
         }
+        cpu_timings.add_since("post_query.itinerary_sort", cpu_started);
 
         let stage = Instant::now();
         set_stage(
@@ -1698,6 +1758,7 @@ pub async fn new_rt_data(
             total_started,
         );
 
+        let cpu_started = current_thread_cpu_time();
         let mut itinerary_pattern_id_to_scheduled_stop_ids: AHashMap<
             String,
             Option<AHashSet<std::sync::Arc<str>>>,
@@ -1709,7 +1770,7 @@ pub async fn new_rt_data(
                 .collect();
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
-        cpu_timings.add_since("post_query_indexes", cpu_started);
+        cpu_timings.add_since("post_query.scheduled_stop_sets", cpu_started);
 
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
@@ -2080,11 +2141,11 @@ pub async fn new_rt_data(
                 .await
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
-                let mut trip_updates_cpu = Duration::ZERO;
-                let mut trip_updates_cpu_started = current_thread_cpu_time();
+                let mut trip_update_cpu = TripUpdateCpuTimings::default();
                 let ref_epoch = trip_updates_gtfs_rt_for_feed_id.reference_epoch;
 
                 for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                    let mut trip_update_phase_started = current_thread_cpu_time();
                     if let Some(trip_update) = &trip_update_entity.trip_update {
                         let trip_id = trip_update.trip.trip_id.clone();
 
@@ -2216,6 +2277,10 @@ pub async fn new_rt_data(
                         if catenary::THROW_AWAY_START_DATES.contains(&chateau_id) {
                             trip_descriptor.start_date = None;
                         }
+                        cpu_lap(
+                            &mut trip_update_cpu.lookup_descriptor,
+                            &mut trip_update_phase_started,
+                        );
 
                         let mut consist = None;
                         let mut helium_vehicle_summary_string: Option<String> = None;
@@ -2226,10 +2291,12 @@ pub async fn new_rt_data(
 
                         //NYC subway consist analysis
                         if is_subway_feed_nyc {
-                            trip_updates_cpu +=
-                                current_thread_cpu_time().saturating_sub(trip_updates_cpu_started);
+                            cpu_lap(
+                                &mut trip_update_cpu.consist_sources,
+                                &mut trip_update_phase_started,
+                            );
                             let read_guard = authoritative_nyct_subway_data_cache.read().await;
-                            trip_updates_cpu_started = current_thread_cpu_time();
+                            trip_update_phase_started = current_thread_cpu_time();
 
                             if let Some(ref nyc_subway_data_cache) = *read_guard {
                                 if let Some(second_decode_nyc_subway_sorted_by_trip_update_id) =
@@ -2394,10 +2461,12 @@ pub async fn new_rt_data(
                                         operation_date.format("%Y-%m-%d"),
                                         train_number
                                     );
-                                    trip_updates_cpu += current_thread_cpu_time()
-                                        .saturating_sub(trip_updates_cpu_started);
+                                    cpu_lap(
+                                        &mut trip_update_cpu.consist_sources,
+                                        &mut trip_update_phase_started,
+                                    );
                                     let read_guard = sbb_formation_store.read().await;
-                                    trip_updates_cpu_started = current_thread_cpu_time();
+                                    trip_update_phase_started = current_thread_cpu_time();
                                     read_guard.get(&key).cloned().flatten()
                                 }
                                 _ => None,
@@ -2405,6 +2474,10 @@ pub async fn new_rt_data(
                         } else {
                             None
                         };
+                        cpu_lap(
+                            &mut trip_update_cpu.consist_sources,
+                            &mut trip_update_phase_started,
+                        );
 
                         let mut stop_time_updates_vec = Vec::new();
 
@@ -2472,6 +2545,10 @@ pub async fn new_rt_data(
                             Some(v) => v,
                             None => &trip_update.stop_time_update,
                         };
+                        cpu_lap(
+                            &mut trip_update_cpu.stop_time_merge,
+                            &mut trip_update_phase_started,
+                        );
 
                         for stu in stus_iter {
                             let mut resolved_stop_id: Option<std::sync::Arc<str>> =
@@ -3027,6 +3104,10 @@ pub async fn new_rt_data(
                                     .map(|x| (*x).into()),
                             });
                         }
+                        cpu_lap(
+                            &mut trip_update_cpu.stop_time_processing,
+                            &mut trip_update_phase_started,
+                        );
 
                         let stop_time_update = stop_time_updates_vec;
 
@@ -3117,6 +3198,10 @@ pub async fn new_rt_data(
                             }
                             None => stop_time_update,
                         };
+                        cpu_lap(
+                            &mut trip_update_cpu.previous_rt_merge,
+                            &mut trip_update_phase_started,
+                        );
 
                         let delay = calculate_delay(
                             trip_update.delay,
@@ -3129,6 +3214,10 @@ pub async fn new_rt_data(
                             compressed_trip,
                             &calendar_structure,
                             timezone,
+                        );
+                        cpu_lap(
+                            &mut trip_update_cpu.delay_calculation,
+                            &mut trip_update_phase_started,
                         );
 
                         let lirr_data_opt = match &fetched_track_data {
@@ -3187,6 +3276,10 @@ pub async fn new_rt_data(
                                 }
                             }
                         }
+                        cpu_lap(
+                            &mut trip_update_cpu.consist_mapping,
+                            &mut trip_update_phase_started,
+                        );
 
                         let mut trip_update_vehicle: Option<AspenisedVehicleDescriptor> =
                             trip_update.vehicle.clone().map(|x| x.into());
@@ -3244,6 +3337,10 @@ pub async fn new_rt_data(
                                 }
                             }
                         }
+                        cpu_lap(
+                            &mut trip_update_cpu.vehicle_merge,
+                            &mut trip_update_phase_started,
+                        );
 
                         let trip_update = AspenisedTripUpdate {
                             trip: trip_descriptor,
@@ -3267,6 +3364,10 @@ pub async fn new_rt_data(
                             true => trip_update.replace_vehicle_label_with_vehicle_id(),
                             false => trip_update,
                         };
+                        cpu_lap(
+                            &mut trip_update_cpu.build_record,
+                            &mut trip_update_phase_started,
+                        );
 
                         if let Some(trip_properties) = &trip_update.trip_properties {
                             if let Some(trip_id) = &trip_properties.trip_id {
@@ -3389,6 +3490,10 @@ pub async fn new_rt_data(
                                 }
                             }
                         }
+                        cpu_lap(
+                            &mut trip_update_cpu.indexing,
+                            &mut trip_update_phase_started,
+                        );
                     }
 
                     if let Some(shape) = &trip_update_entity.shape {
@@ -3451,10 +3556,12 @@ pub async fn new_rt_data(
                             );
                         }
                     }
+                    cpu_lap(
+                        &mut trip_update_cpu.entity_extras,
+                        &mut trip_update_phase_started,
+                    );
                 }
-                trip_updates_cpu +=
-                    current_thread_cpu_time().saturating_sub(trip_updates_cpu_started);
-                cpu_timings.add_duration("trip_updates", trip_updates_cpu);
+                trip_update_cpu.add_to(&mut cpu_timings);
             }
 
             let stage_al = Instant::now();
