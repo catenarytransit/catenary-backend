@@ -213,10 +213,7 @@ impl CpuTimings {
 
     // Call only across synchronous code: a Tokio task may move threads after an await.
     fn add_since(&mut self, section: &'static str, started: Duration) {
-        self.add_duration(
-            section,
-            current_thread_cpu_time().saturating_sub(started),
-        );
+        self.add_duration(section, current_thread_cpu_time().saturating_sub(started));
     }
 
     fn print(&self, chateau_id: &str, realtime_feed_id: &str, wall_time: Duration) {
@@ -2229,8 +2226,8 @@ pub async fn new_rt_data(
 
                         //NYC subway consist analysis
                         if is_subway_feed_nyc {
-                            trip_updates_cpu += current_thread_cpu_time()
-                                .saturating_sub(trip_updates_cpu_started);
+                            trip_updates_cpu +=
+                                current_thread_cpu_time().saturating_sub(trip_updates_cpu_started);
                             let read_guard = authoritative_nyct_subway_data_cache.read().await;
                             trip_updates_cpu_started = current_thread_cpu_time();
 
