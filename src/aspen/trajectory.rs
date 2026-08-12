@@ -17,7 +17,7 @@ use diesel_async::RunQueryDsl;
 use scc::HashMap as SccHashMap;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub const ALLOWED_CHATEAUX: &[&str] = &[
     "deutschland",
@@ -41,6 +41,20 @@ type ShapeLineString = postgis_diesel::types::LineString<postgis_diesel::types::
 pub(crate) struct TrajectoryBuildResult {
     pub(crate) store: Arc<AspenTrajectoryStore>,
     pub(crate) static_changed: bool,
+    pub(crate) cpu_time: Duration,
+}
+
+#[cfg(target_os = "linux")]
+fn current_thread_cpu_time() -> Duration {
+    Duration::try_from(rustix::time::clock_gettime(
+        rustix::time::ClockId::ThreadCPUTime,
+    ))
+    .expect("CLOCK_THREAD_CPUTIME_ID returned a negative duration")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_thread_cpu_time() -> Duration {
+    Duration::ZERO
 }
 
 pub(crate) async fn build_trajectory_store(
@@ -54,6 +68,8 @@ pub(crate) async fn build_trajectory_store(
     let (mut geometries, mut patterns, mut rtree_by_route_type) =
         load_existing_static_trajectory_data(authoritative_trajectory_data_store, chateau_id).await;
 
+    let mut cpu_time = Duration::ZERO;
+    let cpu_started = current_thread_cpu_time();
     let mut pattern_map = pattern_index(&patterns);
     let mut static_changed = false;
 
@@ -74,8 +90,11 @@ pub(crate) async fn build_trajectory_store(
         &vehicle_trip_ids,
         &vehicle_route_ids,
     );
+    cpu_time += current_thread_cpu_time().saturating_sub(cpu_started);
+
     let shape_linestrings = fetch_shape_linestrings(chateau_id, shape_ids, pool).await;
 
+    let cpu_started = current_thread_cpu_time();
     if ALLOWED_CHATEAUX.contains(&chateau_id) {
         process_trip_updates(
             chateau_id,
@@ -102,10 +121,12 @@ pub(crate) async fn build_trajectory_store(
     };
     let (store, compacted_static_data) = persistence::compact_trajectory_store(store);
     static_changed |= compacted_static_data;
+    cpu_time += current_thread_cpu_time().saturating_sub(cpu_started);
 
     TrajectoryBuildResult {
         store: Arc::new(store),
         static_changed,
+        cpu_time,
     }
 }
 

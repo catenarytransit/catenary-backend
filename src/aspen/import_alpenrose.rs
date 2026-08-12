@@ -186,6 +186,73 @@ const SAVE_INTERVAL: Duration = Duration::from_secs(60);
 // in the previous fetch cycle.
 const DROP_OLD_TRIPS_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
+#[cfg(target_os = "linux")]
+fn current_thread_cpu_time() -> Duration {
+    Duration::try_from(rustix::time::clock_gettime(
+        rustix::time::ClockId::ThreadCPUTime,
+    ))
+    .expect("CLOCK_THREAD_CPUTIME_ID returned a negative duration")
+}
+
+#[cfg(not(target_os = "linux"))]
+fn current_thread_cpu_time() -> Duration {
+    // Production Alpenrose runs on Linux. Keep non-Linux builds working while
+    // making it obvious that these measurements are Linux-only CPU clocks.
+    Duration::ZERO
+}
+
+#[derive(Default)]
+struct CpuTimings {
+    sections: BTreeMap<&'static str, Duration>,
+}
+
+impl CpuTimings {
+    fn add_duration(&mut self, section: &'static str, duration: Duration) {
+        *self.sections.entry(section).or_default() += duration;
+    }
+
+    // Call only across synchronous code: a Tokio task may move threads after an await.
+    fn add_since(&mut self, section: &'static str, started: Duration) {
+        self.add_duration(
+            section,
+            current_thread_cpu_time().saturating_sub(started),
+        );
+    }
+
+    fn print(&self, chateau_id: &str, realtime_feed_id: &str, wall_time: Duration) {
+        let total = self
+            .sections
+            .values()
+            .copied()
+            .fold(Duration::ZERO, |total, duration| total + duration);
+
+        let mut sections = self.sections.iter().collect::<Vec<_>>();
+        sections.sort_unstable_by(|(_, a), (_, b)| b.cmp(a));
+
+        println!(
+            "[cpu-profile] chateau={} trigger_feed={} wall={:.3}ms profiled_cpu={:.3}ms",
+            chateau_id,
+            realtime_feed_id,
+            wall_time.as_secs_f64() * 1000.0,
+            total.as_secs_f64() * 1000.0,
+        );
+
+        for (section, duration) in sections {
+            let percent = if total.is_zero() {
+                0.0
+            } else {
+                duration.as_secs_f64() / total.as_secs_f64() * 100.0
+            };
+            println!(
+                "[cpu-profile]   {:<32} {:>10.3}ms {:>6.2}%",
+                section,
+                duration.as_secs_f64() * 1000.0,
+                percent,
+            );
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct MetrolinkPosRaw {
     pub symbol: CompactString,
@@ -286,6 +353,7 @@ pub async fn new_rt_data(
     sbb_formation_store: crate::sbb_downloads::SbbFormationStore,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let total_started = Instant::now();
+    let mut cpu_timings = CpuTimings::default();
     set_stage(chateau_id, realtime_feed_id, "start", total_started);
 
     let mut headsign_cache: std::collections::HashMap<String, Arc<str>> =
@@ -640,6 +708,7 @@ pub async fn new_rt_data(
         println!("No routes found for chateau {}", chateau_id);
     }
 
+    let cpu_started = current_thread_cpu_time();
     //this is so we can quickly lookup the route information here by id
     let mut route_id_to_route: AHashMap<String, catenary::models::Route> = AHashMap::new();
 
@@ -649,6 +718,7 @@ pub async fn new_rt_data(
 
     //lock this table so it can't be edited anymore!
     let route_id_to_route = route_id_to_route;
+    cpu_timings.add_since("route_index", cpu_started);
 
     // Santa Cruz Metro requires supplemental data for better vehicle tracking accuracy
     let santa_cruz_supp_data = match chateau_id {
@@ -699,6 +769,7 @@ pub async fn new_rt_data(
             .await
         {
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
+            let cpu_started = current_thread_cpu_time();
 
             for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
@@ -722,6 +793,7 @@ pub async fn new_rt_data(
                     }
                 }
             }
+            cpu_timings.add_since("collect_rt_trip_ids", cpu_started);
         }
 
         if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
@@ -729,6 +801,7 @@ pub async fn new_rt_data(
             .await
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
+            let cpu_started = current_thread_cpu_time();
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
@@ -754,6 +827,7 @@ pub async fn new_rt_data(
                     }
                 }
             }
+            cpu_timings.add_since("collect_rt_trip_ids", cpu_started);
         }
 
         if let Some(alert_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
@@ -761,6 +835,7 @@ pub async fn new_rt_data(
             .await
         {
             let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
+            let cpu_started = current_thread_cpu_time();
 
             for alert_entity in alert_gtfs_rt_for_feed_id.entity.iter() {
                 if let Some(alert) = &alert_entity.alert {
@@ -773,6 +848,7 @@ pub async fn new_rt_data(
                     }
                 }
             }
+            cpu_timings.add_since("collect_rt_trip_ids", cpu_started);
         }
 
         let mut is_subway_feed_nyc = false;
@@ -814,6 +890,7 @@ pub async fn new_rt_data(
                     Ok(response) => {
                         if response.status().is_success() {
                             if let Ok(bytes) = response.bytes().await {
+                                let cpu_started = current_thread_cpu_time();
                                 match catenary::mta_gtfs_rt::nyct::FeedMessage::decode(
                                     bytes.as_ref(),
                                 ) {
@@ -836,6 +913,7 @@ pub async fn new_rt_data(
                                         );
                                     }
                                 }
+                                cpu_timings.add_since("nyct_second_decode", cpu_started);
                             } else {
                                 println!(
                                     "Error getting bytes from NYCT subway feed response for second decoder"
@@ -863,6 +941,7 @@ pub async fn new_rt_data(
             total_started,
         );
 
+        let cpu_started = current_thread_cpu_time();
         // Remove trips not in the current lookup set using retain (avoids intermediate Vec allocation)
         compressed_trip_internal_cache
             .compressed_trips
@@ -879,6 +958,7 @@ pub async fn new_rt_data(
                     .contains_key(x.as_str())
             })
             .collect::<Vec<&String>>();
+        cpu_timings.add_since("trip_cache_prepare", cpu_started);
 
         let trips = catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
             .filter(catenary::schema::gtfs::trips_compressed::dsl::chateau.eq(&chateau_id))
@@ -891,6 +971,7 @@ pub async fn new_rt_data(
 
         let trip_duration = trip_start.elapsed();
 
+        let cpu_started = current_thread_cpu_time();
         let mut trip_id_to_trip: AHashMap<String, catenary::models::CompressedTrip> =
             AHashMap::new();
 
@@ -901,6 +982,7 @@ pub async fn new_rt_data(
         for (trip_id, trips_in_cache) in compressed_trip_internal_cache.compressed_trips {
             trip_id_to_trip.insert(trip_id.clone(), trips_in_cache.clone());
         }
+        cpu_timings.add_since("trip_cache_merge", cpu_started);
 
         if chateau_id == "sncf" {
             if let TrackData::Sncf(Some(sncf_data)) = &fetched_track_data {
@@ -1176,6 +1258,7 @@ pub async fn new_rt_data(
 
         let trip_id_to_trip = trip_id_to_trip;
 
+        let cpu_started = current_thread_cpu_time();
         let service_ids_to_lookup = trip_id_to_trip
             .iter()
             .map(|x| x.1.service_id.clone())
@@ -1238,12 +1321,14 @@ pub async fn new_rt_data(
 
         // Used for cache fallback
         let empty_scheduled_stops_option: Option<AHashSet<std::sync::Arc<str>>> = None;
+        cpu_timings.add_since("lookup_planning", cpu_started);
 
         if let Some(trip_gtfs_rt_for_feed_id) = authoritative_gtfs_rt
             .get_async(&(realtime_feed_id.clone(), GtfsRtType::TripUpdates))
             .await
         {
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
+            let cpu_started = current_thread_cpu_time();
             let ref_epoch = trip_gtfs_rt_for_feed_id.reference_epoch;
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
@@ -1319,8 +1404,10 @@ pub async fn new_rt_data(
                     }
                 }
             }
+            cpu_timings.add_since("lookup_planning", cpu_started);
         }
 
+        let cpu_started = current_thread_cpu_time();
         let mut list_of_itinerary_patterns_to_lookup: AHashSet<String> = AHashSet::new();
         for trip in trip_id_to_trip.values() {
             list_of_itinerary_patterns_to_lookup.insert(trip.itinerary_pattern_id.clone());
@@ -1421,6 +1508,8 @@ pub async fn new_rt_data(
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         };
 
+        cpu_timings.add_since("lookup_planning", cpu_started);
+
         let join_start = std::time::Instant::now();
         let (
             calendar,
@@ -1441,6 +1530,7 @@ pub async fn new_rt_data(
         let itin_lookup_duration = join_start.elapsed();
         let itinerary_pattern_row_duration = join_start.elapsed();
 
+        let cpu_started = current_thread_cpu_time();
         let calendar_structure =
             catenary::make_calendar_structure_from_pg_single_chateau(calendar, calendar_dates);
 
@@ -1536,6 +1626,7 @@ pub async fn new_rt_data(
                 .map(|x| x.direction_pattern_id.clone())
                 .flatten()
                 .collect();
+        cpu_timings.add_since("post_query_indexes", cpu_started);
 
         // Direction Patterns (dependent on previous result, so we run it now)
         let direction_patterns =
@@ -1551,6 +1642,7 @@ pub async fn new_rt_data(
                 .load::<catenary::models::DirectionPatternMeta>(conn)
                 .await?;
 
+        let cpu_started = current_thread_cpu_time();
         let mut direction_pattern_id_to_direction_pattern_meta: AHashMap<
             String,
             catenary::models::DirectionPatternMeta,
@@ -1620,6 +1712,7 @@ pub async fn new_rt_data(
                 .collect();
             itinerary_pattern_id_to_scheduled_stop_ids.insert(id.clone(), Some(set));
         }
+        cpu_timings.add_since("post_query_indexes", cpu_started);
 
         let mut route_ids_to_insert: AHashSet<String> = AHashSet::new();
 
@@ -1639,6 +1732,7 @@ pub async fn new_rt_data(
                 .await
             {
                 let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
+                let cpu_started = current_thread_cpu_time();
 
                 for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
@@ -1973,6 +2067,7 @@ pub async fn new_rt_data(
                         }
                     }
                 }
+                cpu_timings.add_since("vehicle_positions", cpu_started);
             }
 
             let stage_tu = Instant::now();
@@ -1988,6 +2083,8 @@ pub async fn new_rt_data(
                 .await
             {
                 let trip_updates_gtfs_rt_for_feed_id = trip_updates_gtfs_rt_for_feed_id.get();
+                let mut trip_updates_cpu = Duration::ZERO;
+                let mut trip_updates_cpu_started = current_thread_cpu_time();
                 let ref_epoch = trip_updates_gtfs_rt_for_feed_id.reference_epoch;
 
                 for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
@@ -2132,7 +2229,10 @@ pub async fn new_rt_data(
 
                         //NYC subway consist analysis
                         if is_subway_feed_nyc {
+                            trip_updates_cpu += current_thread_cpu_time()
+                                .saturating_sub(trip_updates_cpu_started);
                             let read_guard = authoritative_nyct_subway_data_cache.read().await;
+                            trip_updates_cpu_started = current_thread_cpu_time();
 
                             if let Some(ref nyc_subway_data_cache) = *read_guard {
                                 if let Some(second_decode_nyc_subway_sorted_by_trip_update_id) =
@@ -2297,7 +2397,10 @@ pub async fn new_rt_data(
                                         operation_date.format("%Y-%m-%d"),
                                         train_number
                                     );
+                                    trip_updates_cpu += current_thread_cpu_time()
+                                        .saturating_sub(trip_updates_cpu_started);
                                     let read_guard = sbb_formation_store.read().await;
+                                    trip_updates_cpu_started = current_thread_cpu_time();
                                     read_guard.get(&key).cloned().flatten()
                                 }
                                 _ => None,
@@ -3352,6 +3455,9 @@ pub async fn new_rt_data(
                         }
                     }
                 }
+                trip_updates_cpu +=
+                    current_thread_cpu_time().saturating_sub(trip_updates_cpu_started);
+                cpu_timings.add_duration("trip_updates", trip_updates_cpu);
             }
 
             let stage_al = Instant::now();
@@ -3367,6 +3473,7 @@ pub async fn new_rt_data(
                 .await
             {
                 let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
+                let cpu_started = current_thread_cpu_time();
 
                 for alert_entity in alert_updates_gtfs_rt.entity.iter() {
                     if let Some(alert) = &alert_entity.alert {
@@ -3379,11 +3486,14 @@ pub async fn new_rt_data(
                         alerts.insert(alert_id, processed_alert);
                     }
                 }
+                cpu_timings.add_since("alerts", cpu_started);
             }
         }
 
         if chateau_id == "sncf" {
-            match crate::sncf_siri_alerts::fetch_alerts(conn).await {
+            let sncf_siri_alerts = crate::sncf_siri_alerts::fetch_alerts(conn).await;
+            let cpu_started = current_thread_cpu_time();
+            match sncf_siri_alerts {
                 Ok(sncf_siri_alerts) => {
                     println!(
                         "Loaded {} SNCF SIRI Situation Exchange alerts",
@@ -3407,10 +3517,12 @@ pub async fn new_rt_data(
                     }
                 }
             }
+            cpu_timings.add_since("alerts", cpu_started);
         }
 
         if chateau_id == "sncf" {
             if let TrackData::Sncf(Some(sncf_data)) = &fetched_track_data {
+                let cpu_started = current_thread_cpu_time();
                 let mut train_num_to_trip_id: AHashMap<String, String> = AHashMap::new();
                 for (trip_id, trip) in trip_id_to_trip.iter() {
                     if let Some(short_name) = &trip.trip_short_name {
@@ -3539,9 +3651,11 @@ pub async fn new_rt_data(
                         }
                     }
                 }
+                cpu_timings.add_since("sncf_synthetic_trip_updates", cpu_started);
             }
         }
 
+        let cpu_started = current_thread_cpu_time();
         alerts = crate::alerts_processing::deduplicate_alerts(alerts);
 
         for (alert_id, alert) in alerts.iter() {
@@ -3583,6 +3697,7 @@ pub async fn new_rt_data(
                 }
             }
         }
+        cpu_timings.add_since("final_indexes", cpu_started);
 
         // println!(
         //     "Finished processing {} chateau took {:?} for route lookup, {:?} for trips, {:?} for itin meta, {:?} for itin rows",
@@ -3596,6 +3711,7 @@ pub async fn new_rt_data(
 
     // Resolve trip delays after all initial processing is complete.
     // This allows us to link trip updates that were processed separately from the vehicle positions.
+    let cpu_started = current_thread_cpu_time();
     for (k, v) in aspenised_vehicle_positions.iter_mut() {
         {
             let trip = v.trip.as_mut();
@@ -3638,9 +3754,11 @@ pub async fn new_rt_data(
             }
         }
     }
+    cpu_timings.add_since("vehicle_delay_linking", cpu_started);
 
     // Explicitly shrink hashmaps to release memory back to the allocator,
     // critical for long-running processes handling high-volume RT feeds.
+    let cpu_started = current_thread_cpu_time();
     aspenised_vehicle_positions.shrink_to_fit();
     vehicle_routes_cache.shrink_to_fit();
     trip_updates.shrink_to_fit();
@@ -3664,11 +3782,13 @@ pub async fn new_rt_data(
     compressed_trip_internal_cache
         .compressed_trips
         .shrink_to_fit();
+    cpu_timings.add_since("memory_compaction", cpu_started);
 
     if let Some(previous_data) = &previous_authoritative_data_store {
         let current_time = catenary::duration_since_unix_epoch().as_millis() as u64;
         let start_time = START_TIME.get_async(chateau_id).await.map(|t| *t.get());
 
+        let cpu_started = current_thread_cpu_time();
         if let Some(start_time) = start_time {
             if start_time.elapsed() > DROP_OLD_TRIPS_GRACE_PERIOD {
                 // If we are past the grace period, rely solely on the new authoritative data.
@@ -3727,8 +3847,10 @@ pub async fn new_rt_data(
                 }
             }
         }
+        cpu_timings.add_since("previous_trip_grace_merge", cpu_started);
     }
 
+    let cpu_started = current_thread_cpu_time();
     let mut vehicle_positions_rtree_by_route_type = AHashMap::new();
     let mut rtree_elements_by_route_type = AHashMap::new();
     for (key, vehicle) in aspenised_vehicle_positions.iter() {
@@ -3746,6 +3868,7 @@ pub async fn new_rt_data(
     for (route_type, elements) in rtree_elements_by_route_type.into_iter() {
         vehicle_positions_rtree_by_route_type.insert(route_type, rstar::RTree::bulk_load(elements));
     }
+    cpu_timings.add_since("vehicle_rtree", cpu_started);
 
     // new_rt_data rebuilds the complete chateau and therefore the maps above contain
     // entities from every realtime feed in the chateau. Do not stamp all of those rows
@@ -3761,12 +3884,14 @@ pub async fn new_rt_data(
             ))
             .await
         {
+            let cpu_started = current_thread_cpu_time();
             for entity in &vehicle_feed.get().entity {
                 if let Some(vehicle_position) = aspenised_vehicle_positions.get(entity.id.as_str())
                 {
                     history_vehicle_positions.insert(entity.id.clone(), vehicle_position.clone());
                 }
             }
+            cpu_timings.add_since("history_snapshot_building", cpu_started);
         }
 
         let mut history_trip_updates = AHashMap::new();
@@ -3774,12 +3899,14 @@ pub async fn new_rt_data(
             .get_async(&(source_realtime_feed_id.clone(), GtfsRtType::TripUpdates))
             .await
         {
+            let cpu_started = current_thread_cpu_time();
             for entity in &trip_feed.get().entity {
                 if let Some(trip_update) = trip_updates.get(entity.id.as_str()) {
                     history_trip_updates
                         .insert(CompactString::new(&entity.id), trip_update.clone());
                 }
             }
+            cpu_timings.add_since("history_snapshot_building", cpu_started);
         }
 
         if history_vehicle_positions.is_empty() && history_trip_updates.is_empty() {
@@ -3804,6 +3931,7 @@ pub async fn new_rt_data(
         }
     }
 
+    let cpu_started = current_thread_cpu_time();
     let fast_hash_of_routes =
         catenary::fast_hash(&vehicle_routes_cache.iter().collect::<BTreeMap<_, _>>());
 
@@ -3851,10 +3979,12 @@ pub async fn new_rt_data(
     // Insert the aspenised data - clone only for persistence, move into map when possible
     let aspenised_data = Arc::new(aspenised_data);
     let aspenised_data_for_persist = Arc::clone(&aspenised_data);
+    cpu_timings.add_since("snapshot_assembly", cpu_started);
 
     let crate::trajectory::TrajectoryBuildResult {
         store,
         static_changed,
+        cpu_time: trajectory_cpu_time,
     } = crate::trajectory::build_trajectory_store(
         chateau_id,
         realtime_feed_id,
@@ -3864,6 +3994,7 @@ pub async fn new_rt_data(
         pool.as_ref(),
     )
     .await;
+    cpu_timings.add_duration("trajectories", trajectory_cpu_time);
 
     set_stage(
         chateau_id,
@@ -3874,9 +4005,11 @@ pub async fn new_rt_data(
 
     let published_at_ms = aspenised_data.last_updated_time_ms;
 
-    authoritative_data_store
+    let authoritative_entry = authoritative_data_store
         .entry_async(chateau_id.to_string())
-        .await
+        .await;
+    let cpu_started = current_thread_cpu_time();
+    authoritative_entry
         .and_modify(|current| {
             if published_at_ms >= current.last_updated_time_ms {
                 *current = Arc::clone(&aspenised_data);
@@ -3891,6 +4024,7 @@ pub async fn new_rt_data(
             }
         })
         .or_insert(Arc::clone(&aspenised_data));
+    cpu_timings.add_since("publish_snapshot", cpu_started);
 
     // tracing::info!(
     //     chateau_id,
@@ -3937,6 +4071,8 @@ pub async fn new_rt_data(
                 .or_insert(Instant::now());
         }
     }
+
+    cpu_timings.print(chateau_id, realtime_feed_id, total_started.elapsed());
 
     //println!("Updated Chateau {}", chateau_id);
 
