@@ -88,7 +88,6 @@ use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -3111,32 +3110,31 @@ pub async fn new_rt_data(
 
                         let stop_time_update = stop_time_updates_vec;
 
-                        let new_stop_ids = stop_time_update
-                            .iter()
-                            .map(|stu| stu.stop_id.clone())
-                            .flatten()
-                            .collect::<BTreeSet<Arc<str>>>();
-
-                        let old_data_to_add_to_start: Option<Vec<AspenisedStopTimeUpdate>> =
-                            match &trip_id {
-                                Some(trip_id) => {
-                                    match &previous_authoritative_data_store {
-                                        Some(previous_authoritative_data_store) => {
-                                            let previous_trip_update_id = match previous_authoritative_data_store.trip_updates_lookup_by_trip_id_to_trip_update_ids.get(trip_id.as_str()) {
-                                            Some(trip_updates_lookup_by_trip_id_to_trip_update_ids) => {
-                                                let mut matching_ids = trip_updates_lookup_by_trip_id_to_trip_update_ids.iter().filter(
-                                                    |possible_match_trip_id| {
+                        let previous_trip_update = match &trip_id {
+                            Some(trip_id) => match &previous_authoritative_data_store {
+                                Some(previous_authoritative_data_store) => {
+                                    let previous_trip_update_id =
+                                        match previous_authoritative_data_store
+                                            .trip_updates_lookup_by_trip_id_to_trip_update_ids
+                                            .get(trip_id.as_str())
+                                        {
+                                            Some(trip_update_ids) => {
+                                                let mut matching_ids = trip_update_ids
+                                                    .iter()
+                                                    .filter(|possible_match_trip_id| {
                                                         previous_authoritative_data_store
                                                             .trip_updates
                                                             .get(possible_match_trip_id.as_str())
-                                                            .is_some_and( |possible_old_trip| {
-                                                                possible_old_trip.trip == trip_descriptor
+                                                            .is_some_and(|possible_old_trip| {
+                                                                possible_old_trip.trip
+                                                                    == trip_descriptor
                                                             })
-                                                    },
-                                                );
-                                                
+                                                    });
+
                                                 let first_match = matching_ids.next();
-                                                if first_match.is_some() && matching_ids.next().is_none() {
+                                                if first_match.is_some()
+                                                    && matching_ids.next().is_none()
+                                                {
                                                     first_match.cloned()
                                                 } else {
                                                     None
@@ -3145,56 +3143,124 @@ pub async fn new_rt_data(
                                             None => None,
                                         };
 
-                                            match previous_trip_update_id {
-                                                Some(previous_trip_update_id) => {
-                                                    let trip_update =
-                                                        previous_authoritative_data_store
-                                                            .trip_updates
-                                                            .get(&previous_trip_update_id);
-
-                                                    match trip_update {
-                                                        Some(trip_update) => {
-                                                            let old_stop_time_update = trip_update
-                                                                .stop_time_update
-                                                                .iter()
-                                                                .filter(|old_stu| {
-                                                                    match &old_stu.stop_id {
-                                                                        Some(old_stu_stop_id) => {
-                                                                            !new_stop_ids.contains(
-                                                                                old_stu_stop_id,
-                                                                            )
-                                                                        }
-                                                                        None => false,
-                                                                    }
-                                                                })
-                                                                .map(|old_stu| {
-                                                                    let mut old_stu =
-                                                                        old_stu.clone();
-                                                                    old_stu.old_rt_data = true;
-                                                                    old_stu
-                                                                })
-                                                                .collect::<Vec<_>>();
-                                                            Some(old_stop_time_update)
-                                                        }
-                                                        None => None,
-                                                    }
-                                                }
-                                                None => None,
-                                            }
-                                        }
-                                        None => None,
-                                    }
+                                    previous_trip_update_id.as_ref().and_then(
+                                        |previous_trip_update_id| {
+                                            previous_authoritative_data_store
+                                                .trip_updates
+                                                .get(previous_trip_update_id.as_str())
+                                        },
+                                    )
                                 }
                                 None => None,
-                            };
+                            },
+                            None => None,
+                        };
 
-                        let stop_time_update = match old_data_to_add_to_start {
-                            Some(old_data_to_add_to_start) => {
-                                let new_vec = old_data_to_add_to_start
-                                    .into_iter()
-                                    .chain(stop_time_update.into_iter())
-                                    .collect::<Vec<_>>();
-                                new_vec
+                        let stop_time_update = match previous_trip_update {
+                            Some(previous_trip_update) => {
+                                let old_stop_time_update = &previous_trip_update.stop_time_update;
+                                let mut current_stop_time_update = stop_time_update;
+
+                                // Fast path: feeds normally remove already-passed stops,
+                                // so the current update is an ordered suffix of the previous one.
+                                // Example: old=[A,B,C,D], current=[C,D].
+                                let suffix_prefix_len = if current_stop_time_update.len()
+                                    <= old_stop_time_update.len()
+                                {
+                                    let prefix_len =
+                                        old_stop_time_update.len() - current_stop_time_update.len();
+
+                                    let is_suffix = old_stop_time_update[prefix_len..]
+                                        .iter()
+                                        .zip(current_stop_time_update.iter())
+                                        .all(|(old_stu, current_stu)| {
+                                            if old_stu.stop_id.as_deref()
+                                                != current_stu.stop_id.as_deref()
+                                            {
+                                                return false;
+                                            }
+
+                                            match (old_stu.stop_sequence, current_stu.stop_sequence)
+                                            {
+                                                (Some(old_sequence), Some(current_sequence)) => {
+                                                    old_sequence == current_sequence
+                                                }
+                                                _ => true,
+                                            }
+                                        });
+
+                                    if is_suffix { Some(prefix_len) } else { None }
+                                } else {
+                                    None
+                                };
+
+                                match suffix_prefix_len {
+                                    Some(0) => current_stop_time_update,
+                                    Some(prefix_len) => {
+                                        let mut merged = Vec::with_capacity(
+                                            prefix_len + current_stop_time_update.len(),
+                                        );
+
+                                        for old_stu in &old_stop_time_update[..prefix_len] {
+                                            // Preserve existing behavior: old entries without a
+                                            // stop_id are not carried forward.
+                                            if old_stu.stop_id.is_some() {
+                                                let mut old_stu = old_stu.clone();
+                                                old_stu.old_rt_data = true;
+                                                merged.push(old_stu);
+                                            }
+                                        }
+
+                                        merged.append(&mut current_stop_time_update);
+                                        merged
+                                    }
+                                    None => {
+                                        // Exceptional path for reordered, inserted, or otherwise
+                                        // non-suffix stop lists. Preserve the previous membership
+                                        // semantics, but avoid cloning Arc<str> into a BTreeSet.
+                                        let mut old_data_to_add = Vec::with_capacity(
+                                            old_stop_time_update
+                                                .len()
+                                                .saturating_sub(current_stop_time_update.len()),
+                                        );
+
+                                        {
+                                            let mut current_stop_ids: AHashSet<&str> =
+                                                AHashSet::with_capacity(
+                                                    current_stop_time_update.len(),
+                                                );
+
+                                            for stu in &current_stop_time_update {
+                                                if let Some(stop_id) = stu.stop_id.as_deref() {
+                                                    current_stop_ids.insert(stop_id);
+                                                }
+                                            }
+
+                                            for old_stu in old_stop_time_update {
+                                                let should_preserve = old_stu
+                                                    .stop_id
+                                                    .as_deref()
+                                                    .is_some_and(|stop_id| {
+                                                        !current_stop_ids.contains(stop_id)
+                                                    });
+
+                                                if should_preserve {
+                                                    let mut old_stu = old_stu.clone();
+                                                    old_stu.old_rt_data = true;
+                                                    old_data_to_add.push(old_stu);
+                                                }
+                                            }
+                                        }
+
+                                        if old_data_to_add.is_empty() {
+                                            current_stop_time_update
+                                        } else {
+                                            old_data_to_add.reserve(current_stop_time_update.len());
+                                            old_data_to_add.append(&mut current_stop_time_update);
+                                            old_data_to_add
+                                        }
+                                    }
+                                }
                             }
                             None => stop_time_update,
                         };
