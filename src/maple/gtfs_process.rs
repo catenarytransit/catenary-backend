@@ -172,6 +172,89 @@ async fn execute_pfaedle_rs(
     Ok(())
 }
 
+fn remove_invalid_pathways_rows(
+    gtfs_path: &str,
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    let pathways_path = Path::new(gtfs_path).join("pathways.txt");
+    if !pathways_path.exists() {
+        return Ok(0);
+    }
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&pathways_path)?;
+    let headers = rdr.headers()?.clone();
+
+    let temp_path = Path::new(gtfs_path).join("pathways.txt.tmp");
+    let mut wtr = csv::WriterBuilder::new()
+        .flexible(true)
+        .from_path(&temp_path)?;
+    wtr.write_record(&headers)?;
+
+    let mut seen_pathway_ids = HashSet::new();
+    let mut removed = 0usize;
+
+    for result in rdr.records() {
+        let record = match result {
+            Ok(record) => record,
+            Err(_) => {
+                removed += 1;
+                continue;
+            }
+        };
+
+        if record.len() != headers.len() {
+            removed += 1;
+            continue;
+        }
+
+        let pathway = match record.deserialize::<gtfs_structures::RawPathway>(Some(&headers)) {
+            Ok(pathway) => pathway,
+            Err(_) => {
+                removed += 1;
+                continue;
+            }
+        };
+
+        let fields_are_valid = !pathway.id.trim().is_empty()
+            && !pathway.from_stop_id.trim().is_empty()
+            && !pathway.to_stop_id.trim().is_empty()
+            && pathway
+                .length
+                .map_or(true, |value| value.is_finite() && value >= 0.0)
+            && pathway.traversal_time.map_or(true, |value| value > 0)
+            && pathway
+                .max_slope
+                .map_or(true, |value| value.is_finite())
+            && pathway
+                .min_width
+                .map_or(true, |value| value.is_finite() && value > 0.0)
+            && !(matches!(pathway.mode, gtfs_structures::PathwayMode::ExitGate)
+                && matches!(
+                    pathway.is_bidirectional,
+                    gtfs_structures::PathwayDirectionType::Bidirectional
+                ));
+
+        if fields_are_valid && seen_pathway_ids.insert(pathway.id) {
+            wtr.write_record(&record)?;
+        } else {
+            removed += 1;
+        }
+    }
+
+    wtr.flush()?;
+    drop(wtr);
+    drop(rdr);
+
+    if removed == 0 {
+        std::fs::remove_file(temp_path)?;
+        return Ok(0);
+    }
+
+    std::fs::rename(temp_path, pathways_path)?;
+    Ok(removed)
+}
+
 // take a feed id and throw it into postgres
 pub async fn gtfs_process_feed(
     gtfs_unzipped_path: &str,
@@ -906,6 +989,14 @@ pub async fn gtfs_process_feed(
         _ => {
             //no pfaedle needed
         }
+    }
+
+    let removed_pathways = remove_invalid_pathways_rows(&path)?;
+    if removed_pathways > 0 {
+        println!(
+            "Removed {} invalid pathways.txt rows for feed {}",
+            removed_pathways, feed_id
+        );
     }
 
     println!("starting GTFS read for feed {}", feed_id);
