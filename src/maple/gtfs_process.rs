@@ -987,6 +987,32 @@ pub async fn gtfs_process_feed(
         }
     }
 
+    if feed_id == "f-tdx~tw" {
+        let files_to_remove = [
+            "pathways.txt",
+            "fare_attributes.txt",
+            "fare_rules.txt",
+            "fare_products.txt",
+            "fare_leg_rules.txt",
+            "fare_transfer_rules.txt",
+            "fare_media.txt",
+            "rider_categories.txt",
+            "areas.txt",
+            "stop_areas.txt",
+            "networks.txt",
+            "route_networks.txt",
+            "timeframes.txt",
+        ];
+
+        for filename in files_to_remove {
+            let file_path = Path::new(&path).join(filename);
+            if file_path.exists() {
+                std::fs::remove_file(&file_path)?;
+                println!("Removed {} for feed {}", filename, feed_id);
+            }
+        }
+    }
+
     let removed_pathways = remove_invalid_pathways_rows(&path)?;
     if removed_pathways > 0 {
         println!(
