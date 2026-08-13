@@ -2849,6 +2849,28 @@ where
     }
 }
 
+fn normalize_gtfs_hh_mm_time(value: &mut String) -> bool {
+    let normalized = {
+        let trimmed = value.trim();
+        let Some((hours, minutes)) = trimmed.split_once(':') else {
+            return false;
+        };
+
+        if hours.is_empty()
+            || !hours.chars().all(|c| c.is_ascii_digit())
+            || minutes.len() != 2
+            || !minutes.chars().all(|c| c.is_ascii_digit())
+        {
+            return false;
+        }
+
+        format!("{}:{}:00", hours, minutes)
+    };
+
+    *value = normalized;
+    true
+}
+
 pub(crate) fn faster_stop_time_reader_injection(
     gtfs: Gtfs,
     stop_times_path: &Path,
@@ -2868,12 +2890,33 @@ pub(crate) fn faster_stop_time_reader_injection(
         .trim(csv::Trim::All)
         .from_reader(buf_reader);
 
+    let headers = rdr.headers()?.clone();
+    let arrival_time_index = headers.iter().position(|header| header == "arrival_time");
+    let departure_time_index = headers.iter().position(|header| header == "departure_time");
+
     let mut current_trip_id: String = String::new();
 
     let mut stop_times_buffer: Vec<gtfs_structures::StopTime> = Vec::with_capacity(1024);
+    let mut normalized_time_fields = 0usize;
 
-    for result in rdr.deserialize() {
-        let stop_time_gtfs_raw: gtfs_structures::RawStopTime = result?;
+    for result in rdr.records() {
+        let record = result?;
+        let mut fields = record.iter().map(str::to_owned).collect::<Vec<_>>();
+
+        for time_index in [arrival_time_index, departure_time_index]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(value) = fields.get_mut(time_index) {
+                if normalize_gtfs_hh_mm_time(value) {
+                    normalized_time_fields += 1;
+                }
+            }
+        }
+
+        let record = csv::StringRecord::from(fields);
+        let stop_time_gtfs_raw: gtfs_structures::RawStopTime =
+            record.deserialize(Some(&headers))?;
 
         //check if we have transitioned to a new trip_id
 
@@ -2908,6 +2951,14 @@ pub(crate) fn faster_stop_time_reader_injection(
 
             stop_times_buffer.push(stop_time);
         }
+    }
+
+    if normalized_time_fields > 0 {
+        println!(
+            "Normalized {} HH:MM time values in {}",
+            normalized_time_fields,
+            stop_times_path.display()
+        );
     }
 
     //flush final buffer
