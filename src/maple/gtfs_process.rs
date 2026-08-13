@@ -172,6 +172,58 @@ async fn execute_pfaedle_rs(
     Ok(())
 }
 
+fn clear_invalid_trips_direction_ids(
+    gtfs_path: &str,
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    let trips_path = Path::new(gtfs_path).join("trips.txt");
+    if !trips_path.exists() {
+        return Ok(0);
+    }
+
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&trips_path)?;
+    let headers = rdr.headers()?.clone();
+
+    let Some(direction_id_index) = headers.iter().position(|header| header == "direction_id") else {
+        return Ok(0);
+    };
+
+    let temp_path = Path::new(gtfs_path).join("trips.txt.tmp");
+    let mut wtr = csv::WriterBuilder::new()
+        .flexible(true)
+        .from_path(&temp_path)?;
+    wtr.write_record(&headers)?;
+
+    let mut cleared = 0usize;
+
+    for result in rdr.records() {
+        let record = result?;
+        let mut fields = record.iter().map(str::to_owned).collect::<Vec<_>>();
+
+        if let Some(direction_id) = fields.get_mut(direction_id_index) {
+            match direction_id.trim() {
+                "0" => *direction_id = "0".to_string(),
+                "1" => *direction_id = "1".to_string(),
+                "" => direction_id.clear(),
+                _ => {
+                    direction_id.clear();
+                    cleared += 1;
+                }
+            }
+        }
+
+        wtr.write_record(&fields)?;
+    }
+
+    wtr.flush()?;
+    drop(wtr);
+    drop(rdr);
+
+    std::fs::rename(temp_path, trips_path)?;
+    Ok(cleared)
+}
+
 fn remove_invalid_pathways_rows(gtfs_path: &str) -> Result<usize, Box<dyn Error + Send + Sync>> {
     let pathways_path = Path::new(gtfs_path).join("pathways.txt");
     if !pathways_path.exists() {
@@ -1010,6 +1062,14 @@ pub async fn gtfs_process_feed(
                 std::fs::remove_file(&file_path)?;
                 println!("Removed {} for feed {}", filename, feed_id);
             }
+        }
+
+        let cleared_direction_ids = clear_invalid_trips_direction_ids(&path)?;
+        if cleared_direction_ids > 0 {
+            println!(
+                "Cleared {} invalid direction_id values from trips.txt for feed {}",
+                cleared_direction_ids, feed_id
+            );
         }
     }
 
