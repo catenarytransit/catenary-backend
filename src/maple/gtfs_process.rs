@@ -172,9 +172,7 @@ async fn execute_pfaedle_rs(
     Ok(())
 }
 
-fn remove_invalid_pathways_rows(
-    gtfs_path: &str,
-) -> Result<usize, Box<dyn Error + Send + Sync>> {
+fn remove_invalid_pathways_rows(gtfs_path: &str) -> Result<usize, Box<dyn Error + Send + Sync>> {
     let pathways_path = Path::new(gtfs_path).join("pathways.txt");
     if !pathways_path.exists() {
         return Ok(0);
@@ -223,9 +221,7 @@ fn remove_invalid_pathways_rows(
                 .length
                 .map_or(true, |value| value.is_finite() && value >= 0.0)
             && pathway.traversal_time.map_or(true, |value| value > 0)
-            && pathway
-                .max_slope
-                .map_or(true, |value| value.is_finite())
+            && pathway.max_slope.map_or(true, |value| value.is_finite())
             && pathway
                 .min_width
                 .map_or(true, |value| value.is_finite() && value > 0.0)
