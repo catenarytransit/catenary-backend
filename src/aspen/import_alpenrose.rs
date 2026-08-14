@@ -2229,7 +2229,7 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
-                        if chateau_id == "île~de~france~mobilités" {
+                        if chateau_id == "île~de~france~mobilités" || chateau_id == "lagunabeachtransit" {
                             trip_descriptor.start_time = None;
                         }
 
