@@ -926,8 +926,14 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     .default_lang
                                     .clone(),
                                 production: false,
-                                feed_expiration_date: None,
-                                feed_start_date: None,
+                                feed_expiration_date: gtfs_process_result
+                                    .as_ref()
+                                    .unwrap()
+                                    .feed_end_date,
+                                feed_start_date: gtfs_process_result
+                                    .as_ref()
+                                    .unwrap()
+                                    .feed_start_date,
                                 ingestion_version: MAPLE_INGESTION_VERSION,
                                 hash_of_file_contents: hash_of_file_contents_string.clone(),
                             };

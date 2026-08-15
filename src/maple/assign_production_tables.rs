@@ -85,6 +85,40 @@ pub async fn assign_production_tables(
     use catenary::schema::gtfs::ingested_static::dsl::ingested_static;
     use diesel::ExpressionMethods;
 
+    use catenary::schema::gtfs::feed_info::dsl as feed_info_columns;
+    use catenary::schema::gtfs::feed_info::dsl::feed_info;
+
+    let current_feed_dates = feed_info
+        .filter(feed_info_columns::onestop_feed_id.eq(feed_id))
+        .filter(feed_info_columns::attempt_id.eq(attempt_id))
+        .select((
+            feed_info_columns::feed_start_date,
+            feed_info_columns::feed_end_date,
+        ))
+        .load::<(Option<NaiveDate>, Option<NaiveDate>)>(conn)
+        .await?
+        .into_iter()
+        .next();
+
+    if let Some((feed_start_date, feed_end_date)) = current_feed_dates {
+        diesel::update(
+            ingested_static
+                .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
+                .filter(ingested_static_columns::attempt_id.eq(attempt_id)),
+        )
+        .set((
+            ingested_static_columns::feed_start_date.eq(feed_start_date),
+            ingested_static_columns::feed_expiration_date.eq(feed_end_date),
+        ))
+        .execute(conn)
+        .await?;
+
+        println!(
+            "GTFS lifecycle dates for {} / {}: start={:?}, end={:?}",
+            feed_id, attempt_id, feed_start_date, feed_end_date
+        );
+    }
+
     let all_feeds: Vec<catenary::models::IngestedStatic> = ingested_static
         .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
         .select(catenary::models::IngestedStatic::as_select())
@@ -194,6 +228,11 @@ pub async fn assign_production_tables(
         .iter()
         .find(|feed_time_range| date_is_within_feed_time_range(now, feed_time_range))
         .map(|feed_time_range| feed_time_range.attempt_id.clone());
+
+    println!(
+        "GTFS lifecycle for {}: retaining {:?}, dropping {:?}, spatially active {:?}",
+        feed_id, production_list_ids, drop_attempt_list, current_feed_id
+    );
 
     //mark old feeds as not in production anymore and new feeds as in production
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
