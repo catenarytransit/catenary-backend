@@ -15,10 +15,25 @@ use std::error::Error;
 use std::ops::Sub;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+
 struct FeedTimeRange {
     attempt_id: String,
     start_date: Option<NaiveDate>,
     expiration_date: Option<NaiveDate>,
+}
+
+fn date_is_within_feed_time_range(date: NaiveDate, feed_time_range: &FeedTimeRange) -> bool {
+    let within_start_bounds = match feed_time_range.start_date {
+        None => true,
+        Some(start_date) => date >= start_date,
+    };
+
+    let within_end_bounds = match feed_time_range.expiration_date {
+        None => true,
+        Some(expiration_date) => date <= expiration_date,
+    };
+
+    within_start_bounds && within_end_bounds
 }
 
 pub async fn assign_production_tables(
@@ -146,10 +161,13 @@ pub async fn assign_production_tables(
                             // add to the feed time range, claim the time range
                             last_claimed_start_time = Some(ingested_item.feed_start_date);
 
+                            // Store the effective expiration date instead of the feed's original
+                            // expiration date. This prevents an older feed from remaining current
+                            // after a newer, future-dated feed reaches its feed_start_date.
                             feed_time_ranges.push(FeedTimeRange {
                                 attempt_id: ingested_item.attempt_id.clone(),
                                 start_date: ingested_item.feed_start_date,
-                                expiration_date: ingested_item.feed_expiration_date,
+                                expiration_date: Some(new_expiration_date),
                             });
                         }
                     }
@@ -168,31 +186,14 @@ pub async fn assign_production_tables(
 
     let now: NaiveDate = Utc::now().naive_utc().date();
 
-    let current_feed_id = match production_list_ids.len() {
-        0 => None,
-        1 => Some(production_list_ids[0].clone()),
-        _ => {
-            let mut valid = production_list_ids[0].clone();
-
-            for (i, feed_time_range) in feed_time_ranges.iter().enumerate() {
-                let within_start_bounds = match feed_time_range.start_date {
-                    None => true,
-                    Some(feed_time_range_start_date) => now >= feed_time_range_start_date,
-                };
-
-                let within_end_bounds = match feed_time_range.expiration_date {
-                    None => true,
-                    Some(feed_time_range_start_date) => now <= feed_time_range_start_date,
-                };
-
-                if within_start_bounds && within_end_bounds {
-                    valid = feed_time_range.attempt_id.clone();
-                }
-            }
-
-            Some(valid)
-        }
-    };
+    // feed_time_ranges is ordered newest ingest -> oldest ingest. Pick the first
+    // range that actually contains today. A future feed remains in production but
+    // is not spatially active until feed_start_date. Likewise, an expired feed is
+    // not selected just because it is the only retained attempt.
+    let current_feed_id = feed_time_ranges
+        .iter()
+        .find(|feed_time_range| date_is_within_feed_time_range(now, feed_time_range))
+        .map(|feed_time_range| feed_time_range.attempt_id.clone());
 
     //mark old feeds as not in production anymore and new feeds as in production
     conn.transaction::<_, diesel::result::Error, _>(|conn| {
@@ -207,51 +208,53 @@ pub async fn assign_production_tables(
                 use catenary::schema::gtfs::stops::dsl as stops_columns;
                 use catenary::schema::gtfs::stops::dsl::stops;
 
-                //determine which one is active for map queries
+                //determine which one is active for map queries. All retained
+                // attempts stay in production; only the attempt whose effective
+                // feed_info date range contains today is spatially queriable.
+                for production_list_id in production_list_ids {
+                    let is_this_feed_spatial_queriable = current_feed_id
+                        .as_ref()
+                        .map(|current_feed_id| current_feed_id == &production_list_id)
+                        .unwrap_or(false);
 
-                if let Some(current_feed_id) = current_feed_id {
-                    for production_list_id in production_list_ids {
-                        let is_this_feed_spatial_queriable = current_feed_id == production_list_id;
+                    //update the shapes to be queriable
+                    let _ = diesel::update(
+                        shapes
+                            .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(shapes_columns::attempt_id.eq(&production_list_id)),
+                    )
+                    .set(
+                        shapes_columns::allowed_spatial_query
+                            .eq(is_this_feed_spatial_queriable),
+                    )
+                    .execute(conn)
+                    .await?;
 
-                        //update the shapes to be queriable
-                        let _ = diesel::update(
-                            shapes
-                                .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
-                                .filter(shapes_columns::attempt_id.eq(&production_list_id)),
-                        )
-                        .set(
-                            shapes_columns::allowed_spatial_query
-                                .eq(is_this_feed_spatial_queriable),
-                        )
-                        .execute(conn)
-                        .await?;
+                    //update the stops to be queriable
+                    let _ = diesel::update(
+                        stops
+                            .filter(stops_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(stops_columns::attempt_id.eq(&production_list_id)),
+                    )
+                    .set(
+                        stops_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable),
+                    )
+                    .execute(conn)
+                    .await?;
 
-                        //update the stops to be queriable
-                        let _ = diesel::update(
-                            stops
-                                .filter(stops_columns::onestop_feed_id.eq(&feed_id))
-                                .filter(stops_columns::attempt_id.eq(&production_list_id)),
-                        )
-                        .set(
-                            stops_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable),
-                        )
-                        .execute(conn)
-                        .await?;
-
-                        let _ = diesel::update(
-                            ingested_static
-                                .filter(ingested_static_columns::onestop_feed_id.eq(&feed_id))
-                                .filter(
-                                    ingested_static_columns::attempt_id.eq(&production_list_id),
-                                ),
-                        )
-                        .set((
-                            ingested_static_columns::deleted.eq(false),
-                            ingested_static_columns::production.eq(true),
-                        ))
-                        .execute(conn)
-                        .await?;
-                    }
+                    let _ = diesel::update(
+                        ingested_static
+                            .filter(ingested_static_columns::onestop_feed_id.eq(&feed_id))
+                            .filter(
+                                ingested_static_columns::attempt_id.eq(&production_list_id),
+                            ),
+                    )
+                    .set((
+                        ingested_static_columns::deleted.eq(false),
+                        ingested_static_columns::production.eq(true),
+                    ))
+                    .execute(conn)
+                    .await?;
                 }
 
                 for drop_id in drop_attempt_list_transaction {
