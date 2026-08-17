@@ -1191,12 +1191,6 @@ async fn fetch_chateau_data(
                         let departure_ts =
                             midnight_ts + trip.start_time as i64 + dep_time_offset as i64;
 
-                        if departure_ts < (departure_time as i64)
-                            || departure_ts > (departure_time as i64 + 18 * 3600)
-                        {
-                            continue;
-                        }
-
                         let headsign = row
                             .stop_headsign_idx
                             .and_then(|idx| {
@@ -1390,6 +1384,19 @@ async fn fetch_chateau_data(
                         }
 
                         let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
+
+                        // Apply the departure window after realtime has been resolved.
+                        // A trip scheduled in the past may still be upcoming if it is delayed.
+                        let effective_departure_ts = rt_dep
+                            .or(rt_arr)
+                            .map(|ts| ts as i64)
+                            .unwrap_or(departure_ts);
+
+                        if effective_departure_ts < departure_time
+                            || effective_departure_ts > departure_time + 18 * 3600
+                        {
+                            continue;
+                        }
 
                         if !is_subway_or_tram
                             && (is_long_distance
