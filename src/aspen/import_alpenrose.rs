@@ -3894,22 +3894,6 @@ pub async fn new_rt_data(
         }
 
         let cpu_started = current_thread_cpu_time();
-        let alerts = if let Some(reused_alerts) = reused_alerts {
-            reused_alerts
-        } else {
-            Arc::new(crate::alerts_processing::deduplicate_alerts(alerts))
-        };
-
-        for (alert_id, alert) in alerts.iter() {
-            crate::alerts_processing::index_alert(
-                alert,
-                alert_id,
-                &mut impacted_route_id_to_alert_ids,
-                &mut impacted_stop_id_to_alert_ids,
-                &mut impact_trip_id_to_alert_ids,
-            );
-        }
-
         for route_id in route_ids_to_insert.iter() {
             let route = route_id_to_route.get(&route_id.clone());
             if let Some(route) = route {
@@ -3950,6 +3934,24 @@ pub async fn new_rt_data(
         //     itinerary_pattern_row_duration
         // );
     }
+
+    let cpu_started = current_thread_cpu_time();
+    let alerts = if let Some(reused_alerts) = reused_alerts {
+        reused_alerts
+    } else {
+        Arc::new(crate::alerts_processing::deduplicate_alerts(alerts))
+    };
+
+    for (alert_id, alert) in alerts.iter() {
+        crate::alerts_processing::index_alert(
+            alert,
+            alert_id,
+            &mut impacted_route_id_to_alert_ids,
+            &mut impacted_stop_id_to_alert_ids,
+            &mut impact_trip_id_to_alert_ids,
+        );
+    }
+    cpu_timings.add_since("alert_indexes", cpu_started);
 
     // Resolve trip delays after all initial processing is complete.
     // This allows us to link trip updates that were processed separately from the vehicle positions.
