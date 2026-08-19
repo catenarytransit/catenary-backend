@@ -4184,7 +4184,7 @@ pub async fn new_rt_data(
         trip_updates: trip_updates,
         trip_updates_lookup_by_trip_id_to_trip_update_ids:
             trip_updates_lookup_by_trip_id_to_trip_update_ids,
-        aspenised_alerts: alerts,
+        aspenised_alerts: alerts.into(),
         impacted_routes_alerts: impacted_route_id_to_alert_ids
             .into_iter()
             .map(|(k, v)| (k, v.into_boxed_slice()))
