@@ -3,13 +3,34 @@
 // Attribution cannot be removed
 
 use ahash::{AHashMap, RandomState};
-use catenary::aspen_dataset::{AspenEntitySelector, AspenRawTripInfo, AspenTimeRange, AspenisedAlert};
+use catenary::aspen_dataset::{
+    AspenEntitySelector, AspenRawTripInfo, AspenTimeRange, AspenTranslatedString, AspenTranslation,
+    AspenisedAlert,
+};
 use catenary::convert_text_12h_to_24h;
 use compact_str::CompactString;
+use dashmap::DashMap;
+use lingua::{LanguageDetector, LanguageDetectorBuilder};
 use regex::Regex;
 use std::cmp::Ordering;
 use std::hash::{BuildHasher, Hash, Hasher};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock, OnceLock};
+
+const LANGUAGE_DETECTION_CACHE_LIMIT: usize = 16_384;
+const METROLINK_WAGON_ALERT_TEXT: &str = "Wagons are not permitted on Metrolink trains because they can block aisles, doorways, and emergency exits, making travel less safe for everyone.";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DetectedLanguageSection {
+    start: usize,
+    end: usize,
+    language: String,
+}
+
+static LANGUAGE_DETECTOR: LazyLock<LanguageDetector> =
+    LazyLock::new(|| LanguageDetectorBuilder::from_all_languages().build());
+
+static LANGUAGE_DETECTION_CACHE: LazyLock<DashMap<String, Arc<[DetectedLanguageSection]>>> =
+    LazyLock::new(DashMap::new);
 
 const HEADER_BOILERPLATE: &[&str] = &[
     "Download the Transit App for real-time information.",
@@ -94,9 +115,7 @@ fn clean_alert_text_owned(mut text: String, chateau_id: &str) -> String {
         text.replace_range(.."Alert: ".len(), "");
     }
 
-    if matches!(chateau_id, "metrolinktrains" | "metro~losangeles")
-        && text.starts_with("Please ")
-    {
+    if matches!(chateau_id, "metrolinktrains" | "metro~losangeles") && text.starts_with("Please ") {
         text.replace_range(.."Please ".len(), "");
 
         if let Some(first) = text.chars().next() {
@@ -114,19 +133,179 @@ fn clean_alert_text(text: &str, chateau_id: &str) -> String {
 }
 
 fn process_translation(text: &str, chateau_id: &str, matcher: &Regex) -> String {
-    // Decode before matching boilerplate. This both fixes the previous discarded
-    // HTML decode and lets phrases containing '&' match when the source uses
-    // '&amp;'.
+    // Keep this as one chain: the decoded value must be the input to every
+    // subsequent cleanup step. Previously the decode result was overwritten by
+    // a later clean_alert_text call.
     let decoded = html_escape::decode_html_entities(text);
     let converted = convert_text_12h_to_24h(decoded.as_ref());
     let cleaned = remove_boilerplate(converted, matcher);
     clean_alert_text_owned(cleaned, chateau_id)
 }
 
-/// Processes an alert, cleaning text.
-///
-/// Takes an already-converted AspenisedAlert and applies text transformations
-/// to the header and description.
+fn detect_language_sections(text: &str) -> Arc<[DetectedLanguageSection]> {
+    if text.trim().is_empty() {
+        return Arc::from(Vec::<DetectedLanguageSection>::new());
+    }
+
+    if let Some(cached) = LANGUAGE_DETECTION_CACHE.get(text) {
+        return Arc::clone(cached.value());
+    }
+
+    let mut sections = LANGUAGE_DETECTOR
+        .detect_multiple_languages_of(text)
+        .into_iter()
+        .map(|result| DetectedLanguageSection {
+            start: result.start_index(),
+            end: result.end_index(),
+            language: result.language().iso_code_639_1().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    // Very short or ambiguous strings can yield no mixed-language sections.
+    // Still attempt the normal single-language detector so callers get a tag
+    // whenever Lingua can make a decision.
+    if sections.is_empty() {
+        if let Some(language) = LANGUAGE_DETECTOR.detect_language_of(text) {
+            sections.push(DetectedLanguageSection {
+                start: 0,
+                end: text.len(),
+                language: language.iso_code_639_1().to_string(),
+            });
+        }
+    }
+
+    let sections: Arc<[DetectedLanguageSection]> = sections.into();
+
+    if LANGUAGE_DETECTION_CACHE.len() >= LANGUAGE_DETECTION_CACHE_LIMIT {
+        LANGUAGE_DETECTION_CACHE.clear();
+    }
+    LANGUAGE_DETECTION_CACHE.insert(text.to_owned(), Arc::clone(&sections));
+
+    sections
+}
+
+fn split_translation_by_detected_language(text: String) -> Vec<AspenTranslation> {
+    let sections = detect_language_sections(&text);
+
+    if sections.is_empty() {
+        return vec![AspenTranslation {
+            text,
+            language: None,
+        }];
+    }
+
+    // Lingua's indices are suitable for slicing the original Rust string. Be
+    // defensive anyway: if a future detector result is malformed, preserve the
+    // complete alert body rather than dropping bytes.
+    let valid_sections = sections.iter().all(|section| {
+        section.start <= section.end
+            && section.end <= text.len()
+            && text.is_char_boundary(section.start)
+            && text.is_char_boundary(section.end)
+    }) && sections
+        .windows(2)
+        .all(|pair| pair[0].start <= pair[1].start);
+
+    if !valid_sections {
+        return vec![AspenTranslation {
+            text,
+            language: None,
+        }];
+    }
+
+    let mut translations: Vec<AspenTranslation> = Vec::with_capacity(sections.len());
+
+    for (index, section) in sections.iter().enumerate() {
+        // Partition by the next section start instead of trusting gaps between
+        // end/start indices. This guarantees that joining all emitted items
+        // reproduces the cleaned source text byte-for-byte.
+        let start = if index == 0 { 0 } else { section.start };
+        let end = sections
+            .get(index + 1)
+            .map(|next| next.start)
+            .unwrap_or(text.len());
+
+        if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            continue;
+        }
+
+        let segment = &text[start..end];
+
+        if let Some(previous) = translations.last_mut() {
+            if previous.language.as_deref() == Some(section.language.as_str()) {
+                previous.text.push_str(segment);
+                continue;
+            }
+        }
+
+        translations.push(AspenTranslation {
+            text: segment.to_owned(),
+            language: Some(section.language.clone()),
+        });
+    }
+
+    if translations.is_empty() {
+        vec![AspenTranslation {
+            text,
+            language: None,
+        }]
+    } else {
+        translations
+    }
+}
+
+fn process_translated_string(
+    translated_string: &mut AspenTranslatedString,
+    chateau_id: &str,
+    matcher: Option<&Regex>,
+) {
+    let translations = std::mem::take(&mut translated_string.translation);
+    let mut processed = Vec::with_capacity(translations.len());
+
+    for AspenTranslation { text, language } in translations {
+        let text = match matcher {
+            Some(matcher) => process_translation(&text, chateau_id, matcher),
+            None => text,
+        };
+
+        // A language explicitly supplied by the feed is authoritative. Detect
+        // only untagged text; this avoids reclassifying proper GTFS translations.
+        if let Some(language) = language {
+            processed.push(AspenTranslation {
+                text,
+                language: Some(language),
+            });
+        } else {
+            processed.extend(split_translation_by_detected_language(text));
+        }
+    }
+
+    translated_string.translation = processed;
+}
+
+pub fn should_drop_alert(alert: &AspenisedAlert, chateau_id: &str) -> bool {
+    if chateau_id != "metrolinktrains" {
+        return false;
+    }
+
+    [
+        alert.header_text.as_ref(),
+        alert.description_text.as_ref(),
+        alert.tts_header_text.as_ref(),
+        alert.tts_description_text.as_ref(),
+        alert.image_alternative_text.as_ref(),
+        alert.cause_detail.as_ref(),
+        alert.effect_detail.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|translated_string| translated_string.translation.iter())
+    .any(|translation| {
+        html_escape::decode_html_entities(&translation.text).contains(METROLINK_WAGON_ALERT_TEXT)
+    })
+}
+
+/// Processes an alert, cleaning text and filling missing language tags.
 pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAlert {
     // Some agencies repeat the header verbatim in the description.
     if alert.header_text.is_some() && alert.header_text == alert.description_text {
@@ -134,17 +313,31 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
     }
 
     if let Some(header_text) = &mut alert.header_text {
-        let matcher = header_boilerplate_regex();
-        for translation in &mut header_text.translation {
-            translation.text = process_translation(&translation.text, chateau_id, matcher);
-        }
+        process_translated_string(header_text, chateau_id, Some(header_boilerplate_regex()));
     }
 
     if let Some(description_text) = &mut alert.description_text {
-        let matcher = description_boilerplate_regex();
-        for translation in &mut description_text.translation {
-            translation.text = process_translation(&translation.text, chateau_id, matcher);
-        }
+        process_translated_string(
+            description_text,
+            chateau_id,
+            Some(description_boilerplate_regex()),
+        );
+    }
+
+    if let Some(tts_header_text) = &mut alert.tts_header_text {
+        process_translated_string(tts_header_text, chateau_id, None);
+    }
+    if let Some(tts_description_text) = &mut alert.tts_description_text {
+        process_translated_string(tts_description_text, chateau_id, None);
+    }
+    if let Some(image_alternative_text) = &mut alert.image_alternative_text {
+        process_translated_string(image_alternative_text, chateau_id, None);
+    }
+    if let Some(cause_detail) = &mut alert.cause_detail {
+        process_translated_string(cause_detail, chateau_id, None);
+    }
+    if let Some(effect_detail) = &mut alert.effect_detail {
+        process_translated_string(effect_detail, chateau_id, None);
     }
 
     alert
@@ -155,11 +348,7 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
 /// `index_alert` processes one alert completely before the next alert is
 /// indexed, so a duplicate key for this alert will always see the same alert ID
 /// as the last element. This avoids allocating a temporary HashSet per alert.
-fn index_one(
-    index: &mut AHashMap<CompactString, Vec<Arc<str>>>,
-    key: &str,
-    alert_id: &Arc<str>,
-) {
+fn index_one(index: &mut AHashMap<CompactString, Vec<Arc<str>>>, key: &str, alert_id: &Arc<str>) {
     let ids = index.entry(CompactString::new(key)).or_default();
 
     if !matches!(ids.last(), Some(last) if last.as_ref() == alert_id.as_ref()) {
@@ -389,8 +578,7 @@ pub fn deduplicate_alerts(
     // keeps the later key maps compact and ensures different alert content can
     // never be unioned even if their 64-bit hashes collide.
     let mut content_group_ids = vec![usize::MAX; len];
-    let mut content_hash_representatives: AHashMap<u64, Vec<usize>> =
-        AHashMap::with_capacity(len);
+    let mut content_hash_representatives: AHashMap<u64, Vec<usize>> = AHashMap::with_capacity(len);
     let mut next_content_group_id = 0usize;
 
     for i in 0..len {
@@ -501,12 +689,7 @@ mod tests {
     use super::*;
     use catenary::aspen_dataset::{AspenTranslatedString, AspenTranslation};
 
-    fn make_alert(
-        header: &str,
-        start: u64,
-        end: u64,
-        route_id: Option<&str>,
-    ) -> AspenisedAlert {
+    fn make_alert(header: &str, start: u64, end: u64, route_id: Option<&str>) -> AspenisedAlert {
         AspenisedAlert {
             header_text: Some(AspenTranslatedString {
                 translation: vec![AspenTranslation {
@@ -588,6 +771,68 @@ mod tests {
         alert = process_alert(alert, "amtrak");
 
         assert_eq!(alert.header_text.unwrap().translation[0].text, "");
+    }
+
+    #[test]
+    fn test_html_decode_is_chained_into_metrolink_cleanup() {
+        let alert = process_alert(
+            make_alert(
+                "Alert: Please use Bus &amp; Rail service.",
+                100,
+                200,
+                Some("R1"),
+            ),
+            "metrolinktrains",
+        );
+
+        assert_eq!(
+            alert.header_text.unwrap().translation[0].text,
+            "Use Bus & Rail service."
+        );
+    }
+
+    #[test]
+    fn test_mixed_language_text_is_split_without_losing_content() {
+        let text = "The next train will arrive shortly. This announcement is for all passengers. 日本語でのご案内です。次の電車はまもなく到着します。";
+        let alert = process_alert(make_alert(text, 100, 200, Some("R1")), "amtrak");
+        let translations = alert.header_text.unwrap().translation;
+
+        assert!(translations.len() >= 2);
+        assert!(
+            translations
+                .iter()
+                .all(|translation| translation.language.is_some())
+        );
+        assert_eq!(
+            translations
+                .iter()
+                .map(|translation| translation.text.as_str())
+                .collect::<String>(),
+            text
+        );
+    }
+
+    #[test]
+    fn test_language_detection_results_are_cached() {
+        let text = "The next train will arrive at the station shortly for all waiting passengers.";
+        let first = detect_language_sections(text);
+        let second = detect_language_sections(text);
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!first.is_empty());
+    }
+
+    #[test]
+    fn test_metrolink_wagon_alert_is_dropped() {
+        let alert = make_alert(
+            &format!("Rider notice: {METROLINK_WAGON_ALERT_TEXT}"),
+            100,
+            200,
+            Some("R1"),
+        );
+
+        assert!(should_drop_alert(&alert, "metrolinktrains"));
+        assert!(!should_drop_alert(&alert, "amtrak"));
     }
 
     #[test]
@@ -704,13 +949,7 @@ mod tests {
         let mut stops = AHashMap::new();
         let mut trips = AHashMap::new();
 
-        index_alert(
-            &alert,
-            &alert_id,
-            &mut routes,
-            &mut stops,
-            &mut trips,
-        );
+        index_alert(&alert, &alert_id, &mut routes, &mut stops, &mut trips);
 
         assert_eq!(routes.get(&CompactString::new("R1")).unwrap().len(), 1);
         assert_eq!(trips.get(&CompactString::new("T1")).unwrap().len(), 1);

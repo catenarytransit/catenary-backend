@@ -185,7 +185,8 @@ fn clear_invalid_trips_direction_ids(
         .from_path(&trips_path)?;
     let headers = rdr.headers()?.clone();
 
-    let Some(direction_id_index) = headers.iter().position(|header| header == "direction_id") else {
+    let Some(direction_id_index) = headers.iter().position(|header| header == "direction_id")
+    else {
         return Ok(0);
     };
 

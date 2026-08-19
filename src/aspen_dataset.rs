@@ -60,7 +60,7 @@ pub struct AspenisedData {
         AHashMap<CompactString, Vec<CompactString>>,
     pub vehicle_positions_rtree_by_route_type:
         AHashMap<i16, rstar::RTree<AspenisedVehiclePositionBBox>>,
-    pub aspenised_alerts: AHashMap<Arc<str>, AspenisedAlert>,
+    pub aspenised_alerts: Arc<AHashMap<Arc<str>, AspenisedAlert>>,
     pub impacted_routes_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,
     pub impacted_stops_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,
     pub impacted_trips_alerts: AHashMap<CompactString, Box<[Arc<str>]>>,

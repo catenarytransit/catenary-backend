@@ -262,10 +262,7 @@ pub async fn assign_production_tables(
                             .filter(shapes_columns::onestop_feed_id.eq(&feed_id))
                             .filter(shapes_columns::attempt_id.eq(&production_list_id)),
                     )
-                    .set(
-                        shapes_columns::allowed_spatial_query
-                            .eq(is_this_feed_spatial_queriable),
-                    )
+                    .set(shapes_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable))
                     .execute(conn)
                     .await?;
 
@@ -275,18 +272,14 @@ pub async fn assign_production_tables(
                             .filter(stops_columns::onestop_feed_id.eq(&feed_id))
                             .filter(stops_columns::attempt_id.eq(&production_list_id)),
                     )
-                    .set(
-                        stops_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable),
-                    )
+                    .set(stops_columns::allowed_spatial_query.eq(is_this_feed_spatial_queriable))
                     .execute(conn)
                     .await?;
 
                     let _ = diesel::update(
                         ingested_static
                             .filter(ingested_static_columns::onestop_feed_id.eq(&feed_id))
-                            .filter(
-                                ingested_static_columns::attempt_id.eq(&production_list_id),
-                            ),
+                            .filter(ingested_static_columns::attempt_id.eq(&production_list_id)),
                     )
                     .set((
                         ingested_static_columns::deleted.eq(false),

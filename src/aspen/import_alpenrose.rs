@@ -87,6 +87,7 @@ use scc::HashIndex;
 use scc::HashMap as SccHashMap;
 use serde::Deserialize;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -96,6 +97,12 @@ use std::time::Instant;
 lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
     static ref START_TIME: SccHashMap<String, Instant> = SccHashMap::new();
+    static ref LAST_ALERT_INPUT_FINGERPRINT: SccHashMap<String, [u8; 32]> = SccHashMap::new();
+}
+
+fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
+    hasher.update((bytes.len() as u64).to_le_bytes());
+    hasher.update(bytes);
 }
 
 /// Extracts the base DIDOK (station/stop) code from a GTFS SLOID identifier string.
@@ -724,6 +731,56 @@ pub async fn new_rt_data(
         .filter(chateaus_pg_schema::dsl::chateau.eq(chateau_id))
         .first::<catenary::models::Chateau>(conn)
         .await?;
+
+    // Snapshot every alert feed in this chateau. new_rt_data rebuilds the whole
+    // chateau, so checking only the feed that triggered this job is not enough.
+    // Processing these captured Arcs also guarantees that the fingerprint below
+    // describes the exact alert inputs used by this rebuild.
+    let mut alert_feed_snapshot: AHashMap<String, Arc<CompactFeedMessage>> = AHashMap::new();
+    let mut alert_input_hasher = Sha256::new();
+
+    for source_realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
+        hash_len_prefixed(&mut alert_input_hasher, source_realtime_feed_id.as_bytes());
+
+        if let Some(alert_feed) = authoritative_gtfs_rt
+            .get_async(&(source_realtime_feed_id.clone(), GtfsRtType::Alerts))
+            .await
+        {
+            let alert_feed = Arc::clone(alert_feed.get());
+            alert_input_hasher.update([1_u8]);
+
+            for entity in &alert_feed.entity {
+                if let Some(alert) = &entity.alert {
+                    hash_len_prefixed(&mut alert_input_hasher, entity.id.as_bytes());
+                    let encoded = alert.encode_to_vec();
+                    hash_len_prefixed(&mut alert_input_hasher, &encoded);
+                }
+            }
+
+            alert_feed_snapshot.insert(source_realtime_feed_id.clone(), alert_feed);
+        } else {
+            alert_input_hasher.update([0_u8]);
+        }
+    }
+
+    let current_alert_input_fingerprint: [u8; 32] = alert_input_hasher.finalize().into();
+
+    // SNCF also imports SIRI SX alerts outside authoritative_gtfs_rt, so the
+    // GTFS-RT fingerprint alone cannot prove its complete alert set is unchanged.
+    let reused_alerts = if chateau_id == "sncf" {
+        None
+    } else if let Some(previous_data) = &previous_authoritative_data_store {
+        match LAST_ALERT_INPUT_FINGERPRINT.get_async(chateau_id).await {
+            Some(previous_fingerprint)
+                if *previous_fingerprint.get() == current_alert_input_fingerprint =>
+            {
+                Some(Arc::clone(&previous_data.aspenised_alerts))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
 
     let is_europe = diesel::select(diesel::dsl::sql::<diesel::sql_types::Bool>(&format!(
         "EXISTS(SELECT 1 FROM gtfs.chateaus WHERE chateau = '{}' AND ST_Intersects(hull, ST_MakeEnvelope(-28.4207529, 34.31734126604816, 40.85603290981834, 71.4754084, 4326)))",
@@ -2229,7 +2286,9 @@ pub async fn new_rt_data(
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
-                        if chateau_id == "île~de~france~mobilités" || chateau_id == "lagunabeachtransit" {
+                        if chateau_id == "île~de~france~mobilités"
+                            || chateau_id == "lagunabeachtransit"
+                        {
                             trip_descriptor.start_time = None;
                         }
 
@@ -3638,25 +3697,34 @@ pub async fn new_rt_data(
                 total_started,
             );
 
-            if let Some(alert_updates_gtfs_rt) = authoritative_gtfs_rt
-                .get_async(&(realtime_feed_id.clone(), GtfsRtType::Alerts))
-                .await
-            {
-                let alert_updates_gtfs_rt = alert_updates_gtfs_rt.get();
-                let cpu_started = current_thread_cpu_time();
+            if reused_alerts.is_none() {
+                if let Some(alert_updates_gtfs_rt) =
+                    alert_feed_snapshot.get(realtime_feed_id.as_str())
+                {
+                    let cpu_started = current_thread_cpu_time();
 
-                for alert_entity in alert_updates_gtfs_rt.entity.iter() {
-                    if let Some(alert) = &alert_entity.alert {
-                        let alert_id = Arc::from(alert_entity.id.as_str());
-                        let aspenised_alert: AspenisedAlert = (*alert.clone()).into();
+                    for alert_entity in alert_updates_gtfs_rt.entity.iter() {
+                        if let Some(alert) = &alert_entity.alert {
+                            let alert_id = Arc::from(alert_entity.id.as_str());
+                            let aspenised_alert: AspenisedAlert = (*alert.clone()).into();
 
-                        let processed_alert =
-                            crate::alerts_processing::process_alert(aspenised_alert, chateau_id);
+                            if crate::alerts_processing::should_drop_alert(
+                                &aspenised_alert,
+                                chateau_id,
+                            ) {
+                                continue;
+                            }
 
-                        alerts.insert(alert_id, processed_alert);
+                            let processed_alert = crate::alerts_processing::process_alert(
+                                aspenised_alert,
+                                chateau_id,
+                            );
+
+                            alerts.insert(alert_id, processed_alert);
+                        }
                     }
+                    cpu_timings.add_since("alerts", cpu_started);
                 }
-                cpu_timings.add_since("alerts", cpu_started);
             }
         }
 
@@ -3679,7 +3747,7 @@ pub async fn new_rt_data(
                     eprintln!("Failed to load SNCF SIRI Situation Exchange alerts: {error}");
 
                     if let Some(previous_data) = &previous_authoritative_data_store {
-                        for (alert_id, alert) in &previous_data.aspenised_alerts {
+                        for (alert_id, alert) in previous_data.aspenised_alerts.iter() {
                             if alert_id.starts_with("sncf-siri-sx:") {
                                 alerts.insert(Arc::clone(alert_id), alert.clone());
                             }
@@ -3826,7 +3894,11 @@ pub async fn new_rt_data(
         }
 
         let cpu_started = current_thread_cpu_time();
-        alerts = crate::alerts_processing::deduplicate_alerts(alerts);
+        let alerts = if let Some(reused_alerts) = reused_alerts {
+            reused_alerts
+        } else {
+            Arc::new(crate::alerts_processing::deduplicate_alerts(alerts))
+        };
 
         for (alert_id, alert) in alerts.iter() {
             crate::alerts_processing::index_alert(
@@ -3943,7 +4015,6 @@ pub async fn new_rt_data(
     }
 
     trip_updates_lookup_by_trip_id_to_trip_update_ids.shrink_to_fit();
-    alerts.shrink_to_fit();
     impacted_route_id_to_alert_ids.shrink_to_fit();
     impacted_stop_id_to_alert_ids.shrink_to_fit();
     impact_trip_id_to_alert_ids.shrink_to_fit();
@@ -4195,6 +4266,19 @@ pub async fn new_rt_data(
         })
         .or_insert(Arc::clone(&aspenised_data));
     cpu_timings.add_since("publish_snapshot", cpu_started);
+
+    let snapshot_was_published = authoritative_data_store
+        .get_async(chateau_id)
+        .await
+        .is_some_and(|current| Arc::ptr_eq(current.get(), &aspenised_data));
+
+    if snapshot_was_published {
+        LAST_ALERT_INPUT_FINGERPRINT
+            .entry_async(chateau_id.to_string())
+            .await
+            .and_modify(|fingerprint| *fingerprint = current_alert_input_fingerprint)
+            .or_insert(current_alert_input_fingerprint);
+    }
 
     // tracing::info!(
     //     chateau_id,
