@@ -2704,6 +2704,28 @@ pub async fn new_rt_data(
                                             sbb_platform_for_stop(sbb_formation, stop_id)
                                                 .map(Into::into);
                                     }
+
+                                    if platform_resp.is_none() {
+                                        if let TrackData::Schweiz(schweiz_data) =
+                                            &fetched_track_data
+                                        {
+                                            if let (Some(trip_id), Some(stop_id)) = (
+                                                trip_descriptor.trip_id.as_deref(),
+                                                resolved_stop_id.as_deref(),
+                                            ) {
+                                                platform_resp = schweiz_data
+                                                    .get(trip_id)
+                                                    .and_then(|trip_platforms| {
+                                                        trip_platforms.iter().find(|platform| {
+                                                            platform.stop_id == stop_id
+                                                        })
+                                                    })
+                                                    .map(|platform| {
+                                                        platform.platform_name.clone().into()
+                                                    });
+                                            }
+                                        }
+                                    }
                                 }
                                 "metrolinktrains" => {
                                     if let TrackData::Metrolink(Some(track_data_scax)) =

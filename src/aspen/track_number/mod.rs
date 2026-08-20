@@ -29,6 +29,7 @@ pub enum TrackData {
     NationalRail(HashMap<String, Vec<PlatformInfo>>),
     IleDeFrance(HashMap<String, Vec<CommonPlatformInfo>>),
     Danmark(HashMap<String, Vec<CommonPlatformInfo>>),
+    Schweiz(HashMap<String, Vec<CommonPlatformInfo>>),
     ViaRail(Option<viarail::ViaRailTrackData>),
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
@@ -313,15 +314,32 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
 
             match reqwest::get(url).await {
                 Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
-                    Ok(response) => TrackData::IleDeFrance(response),
+                    Ok(response) => TrackData::Danmark(response),
                     Err(e) => {
-                        println!("Error decoding Île-de-France platform data: {}", e);
-                        TrackData::IleDeFrance(HashMap::new())
+                        println!("Error decoding Danmark platform data: {}", e);
+                        TrackData::Danmark(HashMap::new())
                     }
                 },
                 Err(e) => {
-                    println!("Error fetching Île-de-France platform data: {}", e);
-                    TrackData::IleDeFrance(HashMap::new())
+                    println!("Error fetching Danmark platform data: {}", e);
+                    TrackData::Danmark(HashMap::new())
+                }
+            }
+        }
+        "schweiz" => {
+            let url = "http://localhost:46485/platforms";
+
+            match reqwest::get(url).await {
+                Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
+                    Ok(response) => TrackData::Schweiz(response),
+                    Err(e) => {
+                        println!("Error decoding Schweiz platform data: {}", e);
+                        TrackData::Schweiz(HashMap::new())
+                    }
+                },
+                Err(e) => {
+                    println!("Error fetching Schweiz platform data: {}", e);
+                    TrackData::Schweiz(HashMap::new())
                 }
             }
         }
