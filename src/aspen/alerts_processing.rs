@@ -19,17 +19,10 @@ use std::sync::{Arc, LazyLock, OnceLock};
 const LANGUAGE_DETECTION_CACHE_LIMIT: usize = 16_384;
 const METROLINK_WAGON_ALERT_TEXT: &str = "Wagons are not permitted on Metrolink trains because they can block aisles, doorways, and emergency exits, making travel less safe for everyone.";
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct DetectedLanguageSection {
-    start: usize,
-    end: usize,
-    language: String,
-}
-
 static LANGUAGE_DETECTOR: LazyLock<LanguageDetector> =
     LazyLock::new(|| LanguageDetectorBuilder::from_all_languages().build());
 
-static LANGUAGE_DETECTION_CACHE: LazyLock<DashMap<String, Arc<[DetectedLanguageSection]>>> =
+static LANGUAGE_DETECTION_CACHE: LazyLock<DashMap<String, Option<String>>> =
     LazyLock::new(DashMap::new);
 
 const HEADER_BOILERPLATE: &[&str] = &[
@@ -142,116 +135,31 @@ fn process_translation(text: &str, chateau_id: &str, matcher: &Regex) -> String 
     clean_alert_text_owned(cleaned, chateau_id)
 }
 
-fn detect_language_sections(text: &str) -> Arc<[DetectedLanguageSection]> {
+/// Detect one language for the complete GTFS translation.
+///
+/// A GTFS `TranslatedString.translation` entry represents one complete localized
+/// string, not a language span inside a larger string. Never split one incoming
+/// translation into multiple AspenTranslation values: downstream consumers select
+/// a translation by language and are not expected to concatenate them.
+fn detect_translation_language(text: &str) -> Option<String> {
     if text.trim().is_empty() {
-        return Arc::from(Vec::<DetectedLanguageSection>::new());
+        return None;
     }
 
     if let Some(cached) = LANGUAGE_DETECTION_CACHE.get(text) {
-        return Arc::clone(cached.value());
+        return cached.value().clone();
     }
 
-    let mut sections = LANGUAGE_DETECTOR
-        .detect_multiple_languages_of(text)
-        .into_iter()
-        .map(|result| DetectedLanguageSection {
-            start: result.start_index(),
-            end: result.end_index(),
-            language: result.language().iso_code_639_1().to_string(),
-        })
-        .collect::<Vec<_>>();
-
-    // Very short or ambiguous strings can yield no mixed-language sections.
-    // Still attempt the normal single-language detector so callers get a tag
-    // whenever Lingua can make a decision.
-    if sections.is_empty() {
-        if let Some(language) = LANGUAGE_DETECTOR.detect_language_of(text) {
-            sections.push(DetectedLanguageSection {
-                start: 0,
-                end: text.len(),
-                language: language.iso_code_639_1().to_string(),
-            });
-        }
-    }
-
-    let sections: Arc<[DetectedLanguageSection]> = sections.into();
+    let language = LANGUAGE_DETECTOR
+        .detect_language_of(text)
+        .map(|language| language.iso_code_639_1().to_string());
 
     if LANGUAGE_DETECTION_CACHE.len() >= LANGUAGE_DETECTION_CACHE_LIMIT {
         LANGUAGE_DETECTION_CACHE.clear();
     }
-    LANGUAGE_DETECTION_CACHE.insert(text.to_owned(), Arc::clone(&sections));
+    LANGUAGE_DETECTION_CACHE.insert(text.to_owned(), language.clone());
 
-    sections
-}
-
-fn split_translation_by_detected_language(text: String) -> Vec<AspenTranslation> {
-    let sections = detect_language_sections(&text);
-
-    if sections.is_empty() {
-        return vec![AspenTranslation {
-            text,
-            language: None,
-        }];
-    }
-
-    // Lingua's indices are suitable for slicing the original Rust string. Be
-    // defensive anyway: if a future detector result is malformed, preserve the
-    // complete alert body rather than dropping bytes.
-    let valid_sections = sections.iter().all(|section| {
-        section.start <= section.end
-            && section.end <= text.len()
-            && text.is_char_boundary(section.start)
-            && text.is_char_boundary(section.end)
-    }) && sections
-        .windows(2)
-        .all(|pair| pair[0].start <= pair[1].start);
-
-    if !valid_sections {
-        return vec![AspenTranslation {
-            text,
-            language: None,
-        }];
-    }
-
-    let mut translations: Vec<AspenTranslation> = Vec::with_capacity(sections.len());
-
-    for (index, section) in sections.iter().enumerate() {
-        // Partition by the next section start instead of trusting gaps between
-        // end/start indices. This guarantees that joining all emitted items
-        // reproduces the cleaned source text byte-for-byte.
-        let start = if index == 0 { 0 } else { section.start };
-        let end = sections
-            .get(index + 1)
-            .map(|next| next.start)
-            .unwrap_or(text.len());
-
-        if start >= end || !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-            continue;
-        }
-
-        let segment = &text[start..end];
-
-        if let Some(previous) = translations.last_mut() {
-            if previous.language.as_deref() == Some(section.language.as_str()) {
-                previous.text.push_str(segment);
-                continue;
-            }
-        }
-
-        translations.push(AspenTranslation {
-            text: segment.to_owned(),
-            language: Some(section.language.clone()),
-        });
-    }
-
-    if translations.is_empty() {
-        vec![AspenTranslation {
-            text,
-            language: None,
-        }]
-    } else {
-        translations
-    }
+    language
 }
 
 fn process_translated_string(
@@ -276,7 +184,10 @@ fn process_translated_string(
                 language: Some(language),
             });
         } else {
-            processed.extend(split_translation_by_detected_language(text));
+            processed.push(AspenTranslation {
+                language: detect_translation_language(&text),
+                text,
+            });
         }
     }
 
@@ -792,34 +703,26 @@ mod tests {
     }
 
     #[test]
-    fn test_mixed_language_text_is_split_without_losing_content() {
+    fn test_untagged_translation_is_never_split() {
         let text = "The next train will arrive shortly. This announcement is for all passengers. 日本語でのご案内です。次の電車はまもなく到着します。";
         let alert = process_alert(make_alert(text, 100, 200, Some("R1")), "amtrak");
         let translations = alert.header_text.unwrap().translation;
 
-        assert!(translations.len() >= 2);
-        assert!(
-            translations
-                .iter()
-                .all(|translation| translation.language.is_some())
-        );
-        assert_eq!(
-            translations
-                .iter()
-                .map(|translation| translation.text.as_str())
-                .collect::<String>(),
-            text
-        );
+        // Even if the source accidentally contains more than one language,
+        // preserve the GTFS translation as one complete message. A consumer
+        // selecting by language must never receive only half of the alert.
+        assert_eq!(translations.len(), 1);
+        assert_eq!(translations[0].text, text);
     }
 
     #[test]
     fn test_language_detection_results_are_cached() {
         let text = "The next train will arrive at the station shortly for all waiting passengers.";
-        let first = detect_language_sections(text);
-        let second = detect_language_sections(text);
+        let first = detect_translation_language(text);
+        let second = detect_translation_language(text);
 
-        assert!(Arc::ptr_eq(&first, &second));
-        assert!(!first.is_empty());
+        assert_eq!(first, second);
+        assert!(first.is_some());
     }
 
     #[test]
