@@ -23,7 +23,11 @@ pub fn remove_agencies(gtfs: Gtfs, to_delete_agencies: &Vec<String>) -> Gtfs {
     let mut stops_to_agency_ids: HashMap<String, BTreeSet<String>> = HashMap::new();
 
     for (trip_id, trip) in gtfs.trips.iter() {
-        let agency_id = gtfs.routes.get(&trip.route_id).map(|x| x.agency_id.clone()).flatten();
+        let agency_id = gtfs
+            .routes
+            .get(&trip.route_id)
+            .map(|x| x.agency_id.clone())
+            .flatten();
 
         if let Some(agency_id) = &agency_id {
             for stop_time in &trip.stop_times {
