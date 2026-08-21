@@ -1012,16 +1012,38 @@ pub async fn gtfs_process_feed(
         }
         "f-u0-switzerland" => {
             // 2 passes requried
-            let _ = execute_pfaedle_rs(
+            // let _ = execute_pfaedle_rs(
+            //     path.as_str(),
+            //     "./railonly-europe-latest.osm.pbf",
+            //     Some(vec![String::from("rail")]),
+            //     false,
+            //     true,
+            // )
+            // .await?;
+
+            // let _ = execute_pfaedle_rs(
+            //     path.as_str(),
+            //     "./switzerland-gtfs-pfaedle.osm.pbf",
+            //     Some(
+            //         "subway,metro,bus,ferry,cablecar,funicular,coach,trolley,monorail,tram"
+            //             .split(",")
+            //             .map(String::from)
+            //             .collect::<Vec<String>>(),
+            //     ),
+            //     false,
+            //     true,
+            // )
+            // .await?;
+
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![String::from("rail")]),
                 false,
                 true,
-            )
-            .await?;
+            ).await?;
 
-            let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./switzerland-gtfs-pfaedle.osm.pbf",
                 Some(
@@ -1032,8 +1054,7 @@ pub async fn gtfs_process_feed(
                 ),
                 false,
                 true,
-            )
-            .await?;
+            ).await?;
         }
         _ => {
             //no pfaedle needed
