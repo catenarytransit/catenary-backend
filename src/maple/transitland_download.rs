@@ -3,7 +3,6 @@
 
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
-use crate::switzerland_pfaedle_download;
 use catenary::GirolleFeedDownloadResult;
 use catenary::catenaryconfig;
 use catenary::models::StaticDownloadAttempt;
@@ -727,56 +726,6 @@ pub async fn download_return_eligible_feeds(
                                 };
                             }
 
-                            // Switzerland has a second required input that is not represented by
-                            // the shared-URL cache. Keep it on the normal download path so both
-                            // artifacts are acquired as one processing input.
-                            if staticfeed.feed_id != switzerland_pfaedle_download::FEED_ID {
-                                let downloaded_lock = url_downloaded_paths.lock().await;
-                                if let Some(cached_path) = downloaded_lock.get(&staticfeed.url).cloned() {
-                                    // URL already downloaded, copy from cache
-                                    drop(downloaded_lock);
-                                    
-                                    match fs::copy(&cached_path, &this_zip_path) {
-                                        Ok(bytes_copied) => {
-                                            let mut download_progress = download_progress.lock().unwrap();
-                                            *download_progress += 1;
-                                            
-                                            println!(
-                                                "Reusing {}/{} [{:.2}%]: {} from cached URL ({} bytes)",
-                                                download_progress,
-                                                total_feeds_to_download,
-                                                (*download_progress as f32 / total_feeds_to_download as f32) * 100.0,
-                                                &staticfeed.feed_id,
-                                                bytes_copied
-                                            );
-                                            
-                                            if let Ok(data) = fs::read(&this_zip_path) {
-                                                let hash = seahash::hash(&data);
-                                                return DownloadedFeedsInformation {
-                                                    feed_id: staticfeed.feed_id.clone(),
-                                                    url: staticfeed.url.clone(),
-                                                    hash: Some(hash),
-                                                    download_timestamp_ms: current_unix_ms_time as u64,
-                                                    operation_success: true,
-                                                    ingest: true,
-                                                    byte_size: Some(bytes_copied),
-                                                    duration_download: Some(start.elapsed().as_millis() as u64),
-                                                    http_response_code: Some("cached".to_string()),
-                                                };
-                                            }
-                                        }
-                                        Err(e) => {
-                                            println!("Failed to copy from cache for {}: {:?}, will download", &staticfeed.feed_id, e);
-                                        }
-                                    }
-                                }
-                            }
-
-                            let switzerland_pfaedle_download =
-                                (staticfeed.feed_id == switzerland_pfaedle_download::FEED_ID).then(|| {
-                                    switzerland_pfaedle_download::PendingArchiveDownload::start(client.clone())
-                                });
-
                             println!("Attempting Download of {}", parse_url);
 
                             let response = try_to_download(
@@ -894,37 +843,6 @@ pub async fn download_return_eligible_feeds(
                                             Err(error) => {
                                                 //could not connect to the postgres, or this query failed. Don't ingest without access to postgres
                                                 answer.operation_success = false;
-                                            }
-                                        }
-
-                                        if answer.ingest {
-                                            if let Some(pfaedle_download) =
-                                                switzerland_pfaedle_download
-                                            {
-                                                match pfaedle_download.finish().await {
-                                                    Ok(archive) => {
-                                                        if let Err(error) =
-                                                            switzerland_pfaedle_download::store_archive(
-                                                                &gtfs_temp_storage,
-                                                                &archive,
-                                                            )
-                                                            .await
-                                                        {
-                                                            eprintln!(
-                                                                "Failed to store Switzerland Pfaedle overlay: {error:#}"
-                                                            );
-                                                            answer.operation_success = false;
-                                                            answer.ingest = false;
-                                                        }
-                                                    }
-                                                    Err(error) => {
-                                                        eprintln!(
-                                                            "Failed to download Switzerland Pfaedle overlay: {error:#}"
-                                                        );
-                                                        answer.operation_success = false;
-                                                        answer.ingest = false;
-                                                    }
-                                                }
                                             }
                                         }
                                        
