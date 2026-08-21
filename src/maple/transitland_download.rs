@@ -3,6 +3,7 @@
 
 use crate::CatenaryPostgresPool;
 use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
+use crate::switzerland_pfaedle_download;
 use catenary::GirolleFeedDownloadResult;
 use catenary::catenaryconfig;
 use catenary::models::StaticDownloadAttempt;
@@ -726,8 +727,10 @@ pub async fn download_return_eligible_feeds(
                                 };
                             }
 
-                            // Check if this URL was already downloaded by another feed
-                            {
+                            // Switzerland has a second required input that is not represented by
+                            // the shared-URL cache. Keep it on the normal download path so both
+                            // artifacts are acquired as one processing input.
+                            if staticfeed.feed_id != switzerland_pfaedle_download::FEED_ID {
                                 let downloaded_lock = url_downloaded_paths.lock().await;
                                 if let Some(cached_path) = downloaded_lock.get(&staticfeed.url).cloned() {
                                     // URL already downloaded, copy from cache
@@ -768,6 +771,11 @@ pub async fn download_return_eligible_feeds(
                                     }
                                 }
                             }
+
+                            let switzerland_pfaedle_download =
+                                (staticfeed.feed_id == switzerland_pfaedle_download::FEED_ID).then(|| {
+                                    switzerland_pfaedle_download::PendingArchiveDownload::start(client.clone())
+                                });
 
                             println!("Attempting Download of {}", parse_url);
 
@@ -886,6 +894,37 @@ pub async fn download_return_eligible_feeds(
                                             Err(error) => {
                                                 //could not connect to the postgres, or this query failed. Don't ingest without access to postgres
                                                 answer.operation_success = false;
+                                            }
+                                        }
+
+                                        if answer.ingest {
+                                            if let Some(pfaedle_download) =
+                                                switzerland_pfaedle_download
+                                            {
+                                                match pfaedle_download.finish().await {
+                                                    Ok(archive) => {
+                                                        if let Err(error) =
+                                                            switzerland_pfaedle_download::store_archive(
+                                                                &gtfs_temp_storage,
+                                                                &archive,
+                                                            )
+                                                            .await
+                                                        {
+                                                            eprintln!(
+                                                                "Failed to store Switzerland Pfaedle overlay: {error:#}"
+                                                            );
+                                                            answer.operation_success = false;
+                                                            answer.ingest = false;
+                                                        }
+                                                    }
+                                                    Err(error) => {
+                                                        eprintln!(
+                                                            "Failed to download Switzerland Pfaedle overlay: {error:#}"
+                                                        );
+                                                        answer.operation_success = false;
+                                                        answer.ingest = false;
+                                                    }
+                                                }
                                             }
                                         }
                                        

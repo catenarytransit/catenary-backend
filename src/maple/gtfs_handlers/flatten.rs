@@ -308,6 +308,10 @@ pub fn flatten_feed(
 
     flatten_if_single_subfolder(&folder_path)?;
 
+    if feed_id == crate::switzerland_pfaedle_download::FEED_ID {
+        crate::switzerland_pfaedle_download::apply_overlay(gtfs_temp_storage, &folder_path)?;
+    }
+
     //fix stop times for germany
 
     /*

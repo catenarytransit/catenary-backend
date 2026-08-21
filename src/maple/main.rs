@@ -79,6 +79,7 @@ pub mod osm_station_matching;
 mod raw_file_agency_remover;
 mod refresh_metadata_tables;
 mod shapes_reader;
+mod switzerland_pfaedle_download;
 mod transitland_download;
 mod update_schedules_with_new_chateau_id;
 
