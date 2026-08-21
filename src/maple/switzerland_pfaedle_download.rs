@@ -48,6 +48,7 @@ impl Drop for PendingArchiveDownload {
 async fn download(client: &reqwest::Client) -> Result<Bytes> {
     let response = client
         .get(ARCHIVE_URL)
+        .timeout(Duration::from_secs(10000))
         .send()
         .await
         .context("requesting Switzerland Pfaedle overlay")?
