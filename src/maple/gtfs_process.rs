@@ -1035,7 +1035,7 @@ pub async fn gtfs_process_feed(
             // )
             // .await?;
 
-            let _ = execute_pfaedle_brosi(
+            execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![String::from("rail")]),
@@ -1043,7 +1043,7 @@ pub async fn gtfs_process_feed(
                 true,
             ).await?;
 
-            let _ = execute_pfaedle_brosi(
+            execute_pfaedle_brosi(
                 path.as_str(),
                 "./switzerland-gtfs-pfaedle.osm.pbf",
                 Some(
