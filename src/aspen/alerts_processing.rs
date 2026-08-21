@@ -162,7 +162,7 @@ fn detect_translation_language(text: &str) -> Option<String> {
     language
 }
 
-fn process_translated_string(
+fn process_translated_string_text(
     translated_string: &mut AspenTranslatedString,
     chateau_id: &str,
     matcher: Option<&Regex>,
@@ -176,22 +176,75 @@ fn process_translated_string(
             None => text,
         };
 
-        // A language explicitly supplied by the feed is authoritative. Detect
-        // only untagged text; this avoids reclassifying proper GTFS translations.
-        if let Some(language) = language {
-            processed.push(AspenTranslation {
-                text,
-                language: Some(language),
-            });
-        } else {
-            processed.push(AspenTranslation {
-                language: detect_translation_language(&text),
-                text,
-            });
-        }
+        processed.push(AspenTranslation { text, language });
     }
 
     translated_string.translation = processed;
+}
+
+fn fill_missing_translation_languages(translated_string: &mut AspenTranslatedString) {
+    for translation in &mut translated_string.translation {
+        // A language explicitly supplied by the feed is authoritative. Detect
+        // only untagged text; this avoids reclassifying proper GTFS translations.
+        if translation.language.is_none() {
+            translation.language = detect_translation_language(&translation.text);
+        }
+    }
+}
+
+/// When an alert has exactly one header translation and one description
+/// translation, treat them as one language-detection unit. Short headers such as
+/// "C Line" do not contain enough signal on their own and can otherwise be
+/// misclassified even when the description clearly identifies the language.
+///
+/// Explicit feed-provided language tags remain authoritative. If exactly one of
+/// the pair is tagged, that tag is propagated to the untagged translation. If
+/// both are untagged, detect the language from `header + description` and assign
+/// that same result to both.
+fn assign_single_header_description_language(
+    header_text: &mut AspenTranslatedString,
+    description_text: &mut AspenTranslatedString,
+) -> bool {
+    if header_text.translation.len() != 1 || description_text.translation.len() != 1 {
+        return false;
+    }
+
+    let header_language = header_text.translation[0].language.clone();
+    let description_language = description_text.translation[0].language.clone();
+
+    let language = match (header_language, description_language) {
+        (Some(header_language), Some(description_language)) => {
+            // Do not overwrite conflicting language metadata supplied by the
+            // source feed. There is nothing left for automatic detection to do.
+            if header_language != description_language {
+                return true;
+            }
+            Some(header_language)
+        }
+        (Some(language), None) | (None, Some(language)) => Some(language),
+        (None, None) => {
+            let header = &header_text.translation[0].text;
+            let description = &description_text.translation[0].text;
+            let mut combined = String::with_capacity(header.len() + description.len() + 1);
+            combined.push_str(header);
+            combined.push('\n');
+            combined.push_str(description);
+            detect_translation_language(&combined)
+        }
+    };
+
+    header_text.translation[0].language = language.clone();
+    description_text.translation[0].language = language;
+    true
+}
+
+fn process_translated_string(
+    translated_string: &mut AspenTranslatedString,
+    chateau_id: &str,
+    matcher: Option<&Regex>,
+) {
+    process_translated_string_text(translated_string, chateau_id, matcher);
+    fill_missing_translation_languages(translated_string);
 }
 
 pub fn should_drop_alert(alert: &AspenisedAlert, chateau_id: &str) -> bool {
@@ -223,16 +276,34 @@ pub fn process_alert(mut alert: AspenisedAlert, chateau_id: &str) -> AspenisedAl
         alert.description_text = None;
     }
 
+    // Clean the visible header/description before language detection so the
+    // detector sees exactly the text downstream consumers will receive.
     if let Some(header_text) = &mut alert.header_text {
-        process_translated_string(header_text, chateau_id, Some(header_boilerplate_regex()));
+        process_translated_string_text(header_text, chateau_id, Some(header_boilerplate_regex()));
     }
 
     if let Some(description_text) = &mut alert.description_text {
-        process_translated_string(
+        process_translated_string_text(
             description_text,
             chateau_id,
             Some(description_boilerplate_regex()),
         );
+    }
+
+    let grouped_header_description = match (&mut alert.header_text, &mut alert.description_text) {
+        (Some(header_text), Some(description_text)) => {
+            assign_single_header_description_language(header_text, description_text)
+        }
+        _ => false,
+    };
+
+    if !grouped_header_description {
+        if let Some(header_text) = &mut alert.header_text {
+            fill_missing_translation_languages(header_text);
+        }
+        if let Some(description_text) = &mut alert.description_text {
+            fill_missing_translation_languages(description_text);
+        }
     }
 
     if let Some(tts_header_text) = &mut alert.tts_header_text {
@@ -713,6 +784,50 @@ mod tests {
         // selecting by language must never receive only half of the alert.
         assert_eq!(translations.len(), 1);
         assert_eq!(translations[0].text, text);
+    }
+
+    #[test]
+    fn test_single_header_and_description_share_combined_language_detection() {
+        let mut alert = make_alert("C Line", 100, 200, Some("R1"));
+        alert.description_text = Some(AspenTranslatedString {
+            translation: vec![AspenTranslation {
+                text: "Trains are delayed because of maintenance near the station.".to_string(),
+                language: None,
+            }],
+        });
+
+        let alert = process_alert(alert, "amtrak");
+        let header_language = alert.header_text.unwrap().translation[0].language.clone();
+        let description_language = alert.description_text.unwrap().translation[0]
+            .language
+            .clone();
+
+        assert_eq!(header_language, description_language);
+        assert_eq!(header_language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn test_single_header_and_description_propagate_explicit_language() {
+        let mut alert = make_alert("C Line", 100, 200, Some("R1"));
+        alert.description_text = Some(AspenTranslatedString {
+            translation: vec![AspenTranslation {
+                text: "Trains are delayed because of maintenance near the station.".to_string(),
+                language: Some("en".to_string()),
+            }],
+        });
+
+        let alert = process_alert(alert, "amtrak");
+
+        assert_eq!(
+            alert.header_text.unwrap().translation[0].language.as_deref(),
+            Some("en")
+        );
+        assert_eq!(
+            alert.description_text.unwrap().translation[0]
+                .language
+                .as_deref(),
+            Some("en")
+        );
     }
 
     #[test]
