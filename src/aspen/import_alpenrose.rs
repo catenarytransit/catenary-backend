@@ -91,6 +91,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -98,6 +99,16 @@ lazy_static! {
     static ref LAST_SAVE_TIME: SccHashMap<String, Instant> = SccHashMap::new();
     static ref START_TIME: SccHashMap<String, Instant> = SccHashMap::new();
     static ref LAST_ALERT_INPUT_FINGERPRINT: SccHashMap<String, [u8; 32]> = SccHashMap::new();
+}
+
+static CPU_PROFILE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn set_cpu_profile_enabled(enabled: bool) {
+    CPU_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
+}
+
+fn cpu_profile_enabled() -> bool {
+    CPU_PROFILE_ENABLED.load(Ordering::Relaxed)
 }
 
 fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
@@ -194,6 +205,10 @@ const DROP_OLD_TRIPS_GRACE_PERIOD: Duration = Duration::from_secs(60);
 
 #[cfg(target_os = "linux")]
 fn current_thread_cpu_time() -> Duration {
+    if !cpu_profile_enabled() {
+        return Duration::ZERO;
+    }
+
     Duration::try_from(rustix::time::clock_gettime(
         rustix::time::ClockId::ThreadCPUTime,
     ))
@@ -214,6 +229,10 @@ struct CpuTimings {
 
 impl CpuTimings {
     fn add_duration(&mut self, section: &'static str, duration: Duration) {
+        if !cpu_profile_enabled() {
+            return;
+        }
+
         *self.sections.entry(section).or_default() += duration;
     }
 
@@ -223,6 +242,10 @@ impl CpuTimings {
     }
 
     fn print(&self, chateau_id: &str, realtime_feed_id: &str, wall_time: Duration) {
+        if !cpu_profile_enabled() {
+            return;
+        }
+
         let total = self
             .sections
             .values()

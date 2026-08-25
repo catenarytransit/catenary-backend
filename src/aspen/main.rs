@@ -108,6 +108,13 @@ pub struct GtfsRealtimeHashStore {
     alerts: Option<u64>,
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(long, help = "Enable detailed CPU profiling logs for realtime processing")]
+    cpu_profile: bool,
+}
+
 // This is the type that implements the generated AspenServer trait. It is the business logic
 // and is used to start the server.
 #[derive(Clone)]
@@ -2137,6 +2144,9 @@ async fn spawn(fut: impl Future<Output = ()> + Send + 'static) {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Args::parse();
+    import_alpenrose::set_cpu_profile_enabled(args.cpu_profile);
+
     let redis_client = redis::Client::open("redis://127.0.0.1/")?;
 
     if std::env::var("TOKIOCONSOLE").is_ok() {
