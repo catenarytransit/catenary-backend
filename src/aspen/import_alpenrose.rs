@@ -25,12 +25,7 @@ use catenary::postgres_tools::CatenaryPostgresPool;
 
 use chrono::TimeZone;
 use compact_str::CompactString;
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
 use ecow::EcoString;
-
-use diesel::dsl::sql;
-use diesel::sql_types::Text;
 
 #[derive(Clone, Debug)]
 struct NyctRtTripContext {
@@ -91,7 +86,6 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use std::time::Instant;
 
@@ -101,14 +95,22 @@ lazy_static! {
     static ref LAST_ALERT_INPUT_FINGERPRINT: SccHashMap<String, [u8; 32]> = SccHashMap::new();
 }
 
-static CPU_PROFILE_ENABLED: AtomicBool = AtomicBool::new(false);
+static CPU_PROFILE_ENABLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_cpu_profile_enabled(enabled: bool) {
-    CPU_PROFILE_ENABLED.store(enabled, Ordering::Relaxed);
+    std::sync::atomic::AtomicBool::store(
+        &CPU_PROFILE_ENABLED,
+        enabled,
+        std::sync::atomic::Ordering::Relaxed,
+    );
 }
 
 fn cpu_profile_enabled() -> bool {
-    CPU_PROFILE_ENABLED.load(Ordering::Relaxed)
+    std::sync::atomic::AtomicBool::load(
+        &CPU_PROFILE_ENABLED,
+        std::sync::atomic::Ordering::Relaxed,
+    )
 }
 
 fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
@@ -424,6 +426,11 @@ pub async fn new_rt_data(
     >,
     sbb_formation_store: crate::sbb_downloads::SbbFormationStore,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    use diesel::dsl::sql;
+    use diesel::prelude::*;
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+
     let total_started = Instant::now();
     let mut cpu_timings = CpuTimings::default();
     set_stage(chateau_id, realtime_feed_id, "start", total_started);
