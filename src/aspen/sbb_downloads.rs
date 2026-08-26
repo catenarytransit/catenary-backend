@@ -83,7 +83,8 @@ enum FormationFetchOutcome {
     DisableApiKey,
 }
 
-const PERSISTENCE_PATH: &str = "sbb_formations_cache.json";
+const PERSISTENCE_DIRECTORY: &str = "sbb_formations_cache";
+const LEGACY_PERSISTENCE_PATH: &str = "sbb_formations_cache.json";
 const PERSISTENCE_PATH_ENV: &str = "SBB_FORMATIONS_CACHE_PATH";
 const SBB_API_KEY_ENV: &str = "SBB_API_KEY";
 const SBB_API_KEYS_ENV: &str = "SBB_API_KEYS";
@@ -99,9 +100,34 @@ const CUS_FOS_VEHICLE_COUNT_MISMATCH_ERROR: &str =
     "Failed, because CUS and FOS suggest different numbers of vehicles";
 
 fn persistence_path() -> PathBuf {
-    env::var_os(PERSISTENCE_PATH_ENV)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(PERSISTENCE_PATH))
+    if let Some(configured_path) = env::var_os(PERSISTENCE_PATH_ENV) {
+        let configured_path = PathBuf::from(configured_path);
+        if configured_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            return configured_path.with_extension("");
+        }
+        return configured_path;
+    }
+
+    PathBuf::from(PERSISTENCE_DIRECTORY)
+}
+
+fn legacy_persistence_path() -> PathBuf {
+    if let Some(configured_path) = env::var_os(PERSISTENCE_PATH_ENV) {
+        let configured_path = PathBuf::from(configured_path);
+        if configured_path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+        {
+            return configured_path;
+        }
+    }
+
+    PathBuf::from(LEGACY_PERSISTENCE_PATH)
 }
 
 fn absolute_path(path: &Path) -> PathBuf {
@@ -114,74 +140,270 @@ fn absolute_path(path: &Path) -> PathBuf {
     }
 }
 
-pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
-    let path = persistence_path();
-    let displayed_path = absolute_path(&path);
+fn cache_key_parts(key: &str) -> Option<(&str, &str, u64)> {
+    let (operation_date, remainder) = key.split_once('_')?;
+    let (evu, train_number) = remainder.rsplit_once('_')?;
 
-    match fs::read_to_string(&path) {
-        Ok(contents) => {
-            match serde_json::from_str::<HashMap<String, Option<SbbFormationData>>>(&contents) {
-                Ok(store) => {
-                    tracing::info!(
-                        cache_path = %displayed_path.display(),
-                        "Loaded SBB formations from disk cache"
-                    );
-                    store
-                }
-                Err(error) => {
-                    tracing::error!(
-                        error = %error,
-                        cache_path = %displayed_path.display(),
-                        "Failed to parse SBB formation disk cache; starting with an empty cache"
-                    );
-                    HashMap::new()
-                }
-            }
-        }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            tracing::info!(
-                cache_path = %displayed_path.display(),
-                "No existing SBB formation disk cache"
-            );
-            HashMap::new()
-        }
-        Err(error) => {
-            tracing::error!(
-                error = %error,
-                cache_path = %displayed_path.display(),
-                "Failed to read SBB formation disk cache; starting with an empty cache"
-            );
-            HashMap::new()
-        }
+    chrono::NaiveDate::parse_from_str(operation_date, "%Y-%m-%d").ok()?;
+    let train_number = train_number.parse::<u64>().ok()?;
+    if evu.is_empty()
+        || !evu
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+    {
+        return None;
     }
+
+    Some((operation_date, evu, train_number))
 }
 
-pub fn save_store_to_disk(
-    store: &HashMap<String, Option<SbbFormationData>>,
-) -> Result<(), io::Error> {
-    let path = persistence_path();
+fn cache_entry_path(key: &str) -> Result<PathBuf, io::Error> {
+    let Some((operation_date, evu, train_number)) = cache_key_parts(key) else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid SBB formation cache key: {key}"),
+        ));
+    };
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
+    Ok(persistence_path()
+        .join(operation_date)
+        .join(format!("{evu}-{train_number}.json")))
+}
 
-    let contents = serde_json::to_vec(store)
+fn save_cache_entry_to_disk(key: &str, value: Option<&SbbFormationData>) -> Result<(), io::Error> {
+    let path = cache_entry_path(key)?;
+    let parent = path.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("cache entry has no parent directory: {}", path.display()),
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+
+    let contents = serde_json::to_vec(&value)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let temporary_path = path.with_extension("json.tmp");
     fs::write(&temporary_path, contents)?;
     fs::rename(temporary_path, path)
 }
 
-fn persist_store(store: &HashMap<String, Option<SbbFormationData>>) {
-    if let Err(error) = save_store_to_disk(store) {
+fn persist_cache_entry(key: &str, value: Option<&SbbFormationData>) {
+    if let Err(error) = save_cache_entry_to_disk(key, value) {
         tracing::error!(
             error = %error,
+            cache_key = key,
             cache_path = %absolute_path(&persistence_path()).display(),
-            "Failed to persist SBB formation cache"
+            "Failed to persist SBB formation cache entry"
         );
     }
+}
+
+fn delete_expired_cache_directories(cutoff: chrono::NaiveDate) -> usize {
+    let cache_path = persistence_path();
+    let entries = match fs::read_dir(&cache_path) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return 0,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                cache_path = %absolute_path(&cache_path).display(),
+                "Failed to scan SBB formation cache directory for eviction"
+            );
+            return 0;
+        }
+    };
+
+    let mut deleted_directories = 0;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let Some(date_string) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&date_string, "%Y-%m-%d") else {
+            continue;
+        };
+        if date >= cutoff {
+            continue;
+        }
+
+        match fs::remove_dir_all(entry.path()) {
+            Ok(()) => deleted_directories += 1,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    operation_date = %date_string,
+                    "Failed to delete expired SBB formation cache directory"
+                );
+            }
+        }
+    }
+
+    deleted_directories
+}
+
+fn remove_legacy_monolithic_cache() {
+    let legacy_path = legacy_persistence_path();
+    let metadata = match fs::metadata(&legacy_path) {
+        Ok(metadata) if metadata.is_file() => metadata,
+        Ok(_) => return,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                cache_path = %absolute_path(&legacy_path).display(),
+                "Failed to inspect legacy SBB formation cache"
+            );
+            return;
+        }
+    };
+
+    match fs::remove_file(&legacy_path) {
+        Ok(()) => tracing::warn!(
+            bytes = metadata.len(),
+            cache_path = %absolute_path(&legacy_path).display(),
+            "Deleted legacy monolithic SBB formation cache; formations will be repopulated into per-train files"
+        ),
+        Err(error) => tracing::error!(
+            error = %error,
+            cache_path = %absolute_path(&legacy_path).display(),
+            "Failed to delete legacy monolithic SBB formation cache"
+        ),
+    }
+}
+
+pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
+    remove_legacy_monolithic_cache();
+
+    let cache_path = persistence_path();
+    let displayed_path = absolute_path(&cache_path);
+    if let Err(error) = fs::create_dir_all(&cache_path) {
+        tracing::error!(
+            error = %error,
+            cache_path = %displayed_path.display(),
+            "Failed to create SBB formation cache directory; starting with an empty cache"
+        );
+        return HashMap::new();
+    }
+
+    let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
+    let deleted_directories = delete_expired_cache_directories(cutoff);
+    if deleted_directories > 0 {
+        tracing::info!(
+            deleted_directories,
+            eviction_hours = EVICTION_HOURS,
+            "Deleted expired SBB formation cache directories during startup"
+        );
+    }
+
+    let mut store = HashMap::new();
+    let date_directories = match fs::read_dir(&cache_path) {
+        Ok(entries) => entries,
+        Err(error) => {
+            tracing::error!(
+                error = %error,
+                cache_path = %displayed_path.display(),
+                "Failed to read SBB formation cache directory; starting with an empty cache"
+            );
+            return store;
+        }
+    };
+
+    for date_entry in date_directories.flatten() {
+        let Ok(file_type) = date_entry.file_type() else {
+            continue;
+        };
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let Some(operation_date) = date_entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let Ok(date) = chrono::NaiveDate::parse_from_str(&operation_date, "%Y-%m-%d") else {
+            continue;
+        };
+        if date < cutoff {
+            continue;
+        }
+
+        let files = match fs::read_dir(date_entry.path()) {
+            Ok(files) => files,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    operation_date = %operation_date,
+                    "Failed to read SBB formation cache date directory"
+                );
+                continue;
+            }
+        };
+
+        for file_entry in files.flatten() {
+            let path = file_entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let Some((evu, train_number)) = stem.rsplit_once('-') else {
+                continue;
+            };
+            let Ok(train_number) = train_number.parse::<u64>() else {
+                continue;
+            };
+            if evu.is_empty() {
+                continue;
+            }
+
+            let key = formation_cache_key(&operation_date, evu, train_number);
+            let contents = match fs::read(&path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        cache_path = %absolute_path(&path).display(),
+                        "Failed to read SBB formation cache entry"
+                    );
+                    continue;
+                }
+            };
+
+            match serde_json::from_slice::<Option<SbbFormationData>>(&contents) {
+                Ok(value) => {
+                    store.insert(key, value);
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        cache_path = %absolute_path(&path).display(),
+                        "Failed to parse SBB formation cache entry; deleting corrupt file"
+                    );
+                    if let Err(delete_error) = fs::remove_file(&path) {
+                        tracing::error!(
+                            error = %delete_error,
+                            cache_path = %absolute_path(&path).display(),
+                            "Failed to delete corrupt SBB formation cache entry"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        entries = store.len(),
+        cache_path = %displayed_path.display(),
+        "Loaded SBB formations from per-train disk cache"
+    );
+    store
 }
 
 fn normalize_api_keys(keys: impl IntoIterator<Item = String>) -> Vec<String> {
@@ -632,9 +854,9 @@ async fn record_no_formation(
 ) {
     no_formation_retry_after.insert(key.to_string(), Instant::now() + NO_FORMATION_RETRY_DELAY);
 
+    persist_cache_entry(key, None);
     let mut write_guard = store.write().await;
     write_guard.insert(key.to_string(), None);
-    persist_store(&write_guard);
 }
 
 fn trip_phase(timing: RealtimeTripTiming, now: i64) -> u8 {
@@ -1015,8 +1237,6 @@ pub async fn bg_fetch_sbb_formations(
                     worker_id = %worker_id.as_str(),
                     "SBB formation downloading enabled because this Aspen worker owns schweiz"
                 );
-                let read_guard = store.read().await;
-                persist_store(&read_guard);
             } else {
                 tracing::info!(
                     worker_id = %worker_id.as_str(),
@@ -1133,9 +1353,9 @@ pub async fn bg_fetch_sbb_formations(
                             .clone()
                             .unwrap_or_else(|| "unknown".to_string());
                         no_formation_retry_after.remove(&key);
+                        persist_cache_entry(&key, Some(&data));
                         let mut write_guard = store.write().await;
                         write_guard.insert(key, Some(data));
-                        persist_store(&write_guard);
 
                         tracing::info!(
                             operation_date = %request.operation_date,
@@ -1173,25 +1393,24 @@ pub async fn bg_fetch_sbb_formations(
 async fn evict_old_entries(store: &SbbFormationStore) {
     let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
 
-    let mut write_guard = store.write().await;
-    let before = write_guard.len();
+    let evicted = {
+        let mut write_guard = store.write().await;
+        let before = write_guard.len();
+        write_guard.retain(|key, _| {
+            cache_key_parts(key)
+                .and_then(|(date, _, _)| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+                .is_some_and(|date| date >= cutoff)
+        });
+        before - write_guard.len()
+    };
 
-    write_guard.retain(|key, _| {
-        if let Some(date_str) = key.split('_').next() {
-            if let Ok(date) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                return date >= cutoff;
-            }
-        }
-        false
-    });
-
-    let evicted = before - write_guard.len();
-    if evicted > 0 {
+    let deleted_directories = delete_expired_cache_directories(cutoff);
+    if evicted > 0 || deleted_directories > 0 {
         tracing::info!(
             evicted,
+            deleted_directories,
             eviction_hours = EVICTION_HOURS,
             "Evicted old SBB formation cache entries"
         );
-        persist_store(&write_guard);
     }
 }
