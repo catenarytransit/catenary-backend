@@ -1041,7 +1041,8 @@ pub async fn gtfs_process_feed(
                 Some(vec![String::from("rail")]),
                 false,
                 true,
-            ).await?;
+            )
+            .await?;
 
             execute_pfaedle_brosi(
                 path.as_str(),
@@ -1054,7 +1055,8 @@ pub async fn gtfs_process_feed(
                 ),
                 false,
                 true,
-            ).await?;
+            )
+            .await?;
         }
         _ => {
             //no pfaedle needed

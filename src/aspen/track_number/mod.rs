@@ -1,6 +1,8 @@
 use catenary::postgres_tools::CatenaryPostgresPool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::{Arc, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
 pub mod lirr_mnr;
 pub mod metrolinx_platforms;
@@ -34,7 +36,9 @@ pub enum TrackData {
     MetroNorthRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     LongIslandRailroad(Option<lirr_mnr::LirrMnrTrackData>),
     NyctSubway(Option<nyct_subway::NyctSubwayTrackData>),
-    Sncf(Option<sncf_siri::SncfTrackData>),
+    // SNCF is a large nested map. Keep it behind Arc so refreshing/falling back
+    // never deep-clones the complete parsed SIRI snapshot.
+    Sncf(Option<Arc<sncf_siri::SncfTrackData>>),
     None,
 }
 
@@ -202,8 +206,53 @@ async fn metrolink_station_schedule_decode(
     }
 }
 
-static SNCF_CACHE: std::sync::OnceLock<std::sync::Mutex<Option<sncf_siri::SncfTrackData>>> =
-    std::sync::OnceLock::new();
+const SNCF_CACHE_TTL: Duration = Duration::from_secs(30);
+const SNCF_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const SNCF_REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+
+struct SncfCacheEntry {
+    fetched_at: Instant,
+    data: Arc<sncf_siri::SncfTrackData>,
+}
+
+static SNCF_CACHE: OnceLock<RwLock<Option<SncfCacheEntry>>> = OnceLock::new();
+static SNCF_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn sncf_cache() -> &'static RwLock<Option<SncfCacheEntry>> {
+    SNCF_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn sncf_http_client() -> &'static reqwest::Client {
+    SNCF_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(SNCF_CONNECT_TIMEOUT)
+            .timeout(SNCF_REQUEST_TIMEOUT)
+            .build()
+            .expect("failed to build SNCF HTTP client")
+    })
+}
+
+fn cached_sncf_data(max_age: Option<Duration>) -> Option<Arc<sncf_siri::SncfTrackData>> {
+    let cache = sncf_cache().read().ok()?;
+    let entry = cache.as_ref()?;
+
+    if let Some(max_age) = max_age {
+        if entry.fetched_at.elapsed() > max_age {
+            return None;
+        }
+    }
+
+    Some(Arc::clone(&entry.data))
+}
+
+fn store_sncf_data(data: Arc<sncf_siri::SncfTrackData>) {
+    if let Ok(mut cache) = sncf_cache().write() {
+        *cache = Some(SncfCacheEntry {
+            fetched_at: Instant::now(),
+            data,
+        });
+    }
+}
 
 pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> TrackData {
     match chateau_id {
@@ -355,40 +404,57 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
         ),
         "nyct" => TrackData::NyctSubway(nyct_subway::fetch_nyct_subway_track_data().await),
         "sncf" => {
+            // Track/platform data changes much more slowly than individual GTFS-RT jobs.
+            // Reuse a fresh immutable snapshot instead of downloading and reparsing the
+            // same large SIRI document for every chateau rebuild.
+            if let Some(cached) = cached_sncf_data(Some(SNCF_CACHE_TTL)) {
+                return TrackData::Sncf(Some(cached));
+            }
+
             let url =
                 "https://proxy.transport.data.gouv.fr/resource/sncf-siri-lite-estimated-timetable";
-            match reqwest::get(url).await {
-                Ok(r) => match r.text().await {
-                    Ok(body) => {
-                        let parsed = sncf_siri::parse_sncf_siri(&body);
-                        if let Ok(mut cache) = SNCF_CACHE
-                            .get_or_init(|| std::sync::Mutex::new(None))
-                            .lock()
-                        {
-                            *cache = Some(parsed.clone());
-                        }
-                        TrackData::Sncf(Some(parsed))
-                    }
-                    Err(e) => {
-                        println!(
-                            "Error reading SNCF Siri data: {}. Attempting to use cached data.",
-                            e
+
+            let response = sncf_http_client()
+                .get(url)
+                .send()
+                .await
+                .and_then(reqwest::Response::error_for_status);
+
+            let body = match response {
+                Ok(response) => match response.text().await {
+                    Ok(body) => body,
+                    Err(error) => {
+                        eprintln!(
+                            "Error reading SNCF SIRI data: {}. Using stale cache if available.",
+                            error
                         );
-                        let cached = SNCF_CACHE
-                            .get()
-                            .and_then(|c| c.lock().ok().and_then(|guard| guard.clone()));
-                        TrackData::Sncf(cached)
+                        return TrackData::Sncf(cached_sncf_data(None));
                     }
                 },
-                Err(e) => {
-                    println!(
-                        "Error fetching SNCF Siri data: {}. Attempting to use cached data.",
-                        e
+                Err(error) => {
+                    eprintln!(
+                        "Error fetching SNCF SIRI data: {}. Using stale cache if available.",
+                        error
                     );
-                    let cached = SNCF_CACHE
-                        .get()
-                        .and_then(|c| c.lock().ok().and_then(|guard| guard.clone()));
-                    TrackData::Sncf(cached)
+                    return TrackData::Sncf(cached_sncf_data(None));
+                }
+            };
+
+            // Parsing a multi-megabyte XML-ish SIRI document is CPU work. Do not run it
+            // on an Alpenrose Tokio worker, where it can prevent unrelated jobs from
+            // making progress. The returned Arc is shared by the job and the cache.
+            match tokio::task::spawn_blocking(move || sncf_siri::parse_sncf_siri(&body)).await {
+                Ok(parsed) => {
+                    let parsed = Arc::new(parsed);
+                    store_sncf_data(Arc::clone(&parsed));
+                    TrackData::Sncf(Some(parsed))
+                }
+                Err(error) => {
+                    eprintln!(
+                        "SNCF SIRI parser task failed: {}. Using stale cache if available.",
+                        error
+                    );
+                    TrackData::Sncf(cached_sncf_data(None))
                 }
             }
         }

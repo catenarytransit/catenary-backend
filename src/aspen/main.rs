@@ -111,7 +111,10 @@ pub struct GtfsRealtimeHashStore {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(long, help = "Enable detailed CPU profiling logs for realtime processing")]
+    #[arg(
+        long,
+        help = "Enable detailed CPU profiling logs for realtime processing"
+    )]
     cpu_profile: bool,
 }
 

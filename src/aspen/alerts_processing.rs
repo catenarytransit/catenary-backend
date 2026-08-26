@@ -819,7 +819,9 @@ mod tests {
         let alert = process_alert(alert, "amtrak");
 
         assert_eq!(
-            alert.header_text.unwrap().translation[0].language.as_deref(),
+            alert.header_text.unwrap().translation[0]
+                .language
+                .as_deref(),
             Some("en")
         );
         assert_eq!(

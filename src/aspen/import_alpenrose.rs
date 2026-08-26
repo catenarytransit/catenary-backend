@@ -107,10 +107,7 @@ pub fn set_cpu_profile_enabled(enabled: bool) {
 }
 
 fn cpu_profile_enabled() -> bool {
-    std::sync::atomic::AtomicBool::load(
-        &CPU_PROFILE_ENABLED,
-        std::sync::atomic::Ordering::Relaxed,
-    )
+    std::sync::atomic::AtomicBool::load(&CPU_PROFILE_ENABLED, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn hash_len_prefixed(hasher: &mut Sha256, bytes: &[u8]) {
@@ -325,6 +322,158 @@ fn cpu_lap(accumulator: &mut Duration, started: &mut Duration) {
     let now = current_thread_cpu_time();
     *accumulator += now.saturating_sub(*started);
     *started = now;
+}
+
+/// Immutable lookup tables for one already-sorted itinerary pattern.
+///
+/// The hot path used to repeatedly scan `rows` with `.iter().find(...)` for every
+/// realtime stop update. For S scheduled stops and R realtime updates that was
+/// O(S * R), and a second scan during materialisation could push a full trip toward
+/// O(S^2). Building these indexes once makes lookup expected O(1), so each trip is
+/// O(S + R) apart from genuinely unmatched realtime stops.
+struct ItineraryRowLookup {
+    by_sequence: AHashMap<i32, usize>,
+    first_by_stop_id: AHashMap<CompactString, usize>,
+}
+
+impl ItineraryRowLookup {
+    fn new(rows: &[CompactItineraryPatternRow]) -> Self {
+        let mut by_sequence = AHashMap::with_capacity(rows.len());
+        let mut first_by_stop_id = AHashMap::with_capacity(rows.len());
+
+        for (row_index, row) in rows.iter().enumerate() {
+            // Preserve the old `.find()` semantics if malformed static data contains
+            // duplicate sequences or the same stop more than once: keep the first row.
+            by_sequence.entry(row.stop_sequence).or_insert(row_index);
+            first_by_stop_id
+                .entry(row.stop_id.clone())
+                .or_insert(row_index);
+        }
+
+        Self {
+            by_sequence,
+            first_by_stop_id,
+        }
+    }
+
+    fn row_for_sequence<'a>(
+        &self,
+        rows: &'a [CompactItineraryPatternRow],
+        sequence: i32,
+    ) -> Option<&'a CompactItineraryPatternRow> {
+        self.by_sequence
+            .get(&sequence)
+            .and_then(|row_index| rows.get(*row_index))
+    }
+
+    fn first_row_for_stop_id<'a>(
+        &self,
+        rows: &'a [CompactItineraryPatternRow],
+        stop_id: &str,
+    ) -> Option<&'a CompactItineraryPatternRow> {
+        self.first_by_stop_id
+            .get(stop_id)
+            .and_then(|row_index| rows.get(*row_index))
+    }
+}
+
+fn stop_update_sort_key(stop_update: &CompactStopTimeUpdate) -> u16 {
+    stop_update.stop_sequence.unwrap_or(u16::MAX)
+}
+
+/// Merge European realtime stop updates with the complete scheduled itinerary.
+///
+/// Each realtime update is classified exactly once using the precomputed itinerary
+/// indexes. Scheduled rows are already sorted, so only the (normally tiny) unmatched
+/// realtime tail needs sorting; the two sorted streams are then merged linearly.
+/// This replaces repeated itinerary scans and a sort of the entire expanded trip.
+fn merge_european_stop_time_updates(
+    rows: &[CompactItineraryPatternRow],
+    lookup: &ItineraryRowLookup,
+    realtime: &[CompactStopTimeUpdate],
+) -> Vec<CompactStopTimeUpdate> {
+    let mut matched: Vec<Option<CompactStopTimeUpdate>> = (0..rows.len()).map(|_| None).collect();
+    let mut unmatched = Vec::new();
+
+    for stop_update in realtime {
+        let row_index = stop_update
+            .stop_sequence
+            .and_then(|sequence| lookup.by_sequence.get(&(sequence as i32)).copied())
+            .or_else(|| {
+                stop_update
+                    .stop_id
+                    .as_deref()
+                    .and_then(|stop_id| lookup.first_by_stop_id.get(stop_id).copied())
+            });
+
+        if let Some(row_index) = row_index {
+            // Preserve the old HashMap behaviour for duplicate realtime updates at the
+            // same scheduled stop: the last update wins. When a feed identifies the stop
+            // only by stop_id, materialise the resolved sequence once so downstream
+            // schedule-time lookup stays O(1) and does not lose scheduled timestamps.
+            let mut stop_update = stop_update.clone();
+            if stop_update.stop_sequence.is_none() {
+                stop_update.stop_sequence = Some(rows[row_index].stop_sequence as u16);
+            }
+            matched[row_index] = Some(stop_update);
+        } else {
+            // The old code silently dropped no-sequence updates whose stop_id was not in
+            // the static itinerary. Preserve them; they may represent ADDED/MODIFIED stops.
+            unmatched.push(stop_update.clone());
+        }
+    }
+
+    let mut scheduled = Vec::with_capacity(rows.len());
+    for (row_index, row) in rows.iter().enumerate() {
+        if let Some(stop_update) = matched[row_index].take() {
+            scheduled.push(stop_update);
+        } else {
+            scheduled.push(CompactStopTimeUpdate {
+                stop_sequence: Some(row.stop_sequence as u16),
+                stop_id: Some(Arc::from(row.stop_id.as_str())),
+                arrival: None,
+                departure: None,
+                departure_occupancy_status: None,
+                schedule_relationship: None,
+                stop_time_properties: None,
+            });
+        }
+    }
+
+    if unmatched.is_empty() {
+        return scheduled;
+    }
+
+    unmatched.sort_by_key(stop_update_sort_key);
+
+    let mut scheduled_iter = scheduled.into_iter().peekable();
+    let mut unmatched_iter = unmatched.into_iter().peekable();
+    let mut merged = Vec::with_capacity(rows.len() + realtime.len());
+
+    loop {
+        let scheduled_key = scheduled_iter.peek().map(stop_update_sort_key);
+        let unmatched_key = unmatched_iter.peek().map(stop_update_sort_key);
+
+        match (scheduled_key, unmatched_key) {
+            (Some(scheduled_key), Some(unmatched_key)) if scheduled_key <= unmatched_key => {
+                merged.push(scheduled_iter.next().expect("peeked scheduled stop"));
+            }
+            (Some(_), Some(_)) => {
+                merged.push(unmatched_iter.next().expect("peeked unmatched stop"));
+            }
+            (Some(_), None) => {
+                merged.extend(scheduled_iter);
+                break;
+            }
+            (None, Some(_)) => {
+                merged.extend(unmatched_iter);
+                break;
+            }
+            (None, None) => break,
+        }
+    }
+
+    merged
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -1836,6 +1985,14 @@ pub async fn new_rt_data(
         }
         cpu_timings.add_since("post_query.itinerary_sort", cpu_started);
 
+        let cpu_started = current_thread_cpu_time();
+        let itinerary_pattern_row_lookups: AHashMap<String, ItineraryRowLookup> =
+            accumulated_itinerary_patterns
+                .iter()
+                .map(|(pattern_id, (_, rows))| (pattern_id.clone(), ItineraryRowLookup::new(rows)))
+                .collect();
+        cpu_timings.add_since("post_query.itinerary_indexes", cpu_started);
+
         let stage = Instant::now();
         set_stage(
             chateau_id,
@@ -2001,14 +2158,19 @@ pub async fn new_rt_data(
                                                             if let Some(current_stop_event) =
                                                                 current_stop_event
                                                             {
-                                                                if let Some(itinerary_pattern_rows) =
+                                                                if let (Some(itinerary_pattern_rows), Some(row_lookup)) = (
                                                                     accumulated_itinerary_patterns
                                                                         .get(&trip.itinerary_pattern_id)
-                                                                        .map(|x| &x.1)
-                                                                {
+                                                                        .map(|x| &x.1),
+                                                                    itinerary_pattern_row_lookups
+                                                                        .get(&trip.itinerary_pattern_id),
+                                                                ) {
                                                                     if let Some(matching_itinerary_row) =
                                                                         current_stop_event.stop_id.as_ref().and_then(|current_stop_id| {
-                                                                            itinerary_pattern_rows.iter().find(|x| x.stop_id == *current_stop_id)
+                                                                            row_lookup.first_row_for_stop_id(
+                                                                                itinerary_pattern_rows,
+                                                                                current_stop_id.as_ref(),
+                                                                            )
                                                                         })
                                                                     {
                                                                         if let Some(stop_headsign_idx) =
@@ -2247,6 +2409,10 @@ pub async fn new_rt_data(
                                     .map(|x| &x.1)
                             })
                             .flatten();
+
+                        let itinerary_row_lookup = compressed_trip.and_then(|compressed_trip| {
+                            itinerary_pattern_row_lookups.get(&compressed_trip.itinerary_pattern_id)
+                        });
 
                         let itinerary_meta = compressed_trip
                             .map(|compressed_trip| {
@@ -2583,51 +2749,20 @@ pub async fn new_rt_data(
                         let compressed_start_time_seconds =
                             compressed_trip.map(|ct| ct.start_time as i64).unwrap_or(0);
 
-                        let merged_stus;
-                        if is_europe {
-                            if let Some(rows) = itinerary_rows {
-                                let mut temp = Vec::new();
-                                let mut rt_stu_map = std::collections::HashMap::new();
-                                for stu_item in &trip_update.stop_time_update {
-                                    if let Some(seq) = stu_item.stop_sequence {
-                                        rt_stu_map.insert(seq as i32, stu_item.clone());
-                                    } else if let Some(ref sid) = stu_item.stop_id {
-                                        if let Some(r) =
-                                            rows.iter().find(|x| x.stop_id.as_str() == sid.as_ref())
-                                        {
-                                            rt_stu_map.insert(r.stop_sequence, stu_item.clone());
-                                        }
-                                    }
+                        let merged_stus = if is_europe {
+                            match (itinerary_rows, itinerary_row_lookup) {
+                                (Some(rows), Some(row_lookup)) => {
+                                    Some(merge_european_stop_time_updates(
+                                        rows,
+                                        row_lookup,
+                                        &trip_update.stop_time_update,
+                                    ))
                                 }
-                                for row in rows {
-                                    if let Some(stu_item) = rt_stu_map.remove(&row.stop_sequence) {
-                                        temp.push(stu_item);
-                                    } else {
-                                        temp.push(
-                                            catenary::compact_formats::CompactStopTimeUpdate {
-                                                stop_sequence: Some(row.stop_sequence as u16),
-                                                stop_id: Some(std::sync::Arc::from(
-                                                    row.stop_id.as_str(),
-                                                )),
-                                                arrival: None,
-                                                departure: None,
-                                                departure_occupancy_status: None,
-                                                schedule_relationship: None,
-                                                stop_time_properties: None,
-                                            },
-                                        );
-                                    }
-                                }
-                                let mut remaining: Vec<_> = rt_stu_map.into_values().collect();
-                                temp.extend(remaining);
-                                temp.sort_by_key(|s| s.stop_sequence.unwrap_or(u16::MAX));
-                                merged_stus = Some(temp);
-                            } else {
-                                merged_stus = None;
+                                _ => None,
                             }
                         } else {
-                            merged_stus = None;
-                        }
+                            None
+                        };
 
                         let stus_iter = match &merged_stus {
                             Some(v) => v,
@@ -2645,9 +2780,11 @@ pub async fn new_rt_data(
                             let mut sched_dep_computed: Option<i64> = None;
 
                             if let Some(seq) = stu.stop_sequence {
-                                if let Some(rows) = itinerary_rows {
+                                if let (Some(rows), Some(row_lookup)) =
+                                    (itinerary_rows, itinerary_row_lookup)
+                                {
                                     if let Some(matching_row) =
-                                        rows.iter().find(|r| r.stop_sequence == (seq as i32))
+                                        row_lookup.row_for_sequence(rows, seq as i32)
                                     {
                                         if resolved_stop_id.is_none() {
                                             resolved_stop_id = Some(std::sync::Arc::from(

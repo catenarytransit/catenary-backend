@@ -321,9 +321,7 @@ fn trajectory_trip_context<'a>(
     })
 }
 
-fn trajectory_stop_count(
-    trip_update: &catenary::aspen_dataset::AspenisedTripUpdate,
-) -> usize {
+fn trajectory_stop_count(trip_update: &catenary::aspen_dataset::AspenisedTripUpdate) -> usize {
     trip_update
         .stop_time_update
         .iter()
