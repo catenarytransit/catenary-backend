@@ -4,6 +4,7 @@ pub mod bridgeport;
 pub mod chicagotransit;
 pub mod flixbus;
 pub mod metrolink_extra;
+pub mod marta;
 pub mod mta;
 pub mod tlms;
 //pub mod uci;

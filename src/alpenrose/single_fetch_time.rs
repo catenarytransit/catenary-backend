@@ -34,6 +34,7 @@ lazy_static! {
         //"f-dp3-cta~rt",
         //"f-dp3-cta~bus~rt",
         "f-viarail~rt",
+        "f-dnh-marta~catenary~rt",
         "f-tlms~rt",
         //"f-uc~irvine~anteater~express~rt",
         "f-metrolinktrains~extra~rt",
@@ -104,6 +105,7 @@ pub async fn single_fetch_time(
     amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<RwLock<Option<String>>>,
     chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
+    marta_realtime: Arc<RwLock<Option<Arc<marta_gtfs_rt::MartaGtfsRt>>>>,
     rtcquebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
@@ -195,6 +197,7 @@ pub async fn single_fetch_time(
                 let bridgeport_gtfs = bridgeport_gtfs.clone();
                 let chicago_text_str = chicago_text_str.clone();
                 let chicago_gtfs = chicago_gtfs.clone();
+                let marta_realtime = marta_realtime.clone();
                 let via_gtfs = via_gtfs.clone();
                 let cta_bus_gtfs = cta_bus_gtfs.clone();
                 let flixbus_us_aggregator = flixbus_us_aggregator.clone();
@@ -640,6 +643,19 @@ pub async fn single_fetch_time(
                                         )
                                         .await;
                                     }
+                                }
+                            },
+                            "f-dnh-marta~catenary~rt" => {
+                                let converter = marta_realtime.read().await.clone();
+                                if let Some(converter) = converter {
+                                    custom_rt_feeds::marta::fetch_marta_data(
+                                        realtime_feed_cache.clone(),
+                                        &feed_id,
+                                        &client,
+                                        converter.as_ref(),
+                                        &assignment,
+                                    )
+                                    .await;
                                 }
                             },
                              "f-rtcquebec~rt" => {

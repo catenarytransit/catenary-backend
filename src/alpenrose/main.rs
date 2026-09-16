@@ -108,6 +108,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let marta_realtime: Arc<RwLock<Option<Arc<marta_gtfs_rt::MartaGtfsRt>>>> =
+        Arc::new(RwLock::new(None));
     let bridgeport_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let via_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let cta_bus_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
@@ -588,6 +590,34 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                     });
                 }
 
+                // MARTA rail. Build the static schedule index once and keep the stateful
+                // converter alive so TRAIN_ID -> trip_id assignments survive between polls.
+                if assigned_feeds.contains("f-dnh-marta~catenary~rt")
+                    && !downloads_started.contains("marta")
+                {
+                    println!("Spawning MARTA GTFS download task...");
+                    downloads_started.insert("marta".to_string());
+                    let marta_realtime = Arc::clone(&marta_realtime);
+                    tokio::spawn(async move {
+                        let gtfs = gtfs_structures::GtfsReader::default()
+                            .read_shapes(false)
+                            .read_from_url_async(
+                                "https://itsmarta.com/google_transit_feed/google_transit.zip",
+                            )
+                            .await;
+
+                        match gtfs {
+                            Ok(gtfs) => {
+                                println!("MARTA GTFS downloaded; building realtime schedule index...");
+                                let converter = marta_gtfs_rt::MartaGtfsRt::new(&gtfs);
+                                *marta_realtime.write().await = Some(Arc::new(converter));
+                                println!("MARTA realtime schedule index loaded.");
+                            }
+                            Err(e) => eprintln!("Failed to download MARTA GTFS: {}", e),
+                        }
+                    });
+                }
+
                 // VIA Rail
                 if assigned_feeds.contains("f-viarail~rt") && !downloads_started.contains("viarail")
                 {
@@ -726,6 +756,7 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 Arc::clone(&amtrak_gtfs),
                 Arc::clone(&chicago_trips_str),
                 Arc::clone(&chicago_gtfs),
+                Arc::clone(&marta_realtime),
                 Arc::clone(&rtc_quebec_gtfs),
                 Arc::clone(&bridgeport_gtfs),
                 Arc::clone(&via_gtfs),
