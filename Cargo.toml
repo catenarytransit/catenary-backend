@@ -119,7 +119,7 @@ tilejson = "0.4.1"
 tile-grid = "0.6"
 zstd-safe = "7.2.4"
 hitbox = "0.1.1"
-cached = { version = "0.55", features = [
+cached = { version = "0.59", features = [
     "async_tokio_rt_multi_thread",
     "disk_store",
 ] }
