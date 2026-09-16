@@ -461,6 +461,7 @@ struct NodeData {
     network: Option<String>,
     level: Option<String>,
     local_ref: Option<String>,
+    train: bool,
     is_derivative: bool,
 }
 
@@ -651,6 +652,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         network: node.tags.get("network").map(|s| s.to_string()),
                         level: node.tags.get("level").map(|s| s.to_string()),
                         local_ref: node.tags.get("local_ref").map(|s| s.to_string()),
+                        train: node.tags.get("train").is_some_and(|v| v == "yes"),
                         is_derivative: false,
                     },
                 );
@@ -727,6 +729,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut ways_covered_by_relations: HashSet<i64> = HashSet::new();
     let mut relations_processed = 0;
     let mut mappings_created = 0;
+    let mut fallback_stop_area_parents: Vec<OsmStation> = Vec::new();
 
     for rel in &stop_area_relations {
         relations_processed += 1;
@@ -780,13 +783,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             }
         }
 
-        // Find the parent station in this relation
+        // Prefer an explicit station/halt member of the stop_area.
         if let Some((parent_id, _)) = find_parent_station_in_relation(rel, &node_data) {
-            // Get all possible child nodes in this relation; tag filtering happens below.
             let child_nodes = get_child_nodes_in_relation(rel);
 
             for child_id in child_nodes {
-                // Don't map a node to itself
                 if child_id != parent_id && node_ids.contains(&child_id) {
                     if let Some(node) = node_data.get(&child_id) {
                         if is_relation_child_node(node) {
@@ -795,6 +796,117 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                         }
                     }
                 }
+            }
+            continue;
+        }
+
+        // A stop_area is only eligible as a synthetic parent when it contains
+        // railway stop_positions. The railway=* check handles railway-tagged
+        // stop_positions, while train=yes handles stop_positions whose rail
+        // context is expressed through the train tag instead.
+        let qualifying_stop_positions: Vec<&NodeData> = rel
+            .refs
+            .iter()
+            .filter_map(|member| match member.member {
+                OsmId::Node(node_id) => node_data.get(&node_id.0),
+                _ => None,
+            })
+            .filter(|node| {
+                node.station_type.as_deref() == Some("stop_position")
+                    && (node.railway_tag.is_some() || node.train)
+            })
+            .collect();
+
+        if qualifying_stop_positions.is_empty() {
+            continue;
+        }
+
+        let centroid_lat = qualifying_stop_positions
+            .iter()
+            .map(|node| node.lat)
+            .sum::<f64>()
+            / qualifying_stop_positions.len() as f64;
+        let centroid_lon = qualifying_stop_positions
+            .iter()
+            .map(|node| node.lon)
+            .sum::<f64>()
+            / qualifying_stop_positions.len() as f64;
+        let stop_area_point = Point::new(centroid_lon, centroid_lat);
+
+        // The relation may omit a nearby railway=station/railway=halt node.
+        // Prefer such a real station within 500m before promoting the stop_area
+        // relation itself to the canonical parent.
+        let nearby_station = node_data
+            .values()
+            .filter(|candidate| {
+                candidate.mode_type == "rail"
+                    && (matches!(candidate.station_type.as_deref(), Some("station" | "halt"))
+                        || matches!(
+                            candidate.railway_tag.as_deref(),
+                            Some("station" | "halt")
+                        ))
+            })
+            .filter_map(|candidate| {
+                let candidate_point = Point::new(candidate.lon, candidate.lat);
+                let distance = Haversine.distance(stop_area_point, candidate_point);
+                (distance <= 500.0).then_some((candidate.id, distance))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+
+        let parent_id = if let Some((station_id, _)) = nearby_station {
+            station_id
+        } else {
+            let relation_id = rel.id.0;
+            let relation_name = rel
+                .tags
+                .get("name")
+                .map(|name| get_clean_name(name))
+                .or_else(|| {
+                    qualifying_stop_positions
+                        .iter()
+                        .find_map(|node| node.name.clone())
+                });
+            let relation_name_translations = extract_name_translations(&rel.tags).or_else(|| {
+                qualifying_stop_positions
+                    .iter()
+                    .find_map(|node| node.name_translations.clone())
+            });
+
+            fallback_stop_area_parents.push(OsmStation {
+                osm_id: relation_id,
+                osm_type: "relation".to_string(),
+                import_id,
+                point: postgis_diesel::types::Point {
+                    x: centroid_lon,
+                    y: centroid_lat,
+                    srid: Some(4326),
+                },
+                name: relation_name,
+                name_translations: relation_name_translations,
+                station_type: Some("stop_area".to_string()),
+                railway_tag: rel.tags.get("railway").map(|v| v.to_string()),
+                mode_type: "rail".to_string(),
+                uic_ref: rel.tags.get("uic_ref").map(|v| v.to_string()),
+                ref_: rel.tags.get("ref").map(|v| v.to_string()),
+                wikidata: rel.tags.get("wikidata").map(|v| v.to_string()),
+                operator: rel.tags.get("operator").map(|v| v.to_string()),
+                network: rel.tags.get("network").map(|v| v.to_string()),
+                level: None,
+                local_ref: None,
+                parent_osm_id: None,
+                is_derivative: false,
+                admin_hierarchy: None,
+            });
+
+            relation_id
+        };
+
+        // The qualifying stop_positions must point to the selected parent. This
+        // prevents them from entering rank-and-clean as independent stations.
+        for child in qualifying_stop_positions {
+            if child.id != parent_id {
+                parent_map.insert(child.id, parent_id);
+                mappings_created += 1;
             }
         }
     }
@@ -842,6 +954,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         stations.push(station);
     }
+
+    stations.extend(fallback_stop_area_parents);
 
     println!(
         "Created {} station records ({} with parent mappings)",

@@ -136,7 +136,7 @@ impl IndexedStation {
 
     fn is_primary_station(&self) -> bool {
         match self.station_type.as_deref() {
-            Some("station") | Some("halt") | Some("tram_stop") => true,
+            Some("station") | Some("halt") | Some("tram_stop") | Some("stop_area") => true,
             _ => match self.railway_tag.as_deref() {
                 Some("station") | Some("halt") | Some("tram_stop") => true,
                 _ => false,
