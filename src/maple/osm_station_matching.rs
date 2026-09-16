@@ -304,6 +304,42 @@ async fn batch_update_stops(
 
     diesel::sql_query(query).execute(conn).await
 }
+/// Recompute the authoritative GTFS stop count for only the OSM stations touched
+/// by this feed's matching pass, then write that exact count into the ranked table.
+///
+/// The count comes directly from gtfs.stops; touched IDs only limit the scope of
+/// the recount. A station with no remaining associated stops is therefore set to 0.
+async fn recompute_ranked_associated_stop_counts(
+    conn: &mut AsyncPgConnection,
+    touched_osm_station_ids: &HashSet<i64>,
+) -> Result<usize, diesel::result::Error> {
+    if touched_osm_station_ids.is_empty() {
+        return Ok(0);
+    }
+
+    const RECOUNT_BATCH_SIZE: usize = 1000;
+    let station_ids: Vec<i64> = touched_osm_station_ids.iter().copied().collect();
+    let mut total_ranked_rows_updated = 0;
+
+    for chunk in station_ids.chunks(RECOUNT_BATCH_SIZE) {
+        total_ranked_rows_updated += diesel::sql_query(
+            r#"
+            UPDATE gtfs.osm_stations_ranked AS ranked
+            SET number_of_associated_stops = (
+                SELECT COUNT(*)::integer
+                FROM gtfs.stops AS stops
+                WHERE stops.osm_station_id = ranked.osm_id
+            )
+            WHERE ranked.osm_id = ANY($1)
+            "#,
+        )
+        .bind::<diesel::sql_types::Array<diesel::sql_types::BigInt>, _>(chunk)
+        .execute(conn)
+        .await?;
+    }
+
+    Ok(total_ranked_rows_updated)
+}
 
 // ============================================================================
 // Matching logic (CPU-bound, parallelizable)
@@ -867,6 +903,12 @@ pub async fn match_stops_for_feed(
         .into_iter()
         .map(|(id, sid, pid)| (id, (sid, pid)))
         .collect();
+    // Keep the pre-match station IDs in the recount scope so stations that lose
+    // associations during this feed import are also refreshed from gtfs.stops.
+    let mut touched_osm_station_ids: HashSet<i64> = existing_matches
+        .values()
+        .filter_map(|(station_id, _)| *station_id)
+        .collect();
 
     let mut processed_stops: HashSet<String> = HashSet::new();
 
@@ -1030,6 +1072,31 @@ pub async fn match_stops_for_feed(
                 chateau_id, e
             );
         }
+    }
+
+    // Add the post-match station IDs after stale-match clearing and parent
+    // propagation. The IDs define the stations to refresh; the values themselves
+    // are recomputed authoritatively from all current rows in gtfs.stops.
+    let current_feed_station_ids: Vec<Option<i64>> = stops_dsl::stops
+        .filter(stops_dsl::onestop_feed_id.eq(feed_id))
+        .filter(stops_dsl::attempt_id.eq(attempt_id))
+        .filter(stops_dsl::osm_station_id.is_not_null())
+        .select(stops_dsl::osm_station_id)
+        .load::<Option<i64>>(conn)
+        .await?;
+
+    touched_osm_station_ids.extend(current_feed_station_ids.into_iter().flatten());
+
+    let ranked_rows_updated =
+        recompute_ranked_associated_stop_counts(conn, &touched_osm_station_ids).await?;
+
+    if !touched_osm_station_ids.is_empty() {
+        println!(
+            "  OSM matching: recomputed associated-stop counts for {} OSM stations ({} ranked rows updated) for {}",
+            touched_osm_station_ids.len(),
+            ranked_rows_updated,
+            chateau_id
+        );
     }
 
     let final_matched_count = stops_dsl::stops
