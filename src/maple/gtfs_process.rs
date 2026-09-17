@@ -1591,6 +1591,58 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        // Auckland Transport
+        "f-rck-gowest~sealinkgroup~atairporter~atmetro~thepartybuscompany" => {
+            let mut gtfs = gtfs;
+
+            // Get rid of pre-City Rail Link routes
+            // Get rid of Te Huia
+            let route_ids_to_delete = vec!["HUIA-404", "EAST-201", "WEST-201", "STH-201", "ONE-201"];
+
+            gtfs.routes
+                .retain(|route_id, _| !route_ids_to_delete.contains(&route_id.as_str()));
+
+            gtfs.trips
+                .retain(|trip_id, trip| !route_ids_to_delete.contains(&trip.route_id.as_str()));
+
+            // Make last stop headsign be "[Last stop]"
+            // Some trips have completely wrong last stop headsigns
+            for trip in gtfs.trips.values_mut() {
+                if let Some(last_stop) = trip.stop_times.last_mut() {
+                    last_stop.stop_headsign = Some("[Last stop]".to_string());
+                }
+            }
+
+            println!("Filtered Auckland");
+            gtfs.print_stats();
+            gtfs
+        },
+        "f-busit~nz" => {
+            let mut gtfs = gtfs;
+
+            for route in gtfs.routes.values_mut() {
+                if let Some(long_name) = route.long_name.as_deref() {
+                    match long_name {
+                        "Te Huia" => {
+                            route.short_name = Some("Te Huia".to_string());
+                            route.long_name = Some("Te Huia".to_string());
+
+                            // Yellow, the accent color of their marketing 
+                            // graphics and their physical trains
+                            // #F5BA0C
+                            route.color = Some(Rgb {
+                                r: 0xF5,
+                                g: 0xBA,
+                                b: 0x0C,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            gtfs
+        },
         _ => gtfs,
     };
 
