@@ -603,6 +603,16 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-vvs~de" => {}
+        "f-q-transperth~transalbany~transbunbury~transbusselton~transgera" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./pfaedle-filtered-western-australia-latest.osm.pbf",
+                None,
+                true,
+                true,
+            )
+            .await?;
+        }
         "f-u-nl" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
