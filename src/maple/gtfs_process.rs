@@ -66,7 +66,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::process::Command;
 
-use crate::anteater_express_gtfs;
+use zotgtfs::redo_anteater_express_gtfs;
 
 #[derive(Debug)]
 pub struct GtfsSummary {
@@ -1178,7 +1178,7 @@ pub async fn gtfs_process_feed(
         "f-uc~irvine~anteater~express" => {
             let mut gtfs = gtfs;
 
-            gtfs = anteater_express_gtfs::redo_anteater_express_gtfs(gtfs);
+            gtfs = zotgtfs::redo_anteater_express_gtfs(gtfs);
 
             gtfs
         }

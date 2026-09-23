@@ -58,7 +58,6 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
-mod anteater_express_gtfs;
 mod delete_overlapping_feeds_dmfr;
 use std::path::PathBuf;
 use std::sync::Arc;

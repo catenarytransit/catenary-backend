@@ -126,7 +126,7 @@ cached = { version = "0.55", features = [
 geo-booleanop = "0.3.2"
 random-string = "1.1.0"
 argon2 = "0.5.3"
-tzf-rs = "1.0"
+tzf-rs = "2.1.2"
 lazy_static = "1.4.0"
 serde_bytes = "0.11"
 bincode = { version = "2.0", features = ["serde"] }
@@ -219,6 +219,7 @@ fast-float = "0.2.0"
 itoa = "1.0.18"
 parking_lot = "0.12.5"
 marta-gtfs-rt = { git = "https://github.com/catenarytransit/marta-gtfs-rt", version = "0.1.0" }
+zotgtfs = "0.5.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = {version = "0.6", features = ["profiling"]}
