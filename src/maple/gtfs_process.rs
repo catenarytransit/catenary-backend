@@ -1351,9 +1351,9 @@ pub async fn gtfs_process_feed(
                             b: 14,
                         });
                         route.text_color = Some(Rgb {
-                            r: 255,
-                            g: 255,
-                            b: 255,
+                            r: 0,
+                            g: 0,
+                            b: 0,
                         });
                     }
                 }
