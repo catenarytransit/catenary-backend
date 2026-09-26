@@ -1309,6 +1309,58 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-c3nf-calgarytransit" => {
+            //colour correct red line route short name 201
+
+            let mut gtfs = gtfs;
+
+            for route in gtfs.routes.values_mut() {
+                if let Some(short_name) = route.short_name.as_deref() {
+                    if short_name == "201" {
+                        route.color = Some(Rgb {
+                            r: 238,
+                            g: 27,
+                            b: 44,
+                        });
+                    }
+                    if short_name == "MP" {
+                        route.color = Some(Rgb {
+                            r: 140,
+                            g: 72,
+                            b: 153,
+                        });
+                    }
+                    if short_name == "MO" {
+                        route.color = Some(Rgb {
+                            r: 245,
+                            g: 137,
+                            b: 36,
+                        });
+                    }
+                    if short_name == "MT" {
+                        route.color = Some(Rgb {
+                            r: 0,
+                            g: 156,
+                            b: 167,
+                        });
+                    }
+                    if short_name == "MY" {
+                        route.color = Some(Rgb {
+                            r: 254,
+                            g: 198,
+                            b: 14,
+                        });
+                        route.text_color = Some(Rgb {
+                            r: 255,
+                            g: 255,
+                            b: 255,
+                        });
+                    }
+                }
+            }
+
+            gtfs
+        }
         "f-sf~bay~area~rg" => {
             let mut gtfs = gtfs;
 
