@@ -608,7 +608,9 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                         match gtfs {
                             Ok(gtfs) => {
-                                println!("MARTA GTFS downloaded; building realtime schedule index...");
+                                println!(
+                                    "MARTA GTFS downloaded; building realtime schedule index..."
+                                );
                                 let converter = marta_gtfs_rt::MartaGtfsRt::new(&gtfs);
                                 *marta_realtime.write().await = Some(Arc::new(converter));
                                 println!("MARTA realtime schedule index loaded.");

@@ -1313,9 +1313,15 @@ pub async fn gtfs_process_feed(
             let mut gtfs = gtfs;
 
             for trip in gtfs.trips.values_mut() {
-                trip.route_id = trip.route_id.replace("EVENING", "").replace("SATURDAY", "").replace("SUNDAY", ""),replace("LATE NIGHT", "")
-                .replace("ALT", "")
-                .trim().to_string();
+                trip.route_id = trip
+                    .route_id
+                    .replace("EVENING", "")
+                    .replace("SATURDAY", "")
+                    .replace("SUNDAY", "")
+                    .replace("LATE NIGHT", "")
+                    .replace("ALT", "")
+                    .trim()
+                    .to_string();
             }
             gtfs
         }
@@ -1360,11 +1366,7 @@ pub async fn gtfs_process_feed(
                             g: 198,
                             b: 14,
                         });
-                        route.text_color = Some(Rgb {
-                            r: 0,
-                            g: 0,
-                            b: 0,
-                        });
+                        route.text_color = Some(Rgb { r: 0, g: 0, b: 0 });
                     }
                 }
             }
@@ -1669,7 +1671,8 @@ pub async fn gtfs_process_feed(
 
             // Get rid of pre-City Rail Link routes
             // Get rid of Te Huia
-            let route_ids_to_delete = vec!["HUIA-404", "EAST-201", "WEST-201", "STH-201", "ONE-201"];
+            let route_ids_to_delete =
+                vec!["HUIA-404", "EAST-201", "WEST-201", "STH-201", "ONE-201"];
 
             gtfs.routes
                 .retain(|route_id, _| !route_ids_to_delete.contains(&route_id.as_str()));
@@ -1688,7 +1691,7 @@ pub async fn gtfs_process_feed(
             println!("Filtered Auckland");
             gtfs.print_stats();
             gtfs
-        },
+        }
         "f-busit~nz" => {
             let mut gtfs = gtfs;
 
@@ -1699,7 +1702,7 @@ pub async fn gtfs_process_feed(
                             route.short_name = Some("Te Huia".to_string());
                             route.long_name = Some("Te Huia".to_string());
 
-                            // Yellow, the accent color of their marketing 
+                            // Yellow, the accent color of their marketing
                             // graphics and their physical trains
                             // #F5BA0C
                             route.color = Some(Rgb {
@@ -1714,7 +1717,7 @@ pub async fn gtfs_process_feed(
             }
 
             gtfs
-        },
+        }
         _ => gtfs,
     };
 

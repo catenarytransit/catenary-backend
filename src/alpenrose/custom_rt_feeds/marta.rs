@@ -18,7 +18,10 @@ pub async fn fetch_marta_data(
     };
 
     let Some(account) = passwords.choose(&mut rand::rng()) else {
-        eprintln!("{}: MARTA realtime feed has an empty password list", feed_id);
+        eprintln!(
+            "{}: MARTA realtime feed has an empty password list",
+            feed_id
+        );
         return;
     };
 
@@ -72,20 +75,17 @@ pub async fn fetch_marta_data(
     };
 
     let realtime = converter.process_rows(rows);
-    let aspen_client = match catenary::aspen::lib::spawn_aspen_client_from_ip(
-        &worker_metadata.socket,
-    )
-    .await
-    {
-        Ok(client) => client,
-        Err(e) => {
-            eprintln!(
-                "{}: failed to connect to Aspen at {}: {}",
-                feed_id, worker_metadata.socket, e
-            );
-            return;
-        }
-    };
+    let aspen_client =
+        match catenary::aspen::lib::spawn_aspen_client_from_ip(&worker_metadata.socket).await {
+            Ok(client) => client,
+            Err(e) => {
+                eprintln!(
+                    "{}: failed to connect to Aspen at {}: {}",
+                    feed_id, worker_metadata.socket, e
+                );
+                return;
+            }
+        };
 
     let worker_id = worker_metadata.worker_id;
     let send_result = aspen_client
@@ -107,6 +107,9 @@ pub async fn fetch_marta_data(
         .await;
 
     if let Err(e) = send_result {
-        eprintln!("{}: error sending MARTA data to {}: {}", feed_id, worker_id, e);
+        eprintln!(
+            "{}: error sending MARTA data to {}: {}",
+            feed_id, worker_id, e
+        );
     }
 }

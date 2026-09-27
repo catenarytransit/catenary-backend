@@ -841,10 +841,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .filter(|candidate| {
                 candidate.mode_type == "rail"
                     && (matches!(candidate.station_type.as_deref(), Some("station" | "halt"))
-                        || matches!(
-                            candidate.railway_tag.as_deref(),
-                            Some("station" | "halt")
-                        ))
+                        || matches!(candidate.railway_tag.as_deref(), Some("station" | "halt")))
             })
             .filter_map(|candidate| {
                 let candidate_point = Point::new(candidate.lon, candidate.lat);

@@ -189,7 +189,7 @@ pub fn fix_background_colour_rgb_feed_route(
                 "51" => RGB::new(225, 25, 143),
                 "61" => RGB::new(19, 32, 104),
                 "71" => ugly_ass_grey,
-                "91" | "92" |  "93" | "94" => RGB::new(193, 155, 6),
+                "91" | "92" | "93" | "94" => RGB::new(193, 155, 6),
                 "101" | "102" | "103" => RGB::new(0, 142, 135),
                 "104" => RGB::new(0, 142, 136),
                 "111" | "112" => ugly_ass_grey,
