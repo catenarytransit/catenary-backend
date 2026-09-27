@@ -1309,6 +1309,16 @@ pub async fn gtfs_process_feed(
 
             gtfs
         }
+        "f-dp1h-champaignurbanamasstransitdistrict" => {
+            let mut gtfs = gtfs;
+
+            for trip in gtfs.trips.values_mut() {
+                trip.route_id = trip.route_id.replace("EVENING", "").replace("SATURDAY", "").replace("SUNDAY", ""),replace("LATE NIGHT", "")
+                .replace("ALT", "")
+                .trim().to_string();
+            }
+            gtfs
+        }
         "f-c3nf-calgarytransit" => {
             //colour correct red line route short name 201
 
