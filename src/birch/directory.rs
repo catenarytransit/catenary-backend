@@ -107,6 +107,7 @@ pub struct RegionPageResponse {
     pub breadcrumbs: Vec<RegionLink>,
     pub alternate_locales: Vec<RegionLocaleLink>,
     pub children: Vec<RegionLink>,
+    pub railways: Vec<AgencyCard>,
     pub national_operators: Vec<AgencyCard>,
     pub agencies: Vec<AgencyCard>,
 }
@@ -496,6 +497,13 @@ async fn fetch_country_agency_candidates(
         FROM gtfs.unified_agency
         WHERE primary_level_0 = $1
            OR $1 = ANY(COALESCE(array_remove(level_0s, NULL::text), ARRAY[]::text[]))
+           OR primary_level_1 LIKE ($1 || '-%')
+           OR EXISTS (
+                SELECT 1
+                FROM unnest(COALESCE(array_remove(level_1s, NULL::text), ARRAY[]::text[]))
+                    AS region_ids(region_id)
+                WHERE region_id LIKE ($1 || '-%')
+           )
            OR is_national_railway_operator = TRUE
         ORDER BY name, id
         "#,
@@ -892,6 +900,7 @@ pub async fn directory_region(
         .filter_map(|id| build_region_link(&store.geography, id, &locale))
         .collect::<Vec<_>>();
 
+    let is_country_page = region_node.depth == 0;
     let agency_candidates = match fetch_country_agency_candidates(pool.get_ref().as_ref(), &country_id).await {
         Ok(agencies) => agencies,
         Err(error) => {
@@ -903,19 +912,31 @@ pub async fn directory_region(
         }
     };
 
+    let mut railways = Vec::new();
     let mut national_operators = Vec::new();
     let mut agencies = Vec::new();
     for agency in agency_candidates {
-        if agency.is_national_railway_operator
-            && agency_relevant_to_country(store.get_ref().as_ref(), &agency, &country_id)
-        {
+        let relevant_to_country =
+            agency_relevant_to_country(store.get_ref().as_ref(), &agency, &country_id);
+
+        // A level-0 page should surface every railway that is relevant to the
+        // country before the administrative subdivisions. This intentionally
+        // includes regional and cross-border rail operators, not only agencies
+        // marked as a national railway operator.
+        if is_country_page && agency.has_rail && relevant_to_country {
+            railways.push(agency_card(&agency, &locale));
+        }
+
+        if agency.is_national_railway_operator && relevant_to_country {
             national_operators.push(agency_card(&agency, &locale));
         } else if !agency.is_national_railway_operator
             && agency_directly_assigned_to_region(store.get_ref().as_ref(), &agency, &region_node.id)
+            && !(is_country_page && agency.has_rail)
         {
             agencies.push(agency_card(&agency, &locale));
         }
     }
+    railways.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     national_operators.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     agencies.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
 
@@ -954,6 +975,7 @@ pub async fn directory_region(
                 &country_id,
             ),
             children,
+            railways,
             national_operators,
             agencies,
         },
