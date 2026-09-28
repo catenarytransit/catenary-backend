@@ -21,7 +21,7 @@ pub fn fix_background_colour_rgb_feed_route(
     route: &gtfs_structures::Route,
 ) -> RGB<u8> {
     match feed_id {
-        "f-bus~dft~gov~uk" => match &route.short_name {
+        "f-bus~dft~gov~uk~england" => match &route.short_name {
             Some(short_name) => match short_name.as_str() {
                 "Bakerloo" => RGB::new(166, 90, 42),
                 "Central" => RGB::new(225, 37, 27),
