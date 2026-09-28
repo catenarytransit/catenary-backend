@@ -478,6 +478,7 @@ fn agency_card(agency: &UnifiedAgencyDb, locale: &str) -> AgencyCard {
 async fn fetch_country_agency_candidates(
     pool: &PgPool,
     country_id: &str,
+    country_level_1_ids: &[String],
 ) -> Result<Vec<UnifiedAgencyDb>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
@@ -496,19 +497,15 @@ async fn fetch_country_agency_candidates(
             is_national_railway_operator
         FROM gtfs.unified_agency
         WHERE primary_level_0 = $1
-           OR $1 = ANY(COALESCE(array_remove(level_0s, NULL::text), ARRAY[]::text[]))
-           OR primary_level_1 LIKE ($1 || '-%')
-           OR EXISTS (
-                SELECT 1
-                FROM unnest(COALESCE(array_remove(level_1s, NULL::text), ARRAY[]::text[]))
-                    AS region_ids(region_id)
-                WHERE region_id LIKE ($1 || '-%')
-           )
+           OR level_0s @> ARRAY[$1]::text[]
+           OR primary_level_1 = ANY($2::text[])
+           OR level_1s && $2::text[]
            OR is_national_railway_operator = TRUE
         ORDER BY name, id
         "#,
     )
     .bind(country_id)
+    .bind(country_level_1_ids.to_vec())
     .fetch_all(pool)
     .await?;
 
@@ -901,7 +898,23 @@ pub async fn directory_region(
         .collect::<Vec<_>>();
 
     let is_country_page = region_node.depth == 0;
-    let agency_candidates = match fetch_country_agency_candidates(pool.get_ref().as_ref(), &country_id).await {
+    // Pass the configured level-1 IDs into PostgreSQL instead of doing a
+    // prefix scan over every level_1s array. This keeps the candidate query
+    // exact and lets the GIN level_1s index service the overlap predicate.
+    let country_level_1_ids = store
+        .geography
+        .children_of(&country_id)
+        .into_iter()
+        .filter(|node| node.depth == 1)
+        .map(|node| node.id.clone())
+        .collect::<Vec<_>>();
+    let agency_candidates = match fetch_country_agency_candidates(
+        pool.get_ref().as_ref(),
+        &country_id,
+        &country_level_1_ids,
+    )
+    .await
+    {
         Ok(agencies) => agencies,
         Err(error) => {
             eprintln!("directory region agency query failed: {error}");
