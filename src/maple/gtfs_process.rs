@@ -994,8 +994,17 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
-        "f-networkrail"
-        | "f-oebb~at"
+        "f-networkrail" => {
+            execute_pfaedle_brosi(
+                path.as_str(),
+                "./railonly-europe-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                false,
+                true,
+            )
+            .await?;
+        }
+        "f-oebb~at"
         | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
