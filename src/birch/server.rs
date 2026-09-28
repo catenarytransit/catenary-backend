@@ -49,6 +49,7 @@ use alerts::*;
 mod departures_at_osm_station;
 mod departures_at_stop;
 mod departures_shared;
+mod directory;
 mod osm_station_lookup;
 mod osm_station_search;
 mod transfer_calc;
@@ -806,6 +807,18 @@ async fn ip_addr_to_geo_api(
 async fn main() -> std::io::Result<()> {
     let catenary_config = catenaryconfig::config();
 
+    let region_names_directory = std::env::var("REGION_NAMES_DIR")
+        .unwrap_or_else(|_| "data/geography".to_string());
+    let region_names_store = Arc::new(
+        catenary::region_names::RegionNamesStore::load_from_dir(&region_names_directory)
+            .map_err(|error| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("failed to load RegionNames from {region_names_directory}: {error}"),
+                )
+            })?,
+    );
+
     // Connect to the database.
     let pool = Arc::new(make_async_pool().await.unwrap());
     let arc_pool = Arc::clone(&pool);
@@ -949,6 +962,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(actix_block_ai_crawling::BlockAi)
             .wrap(middleware::Compress::default())
             .app_data(actix_web::web::Data::new(Arc::clone(&sqlx_pool)))
+            .app_data(actix_web::web::Data::new(Arc::clone(&region_names_store)))
             .app_data(actix_web::web::Data::new(Arc::clone(&pool)))
             .app_data(actix_web::web::Data::new(aspen_chateau_cache.clone()))
             .app_data(actix_web::web::Data::new(Arc::clone(&elasticclient)))
@@ -1006,6 +1020,11 @@ async fn main() -> std::io::Result<()> {
             .service(ip_addr_to_geo_api)
             .service(route_info::route_info)
             .service(route_info::route_info_v2)
+            .service(directory::directory_locales)
+            .service(directory::directory_regions)
+            .service(directory::directory_region)
+            .service(directory::directory_agency)
+            .service(directory::directory_route)
             .service(shapes::get_shape)
             .service(shapes::get_shapes)
             .service(proxy_for_watchduty_tiles)
