@@ -210,12 +210,13 @@ impl GeographyIndex {
         let mut ancestors = Vec::new();
         let mut current = node.parent.as_deref();
         while let Some(parent_id) = current {
-            let parent = self.nodes.get(parent_id).ok_or_else(|| {
-                RegionNamesError::UnknownParent {
-                    region: id.to_string(),
-                    parent: parent_id.to_string(),
-                }
-            })?;
+            let parent =
+                self.nodes
+                    .get(parent_id)
+                    .ok_or_else(|| RegionNamesError::UnknownParent {
+                        region: id.to_string(),
+                        parent: parent_id.to_string(),
+                    })?;
             ancestors.push(parent.id.clone());
             current = parent.parent.as_deref();
         }
@@ -234,11 +235,7 @@ impl GeographyIndex {
     /// Generates a localized slug path from stable IDs.
     ///
     /// `localized_path("DE-BY", "de")` -> `["deutschland", "bayern"]`.
-    pub fn localized_path(
-        &self,
-        id: &str,
-        locale: &str,
-    ) -> Result<Vec<String>, RegionNamesError> {
+    pub fn localized_path(&self, id: &str, locale: &str) -> Result<Vec<String>, RegionNamesError> {
         self.lineage_ids(id)?
             .into_iter()
             .map(|region_id| {

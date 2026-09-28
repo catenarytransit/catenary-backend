@@ -106,9 +106,9 @@ pub mod etcd_cache;
 pub mod genentech_auth;
 pub mod graph_formats;
 pub mod proxy_pool;
+pub mod region_names;
 pub mod stop_matching;
 pub mod trip_logic;
-pub mod region_names;
 
 lazy_static! {
     static ref CLOCK_AM_PM_REGEX: Regex =

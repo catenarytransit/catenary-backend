@@ -46,9 +46,7 @@ pub enum RegionNamesError {
     #[error("region {region} does not have a name for fallback locale {locale}")]
     MissingFallbackName { region: GeoId, locale: LocaleId },
 
-    #[error(
-        "region {region} declares {locale} as an official language but has no name for it"
-    )]
+    #[error("region {region} declares {locale} as an official language but has no name for it")]
     MissingOfficialName { region: GeoId, locale: LocaleId },
 
     #[error("region {region} is missing a slug for required public locale {locale}")]

@@ -32,15 +32,15 @@ mod loader;
 mod model;
 
 pub use agency::{
-    resolve_agency_geography, AgencyRegionOverride, AgencyRegionOverrideMode,
-    AgencyRegionOverrides, AgencyRegionOverridesFile, ResolvedAgencyGeography,
+    AgencyRegionOverride, AgencyRegionOverrideMode, AgencyRegionOverrides,
+    AgencyRegionOverridesFile, ResolvedAgencyGeography, resolve_agency_geography,
 };
 pub use error::RegionNamesError;
 pub use index::{GeographyIndex, ResolvedGeoSlug};
 pub use loader::{
-    read_agency_region_overrides, read_config, read_countries, read_regions, RegionNamesStore,
+    RegionNamesStore, read_agency_region_overrides, read_config, read_countries, read_regions,
 };
 pub use model::{
     CountriesFile, GeoEntityDefinition, GeoId, GeoKind, GeoNode, GeographyConfig, LocaleId,
-    RegionsFile, UnifiedAgencyId, SUPPORTED_SCHEMA_VERSION,
+    RegionsFile, SUPPORTED_SCHEMA_VERSION, UnifiedAgencyId,
 };

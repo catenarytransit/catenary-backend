@@ -1,7 +1,5 @@
-use actix_web::{get, web, HttpResponse, Responder};
-use catenary::region_names::{
-    AgencyRegionOverrideMode, GeoKind, GeographyIndex, RegionNamesStore,
-};
+use actix_web::{HttpResponse, Responder, get, web};
+use catenary::region_names::{AgencyRegionOverrideMode, GeoKind, GeographyIndex, RegionNamesStore};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::collections::BTreeMap;
@@ -371,10 +369,7 @@ fn inferred_direct_region_ids(agency: &UnifiedAgencyDb) -> Vec<String> {
     agency.primary_level_0.iter().cloned().collect()
 }
 
-fn configured_region_ids(
-    store: &RegionNamesStore,
-    agency: &UnifiedAgencyDb,
-) -> Vec<String> {
+fn configured_region_ids(store: &RegionNamesStore, agency: &UnifiedAgencyDb) -> Vec<String> {
     let inferred = inferred_direct_region_ids(agency);
     let Some(configured) = store.agency_overrides.get(&agency.id) else {
         return inferred;
@@ -772,9 +767,7 @@ async fn fetch_direction_patterns(
 }
 
 #[get("/directory/v1/locales")]
-pub async fn directory_locales(
-    store: web::Data<Arc<RegionNamesStore>>,
-) -> impl Responder {
+pub async fn directory_locales(store: web::Data<Arc<RegionNamesStore>>) -> impl Responder {
     json_cached(
         DirectoryLocalesResponse {
             schema_version: 1,
@@ -943,7 +936,11 @@ pub async fn directory_region(
         if agency.is_national_railway_operator && relevant_to_country {
             national_operators.push(agency_card(&agency, &locale));
         } else if !agency.is_national_railway_operator
-            && agency_directly_assigned_to_region(store.get_ref().as_ref(), &agency, &region_node.id)
+            && agency_directly_assigned_to_region(
+                store.get_ref().as_ref(),
+                &agency,
+                &region_node.id,
+            )
             && !(is_country_page && agency.has_rail)
         {
             agencies.push(agency_card(&agency, &locale));
@@ -953,7 +950,10 @@ pub async fn directory_region(
     national_operators.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
     agencies.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
 
-    let country_node = store.geography.node(&country_id).expect("lineage root exists");
+    let country_node = store
+        .geography
+        .node(&country_id)
+        .expect("lineage root exists");
     let region_name = store
         .geography
         .name(&region_node.id, &locale)
@@ -982,11 +982,7 @@ pub async fn directory_region(
                 path: country_link.path,
             },
             breadcrumbs,
-            alternate_locales: region_locale_links(
-                &store.geography,
-                &region_node.id,
-                &country_id,
-            ),
+            alternate_locales: region_locale_links(&store.geography, &region_node.id, &country_id),
             children,
             railways,
             national_operators,
@@ -1037,8 +1033,14 @@ pub async fn directory_agency(
         .filter_map(|id| build_region_link(&store.geography, id, &locale))
         .collect::<Vec<_>>();
     regions.sort_by(|a, b| {
-        let depth_a = store.geography.node(&a.id).map_or(usize::MAX, |node| node.depth);
-        let depth_b = store.geography.node(&b.id).map_or(usize::MAX, |node| node.depth);
+        let depth_a = store
+            .geography
+            .node(&a.id)
+            .map_or(usize::MAX, |node| node.depth);
+        let depth_b = store
+            .geography
+            .node(&b.id)
+            .map_or(usize::MAX, |node| node.depth);
         depth_a
             .cmp(&depth_b)
             .then_with(|| a.name.cmp(&b.name))
@@ -1049,16 +1051,17 @@ pub async fn directory_agency(
         .filter(|id| store.geography.contains(id))
         .and_then(|id| build_region_link(&store.geography, &id, &locale));
 
-    let mut routes = match fetch_routes_for_unified_agency(pool.get_ref().as_ref(), &agency.id).await {
-        Ok(routes) => routes,
-        Err(error) => {
-            eprintln!("directory route list query failed: {error}");
-            return json_error(
-                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "could not query agency routes",
-            );
-        }
-    };
+    let mut routes =
+        match fetch_routes_for_unified_agency(pool.get_ref().as_ref(), &agency.id).await {
+            Ok(routes) => routes,
+            Err(error) => {
+                eprintln!("directory route list query failed: {error}");
+                return json_error(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not query agency routes",
+                );
+            }
+        };
     routes.sort_by(|a, b| {
         a.route_type
             .cmp(&b.route_type)
@@ -1151,33 +1154,35 @@ pub async fn directory_route(
         }
     };
 
-    let (unified_agency_id, agency_name) = match fetch_route_agency(pool.get_ref().as_ref(), &route).await {
-        Ok(Some(agency)) => agency,
-        Ok(None) => {
-            return json_error(
-                actix_web::http::StatusCode::NOT_FOUND,
-                "route does not resolve to a unified agency",
-            );
-        }
-        Err(error) => {
-            eprintln!("directory route agency query failed: {error}");
-            return json_error(
-                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "could not resolve route agency",
-            );
-        }
-    };
+    let (unified_agency_id, agency_name) =
+        match fetch_route_agency(pool.get_ref().as_ref(), &route).await {
+            Ok(Some(agency)) => agency,
+            Ok(None) => {
+                return json_error(
+                    actix_web::http::StatusCode::NOT_FOUND,
+                    "route does not resolve to a unified agency",
+                );
+            }
+            Err(error) => {
+                eprintln!("directory route agency query failed: {error}");
+                return json_error(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not resolve route agency",
+                );
+            }
+        };
 
-    let direction_patterns = match fetch_direction_patterns(pool.get_ref().as_ref(), &chateau, &route_id).await {
-        Ok(patterns) => patterns,
-        Err(error) => {
-            eprintln!("directory direction pattern query failed: {error}");
-            return json_error(
-                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-                "could not query route direction patterns",
-            );
-        }
-    };
+    let direction_patterns =
+        match fetch_direction_patterns(pool.get_ref().as_ref(), &chateau, &route_id).await {
+            Ok(patterns) => patterns,
+            Err(error) => {
+                eprintln!("directory direction pattern query failed: {error}");
+                return json_error(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not query route direction patterns",
+                );
+            }
+        };
 
     let map_deeplink = format!(
         "https://maps.catenarymaps.org/?page=route&chateau={}&route={}",

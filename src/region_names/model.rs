@@ -92,10 +92,7 @@ pub struct GeoNode {
 }
 
 impl GeoNode {
-    pub(crate) fn from_definition(
-        definition: GeoEntityDefinition,
-        parent: Option<GeoId>,
-    ) -> Self {
+    pub(crate) fn from_definition(definition: GeoEntityDefinition, parent: Option<GeoId>) -> Self {
         Self {
             id: definition.id,
             parent,

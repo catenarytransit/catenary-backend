@@ -1004,8 +1004,7 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
-        "f-oebb~at"
-        | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
+        "f-oebb~at" | "f-u1j-kvbkölnerverkehrs~betriebeag~wupsiwupsigmbh~dbdeutschebahn" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
@@ -1225,11 +1224,9 @@ pub async fn gtfs_process_feed(
         "f-bctransit~fraser~valley~region" => {
             let mut gtfs = gtfs;
 
-            for agency in gtfs.agencies.values_mut() {
-                if let Some(agency_name) = agency.name.as_deref() {
-                    if agency_name == "BCTransit" {
-                        agency.name = Some(String::from("Fraser Valley Region - BC Transit"));
-                    }
+            for agency in gtfs.agencies.iter_mut() {
+                if agency.name == "BCTransit" {
+                    agency.name = String::from("Fraser Valley Region - BC Transit");
                 }
             }
 
@@ -1238,11 +1235,9 @@ pub async fn gtfs_process_feed(
         "f-bctransit~east~kootenay~region" => {
             let mut gtfs = gtfs;
 
-            for agency in gtfs.agencies.values_mut() {
-                if let Some(agency_name) = agency.name.as_deref() {
-                    if agency_name == "BCTransit" {
-                        agency.name = Some(String::from("East Kootenay Region - BC Transit"));
-                    }
+            for agency in gtfs.agencies.iter_mut() {
+                if agency.name.as_str() == "BCTransit" {
+                    agency.name = String::from("East Kootenay Region - BC Transit");
                 }
             }
 
@@ -1251,11 +1246,9 @@ pub async fn gtfs_process_feed(
         "f-c28-bctransit~victoriaregionaltransitsystem" => {
             let mut gtfs = gtfs;
 
-            for agency in gtfs.agencies.values_mut() {
-                if let Some(agency_name) = agency.name.as_deref() {
-                    if agency_name == "BCTransit" {
-                        agency.name = Some(String::from("Victoria - BC Transit"));
-                    }
+            for agency in gtfs.agencies.iter_mut() {
+                if agency.name.as_str() == "BCTransit" {
+                    agency.name = String::from("Victoria - BC Transit");
                 }
             }
 

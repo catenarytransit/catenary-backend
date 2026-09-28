@@ -47,10 +47,7 @@ impl AgencyRegionOverrides {
         file: AgencyRegionOverridesFile,
         geography: &GeographyIndex,
     ) -> Result<Self, RegionNamesError> {
-        super::index::validate_schema_version(
-            "agency_region_overrides.toml",
-            file.schema_version,
-        )?;
+        super::index::validate_schema_version("agency_region_overrides.toml", file.schema_version)?;
 
         let mut by_agency = HashMap::new();
         for agency in file.agencies {
@@ -72,9 +69,7 @@ impl AgencyRegionOverrides {
         self.by_agency.contains_key(unified_agency_id)
     }
 
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&UnifiedAgencyId, &AgencyRegionOverride)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&UnifiedAgencyId, &AgencyRegionOverride)> {
         self.by_agency.iter()
     }
 }
@@ -102,11 +97,7 @@ impl ResolvedAgencyGeography {
     }
 
     /// Compatibility helper for existing `level_0s`, `level_1s`, etc.
-    pub fn regions_at_depth(
-        &self,
-        geography: &GeographyIndex,
-        depth: usize,
-    ) -> Vec<GeoId> {
+    pub fn regions_at_depth(&self, geography: &GeographyIndex, depth: usize) -> Vec<GeoId> {
         self.all_region_ids()
             .into_iter()
             .filter(|region_id| {

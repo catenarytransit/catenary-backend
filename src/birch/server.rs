@@ -807,16 +807,17 @@ async fn ip_addr_to_geo_api(
 async fn main() -> std::io::Result<()> {
     let catenary_config = catenaryconfig::config();
 
-    let region_names_directory = std::env::var("REGION_NAMES_DIR")
-        .unwrap_or_else(|_| "region_config".to_string());
+    let region_names_directory =
+        std::env::var("REGION_NAMES_DIR").unwrap_or_else(|_| "region_config".to_string());
     let region_names_store = Arc::new(
-        catenary::region_names::RegionNamesStore::load_from_dir(&region_names_directory)
-            .map_err(|error| {
+        catenary::region_names::RegionNamesStore::load_from_dir(&region_names_directory).map_err(
+            |error| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
                     format!("failed to load RegionNames from {region_names_directory}: {error}"),
                 )
-            })?,
+            },
+        )?,
     );
 
     // Connect to the database.
