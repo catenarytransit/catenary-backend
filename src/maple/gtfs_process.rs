@@ -1222,6 +1222,39 @@ pub async fn gtfs_process_feed(
             }
             gtfs
         }
+        "f-bctransit~fraser~valley~region" => {
+            let mut gtfs = gtfs;
+
+            for agency in gtfs.agencies.values_mut() {
+                if let Some(agency_name) = agency.name.as_deref() {
+                    if agency_name == "BCTransit" {
+                        agency.name = Some(String::from("Fraser Valley Region - BC Transit"));
+                    }
+                }
+            }
+        }
+        "f-bctransit~east~kootenay~region" => {
+            let mut gtfs = gtfs;
+
+            for agency in gtfs.agencies.values_mut() {
+                if let Some(agency_name) = agency.name.as_deref() {
+                    if agency_name == "BCTransit" {
+                        agency.name = Some(String::from("East Kootenay Region - BC Transit"));
+                    }
+                }
+            }
+        }
+        "f-c28-bctransit~victoriaregionaltransitsystem" => {
+            let mut gtfs = gtfs;
+
+            for agency in gtfs.agencies.values_mut() {
+                if let Some(agency_name) = agency.name.as_deref() {
+                    if agency_name == "BCTransit" {
+                        agency.name = Some(String::from("Victoria - BC Transit"));
+                    }
+                }
+            }
+        }
         "f-dr4-septa~rail" => {
             let mut gtfs = gtfs;
 
