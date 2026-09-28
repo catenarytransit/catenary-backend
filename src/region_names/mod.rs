@@ -7,9 +7,12 @@
 //! Expected data layout:
 //!
 //! ```text
-//! geography/
+//! region_config/
 //! ├── config.toml
-//! ├── countries.toml
+//! ├── countries/
+//! │   ├── US.toml
+//! │   ├── CA.toml
+//! │   └── ...
 //! ├── agency_region_overrides.toml
 //! └── regions/
 //!     ├── BE.toml
