@@ -396,7 +396,7 @@ iso_3166_2 = "CA-PE"
 [[region]]
 id = "CA-QC"
 kind = "province"
-official_languages = ["en", "fr"]
+official_languages = ["fr"]
 
 [region.names]
 "en" = "Quebec"
