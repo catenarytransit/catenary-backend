@@ -1232,6 +1232,8 @@ pub async fn gtfs_process_feed(
                     }
                 }
             }
+
+            gtfs
         }
         "f-bctransit~east~kootenay~region" => {
             let mut gtfs = gtfs;
@@ -1243,6 +1245,8 @@ pub async fn gtfs_process_feed(
                     }
                 }
             }
+
+            gtfs
         }
         "f-c28-bctransit~victoriaregionaltransitsystem" => {
             let mut gtfs = gtfs;
@@ -1254,6 +1258,8 @@ pub async fn gtfs_process_feed(
                     }
                 }
             }
+
+            gtfs
         }
         "f-dr4-septa~rail" => {
             let mut gtfs = gtfs;
