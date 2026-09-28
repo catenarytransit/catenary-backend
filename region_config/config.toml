@@ -1,0 +1,48 @@
+# Canonical locale configuration for Catenary geographic SEO names.
+#
+# This is the union of catenary-web's supported locales and the official
+# languages of the European Union. Every country file must provide a name and
+# canonical slug for each locale below.
+
+schema_version = 1
+fallback_locale = "en"
+require_public_locale_slugs = true
+allow_unicode_slugs = true
+
+public_locales = [
+    "ca",
+    "da",
+    "de",
+    "et",
+    "en",
+    "es",
+    "fr",
+    "oc",
+    "lb",
+    "ga",
+    "hr",
+    "it",
+    "lt",
+    "lv",
+    "nl",
+    "hu",
+    "no",
+    "pl",
+    "pt-PT",
+    "ro",
+    "sk",
+    "sl",
+    "sr",
+    "fi",
+    "sv",
+    "ru",
+    "uk",
+    "el",
+    "zh-CN",
+    "zh-TW",
+    "ja",
+    "ko",
+    "bg",
+    "cs",
+    "mt",
+]

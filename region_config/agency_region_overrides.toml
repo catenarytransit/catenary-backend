@@ -1,0 +1,11 @@
+# Manual overrides for unified-agency geographic assignment.
+#
+# Example:
+# [[agency]]
+# unified_agency_id = "deutsche_bahn"
+# label = "Deutsche Bahn"
+# mode = "lock"
+# regions = ["DE"]
+# primary_region = "DE"
+
+schema_version = 1
