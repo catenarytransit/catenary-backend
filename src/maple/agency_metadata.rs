@@ -131,6 +131,48 @@ fn effective_route_agency_id<'a>(
     route_agency_id.or(sole_agency_id)
 }
 
+/// Normalize an automatically generated unified agency ID so it is safe to use
+/// as one URL path segment without transliterating international agency names.
+///
+/// ASCII punctuation and whitespace are collapsed to `_`. Non-ASCII,
+/// non-whitespace characters are preserved so names written in scripts such as
+/// Czech, Japanese, Korean, Devanagari, Arabic, and others remain readable.
+fn normalize_generated_unified_agency_id(value: &str) -> String {
+    let value = value.trim();
+    let mut normalized = String::with_capacity(value.len());
+    let mut pending_separator = false;
+
+    for character in value.chars() {
+        let keep_character =
+            character.is_alphanumeric() || (!character.is_ascii() && !character.is_whitespace());
+
+        if keep_character {
+            if pending_separator && !normalized.is_empty() && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            normalized.push(character);
+            pending_separator = false;
+        } else if character == '_' {
+            if !normalized.is_empty() && !normalized.ends_with('_') {
+                normalized.push('_');
+            }
+            pending_separator = false;
+        } else {
+            pending_separator = !normalized.is_empty();
+        }
+    }
+
+    while normalized.ends_with('_') {
+        normalized.pop();
+    }
+
+    if normalized.is_empty() {
+        format!("agency_{}", hex::encode(value.as_bytes()))
+    } else {
+        normalized
+    }
+}
+
 pub fn unified_agency_id_for(agency_name: &str, agency_url: &str) -> String {
     let agency_url_host = agency_url_host(agency_url);
 
@@ -149,12 +191,12 @@ pub fn unified_agency_id_for(agency_name: &str, agency_url: &str) -> String {
     {
         if let Some(host) = agency_url_host.as_deref() {
             if let Some(domain_name) = domain_name_without_tld(host) {
-                return domain_name.to_string();
+                return normalize_generated_unified_agency_id(domain_name);
             }
         }
     }
 
-    agency_name.replace(' ', "_")
+    normalize_generated_unified_agency_id(agency_name)
 }
 
 #[derive(Clone)]
@@ -593,8 +635,8 @@ fn unified_agency_overrides_path() -> PathBuf {
     PathBuf::from(region_config_root).join("unified_agency_overrides.toml")
 }
 
-fn load_unified_agency_overrides(
-) -> Result<UnifiedAgencyOverridesFile, Box<dyn Error + Send + Sync>> {
+fn load_unified_agency_overrides()
+-> Result<UnifiedAgencyOverridesFile, Box<dyn Error + Send + Sync>> {
     let path = unified_agency_overrides_path();
     let raw = fs::read_to_string(&path)?;
     let overrides: UnifiedAgencyOverridesFile = toml::from_str(&raw)?;
@@ -664,8 +706,7 @@ async fn apply_unified_agency_overrides(
         )
         .set((
             unified_agencies::primary_level_0.eq(Some(home_level_0)),
-            unified_agencies::is_national_railway_operator
-                .eq(agency.is_national_railway_operator),
+            unified_agencies::is_national_railway_operator.eq(agency.is_national_railway_operator),
         ))
         .execute(conn)
         .await?;
@@ -1299,6 +1340,45 @@ mod tests {
         assert_eq!(
             unified_agency_id_for("Los Angeles Metro", "https://www.metro.net/"),
             "Los_Angeles_Metro"
+        );
+    }
+
+    #[test]
+    fn generated_ids_remove_url_significant_ascii_characters() {
+        assert_eq!(
+            unified_agency_id_for(
+                "Lawrence Berkeley National Lab (Home)",
+                "https://example.com/"
+            ),
+            "Lawrence_Berkeley_National_Lab_Home"
+        );
+        assert_eq!(
+            unified_agency_id_for("České dráhy, a.s.", "https://www.cd.cz/"),
+            "České_dráhy_a_s"
+        );
+        assert_eq!(
+            unified_agency_id_for("C.D.Pitt & S.M.Treacy-Pitt Pty Ltd", "https://example.com/"),
+            "C_D_Pitt_S_M_Treacy_Pitt_Pty_Ltd"
+        );
+        assert_eq!(
+            unified_agency_id_for("A/B?C#D%E&F+G=H", "https://example.com/"),
+            "A_B_C_D_E_F_G_H"
+        );
+    }
+
+    #[test]
+    fn generated_ids_preserve_non_latin_unicode() {
+        assert_eq!(
+            unified_agency_id_for("東京都交通局", "https://www.kotsu.metro.tokyo.jp/"),
+            "東京都交通局"
+        );
+        assert_eq!(
+            unified_agency_id_for("서울교통공사", "https://www.seoulmetro.co.kr/"),
+            "서울교통공사"
+        );
+        assert_eq!(
+            unified_agency_id_for("दिल्ली परिवहन निगम", "https://dtc.delhi.gov.in/"),
+            "दिल्ली_परिवहन_निगम"
         );
     }
 }
