@@ -1,0 +1,31 @@
+# Persistent manual metadata for gtfs.unified_agency.
+#
+# Spatial coverage (level_0s / level_1s) remains inferred from the actual GTFS
+# service area. These overrides only define the operator's home country and
+# whether it should be treated as a national railway operator there.
+#
+# Maple reapplies this file after every unified-agency spatial metadata refresh,
+# so these values are source-controlled and are not lost when feeds are
+# re-imported or spatial coverage is recomputed.
+
+schema_version = 1
+
+[[agency]]
+unified_agency_id = "SNCF_VOYAGEURS"
+primary_level_0 = "FR"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "Amtrak"
+primary_level_0 = "US"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "DB_Fernverkehr_AG"
+primary_level_0 = "DE"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "DB_Fernverkehr_(Codesharing)"
+primary_level_0 = "DE"
+is_national_railway_operator = true

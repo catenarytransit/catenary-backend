@@ -59,6 +59,7 @@ pub struct AgencyCard {
     pub has_ferry: bool,
     pub has_bus: bool,
     pub is_national_railway_operator: bool,
+    pub primary_level_0: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -467,6 +468,7 @@ fn agency_card(agency: &UnifiedAgencyDb, locale: &str) -> AgencyCard {
         has_ferry: agency.has_ferry,
         has_bus: agency.has_bus,
         is_national_railway_operator: agency.is_national_railway_operator,
+        primary_level_0: agency.primary_level_0.clone(),
     }
 }
 
@@ -495,7 +497,6 @@ async fn fetch_country_agency_candidates(
            OR level_0s @> ARRAY[$1]::text[]
            OR primary_level_1 = ANY($2::text[])
            OR level_1s && $2::text[]
-           OR is_national_railway_operator = TRUE
         ORDER BY name, id
         "#,
     )
@@ -924,6 +925,8 @@ pub async fn directory_region(
     for agency in agency_candidates {
         let relevant_to_country =
             agency_relevant_to_country(store.get_ref().as_ref(), &agency, &country_id);
+        let is_home_national_operator = agency.is_national_railway_operator
+            && agency.primary_level_0.as_deref() == Some(country_id.as_str());
 
         // A level-0 page should surface every railway that is relevant to the
         // country before the administrative subdivisions. This intentionally
@@ -933,14 +936,14 @@ pub async fn directory_region(
             railways.push(agency_card(&agency, &locale));
         }
 
-        if agency.is_national_railway_operator && relevant_to_country {
+        // National-operator status is scoped to the operator's home country.
+        // Cross-border service still makes the operator a railway in the
+        // visited country, but does not make it that country's national railway.
+        if is_country_page && is_home_national_operator {
             national_operators.push(agency_card(&agency, &locale));
-        } else if !agency.is_national_railway_operator
-            && agency_directly_assigned_to_region(
-                store.get_ref().as_ref(),
-                &agency,
-                &region_node.id,
-            )
+        }
+
+        if agency_directly_assigned_to_region(store.get_ref().as_ref(), &agency, &region_node.id)
             && !(is_country_page && agency.has_rail)
         {
             agencies.push(agency_card(&agency, &locale));

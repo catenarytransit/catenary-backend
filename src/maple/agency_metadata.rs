@@ -517,6 +517,109 @@ impl FeedChunkAccumulator {
 }
 
 const UNIFIED_AGENCY_UPSERT_CHUNK_SIZE: usize = 1_000;
+const UNIFIED_AGENCY_OVERRIDES_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Deserialize)]
+struct UnifiedAgencyOverridesFile {
+    schema_version: u32,
+
+    #[serde(default, rename = "agency")]
+    agencies: Vec<UnifiedAgencyOverride>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UnifiedAgencyOverride {
+    unified_agency_id: String,
+    primary_level_0: String,
+    is_national_railway_operator: bool,
+}
+
+fn unified_agency_overrides_path() -> PathBuf {
+    let region_config_root =
+        std::env::var("REGION_NAMES_DIR").unwrap_or_else(|_| "region_config".to_string());
+    PathBuf::from(region_config_root).join("unified_agency_overrides.toml")
+}
+
+fn load_unified_agency_overrides(
+) -> Result<UnifiedAgencyOverridesFile, Box<dyn Error + Send + Sync>> {
+    let path = unified_agency_overrides_path();
+    let raw = fs::read_to_string(&path)?;
+    let overrides: UnifiedAgencyOverridesFile = toml::from_str(&raw)?;
+
+    if overrides.schema_version != UNIFIED_AGENCY_OVERRIDES_SCHEMA_VERSION {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "{} has unsupported schema_version {}; expected {}",
+                path.display(),
+                overrides.schema_version,
+                UNIFIED_AGENCY_OVERRIDES_SCHEMA_VERSION
+            ),
+        )
+        .into());
+    }
+
+    let mut seen_ids = HashSet::new();
+    for agency in &overrides.agencies {
+        if agency.unified_agency_id.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{} contains an empty unified_agency_id", path.display()),
+            )
+            .into());
+        }
+        if agency.primary_level_0.trim().is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} contains an empty primary_level_0 for {}",
+                    path.display(),
+                    agency.unified_agency_id
+                ),
+            )
+            .into());
+        }
+        if !seen_ids.insert(agency.unified_agency_id.clone()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} contains duplicate override for {}",
+                    path.display(),
+                    agency.unified_agency_id
+                ),
+            )
+            .into());
+        }
+    }
+
+    Ok(overrides)
+}
+
+async fn apply_unified_agency_overrides(
+    conn: &mut AsyncPgConnection,
+) -> Result<usize, Box<dyn Error + Send + Sync>> {
+    use catenary::schema::gtfs::unified_agency::dsl as unified_agencies;
+
+    let overrides = load_unified_agency_overrides()?;
+    let mut updated = 0usize;
+
+    for agency in overrides.agencies {
+        let agency_id = agency.unified_agency_id;
+        let home_level_0 = agency.primary_level_0;
+        updated += diesel::update(
+            unified_agencies::unified_agency.filter(unified_agencies::id.eq(&agency_id)),
+        )
+        .set((
+            unified_agencies::primary_level_0.eq(Some(home_level_0)),
+            unified_agencies::is_national_railway_operator
+                .eq(agency.is_national_railway_operator),
+        ))
+        .execute(conn)
+        .await?;
+    }
+
+    Ok(updated)
+}
 
 pub(crate) fn unified_agency_row(
     id: String,
@@ -1070,6 +1173,12 @@ pub async fn refresh_unified_agency_spatial_metadata(
         .execute(&mut conn)
         .await?;
     }
+
+    let override_updates = apply_unified_agency_overrides(&mut conn).await?;
+    println!(
+        "Applied persistent unified-agency metadata overrides to {} rows",
+        override_updates
+    );
 
     Ok(updated)
 }
