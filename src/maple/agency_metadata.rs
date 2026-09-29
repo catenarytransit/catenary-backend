@@ -267,6 +267,55 @@ pub(crate) struct AgencySpatialMetadata {
     pub(crate) bbox: Option<PgPolygon>,
 }
 
+fn normalized_level_1_id(
+    properties: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    if let Some(iso_1) = properties
+        .get("ISO_1")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+    {
+        if !iso_1.is_empty() && !iso_1.eq_ignore_ascii_case("NA") {
+            return Some(iso_1.to_string());
+        }
+    }
+
+    // GADM 4.1 has ISO_1="NA" for several metropolitan French regions.
+    // HASC_1 is populated, so translate those stable GADM/HASC identifiers to
+    // the canonical ISO 3166-2 IDs used by region_config/regions/FR.toml.
+    let country = properties
+        .get("GID_0")
+        .and_then(|value| value.as_str())
+        .map(str::trim)?;
+    if country != "FRA" {
+        return None;
+    }
+
+    let hasc_1 = properties
+        .get("HASC_1")
+        .and_then(|value| value.as_str())
+        .map(str::trim)?;
+
+    let iso_3166_2 = match hasc_1 {
+        "FR.AR" => "FR-ARA", // Auvergne-Rhône-Alpes
+        "FR.BF" => "FR-BFC", // Bourgogne-Franche-Comté
+        "FR.BT" => "FR-BRE", // Bretagne
+        "FR.CN" => "FR-CVL", // Centre-Val de Loire
+        "FR.CE" => "FR-20R", // Corse
+        "FR.AO" => "FR-GES", // Grand Est
+        "FR.NC" => "FR-HDF", // Hauts-de-France
+        "FR.IF" => "FR-IDF", // Île-de-France
+        "FR.ND" => "FR-NOR", // Normandie
+        "FR.AC" => "FR-NAQ", // Nouvelle-Aquitaine
+        "FR.LP" => "FR-OCC", // Occitanie
+        "FR.PL" => "FR-PDL", // Pays de la Loire
+        "FR.PR" => "FR-PAC", // Provence-Alpes-Côte d'Azur
+        _ => return None,
+    };
+
+    Some(iso_3166_2.to_string())
+}
+
 fn indexed_areas_from_geojson(
     path: &Path,
     id_property: &str,
@@ -288,18 +337,22 @@ fn indexed_areas_from_geojson(
         .features
         .into_iter()
         .filter_map(|feature| {
-            let area_id = feature
-                .properties
-                .as_ref()
-                .and_then(|properties| properties.get(id_property))
-                .and_then(|value| value.as_str())?
-                .trim();
+            let properties = feature.properties.as_ref()?;
+            let area_id = if id_property == "ISO_1" {
+                normalized_level_1_id(properties)?
+            } else {
+                properties
+                    .get(id_property)
+                    .and_then(|value| value.as_str())?
+                    .trim()
+                    .to_string()
+            };
             if area_id.is_empty() {
                 return None;
             }
 
             let geometry = feature.geometry?;
-            Some((area_id.to_string(), geometry))
+            Some((area_id, geometry))
         })
         .map(|(id, geometry)| {
             let geometry: Geometry<f64> = geometry.try_into()?;
