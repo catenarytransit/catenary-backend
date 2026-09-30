@@ -478,7 +478,26 @@ pub async fn gtfs_process_feed(
             }
 
             std::fs::write(&stops_txt_path, output)?;
+
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                None,
+                true,
+                false,
+            )
+            .await?;
         }
+        "f-dq-mtamaryland~marc" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                None,
+                true,
+                false,
+            )
+            .await?;
+        },
         "f-ktmb" => {
             let stops_txt_path = format!("{}/{}/stops.txt", gtfs_unzipped_path, feed_id);
 
