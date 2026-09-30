@@ -671,6 +671,7 @@ async fn resolve_train_requests(
                 .filter(catenary::schema::gtfs::routes::dsl::chateau.eq(SWITZERLAND_CHATEAU_ID))
                 .filter(catenary::schema::gtfs::routes::dsl::route_type.eq(TRAIN_ROUTE_TYPE))
                 .filter(catenary::schema::gtfs::routes::dsl::route_id.eq_any(&route_ids))
+                .select(Route::as_select())
                 .load::<Route>(&mut conn)
                 .await?
         };

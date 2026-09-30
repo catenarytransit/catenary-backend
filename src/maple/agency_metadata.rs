@@ -336,32 +336,32 @@ fn normalized_level_1_id(
         .map(str::trim)?;
 
     let iso_3166_2 = match (country, hasc_1) {
-        ("FRA", "FR.AR") => "FR-ARA", // Auvergne-Rhône-Alpes
-        ("FRA", "FR.BF") => "FR-BFC", // Bourgogne-Franche-Comté
-        ("FRA", "FR.BT") => "FR-BRE", // Bretagne
-        ("FRA", "FR.CN") => "FR-CVL", // Centre-Val de Loire
-        ("FRA", "FR.CE") => "FR-20R", // Corse
-        ("FRA", "FR.AO") => "FR-GES", // Grand Est
-        ("FRA", "FR.NC") => "FR-HDF", // Hauts-de-France
-        ("FRA", "FR.IF") => "FR-IDF", // Île-de-France
-        ("FRA", "FR.ND") => "FR-NOR", // Normandie
-        ("FRA", "FR.AC") => "FR-NAQ", // Nouvelle-Aquitaine
-        ("FRA", "FR.LP") => "FR-OCC", // Occitanie
-        ("FRA", "FR.PL") => "FR-PDL", // Pays de la Loire
-        ("FRA", "FR.PR") => "FR-PAC", // Provence-Alpes-Côte d'Azur
-        ("CAN", "CA.AB") => "CA-AB", // Alberta
-        ("CAN", "CA.BC") => "CA-BC", // British Columbia
-        ("CAN", "CA.MB") => "CA-MB", // Manitoba
-        ("CAN", "CA.NB") => "CA-NB", // New Brunswick
+        ("FRA", "FR.AR") => "FR-ARA",          // Auvergne-Rhône-Alpes
+        ("FRA", "FR.BF") => "FR-BFC",          // Bourgogne-Franche-Comté
+        ("FRA", "FR.BT") => "FR-BRE",          // Bretagne
+        ("FRA", "FR.CN") => "FR-CVL",          // Centre-Val de Loire
+        ("FRA", "FR.CE") => "FR-20R",          // Corse
+        ("FRA", "FR.AO") => "FR-GES",          // Grand Est
+        ("FRA", "FR.NC") => "FR-HDF",          // Hauts-de-France
+        ("FRA", "FR.IF") => "FR-IDF",          // Île-de-France
+        ("FRA", "FR.ND") => "FR-NOR",          // Normandie
+        ("FRA", "FR.AC") => "FR-NAQ",          // Nouvelle-Aquitaine
+        ("FRA", "FR.LP") => "FR-OCC",          // Occitanie
+        ("FRA", "FR.PL") => "FR-PDL",          // Pays de la Loire
+        ("FRA", "FR.PR") => "FR-PAC",          // Provence-Alpes-Côte d'Azur
+        ("CAN", "CA.AB") => "CA-AB",           // Alberta
+        ("CAN", "CA.BC") => "CA-BC",           // British Columbia
+        ("CAN", "CA.MB") => "CA-MB",           // Manitoba
+        ("CAN", "CA.NB") => "CA-NB",           // New Brunswick
         ("CAN", "CA.NF" | "CA.NL") => "CA-NL", // Newfoundland and Labrador
-        ("CAN", "CA.NT") => "CA-NT", // Northwest Territories
-        ("CAN", "CA.NS") => "CA-NS", // Nova Scotia
-        ("CAN", "CA.NU") => "CA-NU", // Nunavut
-        ("CAN", "CA.ON") => "CA-ON", // Ontario
-        ("CAN", "CA.PE") => "CA-PE", // Prince Edward Island
-        ("CAN", "CA.QC") => "CA-QC", // Quebec
-        ("CAN", "CA.SK") => "CA-SK", // Saskatchewan
-        ("CAN", "CA.YT") => "CA-YT", // Yukon
+        ("CAN", "CA.NT") => "CA-NT",           // Northwest Territories
+        ("CAN", "CA.NS") => "CA-NS",           // Nova Scotia
+        ("CAN", "CA.NU") => "CA-NU",           // Nunavut
+        ("CAN", "CA.ON") => "CA-ON",           // Ontario
+        ("CAN", "CA.PE") => "CA-PE",           // Prince Edward Island
+        ("CAN", "CA.QC") => "CA-QC",           // Quebec
+        ("CAN", "CA.SK") => "CA-SK",           // Saskatchewan
+        ("CAN", "CA.YT") => "CA-YT",           // Yukon
         _ => return None,
     };
 

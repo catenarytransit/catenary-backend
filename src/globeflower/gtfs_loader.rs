@@ -67,6 +67,7 @@ impl GtfsLoader {
         // Also load routes for metadata
         let route_results: Vec<Route> = routes::table
             .filter(routes::route_type.eq_any(&rail_types))
+            .select(Route::as_select())
             .load(&mut conn)?;
 
         info!("Loaded {} routes from database", route_results.len());
