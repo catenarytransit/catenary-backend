@@ -497,7 +497,7 @@ pub async fn gtfs_process_feed(
                 false,
             )
             .await?;
-        },
+        }
         "f-ktmb" => {
             let stops_txt_path = format!("{}/{}/stops.txt", gtfs_unzipped_path, feed_id);
 
@@ -1373,10 +1373,8 @@ pub async fn gtfs_process_feed(
             let mut gtfs = gtfs;
 
             for route in gtfs.routes.values_mut() {
-                let s = route.route_id;
-
-                // The code to insert space before HOPPER and title-case was written by
-                // Claude-Sonnet-5.5.
+                // Borrow route.id as a string slice (&str) instead of moving ownership
+                let s = route.id.as_str();
 
                 // Step 1: insert a space before each "HOPPER" (skip if one is already there)
                 let mut spaced = String::with_capacity(s.len() + 4);
@@ -1392,37 +1390,43 @@ pub async fn gtfs_process_feed(
                 spaced.push_str(rest);
 
                 // Step 2: title-case each whitespace-separated word
-                route.long_name = Some(spaced
-                    .split_whitespace()
-                    .map(|word| {
-                        let mut chars = word.chars();
-                        match chars.next() {
-                            Some(first) => {
-                                first.to_uppercase().collect::<String>()
-                                    + &chars.as_str().to_lowercase()
+                route.long_name = Some(
+                    spaced
+                        .split_whitespace()
+                        .map(|word| {
+                            let mut chars = word.chars();
+                            match chars.next() {
+                                Some(first) => {
+                                    format!(
+                                        "{}{}",
+                                        first.to_uppercase().collect::<String>(),
+                                        chars.as_str().to_lowercase()
+                                    )
+                                }
+                                None => String::new(),
                             }
-                            None => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+
+                // Step 3: Add important keywords to route short name safely
+                if s.contains("HOPPER") || s.contains("LIMITED") {
+                    if let Some(mut short_name) = route.short_name.clone() {
+                        if s.contains("HOPPER") {
+                            short_name.push_str(" Hopper");
                         }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" "));
-                
-                // Add important keywords to route short name
-                if let Some(short_name) = route.short_name.as_deref() {
-                    if(s.contains("HOPPER")) {
-                        route.short_name = Some(short_name + " Hopper");
-                    }
-                    if(s.contains("LIMITED")) {
-                        route.short_name = Some(short_name + " Limited");
+                        if s.contains("LIMITED") {
+                            short_name.push_str(" Limited");
+                        }
+                        route.short_name = Some(short_name);
                     }
                 }
             }
 
             for trip in gtfs.trips.values_mut() {
-                if let Some(trip_short_name) = trip.trip_short_name.as_deref() {
-                    if(trip_short_name == "Hopper") {
-                        trip_short_name = None;
-                    }
+                if trip.trip_short_name.as_deref() == Some("Hopper") {
+                    trip.trip_short_name = None;
                 }
             }
             gtfs

@@ -65,10 +65,7 @@ pub async fn unified_agency_ids_for_feed(
     .load::<UnifiedAgencyIdRow>(&mut conn)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(|row| row.unified_agency_id)
-        .collect())
+    Ok(rows.into_iter().map(|row| row.unified_agency_id).collect())
 }
 
 pub async fn recompute_all(pool: &CatenaryPostgresPool) -> Result<usize, BoxError> {
@@ -223,22 +220,10 @@ pub async fn recompute_for_unified_agencies(
 
     let mut updated = 0usize;
     for chunk in assignments.chunks(UPDATE_CHUNK_SIZE) {
-        let feed_ids = chunk
-            .iter()
-            .map(|row| row.0.clone())
-            .collect::<Vec<_>>();
-        let attempt_ids = chunk
-            .iter()
-            .map(|row| row.1.clone())
-            .collect::<Vec<_>>();
-        let route_ids = chunk
-            .iter()
-            .map(|row| row.2.clone())
-            .collect::<Vec<_>>();
-        let slugs = chunk
-            .iter()
-            .map(|row| row.3.clone())
-            .collect::<Vec<_>>();
+        let feed_ids = chunk.iter().map(|row| row.0.clone()).collect::<Vec<_>>();
+        let attempt_ids = chunk.iter().map(|row| row.1.clone()).collect::<Vec<_>>();
+        let route_ids = chunk.iter().map(|row| row.2.clone()).collect::<Vec<_>>();
+        let slugs = chunk.iter().map(|row| row.3.clone()).collect::<Vec<_>>();
 
         updated += sql_query(
             r#"
