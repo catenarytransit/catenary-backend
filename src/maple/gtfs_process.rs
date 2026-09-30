@@ -1353,16 +1353,58 @@ pub async fn gtfs_process_feed(
         "f-dp1h-champaignurbanamasstransitdistrict" => {
             let mut gtfs = gtfs;
 
+            for route in gtfs.routes.values_mut() {
+                let s = route.route_id;
+
+                // The code to insert space before HOPPER and title-case was written by
+                // Claude-Sonnet-5.5.
+
+                // Step 1: insert a space before each "HOPPER" (skip if one is already there)
+                let mut spaced = String::with_capacity(s.len() + 4);
+                let mut rest = s;
+                while let Some(pos) = rest.find("HOPPER") {
+                    spaced.push_str(&rest[..pos]);
+                    if !spaced.is_empty() && !spaced.ends_with(' ') {
+                        spaced.push(' ');
+                    }
+                    spaced.push_str("HOPPER");
+                    rest = &rest[pos + "HOPPER".len()..];
+                }
+                spaced.push_str(rest);
+
+                // Step 2: title-case each whitespace-separated word
+                route.long_name = Some(spaced
+                    .split_whitespace()
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        match chars.next() {
+                            Some(first) => {
+                                first.to_uppercase().collect::<String>()
+                                    + &chars.as_str().to_lowercase()
+                            }
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "));
+                
+                // Add important keywords to route short name
+                if let Some(short_name) = route.short_name.as_deref() {
+                    if(s.contains("HOPPER")) {
+                        route.short_name = Some(short_name + " Hopper");
+                    }
+                    if(s.contains("LIMITED")) {
+                        route.short_name = Some(short_name + " Limited");
+                    }
+                }
+            }
+
             for trip in gtfs.trips.values_mut() {
-                trip.route_id = trip
-                    .route_id
-                    .replace("EVENING", "")
-                    .replace("SATURDAY", "")
-                    .replace("SUNDAY", "")
-                    .replace("LATE NIGHT", "")
-                    .replace("ALT", "")
-                    .trim()
-                    .to_string();
+                if let Some(trip_short_name) = trip.trip_short_name.as_deref() {
+                    if(trip_short_name == "Hopper") {
+                        trip_short_name = None;
+                    }
+                }
             }
             gtfs
         }
