@@ -460,6 +460,7 @@ pub mod gtfs {
             onestop_feed_id -> Text,
             attempt_id -> Text,
             route_id -> Text,
+            url_slug_for_unified_agency -> Nullable<Text>,
             short_name -> Nullable<Text>,
             short_name_translations -> Nullable<Jsonb>,
             long_name -> Nullable<Text>,

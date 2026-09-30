@@ -77,6 +77,7 @@ mod gtfs_process;
 pub mod osm_station_matching;
 mod raw_file_agency_remover;
 mod refresh_metadata_tables;
+mod route_url_slugs;
 mod shapes_reader;
 mod transitland_download;
 mod update_schedules_with_new_chateau_id;
@@ -102,6 +103,9 @@ struct Args {
     use_girolle: Option<bool>,
     #[arg(long)]
     no_elastic: bool,
+    /// Recompute every route URL slug before normal Maple initialization.
+    #[arg(long)]
+    recompute_route_url_slugs: bool,
     #[arg(
         long,
         env = "COUNTRY_GEOJSON",
@@ -148,6 +152,12 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let catenary_config = catenaryconfig::config();
     let maple_config = &catenary_config.maple;
     let args = Args::parse();
+
+    if args.recompute_route_url_slugs {
+        let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
+        let updated = route_url_slugs::recompute_all(&conn_pool).await?;
+        println!("Recomputed route URL slugs for {updated} physical route rows");
+    }
 
     let discord_log_env = std::env::var("DISCORD_LOG")
         .ok()
@@ -969,6 +979,15 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     )
                                     .await;
 
+                                // Capture both old and new unified-agency memberships before stale
+                                // attempts are deleted. If an agency moved, both sides are recomputed.
+                                let route_slug_unified_agency_ids =
+                                    route_url_slugs::unified_agency_ids_for_feed(
+                                        arc_conn_pool.as_ref(),
+                                        &feed_id,
+                                    )
+                                    .await;
+
                                 println!(
                                     "{} No longer in progress. Drop in progress lock",
                                     feed_id
@@ -1012,6 +1031,27 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         Arc::clone(&arc_conn_pool),
                                     )
                                     .await;
+                                }
+
+                                match route_slug_unified_agency_ids {
+                                    Ok(unified_agency_ids) => {
+                                        if let Err(error) =
+                                            route_url_slugs::recompute_for_unified_agencies(
+                                                arc_conn_pool.as_ref(),
+                                                &unified_agency_ids,
+                                            )
+                                            .await
+                                        {
+                                            eprintln!(
+                                                "Failed to recompute route URL slugs after ingesting {}: {}",
+                                                feed_id, error
+                                            );
+                                        }
+                                    }
+                                    Err(error) => eprintln!(
+                                        "Failed to resolve unified agencies for route URL slug recomputation after ingesting {}: {}",
+                                        feed_id, error
+                                    ),
                                 }
                             }
                         } else {

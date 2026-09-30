@@ -1328,6 +1328,7 @@ pub async fn gtfs_process_large_feed(
                     onestop_feed_id: feed_id.to_string(),
                     route_id: route_id_transform(feed_id, route_id.to_string()),
                     attempt_id: attempt_id.to_string(),
+                    url_slug_for_unified_agency: None,
                     agency_id: route.agency_id.clone(),
                     short_name: route.short_name.clone(),
                     long_name: route.long_name.clone(),

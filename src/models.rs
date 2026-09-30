@@ -175,6 +175,7 @@ pub struct Route {
     pub onestop_feed_id: String,
     pub attempt_id: String,
     pub route_id: String,
+    pub url_slug_for_unified_agency: Option<String>,
     pub short_name: Option<String>,
     pub short_name_translations: Option<serde_json::Value>,
     pub long_name: Option<String>,

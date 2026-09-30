@@ -2,7 +2,7 @@ use actix_web::{HttpResponse, Responder, get, web};
 use catenary::region_names::{AgencyRegionOverrideMode, GeoKind, GeographyIndex, RegionNamesStore};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 const REGION_CACHE_CONTROL: &str =
@@ -296,22 +296,6 @@ fn route_path(locale: &str, unified_agency_id: &str, route_key: &str) -> String 
         "{}/route/{route_key}",
         agency_path(locale, unified_agency_id)
     )
-}
-
-fn encode_route_key(chateau: &str, route_id: &str) -> String {
-    hex::encode(format!("{chateau}\0{route_id}").as_bytes())
-}
-
-fn decode_route_key(route_key: &str) -> Option<(String, String)> {
-    let bytes = hex::decode(route_key).ok()?;
-    let decoded = String::from_utf8(bytes).ok()?;
-    let (chateau, route_id) = decoded.split_once('\0')?;
-
-    if chateau.is_empty() || route_id.is_empty() {
-        return None;
-    }
-
-    Some((chateau.to_string(), route_id.to_string()))
 }
 
 fn region_locale_links(
@@ -767,6 +751,134 @@ async fn fetch_direction_patterns(
     Ok(patterns.into_values().collect())
 }
 
+async fn fetch_route_slugs_for_unified_agency(
+    pool: &PgPool,
+    unified_agency_id: &str,
+) -> Result<BTreeMap<String, String>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        WITH target_agencies AS (
+            SELECT DISTINCT chateau, static_onestop_id, attempt_id, agency_id
+            FROM gtfs.agencies
+            WHERE unified_agency_id = $1
+        ),
+        target_feeds AS (
+            SELECT DISTINCT chateau, static_onestop_id, attempt_id
+            FROM target_agencies
+        ),
+        feed_agency_counts AS (
+            SELECT
+                a.chateau,
+                a.static_onestop_id,
+                a.attempt_id,
+                COUNT(DISTINCT a.agency_id) AS agency_count
+            FROM gtfs.agencies a
+            JOIN target_feeds f
+              ON f.chateau = a.chateau
+             AND f.static_onestop_id = a.static_onestop_id
+             AND f.attempt_id = a.attempt_id
+            GROUP BY a.chateau, a.static_onestop_id, a.attempt_id
+        )
+        SELECT DISTINCT ON (r.route_id)
+            r.route_id,
+            r.url_slug_for_unified_agency
+        FROM gtfs.routes r
+        JOIN target_agencies a
+          ON a.chateau = r.chateau
+         AND a.static_onestop_id = r.onestop_feed_id
+         AND a.attempt_id = r.attempt_id
+        JOIN feed_agency_counts c
+          ON c.chateau = r.chateau
+         AND c.static_onestop_id = r.onestop_feed_id
+         AND c.attempt_id = r.attempt_id
+        WHERE r.url_slug_for_unified_agency IS NOT NULL
+          AND (
+                r.agency_id = a.agency_id
+             OR (r.agency_id IS NULL AND c.agency_count = 1)
+          )
+        ORDER BY
+            r.route_id,
+            r.gtfs_order NULLS LAST,
+            r.onestop_feed_id,
+            r.attempt_id
+        "#,
+    )
+    .bind(unified_agency_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut slugs = BTreeMap::new();
+    for row in rows {
+        slugs.insert(
+            row.try_get::<String, _>("route_id")?,
+            row.try_get::<String, _>("url_slug_for_unified_agency")?,
+        );
+    }
+    Ok(slugs)
+}
+
+async fn resolve_route_slug(
+    pool: &PgPool,
+    unified_agency_id: &str,
+    route_slug: &str,
+) -> Result<Option<(String, String)>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        WITH target_agencies AS (
+            SELECT DISTINCT chateau, static_onestop_id, attempt_id, agency_id
+            FROM gtfs.agencies
+            WHERE unified_agency_id = $1
+        ),
+        target_feeds AS (
+            SELECT DISTINCT chateau, static_onestop_id, attempt_id
+            FROM target_agencies
+        ),
+        feed_agency_counts AS (
+            SELECT
+                a.chateau,
+                a.static_onestop_id,
+                a.attempt_id,
+                COUNT(DISTINCT a.agency_id) AS agency_count
+            FROM gtfs.agencies a
+            JOIN target_feeds f
+              ON f.chateau = a.chateau
+             AND f.static_onestop_id = a.static_onestop_id
+             AND f.attempt_id = a.attempt_id
+            GROUP BY a.chateau, a.static_onestop_id, a.attempt_id
+        )
+        SELECT r.chateau, r.route_id
+        FROM gtfs.routes r
+        JOIN target_agencies a
+          ON a.chateau = r.chateau
+         AND a.static_onestop_id = r.onestop_feed_id
+         AND a.attempt_id = r.attempt_id
+        JOIN feed_agency_counts c
+          ON c.chateau = r.chateau
+         AND c.static_onestop_id = r.onestop_feed_id
+         AND c.attempt_id = r.attempt_id
+        WHERE r.url_slug_for_unified_agency = $2
+          AND (
+                r.agency_id = a.agency_id
+             OR (r.agency_id IS NULL AND c.agency_count = 1)
+          )
+        ORDER BY
+            r.gtfs_order NULLS LAST,
+            r.onestop_feed_id,
+            r.attempt_id,
+            r.chateau,
+            r.route_id
+        LIMIT 1
+        "#,
+    )
+    .bind(unified_agency_id)
+    .bind(route_slug)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|row| Ok((row.try_get("chateau")?, row.try_get("route_id")?)))
+        .transpose()
+}
+
 #[get("/directory/v1/locales")]
 pub async fn directory_locales(store: web::Data<Arc<RegionNamesStore>>) -> impl Responder {
     json_cached(
@@ -1074,11 +1186,27 @@ pub async fn directory_agency(
             .then_with(|| a.route_id.cmp(&b.route_id))
     });
 
+    let route_slugs =
+        match fetch_route_slugs_for_unified_agency(pool.get_ref().as_ref(), &agency.id).await {
+            Ok(slugs) => slugs,
+            Err(error) => {
+                eprintln!("directory route slug query failed: {error}");
+                return json_error(
+                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not query agency route slugs",
+                );
+            }
+        };
+    let mut seen_route_ids = BTreeSet::new();
+
     let route_cards = routes
         .into_iter()
-        .map(|route| {
-            let route_key = encode_route_key(&route.chateau, &route.route_id);
-            RouteCard {
+        .filter_map(|route| {
+            if !seen_route_ids.insert(route.route_id.clone()) {
+                return None;
+            }
+            let route_key = route_slugs.get(&route.route_id)?.clone();
+            Some(RouteCard {
                 route_key: route_key.clone(),
                 chateau: route.chateau,
                 route_id: route.route_id,
@@ -1089,7 +1217,7 @@ pub async fn directory_agency(
                 text_color: route.text_color,
                 gtfs_order: route.gtfs_order,
                 path: route_path(&locale, &agency.id, &route_key),
-            }
+            })
         })
         .collect();
 
@@ -1119,13 +1247,13 @@ pub async fn directory_agency(
     )
 }
 
-#[get("/directory/v1/route/{locale}/{route_key}")]
+#[get("/directory/v1/route/{locale}/{unified_agency_id}/{route_slug}")]
 pub async fn directory_route(
-    path: web::Path<(String, String)>,
+    path: web::Path<(String, String, String)>,
     store: web::Data<Arc<RegionNamesStore>>,
     pool: web::Data<Arc<PgPool>>,
 ) -> impl Responder {
-    let (locale, route_key) = path.into_inner();
+    let (locale, requested_unified_agency_id, route_slug) = path.into_inner();
     if !locale_supported(&store.geography, &locale) {
         return json_error(
             actix_web::http::StatusCode::NOT_FOUND,
@@ -1133,11 +1261,27 @@ pub async fn directory_route(
         );
     }
 
-    let Some((chateau, route_id)) = decode_route_key(&route_key) else {
-        return json_error(
-            actix_web::http::StatusCode::BAD_REQUEST,
-            "invalid route key",
-        );
+    let (chateau, route_id) = match resolve_route_slug(
+        pool.get_ref().as_ref(),
+        &requested_unified_agency_id,
+        &route_slug,
+    )
+    .await
+    {
+        Ok(Some(route_identity)) => route_identity,
+        Ok(None) => {
+            return json_error(
+                actix_web::http::StatusCode::NOT_FOUND,
+                "route slug was not found for this unified agency",
+            );
+        }
+        Err(error) => {
+            eprintln!("directory route slug query failed: {error}");
+            return json_error(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "could not resolve route slug",
+            );
+        }
     };
 
     let route = match fetch_route(pool.get_ref().as_ref(), &chateau, &route_id).await {
@@ -1175,6 +1319,13 @@ pub async fn directory_route(
             }
         };
 
+    if unified_agency_id != requested_unified_agency_id {
+        return json_error(
+            actix_web::http::StatusCode::NOT_FOUND,
+            "route slug does not belong to this unified agency",
+        );
+    }
+
     let direction_patterns =
         match fetch_direction_patterns(pool.get_ref().as_ref(), &chateau, &route_id).await {
             Ok(patterns) => patterns,
@@ -1197,9 +1348,9 @@ pub async fn directory_route(
         RoutePageResponse {
             schema_version: 1,
             locale: locale.clone(),
-            canonical_path: route_path(&locale, &unified_agency_id, &route_key),
+            canonical_path: route_path(&locale, &unified_agency_id, &route_slug),
             route: RoutePageRoute {
-                route_key: route_key.clone(),
+                route_key: route_slug.clone(),
                 chateau: route.chateau,
                 route_id: route.route_id,
                 short_name: route.short_name,
@@ -1217,7 +1368,7 @@ pub async fn directory_route(
             },
             direction_patterns,
             alternate_locales: stable_locale_links(&store.geography, |alternate_locale| {
-                route_path(alternate_locale, &unified_agency_id, &route_key)
+                route_path(alternate_locale, &unified_agency_id, &route_slug)
             }),
             map_deeplink,
         },
@@ -1227,19 +1378,13 @@ pub async fn directory_route(
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_route_key, encode_route_key};
+    use super::route_path;
 
     #[test]
-    fn route_key_round_trip() {
-        let encoded = encode_route_key("deutschland", "ICE 1/42");
+    fn route_path_uses_human_readable_slug() {
         assert_eq!(
-            decode_route_key(&encoded),
-            Some(("deutschland".to_string(), "ICE 1/42".to_string()))
+            route_path("en", "BCTransit", "1-comex-mall"),
+            "/en/agency/BCTransit/route/1-comex-mall"
         );
-    }
-
-    #[test]
-    fn route_key_rejects_invalid_hex() {
-        assert_eq!(decode_route_key("not-hex"), None);
     }
 }
