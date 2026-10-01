@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
 const CANADA_COUNTRY_CODE: &str = "CA";
-const ENABLED_US_LEVEL_1_CODES: &[&str] = &["US-CA", "US-IL", "US-NY", "US-DC", "US-MA"];
+const UNITED_STATES_COUNTRY_CODE: &str = "US";
 const UPSERT_BATCH_SIZE: usize = 1_000;
 const MAX_EARLY_START_SECONDS: i64 = 2 * 60 * 60;
 
@@ -65,18 +65,17 @@ fn contains_area_code(values: &Option<Vec<Option<String>>>, expected: &str) -> b
 
 fn rollout_enabled(
     level_0s: &Option<Vec<Option<String>>>,
-    level_1s: &Option<Vec<Option<String>>>,
+    _level_1s: &Option<Vec<Option<String>>>,
 ) -> bool {
     contains_area_code(level_0s, CANADA_COUNTRY_CODE)
-        || ENABLED_US_LEVEL_1_CODES
-            .iter()
-            .any(|code| contains_area_code(level_1s, code))
+        || contains_area_code(level_0s, UNITED_STATES_COUNTRY_CODE)
 }
 
 fn route_history_is_excluded(chateau_id: &str, route_type: Option<i16>) -> bool {
     match chateau_id {
         "gotransit" | "metrolinktrains" | "upexpress" => true,
         "san-diego-mts" => route_type == Some(0),
+        "regionaltransportationdistrict" => matches!(route_type, Some(0) | Some(2)),
         "nyct" => matches!(route_type, Some(1) | Some(2)),
         _ => false,
     }
