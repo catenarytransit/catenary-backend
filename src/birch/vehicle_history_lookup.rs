@@ -1,6 +1,7 @@
 use actix_web::http::StatusCode;
 use actix_web::web::Query;
 use actix_web::{HttpResponse, Responder, web};
+use catenary::aspen_dataset::AspenisedVehiclePosition;
 use catenary::models::{BasicVehicleHistory, Route};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::{Duration, LocalResult, NaiveDate, TimeZone};
@@ -11,6 +12,7 @@ use diesel_async::RunQueryDsl;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
+use tarpc::context;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct VehicleHistoryLookupQuery {
@@ -57,6 +59,7 @@ pub struct VehicleHistoryLookupResponse {
     routes: HashMap<String, Route>,
     agency_timezone: String,
     agency_name: String,
+    current_vehicle: Option<AspenisedVehiclePosition>,
 }
 
 #[derive(Debug, Serialize)]
@@ -892,9 +895,46 @@ async fn enrich_history(
     Ok(enriched_history)
 }
 
+async fn load_current_vehicle(
+    aspen_chateau_cache: &Arc<
+        catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
+    >,
+    chateaux: &[String],
+    vehicle_label: &str,
+) -> Option<AspenisedVehiclePosition> {
+    for chateau in chateaux {
+        let Some(assigned_chateau_data) = aspen_chateau_cache.get(chateau) else {
+            continue;
+        };
+
+        let Ok(aspen_client) =
+            catenary::aspen::lib::spawn_aspen_client_from_ip(&assigned_chateau_data.socket).await
+        else {
+            continue;
+        };
+
+        match aspen_client
+            .get_single_vehicle_location_from_vehicle_label(
+                context::current(),
+                chateau.clone(),
+                vehicle_label.to_string(),
+            )
+            .await
+        {
+            Ok(Some(vehicle)) => return Some(vehicle),
+            Ok(None) | Err(_) => continue,
+        }
+    }
+
+    None
+}
+
 #[actix_web::get("/vehicle_history_lookup")]
 pub async fn vehicle_history_lookup(
     pool: web::Data<Arc<CatenaryPostgresPool>>,
+    aspen_chateau_cache: web::Data<
+        Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
+    >,
     query: Query<VehicleHistoryLookupQuery>,
 ) -> impl Responder {
     let vehicle = match required_parameter(&query.vehicle, "vehicle") {
@@ -939,6 +979,24 @@ pub async fn vehicle_history_lookup(
         Ok(rows) => rows,
         Err(error) => return error.into_response(),
     };
+
+    let mut realtime_chateaux = Vec::new();
+    if let Some(chateau) = query
+        .chateau
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        realtime_chateaux.push(chateau.to_string());
+    }
+    for row in &history {
+        if !realtime_chateaux.contains(&row.chateau) {
+            realtime_chateaux.push(row.chateau.clone());
+        }
+    }
+
+    let current_vehicle =
+        load_current_vehicle(aspen_chateau_cache.get_ref(), &realtime_chateaux, vehicle).await;
 
     let enriched_history = match enrich_history(&mut conn, &history).await {
         Ok(value) => value,
@@ -1001,6 +1059,7 @@ pub async fn vehicle_history_lookup(
         routes,
         agency_timezone: resolved_agency.timezone,
         agency_name,
+        current_vehicle,
     })
 }
 
