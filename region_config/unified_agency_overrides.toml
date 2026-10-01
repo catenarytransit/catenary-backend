@@ -34,3 +34,8 @@ is_national_railway_operator = true
 unified_agency_id = "DB_Fernverkehr_(Codesharing)"
 primary_level_0 = "DE"
 is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "Železničná_spoločnosť_Slovensko_a_s"
+primary_level_0 = "SK"
+is_national_railway_operator = true
