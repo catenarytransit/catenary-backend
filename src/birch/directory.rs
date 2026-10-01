@@ -293,8 +293,9 @@ fn agency_path(locale: &str, unified_agency_id: &str) -> String {
 
 fn route_path(locale: &str, unified_agency_id: &str, route_key: &str) -> String {
     format!(
-        "{}/route/{route_key}",
-        agency_path(locale, unified_agency_id)
+        "{}/route/{}",
+        agency_path(locale, unified_agency_id),
+        urlencoding::encode(route_key)
     )
 }
 
@@ -856,12 +857,19 @@ async fn resolve_route_slug(
           ON c.chateau = r.chateau
          AND c.static_onestop_id = r.onestop_feed_id
          AND c.attempt_id = r.attempt_id
-        WHERE r.url_slug_for_unified_agency = $2
+        WHERE (
+                r.url_slug_for_unified_agency = $2
+             OR (
+                    r.url_slug_for_unified_agency IS NULL
+                AND r.route_id = $2
+             )
+        )
           AND (
                 r.agency_id = a.agency_id
              OR (r.agency_id IS NULL AND c.agency_count = 1)
           )
         ORDER BY
+            CASE WHEN r.url_slug_for_unified_agency = $2 THEN 0 ELSE 1 END,
             r.gtfs_order NULLS LAST,
             r.onestop_feed_id,
             r.attempt_id,
@@ -1205,7 +1213,10 @@ pub async fn directory_agency(
             if !seen_route_ids.insert(route.route_id.clone()) {
                 return None;
             }
-            let route_key = route_slugs.get(&route.route_id)?.clone();
+            let route_key = route_slugs
+                .get(&route.route_id)
+                .cloned()
+                .unwrap_or_else(|| route.route_id.clone());
             Some(RouteCard {
                 route_key: route_key.clone(),
                 chateau: route.chateau,
