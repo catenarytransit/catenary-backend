@@ -16,6 +16,11 @@ primary_level_0 = "FR"
 is_national_railway_operator = true
 
 [[agency]]
+unified_agency_id = "sbb"
+primary_level_0 = "CH"
+is_national_railway_operator = true
+
+[[agency]]
 unified_agency_id = "Amtrak"
 primary_level_0 = "US"
 is_national_railway_operator = true
