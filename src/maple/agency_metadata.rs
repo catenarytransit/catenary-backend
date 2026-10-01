@@ -982,7 +982,7 @@ pub async fn refresh_unified_agency_ids(
         offset += row_count as i64;
     }
 
-        // refresh_unified_agency_ids() is authoritative for which unified agency IDs
+    // refresh_unified_agency_ids() is authoritative for which unified agency IDs
     // are still in use. Once all agency rows have been reassigned, remove stale
     // parent rows left behind by renamed or merged agencies.
     let removed_stale_unified_agencies = diesel::sql_query(
@@ -1370,7 +1370,7 @@ mod tests {
                 "Trenitalia"
             );
         }
-+    }
+    }
 
     #[test]
     fn routes_without_agency_id_use_the_only_feed_agency() {
