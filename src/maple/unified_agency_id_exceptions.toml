@@ -16,3 +16,7 @@ agency_url_host_suffixes = ["translink.ca"]
 [[exceptions]]
 unified_id = "sbb"
 agency_name_contains = ["sbb"]
+
+[[exceptions]]
+unified_id = "Trenitalia"
+agency_name_equals = ["Trenitalia", "TRENITALIA", "TRENITALIA S.p.A."]

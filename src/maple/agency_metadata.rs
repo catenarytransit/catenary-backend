@@ -670,6 +670,8 @@ struct UnifiedAgencyOverridesFile {
 #[derive(Debug, Deserialize)]
 struct UnifiedAgencyOverride {
     unified_agency_id: String,
+    #[serde(default)]
+    name: Option<String>,
     primary_level_0: String,
     is_national_railway_operator: bool,
 }
@@ -745,6 +747,7 @@ async fn apply_unified_agency_overrides(
 
     for agency in overrides.agencies {
         let agency_id = agency.unified_agency_id;
+        let canonical_name = agency.name;
         let home_level_0 = agency.primary_level_0;
         updated += diesel::update(
             unified_agencies::unified_agency.filter(unified_agencies::id.eq(&agency_id)),
@@ -755,6 +758,19 @@ async fn apply_unified_agency_overrides(
         ))
         .execute(conn)
         .await?;
+
+        if let Some(canonical_name) = canonical_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            diesel::update(
+                unified_agencies::unified_agency.filter(unified_agencies::id.eq(&agency_id)),
+            )
+            .set(unified_agencies::name.eq(canonical_name))
+            .execute(conn)
+            .await?;
+        }
     }
 
     Ok(updated)
@@ -964,6 +980,27 @@ pub async fn refresh_unified_agency_ids(
             break;
         }
         offset += row_count as i64;
+    }
+
+        // refresh_unified_agency_ids() is authoritative for which unified agency IDs
+    // are still in use. Once all agency rows have been reassigned, remove stale
+    // parent rows left behind by renamed or merged agencies.
+    let removed_stale_unified_agencies = diesel::sql_query(
+        "DELETE FROM gtfs.unified_agency AS u
+         WHERE NOT EXISTS (
+             SELECT 1
+             FROM gtfs.agencies AS a
+             WHERE a.unified_agency_id = u.id
+         )",
+    )
+    .execute(&mut conn)
+    .await?;
+
+    if removed_stale_unified_agencies > 0 {
+        println!(
+            "Removed {} stale unified-agency rows",
+            removed_stale_unified_agencies
+        );
     }
 
     Ok(updated)
@@ -1325,6 +1362,15 @@ pub async fn refresh_unified_agency_spatial_metadata(
 #[cfg(test)]
 mod tests {
     use super::{effective_route_agency_id, unified_agency_id_for};
+
+    fn collapses_trenitalia_names() {
+        for name in ["Trenitalia", "TRENITALIA", "TRENITALIA S.p.A."] {
+            assert_eq!(
+                unified_agency_id_for(name, "https://www.trenitalia.com/"),
+                "Trenitalia"
+            );
+        }
++    }
 
     #[test]
     fn routes_without_agency_id_use_the_only_feed_agency() {

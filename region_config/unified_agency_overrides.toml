@@ -39,3 +39,9 @@ is_national_railway_operator = true
 unified_agency_id = "Železničná_spoločnosť_Slovensko_a_s"
 primary_level_0 = "SK"
 is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "Trenitalia"
+name = "Trenitalia"
+primary_level_0 = "IT"
+is_national_railway_operator = true
