@@ -193,6 +193,7 @@ pub struct RoutePageResponse {
     pub canonical_path: String,
     pub route: RoutePageRoute,
     pub agency: RoutePageAgency,
+    pub region_breadcrumbs: Vec<RegionLink>,
     pub direction_patterns: Vec<RouteDirectionPattern>,
     pub alternate_locales: Vec<StableLocaleLink>,
     pub map_deeplink: String,
@@ -375,18 +376,87 @@ fn configured_region_ids(store: &RegionNamesStore, agency: &UnifiedAgencyDb) -> 
     }
 }
 
-fn primary_region_id(store: &RegionNamesStore, agency: &UnifiedAgencyDb) -> Option<String> {
+fn single_region_id_at_depth(
+    store: &RegionNamesStore,
+    agency: &UnifiedAgencyDb,
+    depth: usize,
+) -> Option<String> {
+    let mut ids = BTreeSet::new();
+
+    let inferred = match depth {
+        0 => &agency.level_0s,
+        1 => &agency.level_1s,
+        _ => return None,
+    };
+    ids.extend(inferred.iter().cloned());
+
     if let Some(configured) = store.agency_overrides.get(&agency.id) {
-        if let Some(primary) = &configured.primary_region {
-            return Some(primary.clone());
+        if configured.mode == AgencyRegionOverrideMode::Lock {
+            ids.clear();
+        }
+
+        for region_id in &configured.regions {
+            if store
+                .geography
+                .node(region_id)
+                .is_some_and(|node| node.depth == depth)
+            {
+                ids.insert(region_id.clone());
+            }
         }
     }
 
-    agency
-        .primary_level_1
-        .clone()
-        .or_else(|| agency.primary_level_0.clone())
-        .or_else(|| configured_region_ids(store, agency).into_iter().next())
+    if ids.len() == 1 {
+        ids.into_iter().next()
+    } else {
+        None
+    }
+}
+
+fn primary_region_id_at_depth(
+    store: &RegionNamesStore,
+    agency: &UnifiedAgencyDb,
+    depth: usize,
+) -> Option<String> {
+    if let Some(configured) = store.agency_overrides.get(&agency.id) {
+        if let Some(primary) = &configured.primary_region {
+            if store
+                .geography
+                .node(primary)
+                .is_some_and(|node| node.depth == depth)
+            {
+                return Some(primary.clone());
+            }
+        }
+    }
+
+    let explicit = match depth {
+        0 => agency.primary_level_0.clone(),
+        1 => agency.primary_level_1.clone(),
+        _ => None,
+    };
+
+    explicit.or_else(|| single_region_id_at_depth(store, agency, depth))
+}
+
+fn primary_region_id(store: &RegionNamesStore, agency: &UnifiedAgencyDb) -> Option<String> {
+    primary_region_id_at_depth(store, agency, 1)
+        .or_else(|| primary_region_id_at_depth(store, agency, 0))
+}
+
+fn agency_region_breadcrumbs(
+    store: &RegionNamesStore,
+    agency: &UnifiedAgencyDb,
+    locale: &str,
+) -> Vec<RegionLink> {
+    [
+        primary_region_id_at_depth(store, agency, 0),
+        primary_region_id_at_depth(store, agency, 1),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|id| build_region_link(&store.geography, &id, locale))
+    .collect()
 }
 
 fn region_is_in_country(index: &GeographyIndex, region_id: &str, country_id: &str) -> bool {
@@ -1337,6 +1407,27 @@ pub async fn directory_route(
         );
     }
 
+    let region_breadcrumbs = match fetch_unified_agency(
+        pool.get_ref().as_ref(),
+        &unified_agency_id,
+    )
+    .await
+    {
+        Ok(Some(agency)) => agency_region_breadcrumbs(
+            store.get_ref().as_ref(),
+            &agency,
+            &locale,
+        ),
+        Ok(None) => Vec::new(),
+        Err(error) => {
+            eprintln!("directory route unified agency query failed: {error}");
+            return json_error(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "could not query unified agency geography",
+            );
+        }
+    };
+
     let direction_patterns =
         match fetch_direction_patterns(pool.get_ref().as_ref(), &chateau, &route_id).await {
             Ok(patterns) => patterns,
@@ -1377,6 +1468,7 @@ pub async fn directory_route(
                 name: agency_name,
                 path: agency_path(&locale, &unified_agency_id),
             },
+            region_breadcrumbs,
             direction_patterns,
             alternate_locales: stable_locale_links(&store.geography, |alternate_locale| {
                 route_path(alternate_locale, &unified_agency_id, &route_slug)
