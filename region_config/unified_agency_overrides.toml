@@ -45,3 +45,8 @@ unified_agency_id = "Trenitalia"
 name = "Trenitalia"
 primary_level_0 = "IT"
 is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "De_Lijn"
+primary_level_0 = "BE"
+is_national_railway_operator = false

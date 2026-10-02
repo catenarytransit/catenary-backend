@@ -9,3 +9,10 @@
 # primary_region = "DE"
 
 schema_version = 1
+
+[[agency]]
+unified_agency_id = "De_Lijn"
+label = "De Lijn"
+mode = "augment"
+regions = ["BE"]
+primary_region = "BE"
