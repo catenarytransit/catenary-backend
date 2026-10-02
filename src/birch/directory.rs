@@ -1411,17 +1411,10 @@ pub async fn directory_route(
         );
     }
 
-    let region_breadcrumbs = match fetch_unified_agency(
-        pool.get_ref().as_ref(),
-        &unified_agency_id,
-    )
-    .await
+    let region_breadcrumbs = match fetch_unified_agency(pool.get_ref().as_ref(), &unified_agency_id)
+        .await
     {
-        Ok(Some(agency)) => agency_region_breadcrumbs(
-            store.get_ref().as_ref(),
-            &agency,
-            &locale,
-        ),
+        Ok(Some(agency)) => agency_region_breadcrumbs(store.get_ref().as_ref(), &agency, &locale),
         Ok(None) => Vec::new(),
         Err(error) => {
             eprintln!("directory route unified agency query failed: {error}");
