@@ -50,3 +50,58 @@ is_national_railway_operator = true
 unified_agency_id = "De_Lijn"
 primary_level_0 = "BE"
 is_national_railway_operator = false
+
+[[agency]]
+unified_agency_id = "NMBS_SNCB"
+primary_level_0 = "BE"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "NS"
+primary_level_0 = "NL"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "DSB"
+primary_level_0 = "DK"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "RENFE_OPERADORA"
+primary_level_0 = "ES"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "Renfe_Cercanias"
+primary_level_0 = "ES"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "OEBB_Personenverkehr_AG_Kundenservice"
+primary_level_0 = "AT"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "PKP_Intercity"
+primary_level_0 = "PL"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "MÁV"
+primary_level_0 = "HU"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "Vy"
+primary_level_0 = "NO"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "VR"
+primary_level_0 = "FI"
+is_national_railway_operator = true
+
+[[agency]]
+unified_agency_id = "CP_Comboios_de_Portugal"
+primary_level_0 = "PT"
+is_national_railway_operator = true
