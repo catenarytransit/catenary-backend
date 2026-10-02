@@ -449,14 +449,18 @@ fn agency_region_breadcrumbs(
     agency: &UnifiedAgencyDb,
     locale: &str,
 ) -> Vec<RegionLink> {
-    [
-        primary_region_id_at_depth(store, agency, 0),
-        primary_region_id_at_depth(store, agency, 1),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|id| build_region_link(&store.geography, &id, locale))
-    .collect()
+    let country_id = primary_region_id_at_depth(store, agency, 0);
+    let level_1_id = primary_region_id_at_depth(store, agency, 1).filter(|region_id| {
+        country_id.as_deref().map_or(true, |country_id| {
+            region_is_in_country(&store.geography, region_id, country_id)
+        })
+    });
+
+    [country_id, level_1_id]
+        .into_iter()
+        .flatten()
+        .filter_map(|id| build_region_link(&store.geography, &id, locale))
+        .collect()
 }
 
 fn region_is_in_country(index: &GeographyIndex, region_id: &str, country_id: &str) -> bool {
