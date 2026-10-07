@@ -3,6 +3,7 @@ use catenary::postgres_tools::make_async_pool;
 use clap::Parser;
 use log::{debug, error, info, warn};
 use std::path::PathBuf;
+use std::time::Instant;
 
 mod corridor;
 mod export;
@@ -53,10 +54,17 @@ struct Args {
 
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
-    env_logger::init();
+    // LOOM prints progress information while it runs. Do the same by default
+    // instead of requiring callers to remember RUST_LOG=info.
+    //
+    // RUST_LOG still overrides this, e.g. RUST_LOG=debug or
+    // RUST_LOG=globeflower=trace.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+    let total_started = Instant::now();
     info!("Globeflower starting for region: {}", args.region);
+    info!("Output directory: {:?}", args.output_dir);
 
     // Parse region
     let region: Region = args
@@ -70,8 +78,9 @@ fn main() -> Result<()> {
     );
 
     // 1. Load OSM data
+    let stage_started = Instant::now();
     let osm_path = args.osm_dir.join(region.expected_pbf_name());
-    info!("Loading OSM from {:?}", osm_path);
+    info!("[1/6] Reading OSM graph from {:?}...", osm_path);
 
     if !osm_path.exists() {
         error!("OSM file not found: {:?}", osm_path);
@@ -86,9 +95,12 @@ fn main() -> Result<()> {
         osm_index.ways.len(),
         osm_index.edges.len()
     );
+    info!("[1/6] OSM graph ready in {:.2?}", stage_started.elapsed());
 
     // 2. Load GTFS data & Map-Match to OSM (Pre-pass)
     // We do this BEFORE corridor building so we can use route info for gating merges.
+    let stage_started = Instant::now();
+    info!("[2/6] Loading GTFS and map-matching routes...");
     let (lines, stop_clusters, edge_to_routes, matches) = if args.osm_only {
         info!("OSM-only mode: skipping GTFS database queries");
         (
@@ -100,8 +112,17 @@ fn main() -> Result<()> {
     } else {
         load_and_match_gtfs_to_osm(&config, &osm_index)?
     };
+    info!(
+        "[2/6] GTFS/map matching ready in {:.2?}: {} lines, {} stop clusters, {} matched line-shapes",
+        stage_started.elapsed(),
+        lines.len(),
+        stop_clusters.len(),
+        matches.len()
+    );
 
     // 3. Build corridor clusters to disk (streaming)
+    let stage_started = Instant::now();
+    info!("[3/6] Building corridor clusters...");
     let corridor_config = corridor::CorridorConfig {
         max_hausdorff_m: 25.0,
         max_angle_diff_deg: 15.0,
@@ -121,12 +142,15 @@ fn main() -> Result<()> {
     let tile_size_deg = 0.1; // ~11km tiles
     let disk_index = corridor_builder.build_corridors_to_disk(&tile_dir, tile_size_deg)?;
     info!(
-        "Built {} corridor clusters across {} tiles",
+        "[3/6] Built {} corridor clusters across {} tiles in {:.2?}",
         disk_index.total_corridors,
-        disk_index.tiles.len()
+        disk_index.tiles.len(),
+        stage_started.elapsed()
     );
 
     // 4. Build support graph (streaming from disk)
+    let stage_started = Instant::now();
+    info!("[4/6] Building support graph...");
     let support_config = support_graph::SupportGraphConfig {
         sample_interval_m: 25.0,
         merge_threshold_m: 50.0,
@@ -168,13 +192,15 @@ fn main() -> Result<()> {
         warn!("Failed to clean up corridor tiles: {}", e);
     }
     info!(
-        "Support graph: {} nodes, {} edges",
+        "[4/6] Support graph ready in {:.2?}: {} nodes, {} edges",
+        stage_started.elapsed(),
         support_graph.nodes.len(),
         support_graph.edges.len()
     );
 
     // Insert stations
-    info!("Inserting stations...");
+    let stage_started = Instant::now();
+    info!("[5/6] Inserting stations and inferring turn restrictions...");
     let station_config = StationConfig::default();
     let mut station_handler = StationHandler::new(&mut support_graph, station_config);
     let inserted_stations = station_handler.insert_stations(&stop_clusters);
@@ -225,8 +251,14 @@ fn main() -> Result<()> {
         // Infer restrictions
         restrictions.record_from_matches(&matches, &atomic_to_support, &support_graph);
     }
+    info!(
+        "[5/6] Stations/restrictions ready in {:.2?}",
+        stage_started.elapsed()
+    );
 
     // Export outputs
+    let stage_started = Instant::now();
+    info!("[6/6] Writing output files...");
     std::fs::create_dir_all(&args.output_dir)?;
 
     // GeoJSON export
@@ -239,7 +271,11 @@ fn main() -> Result<()> {
     export::export_binary(&support_graph, &restrictions, &binary_path)?;
     info!("Exported binary to {:?}", binary_path);
 
-    info!("Globeflower complete!");
+    info!("[6/6] Output files written in {:.2?}", stage_started.elapsed());
+    info!(
+        "Globeflower complete in {:.2?}",
+        total_started.elapsed()
+    );
     Ok(())
 }
 
@@ -299,6 +335,7 @@ fn load_and_match_gtfs_to_osm(
     let mut processed = 0;
     let total = shapes.len();
 
+    info!("Map-matching {} GTFS shapes...", total);
     for shape in shapes {
         let mode = match shape.route_type {
             0 => crate::osm_types::RailMode::Tram,
@@ -373,10 +410,19 @@ fn load_and_match_gtfs_to_osm(
 
         processed += 1;
         if processed % 100 == 0 {
-            info!("Matched {}/{} shapes", processed, total);
+            let percent = if total == 0 {
+                100.0
+            } else {
+                (processed as f64 / total as f64) * 100.0
+            };
+            info!(
+                "Map-matching: {}/{} shapes ({:.1}%)",
+                processed, total, percent
+            );
         }
     }
 
+    info!("Map-matching complete: {}/{} shapes processed", processed, total);
     Ok((lines, stop_clusters, edge_to_routes, matches))
 }
 
