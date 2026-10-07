@@ -9,6 +9,7 @@ use catenary::graph_formats::{
 use geojson::{Feature, FeatureCollection, Geometry, JsonObject, JsonValue};
 use log::info;
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -24,6 +25,24 @@ pub fn export_geojson(
 
     let mut features = Vec::new();
 
+    // LOOM line graphs do not contain infrastructure-only edges.  Keep the same
+    // invariant at the output boundary as a safety net: only serialize support
+    // edges that actually carry at least one GTFS line, and only serialize nodes
+    // incident to those edges.
+    let active_edges: Vec<&SupportEdge> = graph
+        .edges
+        .values()
+        .filter(|edge| !edge.lines.is_empty())
+        .collect();
+    let active_nodes: HashSet<SupportNodeId> = active_edges
+        .iter()
+        .flat_map(|edge| [edge.from, edge.to])
+        .collect();
+    let used_line_ids: HashSet<&LineId> = active_edges
+        .iter()
+        .flat_map(|edge| edge.lines.iter().map(|occ| &occ.line))
+        .collect();
+
     // Build line lookup
     let line_map: std::collections::HashMap<&LineId, &Line> =
         lines.iter().map(|l| (&l.id, l)).collect();
@@ -31,6 +50,7 @@ pub fn export_geojson(
     // Feature Collection level properties (lines array)
     let lines_array: Vec<JsonValue> = lines
         .iter()
+        .filter(|line| used_line_ids.contains(&line.id))
         .map(|line| {
             json!({
                 "id": line.id.to_string(),
@@ -43,6 +63,10 @@ pub fn export_geojson(
 
     // Export nodes as Point features
     for (_, node) in &graph.nodes {
+        if !active_nodes.contains(&node.id) {
+            continue;
+        }
+
         let mut props = JsonObject::new();
         props.insert("id".to_string(), json!(node.id.0.to_string()));
 
@@ -84,7 +108,7 @@ pub fn export_geojson(
     }
 
     // Export edges as LineString features
-    for (_, edge) in &graph.edges {
+    for edge in active_edges {
         let mut props = JsonObject::new();
         props.insert("from".to_string(), json!(edge.from.0.to_string()));
         props.insert("to".to_string(), json!(edge.to.0.to_string()));
@@ -161,7 +185,18 @@ pub fn export_binary(
     let mut station_to_cluster: std::collections::HashMap<String, usize> =
         std::collections::HashMap::new();
 
+    let active_nodes: HashSet<SupportNodeId> = graph
+        .edges
+        .values()
+        .filter(|edge| !edge.lines.is_empty())
+        .flat_map(|edge| [edge.from, edge.to])
+        .collect();
+
     for (_, node) in &graph.nodes {
+        if !active_nodes.contains(&node.id) {
+            continue;
+        }
+
         if let (Some(station_id), Some(label)) = (&node.station_id, &node.station_label) {
             if !station_to_cluster.contains_key(station_id) {
                 let cluster_id = clusters.len();
@@ -191,7 +226,12 @@ pub fn export_binary(
     }
 
     // Convert edges
-    for (idx, (edge_id, edge)) in graph.edges.iter().enumerate() {
+    for (edge_id, edge) in graph
+        .edges
+        .iter()
+        .filter(|(_, edge)| !edge.lines.is_empty())
+    {
+        let idx = edges.len();
         support_edge_id_to_index.insert(*edge_id, idx);
 
         let from_node_id = convert_support_node_to_catenary(edge.from, &graph.nodes);

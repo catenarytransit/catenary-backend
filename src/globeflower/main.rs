@@ -271,11 +271,11 @@ fn main() -> Result<()> {
     export::export_binary(&support_graph, &restrictions, &binary_path)?;
     info!("Exported binary to {:?}", binary_path);
 
-    info!("[6/6] Output files written in {:.2?}", stage_started.elapsed());
     info!(
-        "Globeflower complete in {:.2?}",
-        total_started.elapsed()
+        "[6/6] Output files written in {:.2?}",
+        stage_started.elapsed()
     );
+    info!("Globeflower complete in {:.2?}", total_started.elapsed());
     Ok(())
 }
 
@@ -422,7 +422,10 @@ fn load_and_match_gtfs_to_osm(
         }
     }
 
-    info!("Map-matching complete: {}/{} shapes processed", processed, total);
+    info!(
+        "Map-matching complete: {}/{} shapes processed",
+        processed, total
+    );
     Ok((lines, stop_clusters, edge_to_routes, matches))
 }
 

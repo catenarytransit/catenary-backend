@@ -159,8 +159,23 @@ impl<'a> CorridorBuilder<'a> {
         // 1. Assign edges to tiles (with Halo)
         let halo = 0.002; // ~200m halo
         let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        let mut eligible_edges = 0usize;
 
         for (i, edge) in self.index.edges.iter().enumerate() {
+            // When GTFS route provenance is available, the corridor graph must be
+            // transit-derived rather than an OSM railway graph.  In particular,
+            // railway=rail contains a huge amount of freight-only infrastructure.
+            //
+            // LOOM's line graph has the same invariant: an edge with no lines is
+            // not part of the graph.  Keep OSM-only behaviour unchanged by only
+            // applying this filter when edge_to_routes was supplied.
+            if let Some(route_map) = self.edge_to_routes {
+                if !matches!(route_map.get(&edge.id), Some(routes) if !routes.is_empty()) {
+                    continue;
+                }
+            }
+
+            eligible_edges += 1;
             let (min_x, min_y, max_x, max_y) = Self::bbox_geo(&edge.geometry);
 
             // Grid range
@@ -175,6 +190,12 @@ impl<'a> CorridorBuilder<'a> {
                 }
             }
         }
+
+        info!(
+            "Corridor input: {} / {} OSM atomic edges are covered by selected GTFS lines",
+            eligible_edges,
+            self.index.edges.len()
+        );
 
         let mut next_id = 0u64;
         let mut written = 0usize;
