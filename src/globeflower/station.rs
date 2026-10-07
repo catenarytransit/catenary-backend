@@ -47,14 +47,55 @@ pub struct StationHandler<'a> {
     graph: &'a mut SupportGraph,
     config: StationConfig,
     next_station_id: u64,
+    edge_tree: rstar::RTree<
+        rstar::primitives::GeomWithData<rstar::primitives::Rectangle<[f64; 2]>, SupportEdgeId>,
+    >,
+    node_tree: rstar::RTree<rstar::primitives::GeomWithData<[f64; 2], (SupportNodeId, ZClass)>>,
 }
 
 impl<'a> StationHandler<'a> {
     pub fn new(graph: &'a mut SupportGraph, config: StationConfig) -> Self {
+        let edge_tree = rstar::RTree::bulk_load(
+            graph
+                .edges
+                .values()
+                .filter_map(|edge| {
+                    let first = edge.geometry.first()?;
+                    let mut min = [first.0, first.1];
+                    let mut max = min;
+                    for &(lon, lat) in &edge.geometry[1..] {
+                        min[0] = min[0].min(lon);
+                        min[1] = min[1].min(lat);
+                        max[0] = max[0].max(lon);
+                        max[1] = max[1].max(lat);
+                    }
+                    Some(rstar::primitives::GeomWithData::new(
+                        rstar::primitives::Rectangle::from_corners(min, max),
+                        edge.id,
+                    ))
+                })
+                .collect(),
+        );
+
+        let node_tree = rstar::RTree::bulk_load(
+            graph
+                .nodes
+                .values()
+                .map(|node| {
+                    rstar::primitives::GeomWithData::new(
+                        [node.position.0, node.position.1],
+                        (node.id, node.z_class),
+                    )
+                })
+                .collect(),
+        );
+
         Self {
             graph,
             config,
             next_station_id: 0,
+            edge_tree,
+            node_tree,
         }
     }
 
@@ -132,20 +173,20 @@ impl<'a> StationHandler<'a> {
 
     /// Find edges near a point
     fn find_nearby_edges(&self, center: (f64, f64)) -> Vec<SupportEdgeId> {
-        let threshold_deg = self.config.snap_radius_m / 111320.0;
+        let threshold_deg = self.config.snap_radius_m / 111_320.0;
+        let envelope = rstar::AABB::from_corners(
+            [center.0 - threshold_deg, center.1 - threshold_deg],
+            [center.0 + threshold_deg, center.1 + threshold_deg],
+        );
 
-        self.graph
-            .edges
-            .iter()
-            .filter(|(_, edge)| {
-                // Check if any point on edge geometry is within radius
-                edge.geometry.iter().any(|&(lon, lat)| {
-                    let dx = (lon - center.0).abs();
-                    let dy = (lat - center.1).abs();
-                    dx <= threshold_deg && dy <= threshold_deg
-                })
+        self.edge_tree
+            .locate_in_envelope(&envelope)
+            .filter_map(|entry| {
+                let edge = self.graph.edges.get(&entry.data)?;
+                let (_, distance, _) =
+                    geometry_utils::project_point_to_polyline(center, &edge.geometry)?;
+                (distance <= self.config.snap_radius_m).then_some(entry.data)
             })
-            .map(|(id, _)| *id)
             .collect()
     }
 
@@ -226,20 +267,26 @@ impl<'a> StationHandler<'a> {
         let threshold_deg = self.config.snap_radius_m / 111320.0;
 
         let mut best_node: Option<(SupportNodeId, f64)> = None;
+        let envelope = rstar::AABB::from_corners(
+            [center.0 - threshold_deg, center.1 - threshold_deg],
+            [center.0 + threshold_deg, center.1 + threshold_deg],
+        );
 
-        for (id, node) in &self.graph.nodes {
-            if node.z_class != z_class {
+        for candidate in self.node_tree.locate_in_envelope(&envelope) {
+            let (id, candidate_z) = candidate.data;
+            if candidate_z != z_class {
                 continue;
             }
 
-            let dx = (node.position.0 - center.0).abs();
-            let dy = (node.position.1 - center.1).abs();
-
-            if dx <= threshold_deg && dy <= threshold_deg {
-                let dist = geometry_utils::polyline_length(&[center, node.position]);
-                if best_node.map_or(true, |(_, d)| dist < d) {
-                    best_node = Some((*id, dist));
-                }
+            let node = match self.graph.nodes.get(&id) {
+                Some(node) => node,
+                None => continue,
+            };
+            let dist = geometry_utils::polyline_length(&[center, node.position]);
+            if dist <= self.config.snap_radius_m
+                && best_node.map_or(true, |(_, best_dist)| dist < best_dist)
+            {
+                best_node = Some((id, dist));
             }
         }
 

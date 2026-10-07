@@ -96,6 +96,8 @@ pub struct MapMatcher<'a> {
     index: &'a OsmRailIndex,
     config: MatchConfig,
     pathfinder: std::cell::RefCell<PathFinder>,
+    transition_dist_cache:
+        std::cell::RefCell<std::collections::HashMap<(AtomicEdgeId, AtomicEdgeId), f64>>,
 }
 
 impl<'a> MapMatcher<'a> {
@@ -104,6 +106,7 @@ impl<'a> MapMatcher<'a> {
             index,
             config,
             pathfinder: std::cell::RefCell::new(PathFinder::new()),
+            transition_dist_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -370,11 +373,21 @@ impl<'a> MapMatcher<'a> {
         }
     }
 
-    /// Wrapper for find_path that returns distance and uses cached context
+    /// Return the shortest transition distance between two matched edges.
     fn find_path_dist_cached(&self, from: AtomicEdgeId, to: AtomicEdgeId) -> f64 {
         if from == to {
             return 0.0;
         }
+
+        if let Some(distance) = self
+            .transition_dist_cache
+            .borrow()
+            .get(&(from, to))
+            .copied()
+        {
+            return distance;
+        }
+
         let from_idx = match self.index.edge_index.get(&from) {
             Some(i) => *i,
             None => return f64::INFINITY,
@@ -387,18 +400,40 @@ impl<'a> MapMatcher<'a> {
         let f_edge = &self.index.edges[from_idx];
         let t_edge = &self.index.edges[to_idx];
 
-        if f_edge.to == t_edge.from || f_edge.to == t_edge.to {
-            return 0.0;
-        }
-        if f_edge.from == t_edge.from || f_edge.from == t_edge.to {
-            return 0.0;
-        }
-
-        if let Some((_, cost)) = self.find_path_internal(from, to, true) {
-            cost
+        let distance = if f_edge.to == t_edge.from
+            || f_edge.to == t_edge.to
+            || f_edge.from == t_edge.from
+            || f_edge.from == t_edge.to
+        {
+            0.0
         } else {
-            f64::INFINITY
-        }
+            let mut lower_bound = f64::INFINITY;
+            for f_node in [f_edge.from, f_edge.to] {
+                let Some(f_pos) = self.index.node_position(f_node) else {
+                    continue;
+                };
+                for t_node in [t_edge.from, t_edge.to] {
+                    let Some(t_pos) = self.index.node_position(t_node) else {
+                        continue;
+                    };
+                    lower_bound = lower_bound.min(geometry_utils::polyline_length(&[f_pos, t_pos]));
+                }
+            }
+
+            if lower_bound > self.config.max_gap_m {
+                f64::INFINITY
+            } else {
+                self.find_path_internal(from, to, true)
+                    .map(|(_, cost)| cost)
+                    .filter(|cost| *cost <= self.config.max_gap_m)
+                    .unwrap_or(f64::INFINITY)
+            }
+        };
+
+        self.transition_dist_cache
+            .borrow_mut()
+            .insert((from, to), distance);
+        distance
     }
 
     /// Find shortest path between two edges using A* on the track graph
@@ -481,10 +516,15 @@ impl<'a> MapMatcher<'a> {
             ..
         } = &mut *pf;
 
+        let start_h = heuristic(start);
+        if start_h > self.config.max_gap_m {
+            return None;
+        }
+
         g_score.insert(start, 0.0);
         open.push(State {
             node: start,
-            cost: heuristic(start),
+            cost: start_h,
         });
 
         // Reduced max iterations for performance
@@ -518,6 +558,11 @@ impl<'a> MapMatcher<'a> {
             }
 
             let current_g = *g_score.get(&node).unwrap_or(&f64::INFINITY);
+            if current_g > self.config.max_gap_m
+                || current_g + heuristic(node) > self.config.max_gap_m
+            {
+                continue;
+            }
 
             for edge in self.index.edges_at_node(node) {
                 let neighbor = edge.other_end(node)?;
@@ -529,6 +574,12 @@ impl<'a> MapMatcher<'a> {
                 }
 
                 let tentative_g = current_g + edge_cost;
+                if tentative_g > self.config.max_gap_m
+                    || tentative_g + heuristic(neighbor) > self.config.max_gap_m
+                {
+                    continue;
+                }
+
                 let neighbor_g = *g_score.get(&neighbor).unwrap_or(&f64::INFINITY);
 
                 if tentative_g < neighbor_g {

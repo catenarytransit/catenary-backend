@@ -300,25 +300,24 @@ fn load_and_match_gtfs_to_osm(
     let total = shapes.len();
 
     for shape in shapes {
+        let mode = match shape.route_type {
+            0 => crate::osm_types::RailMode::Tram,
+            1 => crate::osm_types::RailMode::Subway,
+            2 => crate::osm_types::RailMode::Rail,
+            5 | 7 => crate::osm_types::RailMode::Funicular,
+            12 => crate::osm_types::RailMode::Monorail,
+            _ => crate::osm_types::RailMode::Rail,
+        };
+
+        let mut eligible_lines = Vec::new();
+
         for route_id in &shape.route_ids {
             let line_id = LineId::new(shape.chateau.clone(), route_id.clone());
 
-            // Mode mapping
-            let mode = match shape.route_type {
-                0 => crate::osm_types::RailMode::Tram,
-                1 => crate::osm_types::RailMode::Subway,
-                2 => crate::osm_types::RailMode::Rail,
-                5 | 7 => crate::osm_types::RailMode::Funicular,
-                12 => crate::osm_types::RailMode::Monorail,
-                _ => crate::osm_types::RailMode::Rail,
-            };
-
-            // Rail filtering logic (exclude general rail, allow exceptions)
             if mode == crate::osm_types::RailMode::Rail {
                 let mut allowed = false;
                 if let Some(line) = line_map.get(&line_id) {
                     let c = line_id.chateau.as_str();
-                    // Check simple chateau exceptions
                     if c == "metrolinktrains"
                         || c == "exo~reseaudetransportmetropolitain"
                         || c == "gotransit"
@@ -338,15 +337,11 @@ fn load_and_match_gtfs_to_osm(
                         || c == "translink-queensland-au"
                     {
                         allowed = true;
-                    }
-                    // Check Deutschland / Switzerland
-                    else if (c == "deutschland" || c == "vbb" || c == "schweiz")
+                    } else if (c == "deutschland" || c == "vbb" || c == "schweiz")
                         && line.label.starts_with('S')
                     {
                         allowed = true;
-                    }
-                    // Check London Overground
-                    else if c == "nationalrailuk" && line.agency_id.as_deref() == Some("LO") {
+                    } else if c == "nationalrailuk" && line.agency_id.as_deref() == Some("LO") {
                         allowed = true;
                     }
                 }
@@ -356,16 +351,26 @@ fn load_and_match_gtfs_to_osm(
                 }
             }
 
-            if let Some(matched) = matcher.match_shape(line_id.clone(), &shape.geometry, mode) {
-                for edge_id in &matched.edges {
-                    edge_to_routes
-                        .entry(*edge_id)
-                        .or_default()
-                        .push(line_id.clone());
+            eligible_lines.push(line_id);
+        }
+
+        if let Some(representative) = eligible_lines.first().cloned() {
+            if let Some(template) = matcher.match_shape(representative, &shape.geometry, mode) {
+                for line_id in eligible_lines {
+                    for edge_id in &template.edges {
+                        edge_to_routes
+                            .entry(*edge_id)
+                            .or_default()
+                            .push(line_id.clone());
+                    }
+
+                    let mut matched = template.clone();
+                    matched.line_id = line_id;
+                    matches.push(matched);
                 }
-                matches.push(matched);
             }
         }
+
         processed += 1;
         if processed % 100 == 0 {
             info!("Matched {}/{} shapes", processed, total);
@@ -377,50 +382,100 @@ fn load_and_match_gtfs_to_osm(
 
 /// Cluster GTFS stops by proximity
 fn cluster_gtfs_stops(stops: &[gtfs_loader::GtfsStop]) -> Vec<station::StopCluster> {
-    // Simple clustering: group stops within 100m of each other
-    let mut clusters: Vec<station::StopCluster> = Vec::new();
-    let mut assigned: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for (i, stop) in stops.iter().enumerate() {
-        if assigned.contains(&i) {
-            continue;
-        }
-
-        let mut cluster_stops = vec![i];
-        assigned.insert(i);
-
-        // Find nearby stops
-        for (j, other) in stops.iter().enumerate().skip(i + 1) {
-            if assigned.contains(&j) {
-                continue;
-            }
-            let dist = geometry_utils::polyline_length(&[stop.position, other.position]);
-            if dist < 100.0 {
-                cluster_stops.push(j);
-                assigned.insert(j);
-            }
-        }
-
-        // Calculate centroid
-        let sum: (f64, f64) = cluster_stops
-            .iter()
-            .map(|&idx| stops[idx].position)
-            .fold((0.0, 0.0), |(a, b), (x, y)| (a + x, b + y));
-        let n = cluster_stops.len() as f64;
-        let centroid = (sum.0 / n, sum.1 / n);
-
-        // Use first stop's name as cluster name
-        let name = stops[cluster_stops[0]].name.clone();
-
-        clusters.push(station::StopCluster {
-            centroid,
-            label: name.unwrap_or_else(|| format!("Cluster {}", clusters.len())),
-            stop_ids: cluster_stops
-                .iter()
-                .map(|&idx| stops[idx].stop_id.clone())
-                .collect(),
-        });
+    if stops.is_empty() {
+        return Vec::new();
     }
 
-    clusters
+    let tree = rstar::RTree::bulk_load(
+        stops
+            .iter()
+            .enumerate()
+            .map(|(idx, stop)| {
+                rstar::primitives::GeomWithData::new([stop.position.0, stop.position.1], idx)
+            })
+            .collect(),
+    );
+
+    let mut parent: Vec<usize> = (0..stops.len()).collect();
+    let mut rank = vec![0_u8; stops.len()];
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            let root = find(parent, parent[x]);
+            parent[x] = root;
+        }
+        parent[x]
+    }
+
+    fn union(parent: &mut [usize], rank: &mut [u8], a: usize, b: usize) {
+        let mut ra = find(parent, a);
+        let mut rb = find(parent, b);
+        if ra == rb {
+            return;
+        }
+        if rank[ra] < rank[rb] {
+            std::mem::swap(&mut ra, &mut rb);
+        }
+        parent[rb] = ra;
+        if rank[ra] == rank[rb] {
+            rank[ra] += 1;
+        }
+    }
+
+    const CLUSTER_RADIUS_M: f64 = 100.0;
+    let radius_deg = CLUSTER_RADIUS_M / 111_320.0;
+
+    for (i, stop) in stops.iter().enumerate() {
+        let envelope = rstar::AABB::from_corners(
+            [stop.position.0 - radius_deg, stop.position.1 - radius_deg],
+            [stop.position.0 + radius_deg, stop.position.1 + radius_deg],
+        );
+
+        for candidate in tree.locate_in_envelope(&envelope) {
+            let j = candidate.data;
+            if j <= i {
+                continue;
+            }
+
+            if geometry_utils::polyline_length(&[stop.position, stops[j].position])
+                < CLUSTER_RADIUS_M
+            {
+                union(&mut parent, &mut rank, i, j);
+            }
+        }
+    }
+
+    let mut grouped: std::collections::HashMap<usize, Vec<usize>> =
+        std::collections::HashMap::new();
+    for i in 0..stops.len() {
+        let root = find(&mut parent, i);
+        grouped.entry(root).or_default().push(i);
+    }
+
+    let mut groups: Vec<Vec<usize>> = grouped.into_values().collect();
+    groups.sort_by_key(|members| members[0]);
+
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(cluster_idx, members)| {
+            let sum = members
+                .iter()
+                .map(|&idx| stops[idx].position)
+                .fold((0.0, 0.0), |(a, b), (x, y)| (a + x, b + y));
+            let n = members.len() as f64;
+
+            station::StopCluster {
+                centroid: (sum.0 / n, sum.1 / n),
+                label: stops[members[0]]
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("Cluster {}", cluster_idx)),
+                stop_ids: members
+                    .iter()
+                    .map(|&idx| stops[idx].stop_id.clone())
+                    .collect(),
+            }
+        })
+        .collect()
 }
