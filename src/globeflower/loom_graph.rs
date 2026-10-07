@@ -108,6 +108,81 @@ impl Graph {
             }
         }
     }
+
+    /// Append an already-topologized disconnected component while remapping all
+    /// graph-local IDs. This lets Globeflower release each raw GTFS component
+    /// before loading the next one instead of running topo on a continental graph.
+    pub fn append(&mut self, other: Graph) {
+        let node_offset = self.nodes.len();
+        let edge_offset = self.edges.len();
+        let line_offset = self.lines.len();
+        let original_offset = self
+            .edges
+            .iter()
+            .flatten()
+            .flat_map(|edge| edge.originals.iter().copied())
+            .max()
+            .map_or(0, |id| id + 1);
+
+        self.lines.extend(other.lines);
+
+        for node in other.nodes {
+            self.nodes.push(node.map(|mut node| {
+                node.id += node_offset;
+                node.not_served = node
+                    .not_served
+                    .into_iter()
+                    .map(|line| line + line_offset)
+                    .collect();
+                node.adj = node
+                    .adj
+                    .into_iter()
+                    .map(|edge| edge + edge_offset)
+                    .collect();
+                node.conn_exc = node
+                    .conn_exc
+                    .into_iter()
+                    .map(|(line, from_map)| {
+                        (
+                            line + line_offset,
+                            from_map
+                                .into_iter()
+                                .map(|(from, tos)| {
+                                    (
+                                        from + edge_offset,
+                                        tos.into_iter().map(|to| to + edge_offset).collect(),
+                                    )
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                node
+            }));
+        }
+
+        for edge in other.edges {
+            self.edges.push(edge.map(|mut edge| {
+                edge.id += edge_offset;
+                edge.a += node_offset;
+                edge.b += node_offset;
+                edge.lines = edge
+                    .lines
+                    .into_iter()
+                    .map(|occ| LineOcc {
+                        line: occ.line + line_offset,
+                        direction: occ.direction.map(|node| node + node_offset),
+                    })
+                    .collect();
+                edge.originals = edge
+                    .originals
+                    .into_iter()
+                    .map(|id| id + original_offset)
+                    .collect();
+                edge
+            }));
+        }
+    }
 }
 
 pub fn haversine_m(a: Point, b: Point) -> f64 {
