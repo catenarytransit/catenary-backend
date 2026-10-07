@@ -68,8 +68,12 @@ impl Graph {
     pub fn add_node(&mut self, pos: Point) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(Some(Node {
-            id, pos, stops: vec![], not_served: BTreeSet::new(),
-            adj: BTreeSet::new(), conn_exc: BTreeMap::new(),
+            id,
+            pos,
+            stops: vec![],
+            not_served: BTreeSet::new(),
+            adj: BTreeSet::new(),
+            conn_exc: BTreeMap::new(),
         }));
         id
     }
@@ -77,7 +81,12 @@ impl Graph {
     pub fn add_edge(&mut self, a: NodeId, b: NodeId, geom: Vec<Point>) -> EdgeId {
         let id = self.edges.len();
         self.edges.push(Some(Edge {
-            id, a, b, geom, lines: BTreeSet::new(), originals: BTreeSet::new(),
+            id,
+            a,
+            b,
+            geom,
+            lines: BTreeSet::new(),
+            originals: BTreeSet::new(),
         }));
         self.nodes[a].as_mut().unwrap().adj.insert(id);
         self.nodes[b].as_mut().unwrap().adj.insert(id);
@@ -91,8 +100,12 @@ impl Graph {
 
     pub fn remove_edge(&mut self, eid: EdgeId) {
         if let Some(e) = self.edges[eid].take() {
-            if let Some(n) = self.nodes[e.a].as_mut() { n.adj.remove(&eid); }
-            if let Some(n) = self.nodes[e.b].as_mut() { n.adj.remove(&eid); }
+            if let Some(n) = self.nodes[e.a].as_mut() {
+                n.adj.remove(&eid);
+            }
+            if let Some(n) = self.nodes[e.b].as_mut() {
+                n.adj.remove(&eid);
+            }
         }
     }
 }
@@ -101,10 +114,10 @@ pub fn haversine_m(a: Point, b: Point) -> f64 {
     let r = 6_371_008.8_f64;
     let p1 = a.lat.to_radians();
     let p2 = b.lat.to_radians();
-    let dp = (b.lat-a.lat).to_radians();
-    let dl = (b.lon-a.lon).to_radians();
-    let h = (dp/2.0).sin().powi(2) + p1.cos()*p2.cos()*(dl/2.0).sin().powi(2);
-    2.0*r*h.sqrt().asin()
+    let dp = (b.lat - a.lat).to_radians();
+    let dl = (b.lon - a.lon).to_radians();
+    let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
+    2.0 * r * h.sqrt().asin()
 }
 
 pub fn polyline_len(g: &[Point]) -> f64 {
@@ -112,16 +125,23 @@ pub fn polyline_len(g: &[Point]) -> f64 {
 }
 
 pub fn lerp(a: Point, b: Point, t: f64) -> Point {
-    Point { lon: a.lon + (b.lon-a.lon)*t, lat: a.lat + (b.lat-a.lat)*t }
+    Point {
+        lon: a.lon + (b.lon - a.lon) * t,
+        lat: a.lat + (b.lat - a.lat) * t,
+    }
 }
 
 pub fn densify(g: &[Point], step_m: f64) -> Vec<Point> {
-    if g.len() < 2 { return g.to_vec(); }
+    if g.len() < 2 {
+        return g.to_vec();
+    }
     let mut out = vec![g[0]];
     for w in g.windows(2) {
         let d = haversine_m(w[0], w[1]);
         let n = (d / step_m).ceil().max(1.0) as usize;
-        for i in 1..=n { out.push(lerp(w[0], w[1], i as f64/n as f64)); }
+        for i in 1..=n {
+            out.push(lerp(w[0], w[1], i as f64 / n as f64));
+        }
     }
     out
 }
@@ -130,31 +150,43 @@ pub fn project_on_segment(p: Point, a: Point, b: Point) -> (Point, f64) {
     let lat0 = p.lat.to_radians();
     let sx = 111_320.0 * lat0.cos();
     let sy = 110_540.0;
-    let ax=(a.lon-p.lon)*sx; let ay=(a.lat-p.lat)*sy;
-    let bx=(b.lon-p.lon)*sx; let by=(b.lat-p.lat)*sy;
-    let vx=bx-ax; let vy=by-ay;
-    let den=vx*vx+vy*vy;
-    let t=if den == 0.0 {0.0} else { (-(ax*vx+ay*vy)/den).clamp(0.0,1.0) };
-    (lerp(a,b,t), t)
+    let ax = (a.lon - p.lon) * sx;
+    let ay = (a.lat - p.lat) * sy;
+    let bx = (b.lon - p.lon) * sx;
+    let by = (b.lat - p.lat) * sy;
+    let vx = bx - ax;
+    let vy = by - ay;
+    let den = vx * vx + vy * vy;
+    let t = if den == 0.0 {
+        0.0
+    } else {
+        (-(ax * vx + ay * vy) / den).clamp(0.0, 1.0)
+    };
+    (lerp(a, b, t), t)
 }
 
 pub fn project_on_polyline(p: Point, g: &[Point]) -> (Point, f64, f64) {
-    let total=polyline_len(g).max(1e-9);
-    let mut before=0.0; let mut best=(g[0],0.0,f64::INFINITY);
+    let total = polyline_len(g).max(1e-9);
+    let mut before = 0.0;
+    let mut best = (g[0], 0.0, f64::INFINITY);
     for w in g.windows(2) {
-        let seg=haversine_m(w[0],w[1]);
-        let (q,t)=project_on_segment(p,w[0],w[1]);
-        let d=haversine_m(p,q);
-        if d < best.2 { best=(q,(before+t*seg)/total,d); }
+        let seg = haversine_m(w[0], w[1]);
+        let (q, t) = project_on_segment(p, w[0], w[1]);
+        let d = haversine_m(p, q);
+        if d < best.2 {
+            best = (q, (before + t * seg) / total, d);
+        }
         before += seg;
     }
     best
 }
 
 pub fn subline(g: &[Point], from: f64, to: f64) -> Vec<Point> {
-    let dense=densify(g, 2.5);
-    if dense.len()<2 { return dense; }
-    let a=((dense.len()-1) as f64*from).floor() as usize;
-    let b=((dense.len()-1) as f64*to).ceil() as usize;
-    dense[a.min(dense.len()-1)..=b.min(dense.len()-1)].to_vec()
+    let dense = densify(g, 2.5);
+    if dense.len() < 2 {
+        return dense;
+    }
+    let a = ((dense.len() - 1) as f64 * from).floor() as usize;
+    let b = ((dense.len() - 1) as f64 * to).ceil() as usize;
+    dense[a.min(dense.len() - 1)..=b.min(dense.len() - 1)].to_vec()
 }
