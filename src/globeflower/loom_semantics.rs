@@ -51,7 +51,8 @@ fn can_turn(
         return true;
     }
     // A transition is legal only if a source direction pattern made it.
-    a.iter().any(|&x| b.iter().any(|&y| transitions.contains(&(line, x, y))))
+    a.iter()
+        .any(|&x| b.iter().any(|&y| transitions.contains(&(line, x, y))))
 }
 
 pub fn infer_restrictions(original: &Graph, output: &mut Graph) {

@@ -114,7 +114,10 @@ impl GeoJsonWriter {
         self.counts.nodes += graph.nodes.iter().flatten().count();
         self.counts.edges += graph.edges.iter().flatten().count();
         self.counts.lines += graph.lines.len();
-        self.original_offset += graph.edges.iter().flatten()
+        self.original_offset += graph
+            .edges
+            .iter()
+            .flatten()
             .flat_map(|edge| edge.originals.iter().copied())
             .max()
             .map_or(0, |id| id + 1);

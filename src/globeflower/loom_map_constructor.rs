@@ -35,9 +35,23 @@ impl NodeIndex {
     fn add(&mut self, p: Point, id: usize) {
         self.bins.entry(cell(p, self.scale)).or_default().push(id);
     }
-    fn nearest(&self, p: Point, out: &Graph, forbidden: &HashSet<usize>) -> Option<usize> {
+    fn nearest(
+        &self,
+        p: Point,
+        out: &Graph,
+        forbidden: &HashSet<usize>,
+        span_a: Option<Point>,
+        span_b: Option<Point>,
+    ) -> Option<usize> {
         let key = cell(p, self.scale);
-        let mut best = (self.radius, None);
+        // C++ MapConstructor::ndCollapseCand: a candidate must be nearer
+        // than both protected ends of the current source-edge span.
+        let span_limit = [span_a, span_b]
+            .into_iter()
+            .flatten()
+            .map(|q| haversine_m(p, q) / std::f64::consts::SQRT_2)
+            .fold(self.radius, f64::min);
+        let mut best = (span_limit, None);
         // Longitude's physical width shrinks with latitude; expand the
         // longitude search window instead of losing candidates at high latitudes.
         let cos = p.lat.to_radians().cos().abs().max(0.1);
@@ -52,6 +66,11 @@ impl NodeIndex {
                         let Some(node) = out.nodes[id].as_ref() else {
                             continue;
                         };
+                        // C++ ndCollapseCand excludes isolated nodes. These can
+                        // otherwise attract an unrelated edge and create a spur.
+                        if node.adj.is_empty() {
+                            continue;
+                        }
                         let distance = haversine_m(p, node.pos);
                         if distance < best.0 {
                             best = (distance, Some(id));
@@ -112,6 +131,10 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
         // candidates. This is vital: adjacent 20m samples must not all merge
         // simply because maxAggrDistance is 50m.
         let mut forbidden = HashSet::new();
+        let mut front: Option<usize> = None;
+        // Endpoints must be mapped before processing their neighboring samples.
+        // An already mapped endpoint is a protected topology anchor.
+        let back = mapped_endpoints.get(&edge.b).copied();
         for (i, &point) in points.iter().enumerate() {
             let endpoint = if i == 0 {
                 Some(edge.a)
@@ -124,7 +147,13 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
             let id = if let Some(node_id) = mapped {
                 node_id
             } else {
-                let candidate = index.nearest(point, &out, &forbidden);
+                let span_a = front.and_then(|id| out.nodes[id].as_ref().map(|n| n.pos));
+                let span_b = if i + 1 == points.len() {
+                    None
+                } else {
+                    back.and_then(|id| out.nodes[id].as_ref().map(|n| n.pos))
+                };
+                let candidate = index.nearest(point, &out, &forbidden, span_a, span_b);
                 let id = candidate.unwrap_or_else(|| {
                     let id = out.add_node(point);
                     index.add(point, id);
@@ -141,6 +170,9 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
                 path.push(id);
             }
             forbidden.insert(id);
+            if front.is_none() {
+                front = Some(id);
+            }
         }
         for pair in path.windows(2) {
             let a = pair[0];
@@ -159,15 +191,9 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
             let target = out.edges[id].as_mut().unwrap();
             target.originals.extend(edge.originals.iter().copied());
             for occ in &edge.lines {
-                let direction = occ.direction.map(|old| {
-                    if old == edge.a {
-                        a
-                    } else if old == edge.b {
-                        b
-                    } else {
-                        b
-                    }
-                });
+                // The occurrence points toward the source edge's a or b.
+                // All sampled segments follow the a -> b traversal here.
+                let direction = occ.direction.map(|old| if old == edge.a { a } else { b });
                 target.lines.insert(LineOcc {
                     line: occ.line,
                     direction,

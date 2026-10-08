@@ -658,19 +658,21 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             id
         });
 
-        let physical_key = row
-            .osm_station_id
-            .map(|id| format!("osm:{id}"))
-            .unwrap_or_else(|| {
-                format!(
-                    "gtfs:{}|{}|{}",
-                    row.onestop_feed_id, row.attempt_id, row.stop_id
-                )
-            });
+        // C++ Builder::addStop keys nodes by GTFS stop identity, not by
+        // the parent OSM station. Distinct platforms must remain separate
+        // until topo/StatInserter, even if they share osm_station_id.
+        let physical_key = format!(
+            "gtfs:{}|{}|{}",
+            row.onestop_feed_id, row.attempt_id, row.stop_id
+        );
         let station = physical.entry(physical_key.clone()).or_default();
-        station.sum_lon += row.lon;
-        station.sum_lat += row.lat;
-        station.count += 1;
+        // The same stop occurs in many direction patterns. Count its position
+        // exactly once rather than weighting the centroid by pattern frequency.
+        if station.count == 0 {
+            station.sum_lon = row.lon;
+            station.sum_lat = row.lat;
+            station.count = 1;
+        }
         station
             .stops
             .entry((row.chateau.clone(), row.stop_id.clone()))
@@ -721,6 +723,12 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
         node_by_physical.insert(physical_key, node_id);
     }
 
+    // C++ Builder::consume calls getEdg(from, to) before addEdg. Reuse
+    // canonical edges across repeated direction-pattern occurrences.
+    // Geometrically distinct alternatives must not be silently averaged;
+    // retain distinct alternatives by shape until a dedicated ETG simplifier
+    // can choose the reference geometry as in C++ Builder::simplify.
+    let mut edge_by_pair_shape = HashMap::<(usize, usize, Option<String>), usize>::new();
     let mut preliminary_edge_id = 0usize;
     for (pattern_key, pattern) in &mut patterns {
         pattern.stops.sort_by_key(|x| x.0);
@@ -765,14 +773,25 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             if geometry.len() < 2 {
                 continue;
             }
-            let edge_id = graph.add_edge(a, b, geometry);
+            let key = (a.min(b), a.max(b), pattern.shape_id.clone());
+            let edge_id = if let Some(&id) = edge_by_pair_shape.get(&key) {
+                id
+            } else {
+                let id = graph.add_edge(a, b, geometry);
+                edge_by_pair_shape.insert(key, id);
+                graph.edges[id]
+                    .as_mut()
+                    .unwrap()
+                    .originals
+                    .insert(preliminary_edge_id);
+                preliminary_edge_id += 1;
+                id
+            };
             let edge = graph.edges[edge_id].as_mut().unwrap();
             edge.lines.insert(LineOcc {
                 line: line_id,
                 direction: Some(b),
             });
-            edge.originals.insert(preliminary_edge_id);
-            preliminary_edge_id += 1;
 
             // LOOM Builder::consume records each actual consecutive trip
             // transition. Merely sharing a node and line does NOT establish a
