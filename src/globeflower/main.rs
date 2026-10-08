@@ -30,6 +30,9 @@ struct Args {
     max_length_dev: f64,
     #[arg(long, default_value_t = false)]
     no_infer_restrs: bool,
+    /// C++ gtfs2graph --prune-threshold; 0.0 disables rare-service pruning.
+    #[arg(long, default_value_t = 0.0)]
+    prune_threshold: f64,
 
     /// Initial indexed PostGIS planner tile size. Sparse tiles stay this large.
     #[arg(long, default_value_t = 20.0)]
@@ -82,7 +85,7 @@ fn main() -> Result<()> {
         );
 
         // Only this component's stops, route metadata and shapes are materialized.
-        let raw = gtfs2graph::build_component(&mut conn, component)?;
+        let raw = gtfs2graph::build_component(&mut conn, component, args.prune_threshold)?;
         info!(
             "[component {}/{}][gtfs2graph] {} nodes, {} edges, {} lines",
             index + 1,

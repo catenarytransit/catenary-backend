@@ -6,7 +6,8 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::loom_graph::{
-    Graph, Line, LineOcc, Point, Stop as LoomStop, project_on_polyline, subline,
+    Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ, haversine_m, lerp,
+    project_on_polyline, subline,
 };
 
 /// Globeflower intentionally processes only GTFS route_type 0 (tram) and
@@ -108,6 +109,21 @@ struct PatternStopRow {
     text_color: String,
     #[diesel(sql_type = Nullable<Text>)]
     shape_id: Option<String>,
+}
+
+/// Catenary preserves trip memberships by itinerary pattern.  Summing
+/// trip_ids grouped by direction pattern supplies the C++ Builder::simplify
+/// occurrence weight without expanding all stop_times into memory.
+#[derive(QueryableByName, Debug)]
+struct PatternWeightRow {
+    #[diesel(sql_type = Text)]
+    onestop_feed_id: String,
+    #[diesel(sql_type = Text)]
+    attempt_id: String,
+    #[diesel(sql_type = Text)]
+    direction_pattern_id: String,
+    #[diesel(sql_type = BigInt)]
+    trip_count: i64,
 }
 
 #[derive(QueryableByName, Debug)]
@@ -509,7 +525,11 @@ struct PatternAccum {
 /// Materialize exactly one station-connected component and construct its
 /// gtfs2graph graph. The caller should run topo immediately and drop this raw
 /// component before loading the next one.
-pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Result<Graph> {
+pub fn build_component(
+    conn: &mut PgConnection,
+    component: &WorkComponent,
+    prune_threshold: f64,
+) -> Result<Graph> {
     if component.patterns.is_empty() {
         return Ok(Graph::default());
     }
@@ -634,6 +654,40 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
         }
     }
 
+    // Read ONLY trip counts for this connected component.  C++ Builder
+    // iterates every trip; the compressed schema's `trip_ids` field permits
+    // equivalent weighting while we iterate one direction pattern at a time.
+    let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
+        r#"WITH workset AS (
+              SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(
+                  onestop_feed_id text, attempt_id text, direction_pattern_id text)
+            )
+            SELECT w.onestop_feed_id, w.attempt_id, w.direction_pattern_id,
+                   GREATEST(1, COALESCE(SUM(cardinality(ipm.trip_ids)), 0))::bigint AS trip_count
+            FROM workset w
+            LEFT JOIN gtfs.itinerary_pattern_meta ipm
+              ON ipm.onestop_feed_id = w.onestop_feed_id
+             AND ipm.attempt_id = w.attempt_id
+             AND ipm.direction_pattern_id = w.direction_pattern_id
+            GROUP BY w.onestop_feed_id, w.attempt_id, w.direction_pattern_id"#,
+    )
+    .bind::<Text, _>(&workset_json)
+    .load(conn)
+    .context("load direction-pattern trip cardinalities for Builder::simplify")?;
+    let pattern_weights: HashMap<PatternKey, usize> = weight_rows
+        .into_iter()
+        .map(|row| {
+            (
+                PatternKey {
+                    onestop_feed_id: row.onestop_feed_id,
+                    attempt_id: row.attempt_id,
+                    direction_pattern_id: row.direction_pattern_id,
+                },
+                row.trip_count.max(1) as usize,
+            )
+        })
+        .collect();
+
     let mut graph = Graph::default();
     let mut line_by_key = HashMap::<(String, String, String), usize>::new();
     let mut physical = BTreeMap::<String, PhysicalStationAccum>::new();
@@ -729,6 +783,8 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
     // retain distinct alternatives by shape until a dedicated ETG simplifier
     // can choose the reference geometry as in C++ Builder::simplify.
     let mut edge_by_pair_shape = HashMap::<(usize, usize, Option<String>), usize>::new();
+    let mut edge_trip_weight = HashMap::<usize, usize>::new();
+    let mut edge_line_trip_weight = HashMap::<(usize, usize), usize>::new();
     let mut preliminary_edge_id = 0usize;
     for (pattern_key, pattern) in &mut patterns {
         pattern.stops.sort_by_key(|x| x.0);
@@ -773,6 +829,12 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             if geometry.len() < 2 {
                 continue;
             }
+            // Explicit endpoints are required by MapConstructor's geometry
+            // invariant and avoid tiny connector spurs at station junctions.
+            let mut geometry = geometry;
+            geometry[0] = pa;
+            let last = geometry.len() - 1;
+            geometry[last] = pb;
             let key = (a.min(b), a.max(b), pattern.shape_id.clone());
             let edge_id = if let Some(&id) = edge_by_pair_shape.get(&key) {
                 id
@@ -787,11 +849,20 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
                 preliminary_edge_id += 1;
                 id
             };
+            *edge_trip_weight.entry(edge_id).or_default() +=
+                pattern_weights.get(pattern_key).copied().unwrap_or(1);
+            *edge_line_trip_weight.entry((edge_id, line_id)).or_default() +=
+                pattern_weights.get(pattern_key).copied().unwrap_or(1);
             let edge = graph.edges[edge_id].as_mut().unwrap();
-            edge.lines.insert(LineOcc {
-                line: line_id,
-                direction: Some(b),
-            });
+            // A line used in both directions is represented as bidirectional,
+            // just as C++ EdgeTripGeom::RouteOccurance aggregates trips.
+            add_line_occ(
+                &mut edge.lines,
+                LineOcc {
+                    line: line_id,
+                    direction: Some(b),
+                },
+            );
 
             // LOOM Builder::consume records each actual consecutive trip
             // transition. Merely sharing a node and line does NOT establish a
@@ -811,7 +882,154 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
         }
     }
 
+    simplify_builder_edges(
+        &mut graph,
+        &edge_trip_weight,
+        &mut edge_line_trip_weight,
+        prune_threshold,
+    );
     Ok(graph)
+}
+
+/// Return the approximate position at a fraction of distance along a shape.
+/// Unlike vertex-index interpolation, this is invariant to GTFS shape sampling.
+fn point_at(shape: &[Point], fraction: f64) -> Point {
+    let total: f64 = shape.windows(2).map(|p| haversine_m(p[0], p[1])).sum();
+    if total < 1e-9 {
+        return shape[0];
+    }
+    let wanted = total * fraction.clamp(0.0, 1.0);
+    let mut walked = 0.0;
+    for segment in shape.windows(2) {
+        let len = haversine_m(segment[0], segment[1]);
+        if walked + len >= wanted && len > 0.0 {
+            return lerp(segment[0], segment[1], (wanted - walked) / len);
+        }
+        walked += len;
+    }
+    *shape.last().unwrap()
+}
+
+/// One reference geometry per unordered station pair, as in
+/// Builder::consume + EdgePL::simplify.  Weight by observed trip membership,
+/// retain the dominant valid shape and average only geometrically compatible
+/// alternatives (C++ uses PolyLine::average after coalescing geometries).
+fn simplify_builder_edges(
+    graph: &mut Graph,
+    weights: &HashMap<usize, usize>,
+    line_weights: &mut HashMap<(usize, usize), usize>,
+    prune_threshold: f64,
+) {
+    let mut groups = BTreeMap::<(usize, usize), Vec<usize>>::new();
+    for edge in graph.edges.iter().flatten() {
+        groups
+            .entry((edge.a.min(edge.b), edge.a.max(edge.b)))
+            .or_default()
+            .push(edge.id);
+    }
+    let mut removed_to_reference = HashMap::<usize, usize>::new();
+    for ids in groups.into_values() {
+        if ids.len() < 2 {
+            continue;
+        }
+        let Some(&reference) = ids.iter().max_by_key(|&&id| {
+            (
+                weights.get(&id).copied().unwrap_or(1),
+                std::cmp::Reverse(id),
+            )
+        }) else {
+            continue;
+        };
+        let ref_edge = graph.edges[reference].as_ref().unwrap().clone();
+        let ref_geom = ref_edge.geom.clone();
+        let mut samples = (0..=16)
+            .map(|i| point_at(&ref_geom, i as f64 / 16.0))
+            .collect::<Vec<_>>();
+        let mut weight_sum = weights.get(&reference).copied().unwrap_or(1) as f64;
+        for &id in &ids {
+            if id == reference {
+                continue;
+            }
+            let Some(other) = graph.edges[id].as_ref().cloned() else {
+                continue;
+            };
+            let reversed = other.a != ref_edge.a;
+            let mut close = true;
+            for (i, point) in samples.iter().enumerate() {
+                let fraction = i as f64 / 16.0;
+                let q = point_at(
+                    &other.geom,
+                    if reversed { 1.0 - fraction } else { fraction },
+                );
+                if haversine_m(*point, q) > 10.0 {
+                    close = false;
+                    break;
+                }
+            }
+            // The C++ averages all surviving geometries.  In mixed GTFS
+            // feeds, a huge detour cannot be safely averaged into a corridor;
+            // use the dominant reference shape instead in that case.
+            if close {
+                let w = weights.get(&id).copied().unwrap_or(1) as f64;
+                for (i, point) in samples.iter_mut().enumerate() {
+                    let f = i as f64 / 16.0;
+                    let q = point_at(&other.geom, if reversed { 1.0 - f } else { f });
+                    *point = lerp(*point, q, w / (weight_sum + w));
+                }
+                weight_sum += w;
+            }
+            {
+                let target = graph.edges[reference].as_mut().unwrap();
+                target.originals.extend(other.originals.iter().copied());
+                for occ in other.lines {
+                    let w = line_weights.remove(&(id, occ.line)).unwrap_or(0);
+                    *line_weights.entry((reference, occ.line)).or_default() += w;
+                    add_line_occ(&mut target.lines, occ);
+                }
+            }
+            graph.remove_edge(id);
+            removed_to_reference.insert(id, reference);
+        }
+        // Preserve the actual GTFS stop locations at reference endpoints.
+        samples[0] = graph.nodes[ref_edge.a].as_ref().unwrap().pos;
+        *samples.last_mut().unwrap() = graph.nodes[ref_edge.b].as_ref().unwrap().pos;
+        graph.edges[reference].as_mut().unwrap().geom = samples;
+    }
+    // C++ Builder::simplify uses avg route-occurrence trip counts times the
+    // --prune-threshold parameter (default zero, so nothing is pruned).
+    if prune_threshold > 0.0 && prune_threshold.is_finite() && !line_weights.is_empty() {
+        let mean = line_weights.values().sum::<usize>() as f64 / line_weights.len() as f64;
+        let cutoff = mean * prune_threshold.clamp(0.0, 1.0);
+        let mut delete = Vec::new();
+        for edge in graph.edges.iter_mut().flatten() {
+            edge.lines.retain(|occ| {
+                line_weights.get(&(edge.id, occ.line)).copied().unwrap_or(0) as f64 >= cutoff
+            });
+            if edge.lines.is_empty() {
+                delete.push(edge.id);
+            }
+        }
+        for id in delete {
+            graph.remove_edge(id);
+        }
+    }
+    // Canonicalize explicit direction-pattern transitions after edge merging.
+    let alive_edges: std::collections::HashSet<_> =
+        graph.edges.iter().flatten().map(|e| e.id).collect();
+    for node in graph.nodes.iter_mut().flatten() {
+        for turns in node.allowed_turns.values_mut() {
+            *turns = turns
+                .iter()
+                .map(|&(a, b)| {
+                    (
+                        *removed_to_reference.get(&a).unwrap_or(&a),
+                        *removed_to_reference.get(&b).unwrap_or(&b),
+                    )
+                })
+                .filter(|(a, b)| a != b && alive_edges.contains(a) && alive_edges.contains(b))
+                .collect();
+        }
+    }
 }
 
 fn parse_linestring_geojson(raw: &str) -> Option<Vec<Point>> {
@@ -832,4 +1050,43 @@ fn parse_linestring_geojson(raw: &str) -> Option<Vec<Point>> {
         });
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod simplifier_tests {
+    use super::*;
+    #[test]
+    fn alternative_shape_edges_become_single_canonical_station_pair() {
+        let mut graph = Graph::default();
+        let pa = Point { lon: 0.0, lat: 0.0 };
+        let pb = Point {
+            lon: 0.001,
+            lat: 0.0,
+        };
+        let a = graph.add_node(pa);
+        let b = graph.add_node(pb);
+        let e0 = graph.add_edge(a, b, vec![pa, pb]);
+        let e1 = graph.add_edge(b, a, vec![pb, pa]);
+        graph.edges[e0].as_mut().unwrap().originals.insert(0);
+        graph.edges[e1].as_mut().unwrap().originals.insert(1);
+        graph.edges[e0].as_mut().unwrap().lines.insert(LineOcc {
+            line: 0,
+            direction: Some(b),
+        });
+        graph.edges[e1].as_mut().unwrap().lines.insert(LineOcc {
+            line: 0,
+            direction: Some(a),
+        });
+        simplify_builder_edges(
+            &mut graph,
+            &HashMap::from([(e0, 10), (e1, 5)]),
+            &mut HashMap::from([((e0, 0), 10), ((e1, 0), 5)]),
+            0.0,
+        );
+        let edge = graph.edges.iter().flatten().next().unwrap();
+        assert_eq!(graph.edges.iter().flatten().count(), 1);
+        assert_eq!(edge.originals.len(), 2);
+        assert_eq!(edge.lines.len(), 1);
+        assert!(edge.lines.iter().next().unwrap().direction.is_none());
+    }
 }

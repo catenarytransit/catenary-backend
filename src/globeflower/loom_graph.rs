@@ -35,6 +35,36 @@ pub struct LineOcc {
     pub direction: Option<NodeId>,
 }
 
+/// C++ LineEdgePL stores one occurrence per line.  Opposite observed
+/// directions make that occurrence bidirectional rather than two independent
+/// line entries.  This is important for MapConstructor::lineEq and merging.
+pub fn add_line_occ(lines: &mut BTreeSet<LineOcc>, occurrence: LineOcc) {
+    let existing: Vec<_> = lines
+        .iter()
+        .copied()
+        .filter(|old| old.line == occurrence.line)
+        .collect();
+    if existing.is_empty() {
+        lines.insert(occurrence);
+        return;
+    }
+    let direction = if existing
+        .iter()
+        .all(|old| old.direction == occurrence.direction)
+    {
+        occurrence.direction
+    } else {
+        None
+    };
+    for old in existing {
+        lines.remove(&old);
+    }
+    lines.insert(LineOcc {
+        line: occurrence.line,
+        direction,
+    });
+}
+
 #[derive(Debug, Clone)]
 pub struct Node {
     pub id: NodeId,
@@ -68,6 +98,55 @@ pub struct Graph {
 }
 
 impl Graph {
+    /// Development-time verification for the topology transformations.
+    /// Turn inferred restrictions cannot be correct if graph IDs or line
+    /// directions refer to deleted or non-incident vertices.
+    #[cfg(debug_assertions)]
+    pub fn assert_consistent(&self) {
+        for (id, node) in self.nodes.iter().enumerate() {
+            let Some(node) = node.as_ref() else {
+                continue;
+            };
+            assert_eq!(node.id, id);
+            assert!(node.pos.lon.is_finite() && node.pos.lat.is_finite());
+            for &edge_id in &node.adj {
+                let e = self
+                    .edges
+                    .get(edge_id)
+                    .and_then(Option::as_ref)
+                    .expect("node refers to deleted edge");
+                assert!(e.a == id || e.b == id, "node lists non-incident edge");
+            }
+        }
+        for (id, maybe_edge) in self.edges.iter().enumerate() {
+            let Some(edge) = maybe_edge.as_ref() else {
+                continue;
+            };
+            assert_eq!(id, edge.id);
+            assert_ne!(edge.a, edge.b, "self-edge introduced by collapse");
+            assert!(edge.geom.len() >= 2, "edge with no geometry");
+            for endpoint in [edge.a, edge.b] {
+                let node = self
+                    .nodes
+                    .get(endpoint)
+                    .and_then(Option::as_ref)
+                    .expect("edge endpoint removed");
+                assert!(
+                    node.adj.contains(&id),
+                    "edge absent from endpoint adjacency"
+                );
+            }
+            for occurrence in &edge.lines {
+                assert!(
+                    occurrence.direction.is_none()
+                        || occurrence.direction == Some(edge.a)
+                        || occurrence.direction == Some(edge.b),
+                    "dangling route direction"
+                );
+            }
+        }
+    }
+
     pub fn add_node(&mut self, pos: Point) -> NodeId {
         let id = self.nodes.len();
         self.nodes.push(Some(Node {
@@ -316,4 +395,29 @@ pub fn subline(g: &[Point], from: f64, to: f64) -> Vec<Point> {
         return vec![g[0], g[0]];
     }
     out
+}
+
+#[cfg(test)]
+mod occurrence_tests {
+    use super::*;
+    #[test]
+    fn reverse_trip_makes_bidirectional_occurrence() {
+        let mut lines = BTreeSet::new();
+        add_line_occ(
+            &mut lines,
+            LineOcc {
+                line: 5,
+                direction: Some(0),
+            },
+        );
+        add_line_occ(
+            &mut lines,
+            LineOcc {
+                line: 5,
+                direction: Some(1),
+            },
+        );
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines.iter().next().unwrap().direction, None);
+    }
 }

@@ -7,7 +7,8 @@ use crate::loom_graph::{
     Graph, LineId, LineOcc, Point, Stop, haversine_m, project_on_polyline, subline,
 };
 use log::{info, warn};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet};
 use std::time::Instant;
 
 pub struct StationOccurrence {
@@ -55,11 +56,107 @@ fn can_turn(
         .any(|&x| b.iter().any(|&y| transitions.contains(&(line, x, y))))
 }
 
+/// C++ RestrInferrer uses a separate restriction graph and a bounded
+/// shortest-path check before forbidding a turn. This compact edge-state graph
+/// represents permitted (line, original-edge) transitions from the original
+/// direction patterns. Each intermediate edge contributes its length.
+struct RestrictionPaths {
+    transitions: HashMap<(LineId, usize), Vec<usize>>,
+    lengths_cm: HashMap<usize, u64>,
+}
+
+impl RestrictionPaths {
+    fn new(input: &Graph, turns: &HashSet<(LineId, usize, usize)>) -> Self {
+        let mut transitions: HashMap<(LineId, usize), Vec<usize>> = HashMap::new();
+        for &(line, from, to) in turns {
+            transitions.entry((line, from)).or_default().push(to);
+        }
+        let mut lengths_cm = HashMap::new();
+        for e in input.edges.iter().flatten() {
+            let len_cm = (crate::loom_graph::polyline_len(&e.geom).max(0.0) * 100.0) as u64;
+            for &id in &e.originals {
+                lengths_cm.entry(id).or_insert(len_cm);
+            }
+        }
+        Self {
+            transitions,
+            lengths_cm,
+        }
+    }
+
+    fn bounded_reachable(
+        &self,
+        line: LineId,
+        from: &BTreeSet<usize>,
+        to: &BTreeSet<usize>,
+        max_deviation_m: f64,
+    ) -> bool {
+        let bound = (max_deviation_m.max(0.0) * 100.0) as u64;
+        let mut best: HashMap<usize, u64> = HashMap::new();
+        let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
+        for &start in from {
+            best.insert(start, 0);
+            heap.push(Reverse((0, start)));
+        }
+        while let Some(Reverse((cost, current))) = heap.pop() {
+            if cost > bound {
+                break;
+            }
+            if cost > *best.get(&current).unwrap_or(&u64::MAX) {
+                continue;
+            }
+            if to.contains(&current) {
+                return true;
+            }
+            if let Some(next) = self.transitions.get(&(line, current)) {
+                for &candidate in next {
+                    // We only count the geometry BETWEEN source and target
+                    // edge handles, as in C++ RestrInferrer::check.
+                    let addition = if to.contains(&candidate) {
+                        0
+                    } else {
+                        *self.lengths_cm.get(&candidate).unwrap_or(&u64::MAX)
+                    };
+                    let new_cost = cost.saturating_add(addition);
+                    if new_cost <= bound && new_cost < *best.get(&candidate).unwrap_or(&u64::MAX) {
+                        best.insert(candidate, new_cost);
+                        heap.push(Reverse((new_cost, candidate)));
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
+/// An occurrence can enter a vertex only when its destination is that
+/// vertex (or its direction is unrestricted), and can leave only toward the
+/// other endpoint.  C++ RestrInferrer skips pairs invalid by direction.
+fn enterable(edge: &crate::loom_graph::Edge, line: LineId, node: usize) -> bool {
+    edge.lines
+        .iter()
+        .any(|o| o.line == line && (o.direction.is_none() || o.direction == Some(node)))
+}
+fn leaveable(edge: &crate::loom_graph::Edge, line: LineId, node: usize) -> bool {
+    let other = if edge.a == node { edge.b } else { edge.a };
+    edge.lines
+        .iter()
+        .any(|o| o.line == line && (o.direction.is_none() || o.direction == Some(other)))
+}
+
 pub fn infer_restrictions(original: &Graph, output: &mut Graph) {
+    infer_restrictions_with_deviation(original, output, 500.0);
+}
+
+pub fn infer_restrictions_with_deviation(
+    original: &Graph,
+    output: &mut Graph,
+    max_deviation_m: f64,
+) {
     let start = Instant::now();
     let transitions = original_transitions(original);
+    let paths = RestrictionPaths::new(original, &transitions);
     let mut inferred = 0usize;
-    // Construct restrictions without holding mutable borrows across edge reads.
     for node_id in 0..output.nodes.len() {
         let Some(node) = output.nodes[node_id].as_ref() else {
             continue;
@@ -78,10 +175,17 @@ pub fn infer_restrictions(original: &Graph, output: &mut Graph) {
                     continue;
                 };
                 for occ in &from.lines {
-                    if !to.lines.iter().any(|o| o.line == occ.line) {
+                    if !enterable(from, occ.line, node_id) || !leaveable(to, occ.line, node_id) {
                         continue;
                     }
-                    if can_turn(occ.line, &from.originals, &to.originals, &transitions) {
+                    if can_turn(occ.line, &from.originals, &to.originals, &transitions)
+                        || paths.bounded_reachable(
+                            occ.line,
+                            &from.originals,
+                            &to.originals,
+                            max_deviation_m,
+                        )
+                    {
                         continue;
                     }
                     forbidden
@@ -94,12 +198,44 @@ pub fn infer_restrictions(original: &Graph, output: &mut Graph) {
                 }
             }
         }
+        // C++ RestrInferrer removes a restriction when it would leave a
+        // line occurrence without ANY possible continuation despite having
+        // other same-line edges. This also prevents false disconnections where
+        // pattern compression omitted an otherwise valid original transition.
+        for (&line, map) in &mut forbidden {
+            for &from in &adjacent {
+                let Some(in_edge) = output.edges[from].as_ref() else {
+                    continue;
+                };
+                if !enterable(in_edge, line, node_id) {
+                    continue;
+                }
+                let choices = adjacent
+                    .iter()
+                    .copied()
+                    .filter(|&to| {
+                        to != from
+                            && output.edges[to]
+                                .as_ref()
+                                .is_some_and(|e| leaveable(e, line, node_id))
+                    })
+                    .collect::<Vec<_>>();
+                if !choices.is_empty()
+                    && choices
+                        .iter()
+                        .all(|to| map.get(&from).is_some_and(|blocked| blocked.contains(to)))
+                {
+                    map.remove(&from);
+                }
+            }
+        }
+        forbidden.retain(|_, m| !m.is_empty());
         if let Some(n) = output.nodes[node_id].as_mut() {
             n.conn_exc = forbidden;
         }
     }
     info!(
-        "[topo/restr] {} prohibited edge transitions; {} source transitions in {:.2?}",
+        "[topo/restr] inferred up to {} direction-aware prohibitions; {} original turns in {:.2?}",
         inferred,
         transitions.len(),
         start.elapsed()
@@ -217,6 +353,41 @@ fn split_at(graph: &mut Graph, edge_id: usize, fraction: f64) -> Option<(usize, 
     Some((mid, ids[0], ids[1]))
 }
 
+/// C++ StatInserter::candScore: distance + provenance shortfall + line
+/// shortfall, with an additional 200m penalty for inserting an edge split
+/// within maxAggrDistance of an existing node. Both endpoint nodes are
+/// independent candidates, not just the closest projection on an edge.
+fn station_score(
+    distance: f64,
+    served_orig: usize,
+    needed_orig: usize,
+    served_lines: usize,
+    needed_lines: usize,
+) -> f64 {
+    distance
+        + 100.0 * needed_orig.saturating_sub(served_orig) as f64 / needed_orig.max(1) as f64
+        + 500.0 * needed_lines.saturating_sub(served_lines) as f64 / needed_lines.max(1) as f64
+}
+
+fn node_coverage(
+    graph: &Graph,
+    node: usize,
+    originals: &BTreeSet<usize>,
+    lines: &BTreeSet<LineId>,
+) -> (BTreeSet<usize>, BTreeSet<LineId>) {
+    let mut found_orig = BTreeSet::new();
+    let mut found_lines = BTreeSet::new();
+    if let Some(n) = graph.nodes[node].as_ref() {
+        for &eid in &n.adj {
+            if let Some(e) = graph.edges[eid].as_ref() {
+                found_orig.extend(e.originals.intersection(originals).copied());
+                found_lines.extend(e.lines.iter().map(|o| o.line).filter(|l| lines.contains(l)));
+            }
+        }
+    }
+    (found_orig, found_lines)
+}
+
 pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, radius: f64) {
     let start = Instant::now();
     let mut index = provenance_index(graph);
@@ -228,6 +399,8 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
         };
         let mut remaining_orig = occurrence.originals.clone();
         let mut remaining_lines = occurrence.lines.clone();
+        // Original StatInserter uses MAX_INSERTS=3: a station with separate
+        // tracks can be represented by multiple topological placements.
         for _ in 0..3 {
             let mut candidates = HashSet::new();
             for orig in &remaining_orig {
@@ -235,54 +408,124 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
                     candidates.extend(ids.iter().copied());
                 }
             }
-            // Avoid an unrestricted global scan: if there is no provenance,
-            // an insertion must be deferred rather than attached to a random line.
-            let mut best: Option<(f64, usize, f64, BTreeSet<usize>, BTreeSet<LineId>)> = None;
+            // (score, edge id, split fraction, optional existing node,
+            //  covered originals, covered lines)
+            let mut best: Option<(
+                f64,
+                usize,
+                f64,
+                Option<usize>,
+                BTreeSet<usize>,
+                BTreeSet<LineId>,
+            )> = None;
+            let mut endpoint_seen = HashSet::new();
             for id in candidates {
                 let Some(e) = graph.edges.get(id).and_then(Option::as_ref) else {
                     continue;
                 };
+                let (a, b) = (e.a, e.b);
                 if e.geom.len() < 2 {
                     continue;
                 }
-                let (_, position, dist) = project_on_polyline(stop.pos, &e.geom);
-                if dist > 4.0 * radius {
-                    continue;
+                let (_, pos, dist) = project_on_polyline(stop.pos, &e.geom);
+                if dist <= 4.0 * radius {
+                    let covered_orig: BTreeSet<_> =
+                        e.originals.intersection(&remaining_orig).copied().collect();
+                    let covered_lines: BTreeSet<_> = e
+                        .lines
+                        .iter()
+                        .map(|o| o.line)
+                        .filter(|line| remaining_lines.contains(line))
+                        .collect();
+                    if !covered_orig.is_empty() || !covered_lines.is_empty() {
+                        let len = crate::loom_graph::polyline_len(&e.geom);
+                        let penalty = if pos * len < radius || (1.0 - pos) * len < radius {
+                            200.0
+                        } else {
+                            0.0
+                        };
+                        let score = station_score(
+                            dist,
+                            covered_orig.len(),
+                            remaining_orig.len(),
+                            covered_lines.len(),
+                            remaining_lines.len(),
+                        ) + penalty;
+                        if best.as_ref().is_none_or(|(old, ..)| score < *old) {
+                            best = Some((score, id, pos, None, covered_orig, covered_lines));
+                        }
+                    }
                 }
-                let covered_orig: BTreeSet<_> =
-                    e.originals.intersection(&remaining_orig).copied().collect();
-                let covered_lines: BTreeSet<_> = e
-                    .lines
+                for node in [a, b] {
+                    if !endpoint_seen.insert(node) {
+                        continue;
+                    }
+                    let Some(n) = graph.nodes[node].as_ref() else {
+                        continue;
+                    };
+                    let distance = haversine_m(stop.pos, n.pos);
+                    if distance > 4.0 * radius {
+                        continue;
+                    }
+                    let (covered_orig, covered_lines) =
+                        node_coverage(graph, node, &remaining_orig, &remaining_lines);
+                    if covered_orig.is_empty() && covered_lines.is_empty() {
+                        continue;
+                    }
+                    let score = station_score(
+                        distance,
+                        covered_orig.len(),
+                        remaining_orig.len(),
+                        covered_lines.len(),
+                        remaining_lines.len(),
+                    );
+                    if best.as_ref().is_none_or(|(old, ..)| score < *old) {
+                        best = Some((score, id, 0.0, Some(node), covered_orig, covered_lines));
+                    }
+                }
+            }
+            let Some((_, id, pos, endpoint, covered_orig, covered_lines)) = best else {
+                break;
+            };
+            let node = if let Some(n) = endpoint {
+                n
+            } else {
+                let old_orig = graph.edges[id].as_ref().unwrap().originals.clone();
+                let Some((n, left, right)) = split_at(graph, id, pos) else {
+                    break;
+                };
+                if left != right {
+                    for orig in old_orig {
+                        let entry = index.entry(orig).or_default();
+                        entry.retain(|&e| e != id);
+                        entry.extend([left, right]);
+                    }
+                }
+                n
+            };
+            // Do not mark previously served lines unserved when another station
+            // is inserted at the same node; C++ StatInserter keeps that state.
+            let previously_served: BTreeSet<_> = {
+                let n = graph.nodes[node].as_ref().unwrap();
+                if n.stops.is_empty() {
+                    BTreeSet::new()
+                } else {
+                    n.adj
+                        .iter()
+                        .filter_map(|id| graph.edges[*id].as_ref())
+                        .flat_map(|e| e.lines.iter().map(|o| o.line))
+                        .filter(|l| !n.not_served.contains(l))
+                        .collect()
+                }
+            };
+            let all_adj_lines: BTreeSet<_> = {
+                let n = graph.nodes[node].as_ref().unwrap();
+                n.adj
                     .iter()
-                    .map(|o| o.line)
-                    .filter(|line| remaining_lines.contains(line))
-                    .collect();
-                if covered_orig.is_empty() && covered_lines.is_empty() {
-                    continue;
-                }
-                let missing_orig = remaining_orig.len().saturating_sub(covered_orig.len());
-                let missing_lines = remaining_lines.len().saturating_sub(covered_lines.len());
-                let score = dist
-                    + 100.0 * missing_orig as f64 / remaining_orig.len().max(1) as f64
-                    + 500.0 * missing_lines as f64 / remaining_lines.len().max(1) as f64;
-                if best.as_ref().is_none_or(|(old, ..)| score < *old) {
-                    best = Some((score, id, position, covered_orig, covered_lines));
-                }
-            }
-            let Some((_, id, pos, covered_orig, covered_lines)) = best else {
-                break;
+                    .filter_map(|id| graph.edges[*id].as_ref())
+                    .flat_map(|e| e.lines.iter().map(|o| o.line))
+                    .collect()
             };
-            let old_orig = graph.edges[id].as_ref().unwrap().originals.clone();
-            let Some((node, left, right)) = split_at(graph, id, pos) else {
-                break;
-            };
-            if left != right {
-                for orig in old_orig {
-                    let entry = index.entry(orig).or_default();
-                    entry.retain(|&e| e != id);
-                    entry.extend([left, right]);
-                }
-            }
             let target = graph.nodes[node].as_mut().unwrap();
             for station in &occurrence.stops {
                 if !target
@@ -293,11 +536,18 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
                     target.stops.push(station.clone());
                 }
             }
-            for line in &covered_lines {
-                target.not_served.remove(line);
+            for line in all_adj_lines {
+                if remaining_lines.contains(&line)
+                    || covered_lines.contains(&line)
+                    || previously_served.contains(&line)
+                {
+                    target.not_served.remove(&line);
+                } else {
+                    target.not_served.insert(line);
+                }
             }
-            remaining_orig.retain(|orig| !covered_orig.contains(orig));
-            remaining_lines.retain(|line| !covered_lines.contains(line));
+            remaining_orig.retain(|o| !covered_orig.contains(o));
+            remaining_lines.retain(|l| !covered_lines.contains(l));
             inserted += 1;
             if remaining_orig.is_empty() && remaining_lines.is_empty() {
                 break;
@@ -314,7 +564,7 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
         );
     }
     info!(
-        "[topo/stations] {} station placements, {} incomplete in {:.2?}",
+        "[topo/stations] {} placements, {} incomplete in {:.2?}",
         inserted,
         missing,
         start.elapsed()

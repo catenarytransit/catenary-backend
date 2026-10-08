@@ -52,6 +52,8 @@ struct StationOcc {
 
 /// Run the combined Chapter-3 topology stage over the preliminary GTFS graph.
 pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
+    #[cfg(debug_assertions)]
+    input.assert_consistent();
     let stage = Instant::now();
     let station_occurrences = collect_stations(&mut input);
     info!(
@@ -63,7 +65,15 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     let stage = Instant::now();
     // LOOM-style long-edge-first construction with a geographic node index.
     // Do not build a global union-find over every sampled 5m atom.
-    let mut output = crate::loom_map_constructor::construct(&input, cfg.max_aggr_distance);
+    // TopoMain.cpp: collapseShrdSegs(10, 50, segmentLength), then
+    // collapseShrdSegs(maxAggrDistance, 50, segmentLength).  A coarse-only
+    // collapse can connect neighboring platforms prematurely.
+    let initial = crate::loom_map_constructor::construct(&input, 10.0, cfg.segment_length);
+    let mut output =
+        crate::loom_map_constructor::construct(&initial, cfg.max_aggr_distance, cfg.segment_length);
+    crate::loom_map_constructor::reconstruct_intersections(&mut output, cfg.max_aggr_distance);
+    #[cfg(debug_assertions)]
+    output.assert_consistent();
     info!(
         "[topo] aggregation produced {} nodes / {} edges in {:.2?}",
         output.nodes.iter().flatten().count(),
@@ -73,7 +83,7 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 
     if cfg.infer_restrictions {
         let stage = Instant::now();
-        loom_semantics::infer_restrictions(&input, &mut output);
+        loom_semantics::infer_restrictions_with_deviation(&input, &mut output, cfg.max_length_dev);
         info!("[topo] inferred restrictions in {:.2?}", stage.elapsed());
     }
 
@@ -87,6 +97,10 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
         })
         .collect();
     loom_semantics::insert_stations(&station_inputs, &mut output, cfg.max_aggr_distance);
+    // TopoMain reconstructs intersections again after StatInserter.
+    crate::loom_map_constructor::reconstruct_intersections(&mut output, cfg.max_aggr_distance);
+    #[cfg(debug_assertions)]
+    output.assert_consistent();
     info!("[topo] inserted stations in {:.2?}", stage.elapsed());
     output
 }
