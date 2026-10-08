@@ -189,6 +189,13 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
                     index.add(point, id);
                     id
                 });
+                // C++ ndCollapseCand: move the accepted candidate toward the sample.
+                if candidate.is_some() {
+                    let old = out.nodes[id].as_ref().unwrap().pos;
+                    let middle = lerp(old, point, 0.5);
+                    out.nodes[id].as_mut().unwrap().pos = middle;
+                    index.add(middle, id);
+                }
                 if let Some(old) = endpoint {
                     mapped_endpoints.insert(old, id);
                 }

@@ -162,15 +162,27 @@ fn split_at(graph: &mut Graph, edge_id: usize, fraction: f64) -> Option<(usize, 
             })
             .collect();
     }
-    // A split is transparent to through travel on the affected line.
+    // StatInserter: retain directed through-transitions on split edges.
     for occ in &edge.lines {
-        graph.nodes[mid]
+        let turns = graph.nodes[mid]
             .as_mut()
             .unwrap()
             .allowed_turns
             .entry(occ.line)
-            .or_default()
-            .insert((ids[0], ids[1]));
+            .or_default();
+        match occ.direction {
+            Some(dest) if dest == edge.a => {
+                turns.insert((ids[1], ids[0]));
+            }
+            Some(dest) if dest == edge.b => {
+                turns.insert((ids[0], ids[1]));
+            }
+            None => {
+                turns.insert((ids[0], ids[1]));
+                turns.insert((ids[1], ids[0]));
+            }
+            _ => {}
+        }
     }
     // The outside endpoints' restrictions must point to the replacement edges.
     for (endpoint, replacement) in [(edge.a, ids[0]), (edge.b, ids[1])] {
