@@ -1,9 +1,11 @@
 use crate::loom_graph::{
-    Graph, LineId, LineOcc, Point, Stop, densify, haversine_m, lerp, polyline_len,
+    Graph, LineId, LineOcc, Point, Stop, haversine_m, lerp, polyline_len,
     project_on_polyline, subline,
 };
+use log::info;
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, VecDeque};
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct TopoConfig {
@@ -26,10 +28,13 @@ impl Default for TopoConfig {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct Atom {
-    orig: usize,
-    line: LineOcc,
+    // Keep only the source edge here.  Line/original metadata stays on the
+    // source edge and is collected once a geometric atom cluster is known.
+    // The old representation materialized |lines| * |originals| copies of
+    // every 5 m segment, which is catastrophic on shared metro corridors.
+    edge: usize,
     a: Point,
     b: Point,
 }
@@ -44,15 +49,40 @@ struct StationOcc {
 
 /// Run the combined Chapter-3 topology stage over the preliminary GTFS graph.
 pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
+    let stage = Instant::now();
     let station_occurrences = collect_stations(&mut input);
+    info!(
+        "[topo] collected {} station clusters in {:.2?}",
+        station_occurrences.len(),
+        stage.elapsed()
+    );
+
+    let stage = Instant::now();
     let atoms = atomize(&input, cfg.segment_length);
+    info!(
+        "[topo] sampled {} geometric atoms in {:.2?}",
+        atoms.len(),
+        stage.elapsed()
+    );
+
+    let stage = Instant::now();
     let mut output = aggregate(&input, &atoms, cfg.max_aggr_distance);
+    info!(
+        "[topo] aggregation produced {} nodes / {} edges in {:.2?}",
+        output.nodes.iter().flatten().count(),
+        output.edges.iter().flatten().count(),
+        stage.elapsed()
+    );
 
     if cfg.infer_restrictions {
+        let stage = Instant::now();
         infer_restrictions(&input, &mut output, cfg);
+        info!("[topo] inferred restrictions in {:.2?}", stage.elapsed());
     }
 
+    let stage = Instant::now();
     insert_stations(&station_occurrences, &mut output, cfg);
+    info!("[topo] inserted stations in {:.2?}", stage.elapsed());
     output
 }
 
@@ -87,20 +117,25 @@ fn collect_stations(graph: &mut Graph) -> Vec<StationOcc> {
 
 fn atomize(graph: &Graph, step_m: f64) -> Vec<Atom> {
     let mut atoms = Vec::new();
+    let step_m = step_m.max(0.5);
 
+    // LOOM samples geometry, not the Cartesian product of geometry x lines x
+    // provenance edges.  Stream the samples directly so we also avoid building
+    // a second dense polyline for every input edge.
     for edge in graph.edges.iter().filter_map(Option::as_ref) {
-        let dense = densify(&edge.geom, step_m);
+        for segment in edge.geom.windows(2) {
+            let distance = haversine_m(segment[0], segment[1]);
+            let pieces = (distance / step_m).ceil().max(1.0) as usize;
+            let mut a = segment[0];
 
-        for segment in dense.windows(2) {
-            for &line in &edge.lines {
-                for &orig in &edge.originals {
-                    atoms.push(Atom {
-                        orig,
-                        line,
-                        a: segment[0],
-                        b: segment[1],
-                    });
-                }
+            for i in 1..=pieces {
+                let b = lerp(segment[0], segment[1], i as f64 / pieces as f64);
+                atoms.push(Atom {
+                    edge: edge.id,
+                    a,
+                    b,
+                });
+                a = b;
             }
         }
     }
@@ -254,8 +289,11 @@ fn aggregate(input: &Graph, atoms: &[Atom], max_distance_m: f64) -> Graph {
             start_lat += a.lat;
             end_lon += b.lon;
             end_lat += b.lat;
-            line_occurrences.insert(atoms[index].line);
-            originals.insert(atoms[index].orig);
+            let source = input.edges[atoms[index].edge]
+                .as_ref()
+                .expect("atom source edge exists");
+            line_occurrences.extend(source.lines.iter().copied());
+            originals.extend(source.originals.iter().copied());
         }
 
         let count = ids.len() as f64;
@@ -282,12 +320,36 @@ fn aggregate(input: &Graph, atoms: &[Atom], max_distance_m: f64) -> Graph {
 
     let mut endpoint_uf = UnionFind::new(endpoints.len());
 
-    // This is intentionally local and simple for now; it is the same endpoint
-    // aggregation rule as the previous file, but without borrow/import errors.
-    for i in 0..endpoints.len() {
-        for j in (i + 1)..endpoints.len() {
-            if haversine_m(endpoints[i], endpoints[j]) <= max_distance_m {
-                endpoint_uf.union(i, j);
+    // Do not compare every endpoint with every other endpoint.  On a large
+    // component this was O(S^2) after sampling and is the main reason topo
+    // appeared to freeze.  The same fixed-radius grid used above gives
+    // expected O(S + K), where K is the number of genuinely local candidates.
+    let endpoint_cell_degrees = (max_distance_m / 111_320.0).max(1e-9);
+    let mut endpoint_buckets = HashMap::<(i64, i64), Vec<usize>>::new();
+    for (index, point) in endpoints.iter().enumerate() {
+        let key = (
+            (point.lon / endpoint_cell_degrees).floor() as i64,
+            (point.lat / endpoint_cell_degrees).floor() as i64,
+        );
+        endpoint_buckets.entry(key).or_default().push(index);
+    }
+
+    for (&key, ids) in &endpoint_buckets {
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let Some(other_ids) = endpoint_buckets.get(&(key.0 + dx, key.1 + dy)) else {
+                    continue;
+                };
+                for &i in ids {
+                    for &j in other_ids {
+                        if j <= i {
+                            continue;
+                        }
+                        if haversine_m(endpoints[i], endpoints[j]) <= max_distance_m {
+                            endpoint_uf.union(i, j);
+                        }
+                    }
+                }
             }
         }
     }
@@ -338,33 +400,37 @@ fn aggregate(input: &Graph, atoms: &[Atom], max_distance_m: f64) -> Graph {
     output
 }
 
+fn degree_two_candidate(graph: &Graph, node_id: usize) -> Option<(usize, usize)> {
+    let node = graph.nodes.get(node_id)?.as_ref()?;
+    if node.adj.len() != 2 || !node.stops.is_empty() {
+        return None;
+    }
+
+    let mut adjacent = node.adj.iter();
+    let e1 = *adjacent.next()?;
+    let e2 = *adjacent.next()?;
+    let edge1 = graph.edges.get(e1)?.as_ref()?;
+    let edge2 = graph.edges.get(e2)?.as_ref()?;
+
+    // A change in line membership is a real topological event and must not be
+    // contracted away.
+    (edge1.lines == edge2.lines).then_some((e1, e2))
+}
+
 fn contract_degree_two(graph: &mut Graph) {
-    loop {
-        let candidate = graph.nodes.iter().enumerate().find_map(|(node_id, node)| {
-            let node = node.as_ref()?;
+    // The old loop rescanned the complete node vector after every contraction:
+    // O(V^2) on a long sampled line.  Only the two neighbours of a contracted
+    // node can become new degree-two candidates, so use a local work queue.
+    let mut queue: VecDeque<usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(id, node)| node.as_ref().map(|_| id))
+        .collect();
 
-            if node.adj.len() != 2 || !node.stops.is_empty() {
-                return None;
-            }
-
-            let mut adjacent = node.adj.iter();
-            let e1 = *adjacent.next().expect("degree two");
-            let e2 = *adjacent.next().expect("degree two");
-
-            let edge1 = graph.edges[e1].as_ref()?;
-            let edge2 = graph.edges[e2].as_ref()?;
-
-            // A change in line membership is a real topological event and must
-            // not be contracted away.
-            if edge1.lines != edge2.lines {
-                return None;
-            }
-
-            Some((node_id, e1, e2))
-        });
-
-        let Some((node_id, e1_id, e2_id)) = candidate else {
-            break;
+    while let Some(node_id) = queue.pop_front() {
+        let Some((e1_id, e2_id)) = degree_two_candidate(graph, node_id) else {
+            continue;
         };
 
         let edge1 = graph.edges[e1_id].clone().expect("edge exists");
@@ -373,8 +439,10 @@ fn contract_degree_two(graph: &mut Graph) {
         let u = if edge1.a == node_id { edge1.b } else { edge1.a };
         let v = if edge2.a == node_id { edge2.b } else { edge2.a };
 
+        // A two-edge cycle is not contractible, but it must not abort
+        // contraction of unrelated nodes.
         if u == v {
-            break;
+            continue;
         }
 
         let node_pos = graph.nodes[node_id].as_ref().expect("node exists").pos;
@@ -388,7 +456,6 @@ fn contract_degree_two(graph: &mut Graph) {
         if right.first().copied() != Some(node_pos) {
             right.reverse();
         }
-
         geometry.extend(right.into_iter().skip(1));
 
         graph.remove_edge(e1_id);
@@ -399,13 +466,27 @@ fn contract_degree_two(graph: &mut Graph) {
         let new_edge = graph.edges[new_edge_id]
             .as_mut()
             .expect("newly inserted edge");
-
         new_edge.lines = edge1.lines;
         new_edge.originals = edge1.originals.union(&edge2.originals).copied().collect();
+
+        queue.push_back(u);
+        queue.push_back(v);
     }
 }
 
 fn infer_restrictions(original: &Graph, graph: &mut Graph, cfg: &TopoConfig) {
+    // original_edges_connected used to linearly scan the entire original edge
+    // vector twice for every candidate turn.  Build the provenance lookup once.
+    let mut original_index = HashMap::<usize, usize>::new();
+    for (edge_id, edge) in original.edges.iter().enumerate() {
+        let Some(edge) = edge.as_ref() else {
+            continue;
+        };
+        for &original_id in &edge.originals {
+            original_index.entry(original_id).or_insert(edge_id);
+        }
+    }
+
     let node_ids: Vec<usize> = graph
         .nodes
         .iter()
@@ -444,7 +525,13 @@ fn infer_restrictions(original: &Graph, graph: &mut Graph, cfg: &TopoConfig) {
 
                     let directly_supported = a.originals.iter().any(|from_original| {
                         b.originals.iter().any(|to_original| {
-                            original_edges_connected(original, *from_original, *to_original, line)
+                            original_edges_connected(
+                                original,
+                                &original_index,
+                                *from_original,
+                                *to_original,
+                                line,
+                            )
                         })
                     });
 
@@ -480,21 +567,19 @@ fn infer_restrictions(original: &Graph, graph: &mut Graph, cfg: &TopoConfig) {
 
 fn original_edges_connected(
     graph: &Graph,
+    original_index: &HashMap<usize, usize>,
     a_original: usize,
     b_original: usize,
     line: LineId,
 ) -> bool {
-    let a = graph
-        .edges
-        .iter()
-        .filter_map(Option::as_ref)
-        .find(|edge| edge.originals.contains(&a_original));
-
-    let b = graph
-        .edges
-        .iter()
-        .filter_map(Option::as_ref)
-        .find(|edge| edge.originals.contains(&b_original));
+    let a = original_index
+        .get(&a_original)
+        .and_then(|&edge_id| graph.edges.get(edge_id))
+        .and_then(Option::as_ref);
+    let b = original_index
+        .get(&b_original)
+        .and_then(|&edge_id| graph.edges.get(edge_id))
+        .and_then(Option::as_ref);
 
     match (a, b) {
         (Some(a), Some(b)) => {
@@ -553,14 +638,19 @@ fn short_line_specific_explanation(
         out_edge.a
     };
 
-    let mut distances = vec![f64::INFINITY; graph.nodes.len()];
+    // This search is bounded to max_distance.  Clearing a |V|-sized vector for
+    // every candidate turn makes restriction inference O(T * V) even when each
+    // search visits only a handful of nearby nodes.
+    let mut distances = HashMap::<usize, f64>::new();
     let mut queue = BinaryHeap::new();
 
-    distances[start] = 0.0;
+    distances.insert(start, 0.0);
     queue.push(QueueEntry(0.0, start));
 
     while let Some(QueueEntry(distance, node_id)) = queue.pop() {
-        if distance > distances[node_id] || distance > max_distance {
+        if distance > *distances.get(&node_id).unwrap_or(&f64::INFINITY)
+            || distance > max_distance
+        {
             continue;
         }
 
@@ -590,8 +680,8 @@ fn short_line_specific_explanation(
             let next = if edge.a == node_id { edge.b } else { edge.a };
             let next_distance = distance + polyline_len(&edge.geom);
 
-            if next_distance < distances[next] {
-                distances[next] = next_distance;
+            if next_distance < *distances.get(&next).unwrap_or(&f64::INFINITY) {
+                distances.insert(next, next_distance);
                 queue.push(QueueEntry(next_distance, next));
             }
         }
