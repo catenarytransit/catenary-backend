@@ -113,6 +113,36 @@ fn collect_edges(g: &Graph) -> Vec<usize> {
     edges
 }
 
+// Insert segments as we go: C++ collapseShrdSegs sees non-isolated candidates.
+fn insert_constructed_segment(
+    out: &mut Graph,
+    output_edges: &mut HashMap<(usize, usize), usize>,
+    a: usize,
+    b: usize,
+    source: &crate::loom_graph::Edge,
+) {
+    if a == b {
+        return;
+    }
+    let key = (a.min(b), a.max(b));
+    let id = *output_edges.entry(key).or_insert_with(|| {
+        let geometry = vec![
+            out.nodes[a].as_ref().unwrap().pos,
+            out.nodes[b].as_ref().unwrap().pos,
+        ];
+        out.add_edge(a, b, geometry)
+    });
+    let target = out.edges[id].as_mut().unwrap();
+    target.originals.extend(source.originals.iter().copied());
+    for occ in &source.lines {
+        let direction = occ.direction.map(|old| if old == source.a { a } else { b });
+        target.lines.insert(LineOcc {
+            line: occ.line,
+            direction,
+        });
+    }
+}
+
 fn construct_once(input: &Graph, radius: f64) -> Graph {
     let mut out = Graph::default();
     out.lines = input.lines.clone();
@@ -173,31 +203,13 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
             if front.is_none() {
                 front = Some(id);
             }
-        }
-        for pair in path.windows(2) {
-            let a = pair[0];
-            let b = pair[1];
-            if a == b {
-                continue;
-            }
-            let key = (a.min(b), a.max(b));
-            let id = *output_edges.entry(key).or_insert_with(|| {
-                let geo = vec![
-                    out.nodes[a].as_ref().unwrap().pos,
-                    out.nodes[b].as_ref().unwrap().pos,
-                ];
-                out.add_edge(a, b, geo)
-            });
-            let target = out.edges[id].as_mut().unwrap();
-            target.originals.extend(edge.originals.iter().copied());
-            for occ in &edge.lines {
-                // The occurrence points toward the source edge's a or b.
-                // All sampled segments follow the a -> b traversal here.
-                let direction = occ.direction.map(|old| if old == edge.a { a } else { b });
-                target.lines.insert(LineOcc {
-                    line: occ.line,
-                    direction,
-                });
+            // Materialize each edge now so subsequent candidates have degree.
+            if path.len() >= 2 {
+                let a = path[path.len() - 2];
+                let b = path[path.len() - 1];
+                if a != b {
+                    insert_constructed_segment(&mut out, &mut output_edges, a, b, edge);
+                }
             }
         }
     }
@@ -228,7 +240,16 @@ fn contract(out: &mut Graph) {
         }
         let u = if a.a == mid { a.b } else { a.a };
         let v = if b.a == mid { b.b } else { b.a };
-        if u == v || polyline_len(&a.geom) + polyline_len(&b.geom) > MAX_CONTRACTION_METERS {
+        if u == v
+            || out.nodes[u].as_ref().unwrap().adj.iter().any(|&eid| {
+                eid != ids[0]
+                    && eid != ids[1]
+                    && out.edges[eid]
+                        .as_ref()
+                        .is_some_and(|e| (e.a == u && e.b == v) || (e.a == v && e.b == u))
+            })
+            || polyline_len(&a.geom) + polyline_len(&b.geom) > MAX_CONTRACTION_METERS
+        {
             continue;
         }
         let left = a.clone();
