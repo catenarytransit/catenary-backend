@@ -220,7 +220,7 @@ pub fn average(lines: &[Vec<Point>]) -> Vec<Point> {
     if longest < 1e-9 { return lines[0].clone(); }
     let step = AVERAGING_STEP / longest;
     let mut samples = Vec::new();
-    let mut t = 0.0;
+    let mut t: f64 = 0.0;
     loop {
         let fraction = t.min(1.0);
         let mut sum = (0.0, 0.0);
