@@ -70,7 +70,8 @@ fn main() -> Result<()> {
         ..Default::default()
     };
 
-    let mut graph = loom_graph::Graph::default();
+    // Stream each independent component to disk; never retain a world-sized graph.
+    let mut writer = export::GeoJsonWriter::create(&args.output)?;
     for (index, component) in components.iter().enumerate() {
         let component_started = Instant::now();
         info!(
@@ -102,16 +103,18 @@ fn main() -> Result<()> {
             component_graph.edges.iter().filter(|e| e.is_some()).count(),
             component_started.elapsed()
         );
-        graph.append(component_graph);
+        writer.write_component(&component_graph)?;
+        // Component graph and all of its geometry can now be released.
+        drop(component_graph);
     }
 
-    export::geojson(&graph, &args.output)?;
+    let counts = writer.finish()?;
     info!(
         "wrote {:?}: {} nodes, {} edges, {} lines in {:.2?}",
         args.output,
-        graph.nodes.iter().filter(|n| n.is_some()).count(),
-        graph.edges.iter().filter(|e| e.is_some()).count(),
-        graph.lines.len(),
+        counts.nodes,
+        counts.edges,
+        counts.lines,
         started.elapsed()
     );
     Ok(())
