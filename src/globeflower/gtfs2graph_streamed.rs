@@ -46,6 +46,25 @@ impl Default for PlannerConfig {
 }
 
 #[derive(QueryableByName, Debug)]
+struct RouteSeedRow {
+    #[diesel(sql_type = Text)]
+    onestop_feed_id: String,
+    #[diesel(sql_type = Text)]
+    attempt_id: String,
+    #[diesel(sql_type = Text)]
+    route_id: String,
+    #[diesel(sql_type = Text)]
+    shapes_json: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RouteWorkKey {
+    onestop_feed_id: String,
+    attempt_id: String,
+    route_id: String,
+}
+
+#[derive(QueryableByName, Debug)]
 struct PlannerRow {
     #[diesel(sql_type = Text)]
     onestop_feed_id: String,
@@ -226,70 +245,141 @@ impl DisjointSet {
     }
 }
 
-/// Discover independent transit worksets without ever loading GTFS geometry.
+/// Discover independent transit worksets by starting from gtfs.routes.
 ///
-/// The scan is deliberately spatial so PostgreSQL can use
-/// `gtfs_static_stops_geom_idx`. Dense tiles are adaptively subdivided, making
-/// planner memory O(number of direction patterns + row_limit), not O(all stops).
+/// Globeflower only wants GTFS route_type 0 and 1, so the routes table is a much
+/// cheaper root than sweeping the entire world through gtfs.stops.  We read the
+/// selected routes and their shapes_list first, then resolve direction-pattern
+/// station memberships in bounded route batches.  No shape geometry is loaded
+/// during planning.
 ///
-/// Connectivity is exact at the station level:
-///   * rows sharing an OSM station ID are the same physical station, even when
-///     they come from different feeds/agencies;
-///   * without an OSM station ID, the feed/version/GTFS stop ID is the fallback;
-///   * a direction pattern appearing in several tiles naturally joins those tiles.
-///
-/// Merely overlapping geographic bounding boxes do not force two systems into
-/// one workset. They are joined only when the transit topology actually shares a
-/// physical station, which avoids the quadratic "everything in a city" failure.
+/// Patterns are unioned when they share a physical station. osm_station_id is
+/// the cross-feed identity; otherwise feed + attempt + stop_id is the fallback.
 pub fn discover_components(
     conn: &mut PgConnection,
     cfg: PlannerConfig,
 ) -> Result<Vec<WorkComponent>> {
-    anyhow::ensure!(cfg.tile_degrees > 0.0, "planner tile size must be > 0");
-    anyhow::ensure!(
-        cfg.min_tile_degrees > 0.0,
-        "planner minimum tile size must be > 0"
-    );
     anyhow::ensure!(cfg.row_limit > 0, "planner row limit must be > 0");
 
-    let mut dsu = DisjointSet::default();
-    let mut south = -90.0;
-    let mut tile_count = 0usize;
-    let mut dense_splits = 0usize;
+    info!("[planner] reading production route_type 0/1 routes first");
+    let route_rows: Vec<RouteSeedRow> = diesel::sql_query(format!(
+        r#"
+        SELECT
+            r.onestop_feed_id,
+            r.attempt_id,
+            r.route_id,
+            COALESCE(to_jsonb(r.shapes_list)::text, '[]') AS shapes_json
+        FROM gtfs.routes AS r
+        INNER JOIN gtfs.ingested_static AS ingest
+            ON ingest.onestop_feed_id = r.onestop_feed_id
+           AND ingest.attempt_id = r.attempt_id
+        WHERE r.route_type IN {route_types}
+          AND ingest.production = TRUE
+          AND ingest.deleted = FALSE
+        ORDER BY r.onestop_feed_id, r.attempt_id, r.route_id
+        "#,
+        route_types = ROUTE_TYPES_SQL
+    ))
+    .load(conn)
+    .context("load production tram/metro routes")?;
 
-    while south < 90.0 {
-        let north = (south + cfg.tile_degrees).min(90.0);
-        let mut west = -180.0;
-        while west < 180.0 {
-            let east = (west + cfg.tile_degrees).min(180.0);
-            scan_tile(
-                conn,
-                Tile {
-                    west,
-                    south,
-                    east,
-                    north,
-                },
-                cfg,
-                &mut dsu,
-                &mut tile_count,
-                &mut dense_splits,
-            )?;
-            west = east;
+    if route_rows.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut route_keys = Vec::with_capacity(route_rows.len());
+    let mut shape_ref_count = 0usize;
+    for row in route_rows {
+        if let Ok(shape_ids) = serde_json::from_str::<Vec<Option<String>>>(&row.shapes_json) {
+            shape_ref_count += shape_ids.into_iter().flatten().count();
         }
-        south = north;
+        route_keys.push(RouteWorkKey {
+            onestop_feed_id: row.onestop_feed_id,
+            attempt_id: row.attempt_id,
+            route_id: row.route_id,
+        });
+    }
+
+    info!(
+        "[planner] {} routes reference {} shape IDs; geometry remains unloaded",
+        route_keys.len(),
+        shape_ref_count
+    );
+
+    let mut dsu = DisjointSet::default();
+    let mut first_pattern_at_station = HashMap::<String, usize>::new();
+    let route_batch_size = cfg.row_limit.clamp(64, 1024);
+    let mut membership_count = 0usize;
+
+    for route_chunk in route_keys.chunks(route_batch_size) {
+        let workset_json = serde_json::to_string(route_chunk)?;
+        let rows: Vec<PlannerRow> = diesel::sql_query(format!(
+            r#"
+            WITH route_workset AS (
+                SELECT *
+                FROM jsonb_to_recordset($1::jsonb) AS w(
+                    onestop_feed_id text,
+                    attempt_id text,
+                    route_id text
+                )
+            )
+            SELECT DISTINCT
+                dp.onestop_feed_id,
+                dp.attempt_id,
+                dp.direction_pattern_id,
+                CASE
+                    WHEN s.osm_station_id IS NOT NULL
+                        THEN 'osm:' || s.osm_station_id::text
+                    ELSE 'gtfs:' || s.onestop_feed_id || '|' || s.attempt_id || '|' || s.gtfs_id
+                END AS station_key
+            FROM route_workset AS w
+            INNER JOIN gtfs.direction_pattern_meta AS dpm
+                ON dpm.onestop_feed_id = w.onestop_feed_id
+               AND dpm.attempt_id = w.attempt_id
+               AND dpm.route_id = w.route_id
+            INNER JOIN gtfs.direction_pattern AS dp
+                ON dp.onestop_feed_id = dpm.onestop_feed_id
+               AND dp.attempt_id = dpm.attempt_id
+               AND dp.direction_pattern_id = dpm.direction_pattern_id
+            INNER JOIN gtfs.stops AS s
+                ON s.onestop_feed_id = dp.onestop_feed_id
+               AND s.attempt_id = dp.attempt_id
+               AND s.gtfs_id = dp.stop_id
+            WHERE dpm.route_type IN {route_types}
+              AND s.allowed_spatial_query = TRUE
+              AND s.location_type IN (0, 1)
+              AND s.point IS NOT NULL
+            "#,
+            route_types = ROUTE_TYPES_SQL
+        ))
+        .bind::<Text, _>(&workset_json)
+        .load(conn)
+        .context("load route-batched direction-pattern station memberships")?;
+
+        membership_count += rows.len();
+        for row in rows {
+            let idx = dsu.ensure(PatternKey {
+                onestop_feed_id: row.onestop_feed_id,
+                attempt_id: row.attempt_id,
+                direction_pattern_id: row.direction_pattern_id,
+            });
+            if let Some(&first) = first_pattern_at_station.get(&row.station_key) {
+                dsu.union(first, idx);
+            } else {
+                first_pattern_at_station.insert(row.station_key, idx);
+            }
+        }
     }
 
     let pattern_count = dsu.keys.len();
     let components = dsu.into_components();
     let largest = components.first().map_or(0, |c| c.patterns.len());
     info!(
-        "[planner] {} route_type 0/1 direction patterns -> {} connected components; largest={} patterns; tiles={} splits={}",
+        "[planner] {} station memberships, {} route_type 0/1 direction patterns -> {} connected components; largest={} patterns",
+        membership_count,
         pattern_count,
         components.len(),
-        largest,
-        tile_count,
-        dense_splits
+        largest
     );
     Ok(components)
 }
@@ -494,25 +584,36 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
                 attempt_id text,
                 direction_pattern_id text
             )
+        ),
+        route_shapes AS (
+            SELECT DISTINCT
+                r.onestop_feed_id,
+                r.attempt_id,
+                route_shape.shape_id
+            FROM workset AS w
+            INNER JOIN gtfs.direction_pattern_meta AS dpm
+                ON dpm.onestop_feed_id = w.onestop_feed_id
+               AND dpm.attempt_id = w.attempt_id
+               AND dpm.direction_pattern_id = w.direction_pattern_id
+            INNER JOIN gtfs.routes AS r
+                ON r.onestop_feed_id = dpm.onestop_feed_id
+               AND r.attempt_id = dpm.attempt_id
+               AND r.route_id = dpm.route_id
+            CROSS JOIN LATERAL unnest(COALESCE(r.shapes_list, ARRAY[]::text[])) AS route_shape(shape_id)
+            WHERE r.route_type IN {route_types}
         )
         SELECT DISTINCT
             s.onestop_feed_id,
             s.attempt_id,
             s.shape_id,
             ST_AsGeoJSON(s.linestring) AS geojson
-        FROM workset AS w
-        INNER JOIN gtfs.direction_pattern_meta AS dpm
-            ON dpm.onestop_feed_id = w.onestop_feed_id
-           AND dpm.attempt_id = w.attempt_id
-           AND dpm.direction_pattern_id = w.direction_pattern_id
+        FROM route_shapes AS rs
         INNER JOIN gtfs.shapes AS s
-            ON s.onestop_feed_id = dpm.onestop_feed_id
-           AND s.attempt_id = dpm.attempt_id
-           AND s.shape_id = dpm.gtfs_shape_id
-        WHERE dpm.route_type IN {route_types}
-          AND s.route_type IN {route_types}
+            ON s.onestop_feed_id = rs.onestop_feed_id
+           AND s.attempt_id = rs.attempt_id
+           AND s.shape_id = rs.shape_id
+        WHERE s.route_type IN {route_types}
           AND s.allowed_spatial_query = TRUE
-          AND dpm.gtfs_shape_id IS NOT NULL
         "#,
         route_types = ROUTE_TYPES_SQL
     ))
