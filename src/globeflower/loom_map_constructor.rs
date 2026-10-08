@@ -4,8 +4,8 @@ use crate::loom_graph::{Graph, LineOcc, Point, haversine_m, lerp, polyline_len};
 use log::info;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-const SAMPLE_METERS: f64 = 20.0;
-const MAX_PASSES: usize = 4;
+const SAMPLE_METERS: f64 = 5.0;
+const MAX_PASSES: usize = 50;
 const MAX_CONTRACTION_METERS: f64 = 500.0;
 
 type Cell = (i64, i64);
@@ -181,8 +181,7 @@ fn construct_once(input: &Graph, radius: f64) -> Graph {
 }
 
 fn compatible(a: &BTreeSet<LineOcc>, b: &BTreeSet<LineOcc>) -> bool {
-    a.iter().map(|x| x.line).collect::<BTreeSet<_>>()
-        == b.iter().map(|x| x.line).collect::<BTreeSet<_>>()
+    a == b
 }
 
 fn contract(out: &mut Graph) {
@@ -232,7 +231,10 @@ fn contract(out: &mut Graph) {
 pub fn construct(input: &Graph, max_distance: f64) -> Graph {
     // LOOM repeats collapse until the total network length converges.
     // An iteration cap bounds runtime on continent-scale GTFS datasets.
-    let mut graph = construct_once(input, max_distance.min(20.0));
+    // Use the configured aggregation radius, not a hidden 20m ceiling.
+    // LOOM's topology builder densifies its segments at approximately 5m.
+    assert!(max_distance.is_finite() && max_distance > 0.0);
+    let mut graph = construct_once(input, max_distance);
     contract(&mut graph);
     let mut old_len: f64 = graph
         .edges
@@ -241,7 +243,7 @@ pub fn construct(input: &Graph, max_distance: f64) -> Graph {
         .map(|e| polyline_len(&e.geom))
         .sum();
     for iter in 1..MAX_PASSES {
-        let mut next = construct_once(&graph, max_distance.min(20.0));
+        let mut next = construct_once(&graph, max_distance);
         contract(&mut next);
         let new_len: f64 = next
             .edges
