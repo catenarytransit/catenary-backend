@@ -58,15 +58,9 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     );
 
     let stage = Instant::now();
-    let atoms = atomize(&input, cfg.segment_length);
-    info!(
-        "[topo] sampled {} geometric atoms in {:.2?}",
-        atoms.len(),
-        stage.elapsed()
-    );
-
-    let stage = Instant::now();
-    let mut output = aggregate(&input, &atoms, cfg.max_aggr_distance);
+    // LOOM-style long-edge-first construction with a geographic node index.
+    // Do not build a global union-find over every sampled 5m atom.
+    let mut output = crate::loom_map_constructor::construct(&input, cfg.max_aggr_distance);
     info!(
         "[topo] aggregation produced {} nodes / {} edges in {:.2?}",
         output.nodes.iter().flatten().count(),
@@ -87,12 +81,12 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 }
 
 fn collect_stations(graph: &mut Graph) -> Vec<StationOcc> {
-    let mut by_name = BTreeMap::<String, StationOcc>::new();
+    let mut by_name = BTreeMap::<(String, String), StationOcc>::new();
 
     for node in graph.nodes.iter_mut().filter_map(Option::as_mut) {
         for stop in std::mem::take(&mut node.stops) {
             let entry = by_name
-                .entry(stop.name.clone())
+                .entry((stop.chateau.clone(), stop.stop_id.clone()))
                 .or_insert_with(|| StationOcc {
                     stops: Vec::new(),
                     originals: BTreeSet::new(),
@@ -583,10 +577,13 @@ fn original_edges_connected(
 
     match (a, b) {
         (Some(a), Some(b)) => {
-            let share_node = a.a == b.a || a.a == b.b || a.b == b.a || a.b == b.b;
             let a_has_line = a.lines.iter().any(|occ| occ.line == line);
             let b_has_line = b.lines.iter().any(|occ| occ.line == line);
-            share_node && a_has_line && b_has_line
+            a_has_line && b_has_line && [a.a, a.b].iter().any(|&shared| {
+                (b.a == shared || b.b == shared) && graph.nodes[shared].as_ref()
+                    .and_then(|n| n.allowed_turns.get(&line))
+                    .is_some_and(|turns| turns.contains(&(a.id, b.id)) || turns.contains(&(b.id, a.id)))
+            })
         }
         _ => false,
     }
@@ -801,7 +798,18 @@ fn split_edge(graph: &mut Graph, edge_id: usize, position: f64) -> usize {
             .as_mut()
             .expect("newly inserted edge");
 
-        new_edge.lines = edge.lines.clone();
+        // StatInserter::split replaces the directional endpoint for each
+        // half-edge. Retaining a direction to the old, non-adjacent node
+        // corrupts directional connectivity after a station insertion.
+        new_edge.lines = edge.lines.iter().map(|occ| {
+            let direction = match occ.direction {
+                None => None,
+                Some(n) if n == edge.b => Some(b),
+                Some(n) if n == edge.a => Some(a),
+                Some(n) => Some(n),
+            };
+            LineOcc { line: occ.line, direction }
+        }).collect();
         new_edge.originals = edge.originals.clone();
     }
 

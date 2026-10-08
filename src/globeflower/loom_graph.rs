@@ -42,6 +42,9 @@ pub struct Node {
     pub stops: Vec<Stop>,
     pub not_served: BTreeSet<LineId>,
     pub adj: BTreeSet<EdgeId>,
+    /// Explicit consecutive-edge transitions constructed from direction patterns.
+    /// Edge IDs are local to this graph, not database or provenance IDs.
+    pub allowed_turns: BTreeMap<LineId, BTreeSet<(EdgeId, EdgeId)>>,
     /// line -> from edge -> forbidden to edges
     pub conn_exc: BTreeMap<LineId, BTreeMap<EdgeId, BTreeSet<EdgeId>>>,
 }
@@ -73,6 +76,7 @@ impl Graph {
             stops: vec![],
             not_served: BTreeSet::new(),
             adj: BTreeSet::new(),
+            allowed_turns: BTreeMap::new(),
             conn_exc: BTreeMap::new(),
         }));
         id
@@ -138,6 +142,18 @@ impl Graph {
                     .adj
                     .into_iter()
                     .map(|edge| edge + edge_offset)
+                    .collect();
+                node.allowed_turns = node
+                    .allowed_turns
+                    .into_iter()
+                    .map(|(line, turns)| {
+                        (
+                            line + line_offset,
+                            turns.into_iter().map(|(a, b)| {
+                                (a + edge_offset, b + edge_offset)
+                            }).collect(),
+                        )
+                    })
                     .collect();
                 node.conn_exc = node
                     .conn_exc
@@ -257,11 +273,36 @@ pub fn project_on_polyline(p: Point, g: &[Point]) -> (Point, f64, f64) {
 }
 
 pub fn subline(g: &[Point], from: f64, to: f64) -> Vec<Point> {
-    let dense = densify(g, 2.5);
-    if dense.len() < 2 {
-        return dense;
+    if g.len() < 2 {
+        return g.to_vec();
     }
-    let a = ((dense.len() - 1) as f64 * from).floor() as usize;
-    let b = ((dense.len() - 1) as f64 * to).ceil() as usize;
-    dense[a.min(dense.len() - 1)..=b.min(dense.len() - 1)].to_vec()
+    // LOOM uses geometric distance along the polyline. Sampling at 2.5m
+    // and then indexing by vertex count silently changes the meaning of
+    // fractional positions and multiplies allocations on long GTFS shapes.
+    let total = polyline_len(g);
+    if total <= 1e-9 { return vec![g[0], *g.last().unwrap()]; }
+    let start = from.clamp(0.0, 1.0) * total;
+    let end = to.clamp(0.0, 1.0) * total;
+    if end < start { return vec![g[0], g[0]]; }
+    let mut out = Vec::new();
+    let mut travelled = 0.0;
+    for segment in g.windows(2) {
+        let len = haversine_m(segment[0], segment[1]);
+        let next = travelled + len;
+        if next >= start && travelled <= end && len > 0.0 {
+            let a = ((start - travelled) / len).clamp(0.0, 1.0);
+            let b = ((end - travelled) / len).clamp(0.0, 1.0);
+            if out.is_empty() { out.push(lerp(segment[0], segment[1], a)); }
+            if next < end {
+                out.push(segment[1]);
+            } else {
+                out.push(lerp(segment[0], segment[1], b));
+                break;
+            }
+        }
+        travelled = next;
+    }
+    if out.len() == 1 { out.push(out[0]); }
+    if out.is_empty() { return vec![g[0], g[0]]; }
+    out
 }

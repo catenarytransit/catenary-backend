@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 mod export;
+mod loom_map_constructor;
 #[path = "gtfs2graph_streamed.rs"]
 mod gtfs2graph;
 mod loom_graph;

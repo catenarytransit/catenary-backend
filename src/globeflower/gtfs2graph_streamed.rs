@@ -735,6 +735,8 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             ))
         });
 
+        let mut previous: Option<(usize, usize)> = None; // (end node, edge id)
+
         for pair in pattern.stops.windows(2) {
             let Some(&a) = node_by_physical.get(&pair[0].2) else {
                 continue;
@@ -771,6 +773,18 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             });
             edge.originals.insert(preliminary_edge_id);
             preliminary_edge_id += 1;
+
+            // LOOM Builder::consume records each actual consecutive trip
+            // transition. Merely sharing a node and line does NOT establish a
+            // legal transition (particularly on branching metro services).
+            if let Some((previous_end, previous_edge)) = previous {
+                if previous_end == a {
+                    graph.nodes[a].as_mut().unwrap()
+                        .allowed_turns.entry(line_id).or_default()
+                        .insert((previous_edge, edge_id));
+                }
+            }
+            previous = Some((b, edge_id));
         }
     }
 
