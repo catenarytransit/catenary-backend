@@ -1,3 +1,6 @@
+#[path = "loom_semantics.rs"]
+mod loom_semantics;
+
 use crate::loom_graph::{
     Graph, LineId, LineOcc, Point, Stop, haversine_m, lerp, polyline_len, project_on_polyline,
     subline,
@@ -70,12 +73,20 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 
     if cfg.infer_restrictions {
         let stage = Instant::now();
-        infer_restrictions(&input, &mut output, cfg);
+        loom_semantics::infer_restrictions(&input, &mut output);
         info!("[topo] inferred restrictions in {:.2?}", stage.elapsed());
     }
 
     let stage = Instant::now();
-    insert_stations(&station_occurrences, &mut output, cfg);
+    let station_inputs: Vec<_> = station_occurrences
+        .into_iter()
+        .map(|o| loom_semantics::StationOccurrence {
+            stops: o.stops,
+            originals: o.originals,
+            lines: o.lines,
+        })
+        .collect();
+    loom_semantics::insert_stations(&station_inputs, &mut output, cfg.max_aggr_distance);
     info!("[topo] inserted stations in {:.2?}", stage.elapsed());
     output
 }
@@ -579,11 +590,17 @@ fn original_edges_connected(
         (Some(a), Some(b)) => {
             let a_has_line = a.lines.iter().any(|occ| occ.line == line);
             let b_has_line = b.lines.iter().any(|occ| occ.line == line);
-            a_has_line && b_has_line && [a.a, a.b].iter().any(|&shared| {
-                (b.a == shared || b.b == shared) && graph.nodes[shared].as_ref()
-                    .and_then(|n| n.allowed_turns.get(&line))
-                    .is_some_and(|turns| turns.contains(&(a.id, b.id)) || turns.contains(&(b.id, a.id)))
-            })
+            a_has_line
+                && b_has_line
+                && [a.a, a.b].iter().any(|&shared| {
+                    (b.a == shared || b.b == shared)
+                        && graph.nodes[shared]
+                            .as_ref()
+                            .and_then(|n| n.allowed_turns.get(&line))
+                            .is_some_and(|turns| {
+                                turns.contains(&(a.id, b.id)) || turns.contains(&(b.id, a.id))
+                            })
+                })
         }
         _ => false,
     }
@@ -801,15 +818,22 @@ fn split_edge(graph: &mut Graph, edge_id: usize, position: f64) -> usize {
         // StatInserter::split replaces the directional endpoint for each
         // half-edge. Retaining a direction to the old, non-adjacent node
         // corrupts directional connectivity after a station insertion.
-        new_edge.lines = edge.lines.iter().map(|occ| {
-            let direction = match occ.direction {
-                None => None,
-                Some(n) if n == edge.b => Some(b),
-                Some(n) if n == edge.a => Some(a),
-                Some(n) => Some(n),
-            };
-            LineOcc { line: occ.line, direction }
-        }).collect();
+        new_edge.lines = edge
+            .lines
+            .iter()
+            .map(|occ| {
+                let direction = match occ.direction {
+                    None => None,
+                    Some(n) if n == edge.b => Some(b),
+                    Some(n) if n == edge.a => Some(a),
+                    Some(n) => Some(n),
+                };
+                LineOcc {
+                    line: occ.line,
+                    direction,
+                }
+            })
+            .collect();
         new_edge.originals = edge.originals.clone();
     }
 

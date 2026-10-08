@@ -779,8 +779,12 @@ pub fn build_component(conn: &mut PgConnection, component: &WorkComponent) -> Re
             // legal transition (particularly on branching metro services).
             if let Some((previous_end, previous_edge)) = previous {
                 if previous_end == a {
-                    graph.nodes[a].as_mut().unwrap()
-                        .allowed_turns.entry(line_id).or_default()
+                    graph.nodes[a]
+                        .as_mut()
+                        .unwrap()
+                        .allowed_turns
+                        .entry(line_id)
+                        .or_default()
                         .insert((previous_edge, edge_id));
                 }
             }
