@@ -10,6 +10,8 @@ mod export;
 #[path = "gtfs2graph_streamed.rs"]
 mod gtfs2graph;
 mod loom_graph;
+mod loom_polyline;
+mod loom_builder_simplify;
 mod loom_map_constructor;
 mod topo;
 

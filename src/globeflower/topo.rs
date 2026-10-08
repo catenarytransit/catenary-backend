@@ -62,6 +62,15 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
         stage.elapsed()
     );
 
+    // TopoMain.cpp, in order: StatInserter::init (collect_stations above),
+    // MapConstructor::averageNodePositions, removeNodeArtifacts(false),
+    // cleanUpGeoms, then the two collapseShrdSegs passes.
+    crate::loom_map_constructor::average_node_positions(&mut input);
+    crate::loom_map_constructor::remove_node_artifacts(&mut input);
+    crate::loom_map_constructor::clean_up_geoms(&mut input);
+    #[cfg(debug_assertions)]
+    input.assert_consistent();
+
     let stage = Instant::now();
     // LOOM-style long-edge-first construction with a geographic node index.
     // Do not build a global union-find over every sampled 5m atom.

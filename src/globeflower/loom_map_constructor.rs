@@ -1,7 +1,7 @@
 //! Edge-by-edge, indexed shared-segment construction following LOOM's
 //! MapConstructor::collapseShrdSegs traversal, without global atom union-find.
 use crate::loom_graph::{
-    Graph, LineOcc, Point, add_line_occ, haversine_m, lerp, polyline_len, subline,
+    Graph, LineOcc, Point, add_line_occ, haversine_m, lerp, polyline_len,
 };
 use log::info;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -289,50 +289,7 @@ fn compatible(a: &BTreeSet<LineOcc>, b: &BTreeSet<LineOcc>, mid: usize) -> bool 
     })
 }
 
-/// C++ MapConstructor::lineEq also requires an observed transition. Shared
-/// original provenance means both pieces came from the same original edge.
-/// For different originals, only a recorded GTFS direction-pattern transition
-/// can authorize contracting away their intermediate node.
-fn source_transition(
-    a: &crate::loom_graph::Edge,
-    b: &crate::loom_graph::Edge,
-    legal: &HashSet<(usize, usize, usize)>,
-) -> bool {
-    if !a.originals.is_disjoint(&b.originals) {
-        return true;
-    }
-    a.lines.iter().all(|occ| {
-        a.originals.iter().any(|x| {
-            b.originals
-                .iter()
-                .any(|y| legal.contains(&(occ.line, *x, *y)) || legal.contains(&(occ.line, *y, *x)))
-        })
-    })
-}
-
-fn legal_transitions(graph: &Graph) -> HashSet<(usize, usize, usize)> {
-    let mut legal = HashSet::new();
-    for node in graph.nodes.iter().flatten() {
-        for (&line, turns) in &node.allowed_turns {
-            for &(a, b) in turns {
-                let (Some(left), Some(right)) = (
-                    graph.edges.get(a).and_then(Option::as_ref),
-                    graph.edges.get(b).and_then(Option::as_ref),
-                ) else {
-                    continue;
-                };
-                for x in &left.originals {
-                    for y in &right.originals {
-                        legal.insert((line, *x, *y));
-                    }
-                }
-            }
-        }
-    }
-    legal
-}
-
-fn contract(out: &mut Graph, legal: &HashSet<(usize, usize, usize)>) {
+fn contract(out: &mut Graph) {
     let mut todo: VecDeque<usize> = (0..out.nodes.len()).collect();
     while let Some(mid) = todo.pop_front() {
         let Some(node) = out.nodes[mid].as_ref() else {
@@ -345,7 +302,15 @@ fn contract(out: &mut Graph, legal: &HashSet<(usize, usize, usize)>) {
         let (Some(a), Some(b)) = (out.edges[ids[0]].as_ref(), out.edges[ids[1]].as_ref()) else {
             continue;
         };
-        if !compatible(&a.lines, &b.lines, mid) || !source_transition(a, b, legal) {
+        // C++ LineNodePL::connOccurs is TRUE unless a connection exception
+        // explicitly forbids this turn. It does NOT demand that a GTFS trip
+        // explicitly recorded the transition: that evidence is used later by
+        // RestrInferrer. Requiring it here creates spurious degree-two nodes.
+        if !compatible(&a.lines, &b.lines, mid) || !a.lines.iter().all(|occ| {
+            !node.conn_exc.get(&occ.line)
+                .and_then(|forbidden| forbidden.get(&ids[0]))
+                .is_some_and(|targets| targets.contains(&ids[1]))
+        }) {
             continue;
         }
         let u = if a.a == mid { a.b } else { a.a };
@@ -419,6 +384,18 @@ fn contract(out: &mut Graph, legal: &HashSet<(usize, usize, usize)>) {
         let edge = out.edges[eid].as_mut().unwrap();
         edge.lines = occurrences;
         edge.originals = originals;
+        // C++ LineGraph::nodeRpl updates the turn graph when edges are
+        // replaced. Remap both endpoints before another contraction pass.
+        for endpoint in [u, v] {
+            if let Some(node) = out.nodes[endpoint].as_mut() {
+                for turns in node.allowed_turns.values_mut() {
+                    *turns = turns.iter().map(|&(x, y)| (
+                        if x == ids[0] || x == ids[1] { eid } else { x },
+                        if y == ids[0] || y == ids[1] { eid } else { y },
+                    )).filter(|(x, y)| x != y).collect();
+                }
+            }
+        }
         todo.push_back(u);
         todo.push_back(v);
     }
@@ -481,26 +458,13 @@ fn combine_nodes(graph: &mut Graph, remove: usize, keep: usize, connecting: usiz
             if old.a != target.a && old.b != target.b {
                 old_geometry.reverse();
             }
-            // C++ foldEdges averages coincident geometries; keeping the
-            // existing shape when alternatives are far apart avoids sewing
-            // distinct platform tracks into a fictitious diagonal.
-            let old_mid = point_on_fraction(&old_geometry, 0.5);
-            let target_mid = point_on_fraction(&target.geom, 0.5);
-            let can_average = haversine_m(old_mid, target_mid) <= 10.0;
+            // C++ MapConstructor::foldEdges -> geomAvg uses the UNWEIGHTED
+            // PolyLine::average and subsequently simplifies by 0.5 meters.
+            // Do not introduce an extra 10m midpoint acceptance predicate:
+            // the C++ routine does not have one.
+            let averaged = crate::loom_polyline::average(&[target.geom.clone(), old_geometry]);
             let into = graph.edges[target_id].as_mut().unwrap();
-            if can_average {
-                let samples = (0..=16)
-                    .map(|i| {
-                        let f = i as f64 / 16.0;
-                        lerp(
-                            point_on_fraction(&target.geom, f),
-                            point_on_fraction(&old_geometry, f),
-                            0.5,
-                        )
-                    })
-                    .collect();
-                into.geom = samples;
-            }
+            into.geom = crate::loom_polyline::simplify(&averaged, 0.5);
             into.originals.extend(old.originals.iter().copied());
             for occ in &old.lines {
                 let direction = occ.direction.map(|d| if d == remove { keep } else { d });
@@ -546,23 +510,6 @@ fn combine_nodes(graph: &mut Graph, remove: usize, keep: usize, connecting: usiz
     }
     graph.nodes[remove] = None;
     true
-}
-
-fn point_on_fraction(polyline: &[Point], fraction: f64) -> Point {
-    let total = polyline_len(polyline);
-    if total < 1e-9 {
-        return polyline[0];
-    }
-    let wanted = fraction.clamp(0.0, 1.0) * total;
-    let mut travelled = 0.0;
-    for pair in polyline.windows(2) {
-        let len = haversine_m(pair[0], pair[1]);
-        if travelled + len >= wanted && len > 0.0 {
-            return lerp(pair[0], pair[1], (wanted - travelled) / len);
-        }
-        travelled += len;
-    }
-    *polyline.last().unwrap()
 }
 
 /// C++ `collapseShrdSegs` combines sub-segment-length artifacts if at least
@@ -616,30 +563,58 @@ fn collapse_short_artifacts(graph: &mut Graph, segment_length: f64) {
     }
 }
 
-/// C++ reconstructIntersections trims the interior of the collapsed polyline
-/// by the aggregation radius and reconnects it to the final node coordinates.
-/// Call only at the END of a construction phase, not before another collapse.
+/// C++ MapConstructor::averageNodePositions, also called BEFORE collapse.
+pub fn average_node_positions(graph: &mut Graph) {
+    // C++ MapConstructor::averageNodePositions: take the mean of incident
+    // polyline start/end positions BEFORE trimming the intersection arms.
+    // This mean is in WebMercator meters, not geographic degrees.
+    let mut averaged = Vec::with_capacity(graph.nodes.len());
+    for node in graph.nodes.iter().map(Option::as_ref) {
+        let Some(node) = node else { averaged.push(None); continue; };
+        let incident: Vec<Point> = node.adj.iter().filter_map(|&eid| {
+            let edge = graph.edges.get(eid).and_then(Option::as_ref)?;
+            if edge.a == node.id { edge.geom.first().copied() }
+            else { edge.geom.last().copied() }
+        }).collect();
+        averaged.push(if incident.is_empty() { None }
+            else { Some(crate::loom_polyline::centroid(&incident)) });
+    }
+    for (node, average) in graph.nodes.iter_mut().zip(averaged) {
+        if let (Some(node), Some(pos)) = (node.as_mut(), average) { node.pos = pos; }
+    }
+}
+
+/// C++ MapConstructor::cleanUpGeoms, after initial node-artifact removal.
+pub fn clean_up_geoms(graph: &mut Graph) {
+    for edge in graph.edges.iter_mut().flatten() {
+        let from = graph.nodes[edge.a].as_ref().unwrap().pos;
+        let to = graph.nodes[edge.b].as_ref().unwrap().pos;
+        edge.geom = crate::loom_polyline::trim_between_projections(&edge.geom, from, to);
+    }
+}
+
+/// C++ MapConstructor::removeNodeArtifacts(false) contracts valid degree-two
+/// nodes before and after shared-segment collapse. Station candidates have
+/// already been collected by StatInserter::init at this point.
+pub fn remove_node_artifacts(graph: &mut Graph) {
+    contract(graph);
+}
+
 pub fn reconstruct_intersections(graph: &mut Graph, radius: f64) {
+    average_node_positions(graph);
     for edge in graph.edges.iter_mut().flatten() {
         let (Some(from), Some(to)) = (graph.nodes[edge.a].as_ref(), graph.nodes[edge.b].as_ref())
         else {
             continue;
         };
-        let len = polyline_len(&edge.geom);
-        let from_pos = from.pos;
-        let to_pos = to.pos;
-        if len <= 2.0 * radius || edge.geom.len() < 2 {
-            edge.geom = vec![from_pos, to_pos];
-        } else {
-            let mut inner = subline(&edge.geom, radius / len, 1.0 - radius / len);
-            // Avoid zero-length connector artifacts from repeated coordinates.
-            inner.retain(|p| p.lon.is_finite() && p.lat.is_finite());
-            let mut geom = Vec::with_capacity(inner.len() + 2);
-            geom.push(from_pos);
-            geom.extend(inner);
-            geom.push(to_pos);
-            edge.geom = geom;
-        }
+        let len = crate::loom_polyline::metric_length(&edge.geom);
+        let mut inner = crate::loom_polyline::segment_at_dist(&edge.geom, radius, len - radius);
+        inner.retain(|p| p.lon.is_finite() && p.lat.is_finite());
+        let mut geom = Vec::with_capacity(inner.len() + 2);
+        geom.push(from.pos);
+        geom.extend(inner);
+        geom.push(to.pos);
+        edge.geom = geom;
     }
 }
 
@@ -651,10 +626,9 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
     assert!(max_distance.is_finite() && max_distance > 0.0);
     assert!(segment_length.is_finite() && segment_length > 0.0);
     let segment_length = segment_length.max(0.5);
-    let legal = legal_transitions(input);
     let mut graph = construct_once(input, max_distance, segment_length);
     collapse_short_artifacts(&mut graph, segment_length);
-    contract(&mut graph, &legal);
+    contract(&mut graph);
     let mut old_len: f64 = graph
         .edges
         .iter()
@@ -664,7 +638,7 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
     for iter in 1..MAX_PASSES {
         let mut next = construct_once(&graph, max_distance, segment_length);
         collapse_short_artifacts(&mut next, segment_length);
-        contract(&mut next, &legal);
+        contract(&mut next);
         let new_len: f64 = next
             .edges
             .iter()
@@ -734,11 +708,28 @@ mod parity_tests {
             line: 0,
             direction: Some(b),
         });
-        contract(&mut graph, &HashSet::new());
+        contract(&mut graph);
         let edges: Vec<_> = graph.edges.iter().flatten().collect();
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].lines.iter().next().unwrap().direction, Some(b));
         assert!(graph.nodes[mid].is_none());
+    }
+
+    #[test]
+    fn contraction_respects_explicit_cpp_connection_exception() {
+        let mut graph = Graph::default();
+        let a = graph.add_node(point(0.0));
+        let middle = graph.add_node(point(0.0001));
+        let b = graph.add_node(point(0.0002));
+        let e1 = graph.add_edge(a, middle, vec![point(0.0), point(0.0001)]);
+        let e2 = graph.add_edge(middle, b, vec![point(0.0001), point(0.0002)]);
+        graph.edges[e1].as_mut().unwrap().lines.insert(LineOcc { line: 0, direction: Some(middle) });
+        graph.edges[e2].as_mut().unwrap().lines.insert(LineOcc { line: 0, direction: Some(b) });
+        graph.nodes[middle].as_mut().unwrap().conn_exc.entry(0).or_default()
+            .entry(e1).or_default().insert(e2);
+        contract(&mut graph);
+        assert_eq!(graph.edges.iter().flatten().count(), 2);
+        assert!(graph.nodes[middle].is_some());
     }
 
     #[test]

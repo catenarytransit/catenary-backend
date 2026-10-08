@@ -6,8 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::loom_graph::{
-    Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ, haversine_m, lerp,
-    project_on_polyline, subline,
+    Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ,
 };
 
 /// Globeflower intentionally processes only GTFS route_type 0 (tram) and
@@ -814,27 +813,16 @@ pub fn build_component(
             let pa = graph.nodes[a].as_ref().unwrap().pos;
             let pb = graph.nodes[b].as_ref().unwrap().pos;
             let geometry = if let Some(shape) = shape {
-                let (_, ta, _) = project_on_polyline(pa, shape);
-                let (_, tb, _) = project_on_polyline(pb, shape);
-                if ta <= tb {
-                    subline(shape, ta, tb)
-                } else {
-                    let mut reversed = subline(shape, tb, ta);
-                    reversed.reverse();
-                    reversed
-                }
+                crate::loom_polyline::ordered_segment(shape, pa, pb)
             } else {
                 vec![pa, pb]
             };
             if geometry.len() < 2 {
                 continue;
             }
-            // Explicit endpoints are required by MapConstructor's geometry
-            // invariant and avoid tiny connector spurs at station junctions.
-            let mut geometry = geometry;
-            geometry[0] = pa;
-            let last = geometry.len() - 1;
-            geometry[last] = pb;
+            // C++ Builder::getSubPolyLine returns projected shape geometry.
+            // It DOES NOT force its endpoints onto the GTFS stop positions.
+            // MapConstructor handles graph-node endpoints separately.
             let key = (a.min(b), a.max(b), pattern.shape_id.clone());
             let edge_id = if let Some(&id) = edge_by_pair_shape.get(&key) {
                 id
@@ -882,154 +870,13 @@ pub fn build_component(
         }
     }
 
-    simplify_builder_edges(
+    crate::loom_builder_simplify::simplify(
         &mut graph,
         &edge_trip_weight,
         &mut edge_line_trip_weight,
         prune_threshold,
     );
     Ok(graph)
-}
-
-/// Return the approximate position at a fraction of distance along a shape.
-/// Unlike vertex-index interpolation, this is invariant to GTFS shape sampling.
-fn point_at(shape: &[Point], fraction: f64) -> Point {
-    let total: f64 = shape.windows(2).map(|p| haversine_m(p[0], p[1])).sum();
-    if total < 1e-9 {
-        return shape[0];
-    }
-    let wanted = total * fraction.clamp(0.0, 1.0);
-    let mut walked = 0.0;
-    for segment in shape.windows(2) {
-        let len = haversine_m(segment[0], segment[1]);
-        if walked + len >= wanted && len > 0.0 {
-            return lerp(segment[0], segment[1], (wanted - walked) / len);
-        }
-        walked += len;
-    }
-    *shape.last().unwrap()
-}
-
-/// One reference geometry per unordered station pair, as in
-/// Builder::consume + EdgePL::simplify.  Weight by observed trip membership,
-/// retain the dominant valid shape and average only geometrically compatible
-/// alternatives (C++ uses PolyLine::average after coalescing geometries).
-fn simplify_builder_edges(
-    graph: &mut Graph,
-    weights: &HashMap<usize, usize>,
-    line_weights: &mut HashMap<(usize, usize), usize>,
-    prune_threshold: f64,
-) {
-    let mut groups = BTreeMap::<(usize, usize), Vec<usize>>::new();
-    for edge in graph.edges.iter().flatten() {
-        groups
-            .entry((edge.a.min(edge.b), edge.a.max(edge.b)))
-            .or_default()
-            .push(edge.id);
-    }
-    let mut removed_to_reference = HashMap::<usize, usize>::new();
-    for ids in groups.into_values() {
-        if ids.len() < 2 {
-            continue;
-        }
-        let Some(&reference) = ids.iter().max_by_key(|&&id| {
-            (
-                weights.get(&id).copied().unwrap_or(1),
-                std::cmp::Reverse(id),
-            )
-        }) else {
-            continue;
-        };
-        let ref_edge = graph.edges[reference].as_ref().unwrap().clone();
-        let ref_geom = ref_edge.geom.clone();
-        let mut samples = (0..=16)
-            .map(|i| point_at(&ref_geom, i as f64 / 16.0))
-            .collect::<Vec<_>>();
-        let mut weight_sum = weights.get(&reference).copied().unwrap_or(1) as f64;
-        for &id in &ids {
-            if id == reference {
-                continue;
-            }
-            let Some(other) = graph.edges[id].as_ref().cloned() else {
-                continue;
-            };
-            let reversed = other.a != ref_edge.a;
-            let mut close = true;
-            for (i, point) in samples.iter().enumerate() {
-                let fraction = i as f64 / 16.0;
-                let q = point_at(
-                    &other.geom,
-                    if reversed { 1.0 - fraction } else { fraction },
-                );
-                if haversine_m(*point, q) > 10.0 {
-                    close = false;
-                    break;
-                }
-            }
-            // The C++ averages all surviving geometries.  In mixed GTFS
-            // feeds, a huge detour cannot be safely averaged into a corridor;
-            // use the dominant reference shape instead in that case.
-            if close {
-                let w = weights.get(&id).copied().unwrap_or(1) as f64;
-                for (i, point) in samples.iter_mut().enumerate() {
-                    let f = i as f64 / 16.0;
-                    let q = point_at(&other.geom, if reversed { 1.0 - f } else { f });
-                    *point = lerp(*point, q, w / (weight_sum + w));
-                }
-                weight_sum += w;
-            }
-            {
-                let target = graph.edges[reference].as_mut().unwrap();
-                target.originals.extend(other.originals.iter().copied());
-                for occ in other.lines {
-                    let w = line_weights.remove(&(id, occ.line)).unwrap_or(0);
-                    *line_weights.entry((reference, occ.line)).or_default() += w;
-                    add_line_occ(&mut target.lines, occ);
-                }
-            }
-            graph.remove_edge(id);
-            removed_to_reference.insert(id, reference);
-        }
-        // Preserve the actual GTFS stop locations at reference endpoints.
-        samples[0] = graph.nodes[ref_edge.a].as_ref().unwrap().pos;
-        *samples.last_mut().unwrap() = graph.nodes[ref_edge.b].as_ref().unwrap().pos;
-        graph.edges[reference].as_mut().unwrap().geom = samples;
-    }
-    // C++ Builder::simplify uses avg route-occurrence trip counts times the
-    // --prune-threshold parameter (default zero, so nothing is pruned).
-    if prune_threshold > 0.0 && prune_threshold.is_finite() && !line_weights.is_empty() {
-        let mean = line_weights.values().sum::<usize>() as f64 / line_weights.len() as f64;
-        let cutoff = mean * prune_threshold.clamp(0.0, 1.0);
-        let mut delete = Vec::new();
-        for edge in graph.edges.iter_mut().flatten() {
-            edge.lines.retain(|occ| {
-                line_weights.get(&(edge.id, occ.line)).copied().unwrap_or(0) as f64 >= cutoff
-            });
-            if edge.lines.is_empty() {
-                delete.push(edge.id);
-            }
-        }
-        for id in delete {
-            graph.remove_edge(id);
-        }
-    }
-    // Canonicalize explicit direction-pattern transitions after edge merging.
-    let alive_edges: std::collections::HashSet<_> =
-        graph.edges.iter().flatten().map(|e| e.id).collect();
-    for node in graph.nodes.iter_mut().flatten() {
-        for turns in node.allowed_turns.values_mut() {
-            *turns = turns
-                .iter()
-                .map(|&(a, b)| {
-                    (
-                        *removed_to_reference.get(&a).unwrap_or(&a),
-                        *removed_to_reference.get(&b).unwrap_or(&b),
-                    )
-                })
-                .filter(|(a, b)| a != b && alive_edges.contains(a) && alive_edges.contains(b))
-                .collect();
-        }
-    }
 }
 
 fn parse_linestring_geojson(raw: &str) -> Option<Vec<Point>> {
@@ -1077,7 +924,7 @@ mod simplifier_tests {
             line: 0,
             direction: Some(a),
         });
-        simplify_builder_edges(
+        crate::loom_builder_simplify::simplify(
             &mut graph,
             &HashMap::from([(e0, 10), (e1, 5)]),
             &mut HashMap::from([((e0, 0), 10), ((e1, 0), 5)]),
