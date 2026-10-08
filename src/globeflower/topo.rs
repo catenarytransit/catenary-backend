@@ -1,6 +1,6 @@
 use crate::loom_graph::{
-    Graph, LineId, LineOcc, Point, Stop, haversine_m, lerp, polyline_len,
-    project_on_polyline, subline,
+    Graph, LineId, LineOcc, Point, Stop, haversine_m, lerp, polyline_len, project_on_polyline,
+    subline,
 };
 use log::info;
 use std::cmp::Ordering;
@@ -648,8 +648,7 @@ fn short_line_specific_explanation(
     queue.push(QueueEntry(0.0, start));
 
     while let Some(QueueEntry(distance, node_id)) = queue.pop() {
-        if distance > *distances.get(&node_id).unwrap_or(&f64::INFINITY)
-            || distance > max_distance
+        if distance > *distances.get(&node_id).unwrap_or(&f64::INFINITY) || distance > max_distance
         {
             continue;
         }
