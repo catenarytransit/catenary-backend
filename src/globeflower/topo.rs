@@ -68,6 +68,9 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     crate::loom_map_constructor::average_node_positions(&mut input);
     crate::loom_map_constructor::remove_node_artifacts(&mut input);
     crate::loom_map_constructor::clean_up_geoms(&mut input);
+    // Freeze source provenance before edge-artifact removal, as in TopoMain.
+    let restriction_reference = input.clone();
+    crate::loom_cpp_topo::remove_edge_artifacts(&mut input, cfg.max_aggr_distance, false);
     #[cfg(debug_assertions)]
     input.assert_consistent();
 
@@ -80,6 +83,7 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     let initial = crate::loom_map_constructor::construct(&input, 10.0, cfg.segment_length);
     let mut output =
         crate::loom_map_constructor::construct(&initial, cfg.max_aggr_distance, cfg.segment_length);
+    crate::loom_map_constructor::remove_node_artifacts(&mut output);
     crate::loom_map_constructor::reconstruct_intersections(&mut output, cfg.max_aggr_distance);
     #[cfg(debug_assertions)]
     output.assert_consistent();
@@ -92,7 +96,11 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 
     if cfg.infer_restrictions {
         let stage = Instant::now();
-        loom_semantics::infer_restrictions_with_deviation(&input, &mut output, cfg.max_length_dev);
+        loom_semantics::infer_restrictions_with_deviation(
+            &restriction_reference,
+            &mut output,
+            cfg.max_length_dev,
+        );
         info!("[topo] inferred restrictions in {:.2?}", stage.elapsed());
     }
 
@@ -106,8 +114,12 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
         })
         .collect();
     loom_semantics::insert_stations(&station_inputs, &mut output, cfg.max_aggr_distance);
-    // TopoMain reconstructs intersections again after StatInserter.
+    // C++ TopoMain removes orphaned lines, contracts non-station degree-two
+    // nodes, reconstructs the junction geometry, then cleans orphans again.
+    crate::loom_cpp_topo::remove_orphan_lines(&mut output);
+    crate::loom_map_constructor::remove_node_artifacts(&mut output);
     crate::loom_map_constructor::reconstruct_intersections(&mut output, cfg.max_aggr_distance);
+    crate::loom_cpp_topo::remove_orphan_lines(&mut output);
     #[cfg(debug_assertions)]
     output.assert_consistent();
     info!("[topo] inserted stations in {:.2?}", stage.elapsed());

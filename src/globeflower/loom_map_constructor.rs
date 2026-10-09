@@ -349,7 +349,38 @@ fn compatible(a: &BTreeSet<LineOcc>, b: &BTreeSet<LineOcc>, mid: usize) -> bool 
     })
 }
 
+/// C++ MapConstructor::lineEq: matching route occurrences must also have
+/// an allowed continuation across the shared node.
+pub(crate) fn line_eq_at(graph: &Graph, first: usize, second: usize, at: usize) -> bool {
+    let (Some(a), Some(b), Some(node)) = (
+        graph.edges.get(first).and_then(Option::as_ref),
+        graph.edges.get(second).and_then(Option::as_ref),
+        graph.nodes.get(at).and_then(Option::as_ref),
+    ) else {
+        return false;
+    };
+    compatible(&a.lines, &b.lines, at)
+        && a.lines.iter().all(|occ| {
+            !node
+                .conn_exc
+                .get(&occ.line)
+                .and_then(|map| map.get(&first))
+                .is_some_and(|targets| targets.contains(&second))
+                && !node
+                    .conn_exc
+                    .get(&occ.line)
+                    .and_then(|map| map.get(&second))
+                    .is_some_and(|targets| targets.contains(&first))
+        })
+}
+
 fn contract(out: &mut Graph) {
+    contract_with_cutoff(out, 0.0);
+}
+
+/// A nonzero radius additionally enables C++ supportEdge splitting if a
+/// long parallel edge would otherwise block a valid degree-two contraction.
+fn contract_with_cutoff(out: &mut Graph, cutoff: f64) {
     let mut todo: VecDeque<usize> = (0..out.nodes.len()).collect();
     while let Some(mid) = todo.pop_front() {
         let Some(node) = out.nodes[mid].as_ref() else {
@@ -382,17 +413,27 @@ fn contract(out: &mut Graph) {
         if u == v || polyline_len(&a.geom) + polyline_len(&b.geom) > MAX_CONTRACTION_METERS {
             continue;
         }
-        // C++ contractEdges refuses contraction when the endpoint pair is
-        // already directly connected (protects parallel and triangular tracks).
-        if out.nodes[u].as_ref().is_some_and(|n| {
-            n.adj.iter().any(|&eid| {
+        // C++ collapseShrdSegs: when a direct edge would block a contraction,
+        // split that edge in half if it is longer than twice the cutoff.
+        // The new support vertex prevents a multiedge while preserving geometry.
+        let blocker = out.nodes[u].as_ref().and_then(|n| {
+            n.adj.iter().copied().find(|&eid| {
                 eid != ids[0]
                     && eid != ids[1]
                     && out.edges[eid]
                         .as_ref()
                         .is_some_and(|e| (e.a == u && e.b == v) || (e.a == v && e.b == u))
             })
-        }) {
+        });
+        if let Some(blocker) = blocker {
+            if cutoff > 0.0
+                && out.edges[blocker]
+                    .as_ref()
+                    .is_some_and(|e| polyline_len(&e.geom) > 2.0 * cutoff)
+                && crate::loom_cpp_topo::support_edge(out, blocker).is_some()
+            {
+                todo.push_back(mid);
+            }
             continue;
         }
         let left = a.clone();
@@ -464,6 +505,28 @@ fn contract(out: &mut Graph) {
                         .filter(|(x, y)| x != y)
                         .collect();
                 }
+                // C++ edgeRpl/nodeRpl also repair direction-specific connection
+                // exceptions when their incident edge handles are replaced.
+                for restrictions in node.conn_exc.values_mut() {
+                    let old = std::mem::take(restrictions);
+                    for (from, targets) in old {
+                        let from = if from == ids[0] || from == ids[1] {
+                            eid
+                        } else {
+                            from
+                        };
+                        for to in targets {
+                            let to = if to == ids[0] || to == ids[1] {
+                                eid
+                            } else {
+                                to
+                            };
+                            if from != to {
+                                restrictions.entry(from).or_default().insert(to);
+                            }
+                        }
+                    }
+                }
             }
         }
         todo.push_back(u);
@@ -474,7 +537,12 @@ fn contract(out: &mut Graph) {
 /// C++ MapConstructor::combineNodes: redirect all edges of `remove` to
 /// `keep`, folding duplicate endpoint pairs and preserving line directions
 /// and source provenance. Used only on actual short connecting edges.
-fn combine_nodes(graph: &mut Graph, remove: usize, keep: usize, connecting: usize) -> bool {
+pub(crate) fn combine_nodes(
+    graph: &mut Graph,
+    remove: usize,
+    keep: usize,
+    connecting: usize,
+) -> bool {
     if remove == keep {
         return false;
     }
@@ -681,7 +749,12 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
     assert!(segment_length.is_finite() && segment_length > 0.0);
     let segment_length = segment_length.max(0.5);
     let mut graph = construct_once(input, max_distance, segment_length);
-    contract(&mut graph);
+    crate::loom_cpp_topo::soft_cleanup(&mut graph);
+    contract_with_cutoff(&mut graph, max_distance);
+    // C++ collapseShrdSegs removes newly exposed short edge artifacts,
+    // then contracts degree-two vertices again before smoothing.
+    crate::loom_cpp_topo::remove_edge_artifacts(&mut graph, max_distance, true);
+    contract_with_cutoff(&mut graph, max_distance);
     smooth_edges(&mut graph, segment_length);
     let mut old_len: f64 = graph
         .edges
@@ -691,7 +764,10 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
         .sum();
     for iter in 1..MAX_PASSES {
         let mut next = construct_once(&graph, max_distance, segment_length);
-        contract(&mut next);
+        crate::loom_cpp_topo::soft_cleanup(&mut next);
+        contract_with_cutoff(&mut next, max_distance);
+        crate::loom_cpp_topo::remove_edge_artifacts(&mut next, max_distance, true);
+        contract_with_cutoff(&mut next, max_distance);
         smooth_edges(&mut next, segment_length);
         let new_len: f64 = next
             .edges
