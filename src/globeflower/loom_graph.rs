@@ -90,7 +90,7 @@ pub struct Edge {
     pub originals: BTreeSet<usize>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Graph {
     pub nodes: Vec<Option<Node>>,
     pub edges: Vec<Option<Edge>>,
