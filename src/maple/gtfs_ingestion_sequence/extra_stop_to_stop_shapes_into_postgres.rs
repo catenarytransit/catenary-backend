@@ -9,6 +9,7 @@ pub async fn insert_stop_to_stop_geometry(
     attempt_id: &str,
     chateau_id: &str,
     route: &gtfs_structures::Route,
+    gtfs: &gtfs_structures::Gtfs,
     direction_id: u64,
     linestring: &postgis_diesel::types::LineString<postgis_diesel::types::Point>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
@@ -27,20 +28,13 @@ pub async fn insert_stop_to_stop_geometry(
         },
     };
 
-    let bg_color =
-        colour_correction::fix_background_colour_rgb_feed_route(feed_id, route.color, route);
-
+    let (bg_color, foreground) =
+        colour_correction::corrected_route_colours(feed_id, gtfs, route);
     let bg_color_string = format!("{:02x}{:02x}{:02x}", bg_color.r, bg_color.g, bg_color.b);
-
-    let text_color = match route.text_color {
-        Some(text_color) => {
-            format!(
-                "{:02x}{:02x}{:02x}",
-                text_color.r, text_color.g, text_color.b
-            )
-        }
-        None => String::from("000000"),
-    };
+    let text_color = format!(
+        "{:02x}{:02x}{:02x}",
+        foreground.r, foreground.g, foreground.b
+    );
 
     let shape_value: catenary::models::Shape = catenary::models::Shape {
         onestop_feed_id: feed_id.to_string(),
