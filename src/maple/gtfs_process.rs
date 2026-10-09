@@ -595,7 +595,7 @@ pub async fn gtfs_process_feed(
                 ],
             )?;
 
-            let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 Some(vec![
@@ -615,6 +615,7 @@ pub async fn gtfs_process_feed(
                     String::from("bus"),
                     String::from("coach"),
                     String::from("trolleybus"),
+                    String::from("ferry"),
                 ]),
                 true,
                 true,
