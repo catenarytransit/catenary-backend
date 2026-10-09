@@ -74,10 +74,7 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
                         colour_correction::corrected_route_colours(feed_id, gtfs, route);
 
                     shape_to_color_lookup.insert(trip.shape_id.as_ref().unwrap().to_owned(), color);
-                    shape_to_text_color_lookup.insert(
-                        shape_id.clone(),
-                        text_color,
-                    );
+                    shape_to_text_color_lookup.insert(shape_id.clone(), text_color);
                 }
 
                 //assign route id to this shape id

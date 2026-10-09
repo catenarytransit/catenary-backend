@@ -270,7 +270,6 @@ pub fn fix_foreground_colour_rgb_feed(
     }
 }
 
- 
 // The DELFI data is sourced from Transitous's agency-name/route-short-name table:
 // https://github.com/public-transport/transitous/blob/main/scripts/de-delfi-colors.lua
 // Transitous generated this from Traewelling/line-colors (SPDX: CC0-1.0).
@@ -280,23 +279,23 @@ pub fn is_de_delfi_feed(feed_id: &str) -> bool {
     matches!(
         feed_id,
         "f-gtfs~de"
-        | "f-gtfs~de~bayern"
-        | "f-gtfs~de~berlin"
-        | "f-gtfs~de~brandenburg"
-        | "f-gtfs~de~bremen"
-        | "f-gtfs~de~hamburg"
-        | "f-gtfs~de~hessen"
-        | "f-gtfs~de~mecklenburg~vorpommern"
-        | "f-gtfs~de~baden~württemberg"
-        | "f-gtfs~de~niedersachsen"
-        | "f-gtfs~de~nordrhein~westfalen"
-        | "f-gtfs~de~rheinland~pfalz"
-        | "f-gtfs~de~saarland"
-        | "f-gtfs~de~sachsen~anhalt"
-        | "f-gtfs~de~sachsen"
-        | "f-gtfs~de~schleswig~holstein"
-        | "f-gtfs~de~thüringen"
-        | "f-gtfs~de~deutsche~bahn"
+            | "f-gtfs~de~bayern"
+            | "f-gtfs~de~berlin"
+            | "f-gtfs~de~brandenburg"
+            | "f-gtfs~de~bremen"
+            | "f-gtfs~de~hamburg"
+            | "f-gtfs~de~hessen"
+            | "f-gtfs~de~mecklenburg~vorpommern"
+            | "f-gtfs~de~baden~württemberg"
+            | "f-gtfs~de~niedersachsen"
+            | "f-gtfs~de~nordrhein~westfalen"
+            | "f-gtfs~de~rheinland~pfalz"
+            | "f-gtfs~de~saarland"
+            | "f-gtfs~de~sachsen~anhalt"
+            | "f-gtfs~de~sachsen"
+            | "f-gtfs~de~schleswig~holstein"
+            | "f-gtfs~de~thüringen"
+            | "f-gtfs~de~deutsche~bahn"
     )
 }
 
@@ -349,7 +348,11 @@ fn delfi_route_colours(
     let agency = route
         .agency_id
         .as_ref()
-        .and_then(|id| gtfs.agencies.iter().find(|agency| agency.id.as_ref() == Some(id)))
+        .and_then(|id| {
+            gtfs.agencies
+                .iter()
+                .find(|agency| agency.id.as_ref() == Some(id))
+        })
         .or_else(|| {
             if gtfs.agencies.len() == 1 {
                 gtfs.agencies.first()

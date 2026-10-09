@@ -28,8 +28,7 @@ pub async fn insert_stop_to_stop_geometry(
         },
     };
 
-    let (bg_color, foreground) =
-        colour_correction::corrected_route_colours(feed_id, gtfs, route);
+    let (bg_color, foreground) = colour_correction::corrected_route_colours(feed_id, gtfs, route);
     let bg_color_string = format!("{:02x}{:02x}{:02x}", bg_color.r, bg_color.g, bg_color.b);
     let text_color = format!(
         "{:02x}{:02x}{:02x}",
