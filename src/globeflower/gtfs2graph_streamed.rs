@@ -5,9 +5,7 @@ use log::{info, warn};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::loom_graph::{
-    Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ,
-};
+use crate::loom_graph::{Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ};
 
 /// Globeflower intentionally processes only GTFS route_type 0 (tram) and
 /// route_type 1 (subway/metro). Heavy rail is deliberately excluded.

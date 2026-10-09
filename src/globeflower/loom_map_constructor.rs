@@ -1,7 +1,7 @@
 //! Edge-by-edge, indexed shared-segment construction following LOOM's
 //! MapConstructor::collapseShrdSegs traversal, without global atom union-find.
 use crate::loom_graph::{
-    Graph, LineOcc, Point, add_line_occ, haversine_m, lerp, polyline_len,
+    Graph, LineOcc, Point, add_line_occ, lerp, metric_distance_m, polyline_len, web_mercator,
 };
 use log::info;
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
@@ -12,12 +12,8 @@ const MAX_CONTRACTION_METERS: f64 = 500.0;
 type Cell = (i64, i64);
 
 fn cell(p: Point, scale: f64) -> Cell {
-    // Fixed Mercator-free latitude/longitude bins. Variable longitude width
-    // affects only false positives, never acceptance (which uses haversine).
-    (
-        (p.lon / scale).floor() as i64,
-        (p.lat / scale).floor() as i64,
-    )
+    let (x, y) = web_mercator(p);
+    ((x / scale).floor() as i64, (y / scale).floor() as i64)
 }
 
 struct NodeIndex {
@@ -29,12 +25,21 @@ impl NodeIndex {
     fn new(radius: f64) -> Self {
         Self {
             bins: HashMap::new(),
-            scale: (radius / 111_320.0).max(1e-9),
+            scale: radius.max(1e-9),
             radius,
         }
     }
     fn add(&mut self, p: Point, id: usize) {
         self.bins.entry(cell(p, self.scale)).or_default().insert(id);
+    }
+    fn remove(&mut self, p: Point, id: usize) {
+        let key = cell(p, self.scale);
+        if let Some(ids) = self.bins.get_mut(&key) {
+            ids.remove(&id);
+            if ids.is_empty() {
+                self.bins.remove(&key);
+            }
+        }
     }
     // Moving a node must remove its OLD spatial entry. Otherwise a stale
     // cell may return a point now outside the search envelope.
@@ -65,15 +70,12 @@ impl NodeIndex {
         let span_limit = [span_a, span_b]
             .into_iter()
             .flatten()
-            .map(|q| haversine_m(p, q) / std::f64::consts::SQRT_2)
+            .map(|q| metric_distance_m(p, q) / std::f64::consts::SQRT_2)
             .fold(self.radius, f64::min);
         let mut best = (span_limit, None);
-        // Longitude's physical width shrinks with latitude; expand the
-        // longitude search window instead of losing candidates at high latitudes.
-        let cos = p.lat.to_radians().cos().abs().max(0.1);
-        let extent_x = (1.0 / cos).ceil() as i64 + 1;
-        for dx in -extent_x..=extent_x {
-            for dy in -2..=2 {
+        // A 3x3 search is complete for a radius-sized WebMercator cell.
+        for dx in -1..=1 {
+            for dy in -1..=1 {
                 if let Some(ids) = self.bins.get(&(key.0 + dx, key.1 + dy)) {
                     for &id in ids {
                         if forbidden.contains(&id) {
@@ -87,7 +89,7 @@ impl NodeIndex {
                         if node.adj.is_empty() {
                             continue;
                         }
-                        let distance = haversine_m(p, node.pos);
+                        let distance = metric_distance_m(p, node.pos);
                         if distance < best.0
                             || ((distance - best.0).abs() < 1e-9
                                 && best.1.is_some_and(|current| id < current))
@@ -108,7 +110,7 @@ fn sample(geometry: &[Point], distance: f64) -> Vec<Point> {
     }
     let mut sampled = vec![geometry[0]];
     for pair in geometry.windows(2) {
-        let meters = haversine_m(pair[0], pair[1]);
+        let meters = metric_distance_m(pair[0], pair[1]);
         let steps = (meters / distance).ceil().max(1.0) as usize;
         for i in 1..=steps {
             sampled.push(lerp(pair[0], pair[1], i as f64 / steps as f64));
@@ -146,13 +148,35 @@ fn insert_constructed_segment(
         return;
     }
     let key = (a.min(b), a.max(b));
-    let id = *output_edges.entry(key).or_insert_with(|| {
+    let live = |id: usize| {
+        out.edges
+            .get(id)
+            .and_then(Option::as_ref)
+            .is_some_and(|e| (e.a.min(e.b), e.a.max(e.b)) == key)
+    };
+    let existing = output_edges
+        .get(&key)
+        .copied()
+        .filter(|&id| live(id))
+        .or_else(|| {
+            out.nodes[a]
+                .as_ref()
+                .unwrap()
+                .adj
+                .iter()
+                .copied()
+                .find(|&id| live(id))
+        });
+    let id = if let Some(id) = existing {
+        id
+    } else {
         let geometry = vec![
             out.nodes[a].as_ref().unwrap().pos,
             out.nodes[b].as_ref().unwrap().pos,
         ];
         out.add_edge(a, b, geometry)
-    });
+    };
+    output_edges.insert(key, id);
     let target = out.edges[id].as_mut().unwrap();
     target.originals.extend(source.originals.iter().copied());
     for occ in &source.lines {
@@ -185,73 +209,109 @@ fn construct_once(input: &Graph, radius: f64, segment_length: f64) -> Graph {
         source_geometry.push(input.nodes[edge.a].as_ref().unwrap().pos);
         source_geometry.extend(edge.geom.iter().copied());
         source_geometry.push(input.nodes[edge.b].as_ref().unwrap().pos);
-        let points = sample(&source_geometry, segment_length);
-        let mut path = Vec::with_capacity(points.len());
-        // LOOM excludes nodes visited on the current input edge from collapse
-        // candidates. This is vital: adjacent 20m samples must not all merge
-        // simply because maxAggrDistance is 50m.
+        // C++ collapseShrdSegs uses simplify(0.5) BEFORE densifying at SEGL.
+        let simplified = crate::loom_polyline::simplify(&source_geometry, 0.5);
+        let points = sample(&simplified, segment_length);
         let mut forbidden = HashSet::new();
+        let mut affected = Vec::new();
         let mut front: Option<usize> = None;
-        // Endpoints must be mapped before processing their neighboring samples.
-        // An already mapped endpoint is a protected topology anchor.
-        let back = mapped_endpoints.get(&edge.b).copied();
+        let mut last: Option<usize> = None;
+        let mut from_covered = false;
+        let mut to_covered = false;
         for (i, &point) in points.iter().enumerate() {
-            let endpoint = if i == 0 {
-                Some(edge.a)
-            } else if i == points.len() - 1 {
-                Some(edge.b)
-            } else {
+            // In C++ EVERY sample calls ndCollapseCand. A previously mapped
+            // endpoint is not forcibly substituted for this sample: missing
+            // endpoint coverage is repaired by explicit connecting edges.
+            let span_a = front.and_then(|id| out.nodes[id].as_ref().map(|n| n.pos));
+            let span_b = if i + 1 == points.len() {
                 None
-            };
-            let mapped = endpoint.and_then(|old| mapped_endpoints.get(&old).copied());
-            let id = if let Some(node_id) = mapped {
-                node_id
             } else {
-                let span_a = front.and_then(|id| out.nodes[id].as_ref().map(|n| n.pos));
-                let span_b = if i + 1 == points.len() {
-                    None
-                } else {
-                    back.and_then(|id| out.nodes[id].as_ref().map(|n| n.pos))
-                };
-                let candidate = index.nearest(point, &out, &forbidden, span_a, span_b);
-                let id = candidate.unwrap_or_else(|| {
-                    let id = out.add_node(point);
-                    index.add(point, id);
-                    id
-                });
-                // C++ ndCollapseCand: move the accepted candidate toward the sample.
-                if candidate.is_some() {
-                    let old = out.nodes[id].as_ref().unwrap().pos;
-                    let middle = lerp(old, point, 0.5);
-                    out.nodes[id].as_mut().unwrap().pos = middle;
-                    index.relocate(old, middle, id);
-                }
-                if let Some(old) = endpoint {
-                    mapped_endpoints.insert(old, id);
-                }
-                id
+                Some(input.nodes[edge.b].as_ref().unwrap().pos)
             };
-            // Preserve a self-loop's actual input topology, but prevent an
-            // intermediate short-cycle from degenerating into a self-edge.
-            if path.last().copied() != Some(id) {
-                path.push(id);
+            let candidate = index.nearest(point, &out, &forbidden, span_a, span_b);
+            let id = candidate.unwrap_or_else(|| {
+                let new_id = out.add_node(point);
+                index.add(point, new_id);
+                new_id
+            });
+            if candidate.is_some() {
+                let old = out.nodes[id].as_ref().unwrap().pos;
+                let middle = lerp(old, point, 0.5);
+                out.nodes[id].as_mut().unwrap().pos = middle;
+                index.relocate(old, middle, id);
+            }
+            if i == 0 && !mapped_endpoints.contains_key(&edge.a) {
+                mapped_endpoints.insert(edge.a, id);
+                from_covered = true;
+            }
+            if i + 1 == points.len() && !mapped_endpoints.contains_key(&edge.b) {
+                mapped_endpoints.insert(edge.b, id);
+                to_covered = true;
             }
             forbidden.insert(id);
+            if last == Some(id) {
+                continue;
+            }
+            from_covered |= mapped_endpoints.get(&edge.a) == Some(&id);
+            to_covered |= mapped_endpoints.get(&edge.b) == Some(&id);
+            if let Some(previous) = last {
+                insert_constructed_segment(&mut out, &mut output_edges, previous, id, edge);
+            }
+            affected.push(id);
             if front.is_none() {
                 front = Some(id);
             }
-            // Materialize each edge now so subsequent candidates have degree.
-            if path.len() >= 2 {
-                let a = path[path.len() - 2];
-                let b = path[path.len() - 1];
-                if a != b {
-                    insert_constructed_segment(&mut out, &mut output_edges, a, b, edge);
+            last = Some(id);
+            if mapped_endpoints.get(&edge.b) == Some(&id) {
+                break;
+            }
+        }
+        // C++ imgFromCovered/imgToCovered reconciliation. Without these,
+        // a sampled edge can skip its real shared topology endpoints.
+        if !from_covered {
+            if let (Some(&from), Some(first)) = (mapped_endpoints.get(&edge.a), front) {
+                insert_constructed_segment(&mut out, &mut output_edges, from, first, edge);
+            }
+        }
+        if !to_covered {
+            if let (Some(last), Some(&to)) = (last, mapped_endpoints.get(&edge.b)) {
+                insert_constructed_segment(&mut out, &mut output_edges, last, to, edge);
+            }
+        }
+        // The C++ short-artifact pass is LOCAL to the affected input edge and
+        // must never remove an image of an original graph node.
+        let protected: HashSet<_> = mapped_endpoints.values().copied().collect();
+        for a in affected {
+            if protected.contains(&a) {
+                continue;
+            }
+            let Some(node) = out.nodes.get(a).and_then(Option::as_ref) else {
+                continue;
+            };
+            let mut best: Option<(usize, usize, f64)> = None;
+            for &eid in &node.adj {
+                let Some(e) = out.edges[eid].as_ref() else {
+                    continue;
+                };
+                let b = if e.a == a { e.b } else { e.a };
+                let Some(other) = out.nodes[b].as_ref() else {
+                    continue;
+                };
+                if node.adj.len() < 3 && other.adj.len() < 3 {
+                    continue;
+                }
+                let distance = metric_distance_m(node.pos, other.pos);
+                if distance <= segment_length && best.is_none_or(|(_, _, d)| distance < d) {
+                    best = Some((b, eid, distance));
                 }
             }
-            // C++ collapseShrdSegs stops when the image of the destination
-            // has been reached, avoiding connections beyond that anchor.
-            if back.is_some() && Some(id) == back {
-                break;
+            if let Some((b, eid, _)) = best {
+                let old_a = out.nodes[a].as_ref().unwrap().pos;
+                let old_b = out.nodes[b].as_ref().unwrap().pos;
+                if combine_nodes(&mut out, a, b, eid) {
+                    index.remove(old_a, a);
+                    index.relocate(old_b, out.nodes[b].as_ref().unwrap().pos, b);
+                }
             }
         }
     }
@@ -306,11 +366,15 @@ fn contract(out: &mut Graph) {
         // explicitly forbids this turn. It does NOT demand that a GTFS trip
         // explicitly recorded the transition: that evidence is used later by
         // RestrInferrer. Requiring it here creates spurious degree-two nodes.
-        if !compatible(&a.lines, &b.lines, mid) || !a.lines.iter().all(|occ| {
-            !node.conn_exc.get(&occ.line)
-                .and_then(|forbidden| forbidden.get(&ids[0]))
-                .is_some_and(|targets| targets.contains(&ids[1]))
-        }) {
+        if !compatible(&a.lines, &b.lines, mid)
+            || !a.lines.iter().all(|occ| {
+                !node
+                    .conn_exc
+                    .get(&occ.line)
+                    .and_then(|forbidden| forbidden.get(&ids[0]))
+                    .is_some_and(|targets| targets.contains(&ids[1]))
+            })
+        {
             continue;
         }
         let u = if a.a == mid { a.b } else { a.a };
@@ -389,10 +453,16 @@ fn contract(out: &mut Graph) {
         for endpoint in [u, v] {
             if let Some(node) = out.nodes[endpoint].as_mut() {
                 for turns in node.allowed_turns.values_mut() {
-                    *turns = turns.iter().map(|&(x, y)| (
-                        if x == ids[0] || x == ids[1] { eid } else { x },
-                        if y == ids[0] || y == ids[1] { eid } else { y },
-                    )).filter(|(x, y)| x != y).collect();
+                    *turns = turns
+                        .iter()
+                        .map(|&(x, y)| {
+                            (
+                                if x == ids[0] || x == ids[1] { eid } else { x },
+                                if y == ids[0] || y == ids[1] { eid } else { y },
+                            )
+                        })
+                        .filter(|(x, y)| x != y)
+                        .collect();
                 }
             }
         }
@@ -516,52 +586,8 @@ fn combine_nodes(graph: &mut Graph, remove: usize, keep: usize, connecting: usiz
 /// one endpoint is a branching vertex. This is a local cleanup; contraction
 /// over the full aggregation radius is more disruptive and intentionally
 /// remains separate from the 5m short-artifact pass.
-fn collapse_short_artifacts(graph: &mut Graph, segment_length: f64) {
-    let mut queue: VecDeque<usize> = graph
-        .edges
-        .iter()
-        .flatten()
-        .filter_map(|e| {
-            let (Some(a), Some(b)) = (graph.nodes[e.a].as_ref(), graph.nodes[e.b].as_ref()) else {
-                return None;
-            };
-            if haversine_m(a.pos, b.pos) <= segment_length && (a.adj.len() >= 3 || b.adj.len() >= 3)
-            {
-                Some(e.id)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let mut changes = 0usize;
-    while let Some(id) = queue.pop_front() {
-        let Some(edge) = graph.edges.get(id).and_then(Option::as_ref) else {
-            continue;
-        };
-        let (a, b) = (edge.a, edge.b);
-        let (Some(left), Some(right)) = (graph.nodes[a].as_ref(), graph.nodes[b].as_ref()) else {
-            continue;
-        };
-        if haversine_m(left.pos, right.pos) > segment_length
-            || (left.adj.len() < 3 && right.adj.len() < 3)
-        {
-            continue;
-        }
-        let adjacent: Vec<_> = left.adj.iter().chain(right.adj.iter()).copied().collect();
-        if combine_nodes(graph, a, b, id) {
-            changes += 1;
-            for candidate in adjacent {
-                queue.push_back(candidate);
-            }
-        }
-    }
-    if changes > 0 {
-        info!(
-            "[topo/mapconstructor] combined {} sub-5m junction artifacts",
-            changes
-        );
-    }
-}
+// Short-segment contraction is performed inside construct_once, as in the
+// C++ per-source-edge affectedNodes walk, with protected imgNdsSet anchors.
 
 /// C++ MapConstructor::averageNodePositions, also called BEFORE collapse.
 pub fn average_node_positions(graph: &mut Graph) {
@@ -570,17 +596,32 @@ pub fn average_node_positions(graph: &mut Graph) {
     // This mean is in WebMercator meters, not geographic degrees.
     let mut averaged = Vec::with_capacity(graph.nodes.len());
     for node in graph.nodes.iter().map(Option::as_ref) {
-        let Some(node) = node else { averaged.push(None); continue; };
-        let incident: Vec<Point> = node.adj.iter().filter_map(|&eid| {
-            let edge = graph.edges.get(eid).and_then(Option::as_ref)?;
-            if edge.a == node.id { edge.geom.first().copied() }
-            else { edge.geom.last().copied() }
-        }).collect();
-        averaged.push(if incident.is_empty() { None }
-            else { Some(crate::loom_polyline::centroid(&incident)) });
+        let Some(node) = node else {
+            averaged.push(None);
+            continue;
+        };
+        let incident: Vec<Point> = node
+            .adj
+            .iter()
+            .filter_map(|&eid| {
+                let edge = graph.edges.get(eid).and_then(Option::as_ref)?;
+                if edge.a == node.id {
+                    edge.geom.first().copied()
+                } else {
+                    edge.geom.last().copied()
+                }
+            })
+            .collect();
+        averaged.push(if incident.is_empty() {
+            None
+        } else {
+            Some(crate::loom_polyline::centroid(&incident))
+        });
     }
     for (node, average) in graph.nodes.iter_mut().zip(averaged) {
-        if let (Some(node), Some(pos)) = (node.as_mut(), average) { node.pos = pos; }
+        if let (Some(node), Some(pos)) = (node.as_mut(), average) {
+            node.pos = pos;
+        }
     }
 }
 
@@ -618,6 +659,19 @@ pub fn reconstruct_intersections(graph: &mut Graph, radius: f64) {
     }
 }
 
+fn smooth_edges(graph: &mut Graph, segment_length: f64) {
+    for edge in graph.edges.iter_mut().flatten() {
+        edge.geom = crate::loom_polyline::smooth_topology_edge(&edge.geom, segment_length);
+        // Every edge must begin/end exactly at its incident graph vertices.
+        if let Some(a) = edge.geom.first_mut() {
+            *a = graph.nodes[edge.a].as_ref().unwrap().pos;
+        }
+        if let Some(b) = edge.geom.last_mut() {
+            *b = graph.nodes[edge.b].as_ref().unwrap().pos;
+        }
+    }
+}
+
 pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph {
     // LOOM repeats collapse until the total network length converges.
     // An iteration cap bounds runtime on continent-scale GTFS datasets.
@@ -627,8 +681,8 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
     assert!(segment_length.is_finite() && segment_length > 0.0);
     let segment_length = segment_length.max(0.5);
     let mut graph = construct_once(input, max_distance, segment_length);
-    collapse_short_artifacts(&mut graph, segment_length);
     contract(&mut graph);
+    smooth_edges(&mut graph, segment_length);
     let mut old_len: f64 = graph
         .edges
         .iter()
@@ -637,8 +691,8 @@ pub fn construct(input: &Graph, max_distance: f64, segment_length: f64) -> Graph
         .sum();
     for iter in 1..MAX_PASSES {
         let mut next = construct_once(&graph, max_distance, segment_length);
-        collapse_short_artifacts(&mut next, segment_length);
         contract(&mut next);
+        smooth_edges(&mut next, segment_length);
         let new_len: f64 = next
             .edges
             .iter()
@@ -723,10 +777,23 @@ mod parity_tests {
         let b = graph.add_node(point(0.0002));
         let e1 = graph.add_edge(a, middle, vec![point(0.0), point(0.0001)]);
         let e2 = graph.add_edge(middle, b, vec![point(0.0001), point(0.0002)]);
-        graph.edges[e1].as_mut().unwrap().lines.insert(LineOcc { line: 0, direction: Some(middle) });
-        graph.edges[e2].as_mut().unwrap().lines.insert(LineOcc { line: 0, direction: Some(b) });
-        graph.nodes[middle].as_mut().unwrap().conn_exc.entry(0).or_default()
-            .entry(e1).or_default().insert(e2);
+        graph.edges[e1].as_mut().unwrap().lines.insert(LineOcc {
+            line: 0,
+            direction: Some(middle),
+        });
+        graph.edges[e2].as_mut().unwrap().lines.insert(LineOcc {
+            line: 0,
+            direction: Some(b),
+        });
+        graph.nodes[middle]
+            .as_mut()
+            .unwrap()
+            .conn_exc
+            .entry(0)
+            .or_default()
+            .entry(e1)
+            .or_default()
+            .insert(e2);
         contract(&mut graph);
         assert_eq!(graph.edges.iter().flatten().count(), 2);
         assert!(graph.nodes[middle].is_some());

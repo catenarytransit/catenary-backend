@@ -4,7 +4,7 @@
 //! explicit original transitions, line-specific restrictions, candidate coverage,
 //! and multiple placements for a stop served by disjoint tracks.
 use crate::loom_graph::{
-    Graph, LineId, LineOcc, Point, Stop, haversine_m, project_on_polyline, subline,
+    Graph, LineId, LineOcc, Point, Stop, metric_distance_m, project_on_polyline, subline,
 };
 use log::{info, warn};
 use std::cmp::Reverse;
@@ -394,9 +394,16 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
     let mut inserted = 0usize;
     let mut missing = 0usize;
     for occurrence in occurrences {
-        let Some(stop) = occurrence.stops.first() else {
+        if occurrence.stops.is_empty() {
             continue;
-        };
+        }
+        let stop_position = crate::loom_polyline::centroid(
+            &occurrence
+                .stops
+                .iter()
+                .map(|stop| stop.pos)
+                .collect::<Vec<_>>(),
+        );
         let mut remaining_orig = occurrence.originals.clone();
         let mut remaining_lines = occurrence.lines.clone();
         // Original StatInserter uses MAX_INSERTS=3: a station with separate
@@ -427,7 +434,7 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
                 if e.geom.len() < 2 {
                     continue;
                 }
-                let (_, pos, dist) = project_on_polyline(stop.pos, &e.geom);
+                let (_, pos, dist) = project_on_polyline(stop_position, &e.geom);
                 if dist <= 4.0 * radius {
                     let covered_orig: BTreeSet<_> =
                         e.originals.intersection(&remaining_orig).copied().collect();
@@ -463,7 +470,7 @@ pub fn insert_stations(occurrences: &[StationOccurrence], graph: &mut Graph, rad
                     let Some(n) = graph.nodes[node].as_ref() else {
                         continue;
                     };
-                    let distance = haversine_m(stop.pos, n.pos);
+                    let distance = metric_distance_m(stop_position, n.pos);
                     if distance > 4.0 * radius {
                         continue;
                     }

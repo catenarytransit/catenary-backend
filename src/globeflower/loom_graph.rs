@@ -281,6 +281,32 @@ impl Graph {
     }
 }
 
+// LOOM performs its entire gtfs2graph/topo pipeline in EPSG:3857.
+// NEVER use geodesic meters for Chapter 3's 5/10/50/500 meter thresholds.
+const WEB_MERCATOR_R: f64 = 6_378_137.0;
+
+pub fn web_mercator(p: Point) -> (f64, f64) {
+    let lat = p.lat.clamp(-85.05112878, 85.05112878).to_radians();
+    (
+        WEB_MERCATOR_R * p.lon.to_radians(),
+        WEB_MERCATOR_R * (std::f64::consts::FRAC_PI_4 + lat * 0.5).tan().ln(),
+    )
+}
+
+pub fn from_web_mercator((x, y): (f64, f64)) -> Point {
+    Point {
+        lon: (x / WEB_MERCATOR_R).to_degrees(),
+        lat: (2.0 * (y / WEB_MERCATOR_R).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees(),
+    }
+}
+
+pub fn metric_distance_m(a: Point, b: Point) -> f64 {
+    let (ax, ay) = web_mercator(a);
+    let (bx, by) = web_mercator(b);
+    (ax - bx).hypot(ay - by)
+}
+
+// Retained for non-topological callers that need actual surface distances.
 pub fn haversine_m(a: Point, b: Point) -> f64 {
     let r = 6_371_008.8_f64;
     let p1 = a.lat.to_radians();
@@ -292,14 +318,13 @@ pub fn haversine_m(a: Point, b: Point) -> f64 {
 }
 
 pub fn polyline_len(g: &[Point]) -> f64 {
-    g.windows(2).map(|w| haversine_m(w[0], w[1])).sum()
+    g.windows(2).map(|w| metric_distance_m(w[0], w[1])).sum()
 }
 
 pub fn lerp(a: Point, b: Point, t: f64) -> Point {
-    Point {
-        lon: a.lon + (b.lon - a.lon) * t,
-        lat: a.lat + (b.lat - a.lat) * t,
-    }
+    let (ax, ay) = web_mercator(a);
+    let (bx, by) = web_mercator(b);
+    from_web_mercator((ax + (bx - ax) * t, ay + (by - ay) * t))
 }
 
 pub fn densify(g: &[Point], step_m: f64) -> Vec<Point> {
@@ -308,7 +333,7 @@ pub fn densify(g: &[Point], step_m: f64) -> Vec<Point> {
     }
     let mut out = vec![g[0]];
     for w in g.windows(2) {
-        let d = haversine_m(w[0], w[1]);
+        let d = metric_distance_m(w[0], w[1]);
         let n = (d / step_m).ceil().max(1.0) as usize;
         for i in 1..=n {
             out.push(lerp(w[0], w[1], i as f64 / n as f64));
@@ -318,22 +343,17 @@ pub fn densify(g: &[Point], step_m: f64) -> Vec<Point> {
 }
 
 pub fn project_on_segment(p: Point, a: Point, b: Point) -> (Point, f64) {
-    let lat0 = p.lat.to_radians();
-    let sx = 111_320.0 * lat0.cos();
-    let sy = 110_540.0;
-    let ax = (a.lon - p.lon) * sx;
-    let ay = (a.lat - p.lat) * sy;
-    let bx = (b.lon - p.lon) * sx;
-    let by = (b.lat - p.lat) * sy;
-    let vx = bx - ax;
-    let vy = by - ay;
+    let (px, py) = web_mercator(p);
+    let (ax, ay) = web_mercator(a);
+    let (bx, by) = web_mercator(b);
+    let (vx, vy) = (bx - ax, by - ay);
     let den = vx * vx + vy * vy;
-    let t = if den == 0.0 {
+    let t = if den <= 1e-16 {
         0.0
     } else {
-        (-(ax * vx + ay * vy) / den).clamp(0.0, 1.0)
+        (((px - ax) * vx + (py - ay) * vy) / den).clamp(0.0, 1.0)
     };
-    (lerp(a, b, t), t)
+    (from_web_mercator((ax + t * vx, ay + t * vy)), t)
 }
 
 pub fn project_on_polyline(p: Point, g: &[Point]) -> (Point, f64, f64) {
@@ -341,9 +361,9 @@ pub fn project_on_polyline(p: Point, g: &[Point]) -> (Point, f64, f64) {
     let mut before = 0.0;
     let mut best = (g[0], 0.0, f64::INFINITY);
     for w in g.windows(2) {
-        let seg = haversine_m(w[0], w[1]);
+        let seg = metric_distance_m(w[0], w[1]);
         let (q, t) = project_on_segment(p, w[0], w[1]);
-        let d = haversine_m(p, q);
+        let d = metric_distance_m(p, q);
         if d < best.2 {
             best = (q, (before + t * seg) / total, d);
         }
@@ -371,7 +391,7 @@ pub fn subline(g: &[Point], from: f64, to: f64) -> Vec<Point> {
     let mut out = Vec::new();
     let mut travelled = 0.0;
     for segment in g.windows(2) {
-        let len = haversine_m(segment[0], segment[1]);
+        let len = metric_distance_m(segment[0], segment[1]);
         let next = travelled + len;
         if next >= start && travelled <= end && len > 0.0 {
             let a = ((start - travelled) / len).clamp(0.0, 1.0);
@@ -395,6 +415,42 @@ pub fn subline(g: &[Point], from: f64, to: f64) -> Vec<Point> {
         return vec![g[0], g[0]];
     }
     out
+}
+
+#[cfg(test)]
+mod projected_metric_tests {
+    use super::*;
+
+    #[test]
+    fn paris_aggregation_uses_web_mercator_meters() {
+        let a = Point {
+            lon: 2.363,
+            lat: 48.867,
+        };
+        let b = Point {
+            lon: 2.3635,
+            lat: 48.867,
+        };
+        // At Paris latitude, half a millidegree longitude is ~36.6m on
+        // the ground, but ~55.66m in LOOM's EPSG:3857 coordinates.
+        assert!(haversine_m(a, b) < 50.0);
+        assert!(metric_distance_m(a, b) > 50.0);
+        assert!((polyline_len(&[a, b]) - metric_distance_m(a, b)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn projected_interpolation_preserves_projected_half_length() {
+        let a = Point {
+            lon: 2.363,
+            lat: 48.867,
+        };
+        let b = Point {
+            lon: 2.370,
+            lat: 48.872,
+        };
+        let mid = lerp(a, b, 0.5);
+        assert!((metric_distance_m(a, mid) - metric_distance_m(mid, b)).abs() < 1e-5);
+    }
 }
 
 #[cfg(test)]

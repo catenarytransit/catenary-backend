@@ -6,7 +6,7 @@
 //! C++ operation order: geometry equality (10m), prune per route occurrence,
 //! merge included shapes (50m), then UNWEIGHTED PolyLine::average (20m).
 //! A canonical topological edge is keyed by unordered GTFS stop-node pair.
-use crate::loom_graph::{add_line_occ, Graph, LineOcc, Point};
+use crate::loom_graph::{Graph, LineOcc, Point, add_line_occ};
 use crate::loom_polyline::{average, contains, equals, metric_length};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -25,7 +25,9 @@ fn join(left: &mut EdgeTripGeom, right: EdgeTripGeom) {
     for (line, n) in right.counts {
         *left.counts.entry(line).or_default() += n;
     }
-    for occ in right.lines { add_line_occ(&mut left.lines, occ); }
+    for occ in right.lines {
+        add_line_occ(&mut left.lines, occ);
+    }
 }
 
 fn grouped_edges(
@@ -37,12 +39,18 @@ fn grouped_edges(
     for edge in graph.edges.iter().flatten() {
         let key = (edge.a.min(edge.b), edge.a.max(edge.b));
         let mut shape = edge.geom.clone();
-        if edge.a != key.0 { shape.reverse(); }
+        if edge.a != key.0 {
+            shape.reverse();
+        }
         let mut counts = BTreeMap::new();
         for occ in &edge.lines {
-            counts.insert(occ.line,
-                line_weights.get(&(edge.id, occ.line)).copied().unwrap_or_else(||
-                    weights.get(&edge.id).copied().unwrap_or(1)));
+            counts.insert(
+                occ.line,
+                line_weights
+                    .get(&(edge.id, occ.line))
+                    .copied()
+                    .unwrap_or_else(|| weights.get(&edge.id).copied().unwrap_or(1)),
+            );
         }
         candidates.entry(key).or_default().push(EdgeTripGeom {
             geometry: shape,
@@ -56,7 +64,10 @@ fn grouped_edges(
     for list in candidates.values_mut() {
         let source = std::mem::take(list);
         for item in source {
-            if let Some(existing) = list.iter_mut().find(|other| equals(&other.geometry, &item.geometry, 10.0)) {
+            if let Some(existing) = list
+                .iter_mut()
+                .find(|other| equals(&other.geometry, &item.geometry, 10.0))
+            {
                 existing.geometry = average(&[existing.geometry.clone(), item.geometry.clone()]);
                 join(existing, item);
             } else {
@@ -78,9 +89,18 @@ pub fn simplify(
 ) {
     let mut groups = grouped_edges(graph, weights, line_weights);
     // Builder::simplify() calculates the average before it calls EdgePL::simplify.
-    let (total, number) = groups.values().flat_map(|xs| xs.iter()).flat_map(|e| e.counts.values())
-        .fold((0usize, 0usize), |(sum, n), &v| (sum.saturating_add(v), n+1));
-    let mean = if number == 0 { 0.0 } else { total as f64 / number as f64 };
+    let (total, number) = groups
+        .values()
+        .flat_map(|xs| xs.iter())
+        .flat_map(|e| e.counts.values())
+        .fold((0usize, 0usize), |(sum, n), &v| {
+            (sum.saturating_add(v), n + 1)
+        });
+    let mean = if number == 0 {
+        0.0
+    } else {
+        total as f64 / number as f64
+    };
     let cutoff = mean * prune_threshold.max(0.0);
     let mut remap: HashMap<usize, usize> = HashMap::new();
     let mut delete = Vec::new();
@@ -91,14 +111,26 @@ pub fn simplify(
             etg.lines.retain(|o| etg.counts.contains_key(&o.line));
         }
         etgs.retain(|e| !e.counts.is_empty());
-        let mut ids: Vec<usize> = graph.edges.iter().flatten()
+        let mut ids: Vec<usize> = graph
+            .edges
+            .iter()
+            .flatten()
             .filter(|e| (e.a.min(e.b), e.a.max(e.b)) == *pair)
-            .map(|e| e.id).collect();
+            .map(|e| e.id)
+            .collect();
         ids.sort_unstable();
-        if ids.is_empty() { continue; }
+        if ids.is_empty() {
+            continue;
+        }
         let reference = ids[0];
-        for &id in ids.iter().skip(1) { remap.insert(id, reference); delete.push(id); }
-        if etgs.is_empty() { delete.push(reference); continue; }
+        for &id in ids.iter().skip(1) {
+            remap.insert(id, reference);
+            delete.push(id);
+        }
+        if etgs.is_empty() {
+            delete.push(reference);
+            continue;
+        }
 
         // EdgePL::combineIncludedGeoms: a longer shape absorbs a shorter
         // contained shape only if the containment is NOT bidirectional.
@@ -106,7 +138,9 @@ pub fn simplify(
         while idx < etgs.len() {
             let mut absorber = None;
             for j in 0..etgs.len() {
-                if j == idx { continue; }
+                if j == idx {
+                    continue;
+                }
                 if metric_length(&etgs[j].geometry) > metric_length(&etgs[idx].geometry)
                     && contains(&etgs[j].geometry, &etgs[idx].geometry, 50.0)
                     && !contains(&etgs[idx].geometry, &etgs[j].geometry, 50.0)
@@ -117,9 +151,11 @@ pub fn simplify(
             }
             if let Some(j) = absorber {
                 let item = etgs.remove(idx);
-                let target = if j > idx { j-1 } else { j };
+                let target = if j > idx { j - 1 } else { j };
                 join(&mut etgs[target], item);
-            } else { idx += 1; }
+            } else {
+                idx += 1;
+            }
         }
         // EdgePL::averageCombineGeom: surviving ETGs get EQUAL weights,
         // regardless of trip cardinality, exactly as in the C++ overload.
@@ -128,21 +164,29 @@ pub fn simplify(
         let mut originals = BTreeSet::new();
         for e in etgs.iter() {
             originals.extend(e.originals.iter().copied());
-            for &occ in &e.lines { add_line_occ(&mut lines, occ); }
+            for &occ in &e.lines {
+                add_line_occ(&mut lines, occ);
+            }
         }
         let edge = graph.edges[reference].as_mut().unwrap();
-        if edge.a == pair.0 { edge.geom = geometry; }
-        else { edge.geom = geometry.into_iter().rev().collect(); }
+        if edge.a == pair.0 {
+            edge.geom = geometry;
+        } else {
+            edge.geom = geometry.into_iter().rev().collect();
+        }
         edge.originals = originals;
         edge.lines = lines;
     }
-    for id in delete { graph.remove_edge(id); }
+    for id in delete {
+        graph.remove_edge(id);
+    }
     let alive: HashSet<usize> = graph.edges.iter().flatten().map(|e| e.id).collect();
     for node in graph.nodes.iter_mut().flatten() {
         for turns in node.allowed_turns.values_mut() {
-            *turns = turns.iter().map(|&(a, b)| {
-                (*remap.get(&a).unwrap_or(&a), *remap.get(&b).unwrap_or(&b))
-            }).filter(|(a,b)| alive.contains(a) && alive.contains(b))
+            *turns = turns
+                .iter()
+                .map(|&(a, b)| (*remap.get(&a).unwrap_or(&a), *remap.get(&b).unwrap_or(&b)))
+                .filter(|(a, b)| alive.contains(a) && alive.contains(b))
                 .collect();
         }
     }
@@ -151,24 +195,29 @@ pub fn simplify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn p(x: f64, y: f64) -> Point { Point { lon: x, lat: y } }
+    fn p(x: f64, y: f64) -> Point {
+        Point { lon: x, lat: y }
+    }
     #[test]
     fn contained_geom_does_not_survive_as_parallel_edge() {
         let mut g = Graph::default();
         let a = g.add_node(p(0.0, 0.0));
         let b = g.add_node(p(0.002, 0.0));
-        let short = g.add_edge(a,b,vec![p(0.0005,0.0),p(0.0015,0.0)]);
-        let long = g.add_edge(a,b,vec![p(0.0,0.0),p(0.002,0.0)]);
-        for id in [short,long] {
-            g.edges[id].as_mut().unwrap().lines.insert(LineOcc { line:0, direction:Some(b) });
+        let short = g.add_edge(a, b, vec![p(0.0005, 0.0), p(0.0015, 0.0)]);
+        let long = g.add_edge(a, b, vec![p(0.0, 0.0), p(0.002, 0.0)]);
+        for id in [short, long] {
+            g.edges[id].as_mut().unwrap().lines.insert(LineOcc {
+                line: 0,
+                direction: Some(b),
+            });
             g.edges[id].as_mut().unwrap().originals.insert(id);
         }
-        let weights = HashMap::from([(short,1),(long,5)]);
-        let mut lw = HashMap::from([((short,0),1),((long,0),5)]);
-        simplify(&mut g,&weights,&mut lw,0.0);
-        assert_eq!(g.edges.iter().flatten().count(),1);
+        let weights = HashMap::from([(short, 1), (long, 5)]);
+        let mut lw = HashMap::from([((short, 0), 1), ((long, 0), 5)]);
+        simplify(&mut g, &weights, &mut lw, 0.0);
+        assert_eq!(g.edges.iter().flatten().count(), 1);
         let e = g.edges.iter().flatten().next().unwrap();
-        assert!(metric_length(&e.geom)>180.0);
+        assert!(metric_length(&e.geom) > 180.0);
         assert!(e.originals.contains(&short) && e.originals.contains(&long));
     }
 }

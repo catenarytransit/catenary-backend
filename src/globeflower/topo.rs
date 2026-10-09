@@ -2,8 +2,8 @@
 mod loom_semantics;
 
 use crate::loom_graph::{
-    Graph, LineId, LineOcc, Point, Stop, haversine_m, lerp, polyline_len, project_on_polyline,
-    subline,
+    Graph, LineId, LineOcc, Point, Stop, lerp, metric_distance_m, polyline_len,
+    project_on_polyline, subline,
 };
 use log::info;
 use std::cmp::Ordering;
@@ -115,12 +115,12 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 }
 
 fn collect_stations(graph: &mut Graph) -> Vec<StationOcc> {
-    let mut by_name = BTreeMap::<(String, String), StationOcc>::new();
+    let mut by_name = BTreeMap::<String, StationOcc>::new();
 
     for node in graph.nodes.iter_mut().filter_map(Option::as_mut) {
         for stop in std::mem::take(&mut node.stops) {
             let entry = by_name
-                .entry((stop.chateau.clone(), stop.stop_id.clone()))
+                .entry(stop.name.clone())
                 .or_insert_with(|| StationOcc {
                     stops: Vec::new(),
                     originals: BTreeSet::new(),
@@ -152,7 +152,7 @@ fn atomize(graph: &Graph, step_m: f64) -> Vec<Atom> {
     // a second dense polyline for every input edge.
     for edge in graph.edges.iter().filter_map(Option::as_ref) {
         for segment in edge.geom.windows(2) {
-            let distance = haversine_m(segment[0], segment[1]);
+            let distance = metric_distance_m(segment[0], segment[1]);
             let pieces = (distance / step_m).ceil().max(1.0) as usize;
             let mut a = segment[0];
 
@@ -271,7 +271,9 @@ fn aggregate(input: &Graph, atoms: &[Atom], max_distance_m: f64) -> Graph {
                         let a = &atoms[i];
                         let b = &atoms[j];
 
-                        if haversine_m(midpoint(a.a, a.b), midpoint(b.a, b.b)) > max_distance_m {
+                        if metric_distance_m(midpoint(a.a, a.b), midpoint(b.a, b.b))
+                            > max_distance_m
+                        {
                             continue;
                         }
 
@@ -373,7 +375,7 @@ fn aggregate(input: &Graph, atoms: &[Atom], max_distance_m: f64) -> Graph {
                         if j <= i {
                             continue;
                         }
-                        if haversine_m(endpoints[i], endpoints[j]) <= max_distance_m {
+                        if metric_distance_m(endpoints[i], endpoints[j]) <= max_distance_m {
                             endpoint_uf.union(i, j);
                         }
                     }
