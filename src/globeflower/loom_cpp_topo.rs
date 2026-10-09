@@ -252,12 +252,10 @@ fn line_continues(
     if node.adj.len() == 1 {
         return false;
     }
-    if node
-        .conn_exc
-        .get(&line)
-        .and_then(|m| m.get(&first))
-        .is_some_and(|to| to.contains(&second))
-    {
+    if node.conn_exc.get(&line).is_some_and(|m| {
+        m.get(&first).is_some_and(|to| to.contains(&second))
+            || m.get(&second).is_some_and(|to| to.contains(&first))
+    }) {
         return false;
     }
     x.direction.is_none()
@@ -304,10 +302,49 @@ pub(crate) fn remove_orphan_lines(graph: &mut Graph) -> usize {
         if changes.is_empty() {
             break;
         }
+        // C++ MapConstructor::removeOrphanLines, prior to removing an
+        // occurrence: preserve surviving through-connections. An orphan
+        // stump can be the reason another two arms were marked incompatible.
+        let mut clear = BTreeSet::<(usize, LineId, usize, usize)>::new();
+        let mut deleted = BTreeSet::<(usize, LineId)>::new();
         for (eid, line) in changes {
-            let Some(edge) = graph.edges.get_mut(eid).and_then(Option::as_mut) else {
-                continue;
-            };
+            if !deleted.insert((eid, line)) { continue; }
+            let Some(edge) = graph.edges.get(eid).and_then(Option::as_ref) else { continue; };
+            for node_id in [edge.a, edge.b] {
+                let Some(node) = graph.nodes[node_id].as_ref() else { continue; };
+                let others: Vec<usize> = node.adj.iter().copied()
+                    .filter(|&other| other != eid).collect();
+                for &a in &others {
+                    if !line_continues(graph, node_id, eid, a, line) { continue; }
+                    for &b in &others {
+                        if a == b || !line_continues(graph, node_id, eid, b, line) { continue; }
+                        if !line_continues(graph, node_id, a, b, line) {
+                            clear.insert((node_id, line, a, b));
+                        }
+                    }
+                }
+            }
+            // Match delConnExc(line, orphan, each_adjacent): remove both
+            // directions so no stale reference survives the line deletion.
+            for node_id in [edge.a, edge.b] {
+                if let Some(node) = graph.nodes[node_id].as_ref() {
+                    for &other in &node.adj {
+                        clear.insert((node_id, line, eid, other));
+                    }
+                }
+            }
+        }
+        for (node_id, line, a, b) in clear {
+            let Some(node) = graph.nodes[node_id].as_mut() else { continue; };
+            if let Some(map) = node.conn_exc.get_mut(&line) {
+                if let Some(to) = map.get_mut(&a) { to.remove(&b); }
+                if let Some(to) = map.get_mut(&b) { to.remove(&a); }
+                map.retain(|_, to| !to.is_empty());
+            }
+            node.conn_exc.retain(|_, map| !map.is_empty());
+        }
+        for (eid, line) in deleted {
+            let Some(edge) = graph.edges.get_mut(eid).and_then(Option::as_mut) else { continue; };
             let before = edge.lines.len();
             edge.lines.retain(|o| o.line != line);
             removed += before - edge.lines.len();
@@ -345,6 +382,40 @@ pub(crate) fn remove_orphan_lines(graph: &mut Graph) -> usize {
     }
     info!("[topo/mapconstructor] removed {removed} orphan line occurrences");
     removed
+}
+
+#[cfg(test)]
+mod orphan_exception_regression {
+    use super::*;
+    use crate::loom_graph::{Point, Stop};
+
+    #[test]
+    fn orphan_stump_removal_restores_surviving_line_connection() {
+        let mut g = Graph::default();
+        let center = g.add_node(Point { lon: 0.0, lat: 0.0 });
+        let ends: Vec<_> = (1..=3).map(|i| g.add_node(Point { lon: i as f64 * 0.001, lat: 0.0 })).collect();
+        let mut edges = Vec::new();
+        for &end in &ends {
+            let e = g.add_edge(center, end, vec![g.nodes[center].as_ref().unwrap().pos, g.nodes[end].as_ref().unwrap().pos]);
+            g.edges[e].as_mut().unwrap().lines.insert(LineOcc { line: 0, direction: None });
+            edges.push(e);
+        }
+        for &end in &ends[1..] {
+            let node = g.nodes[end].as_mut().unwrap();
+            node.stops.push(Stop {
+                chateau: "a".into(), stop_id: end.to_string(), name: "Station".into(),
+                pos: node.pos,
+            });
+        }
+        let node = g.nodes[center].as_mut().unwrap();
+        node.conn_exc.entry(0).or_default().entry(edges[1]).or_default().insert(edges[2]);
+        node.conn_exc.entry(0).or_default().entry(edges[2]).or_default().insert(edges[1]);
+        remove_orphan_lines(&mut g);
+        assert!(g.edges[edges[0]].is_none());
+        assert!(g.edges[edges[1]].is_some() && g.edges[edges[2]].is_some());
+        assert!(!g.nodes[center].as_ref().unwrap().conn_exc.get(&0)
+            .and_then(|m| m.get(&edges[1])).is_some_and(|s| s.contains(&edges[2])));
+    }
 }
 
 #[cfg(test)]

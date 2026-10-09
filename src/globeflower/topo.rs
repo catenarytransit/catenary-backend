@@ -96,10 +96,12 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 
     if cfg.infer_restrictions {
         let stage = Instant::now();
-        loom_semantics::infer_restrictions_with_deviation(
+        crate::loom_restr_inferrer::infer(
             &restriction_reference,
             &mut output,
             cfg.max_length_dev,
+            cfg.max_aggr_distance,
+            cfg.max_turn_restr_check_dist,
         );
         info!("[topo] inferred restrictions in {:.2?}", stage.elapsed());
     }

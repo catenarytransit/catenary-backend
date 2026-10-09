@@ -11,6 +11,7 @@ mod export;
 mod gtfs2graph;
 mod loom_builder_simplify;
 mod loom_cpp_topo;
+mod loom_restr_inferrer;
 mod loom_graph;
 mod loom_map_constructor;
 mod loom_polyline;
@@ -46,6 +47,9 @@ struct Args {
     /// Maximum station/pattern memberships retained for a planner tile.
     #[arg(long, default_value_t = 100_000)]
     planner_row_limit: usize,
+    /// LOOM geographic proximity for distConnectedComponents (Web Mercator metres).
+    #[arg(long, default_value_t = 10_000.0)]
+    connected_comp_distance: f64,
 }
 
 fn main() -> Result<()> {
@@ -65,6 +69,7 @@ fn main() -> Result<()> {
             tile_degrees: args.planner_tile_degrees,
             min_tile_degrees: args.planner_min_tile_degrees,
             row_limit: args.planner_row_limit,
+            connected_comp_distance: args.connected_comp_distance,
         },
     )?;
 

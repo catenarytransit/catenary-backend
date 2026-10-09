@@ -31,6 +31,9 @@ pub struct PlannerConfig {
     pub min_tile_degrees: f64,
     /// A tile returning more rows than this is subdivided before its rows are used.
     pub row_limit: usize,
+    /// LOOM topo/TopoMain.cpp: distConnectedComponents(10000, false).
+    /// Web Mercator metres, matching the LOOM geometry operations.
+    pub connected_comp_distance: f64,
 }
 
 impl Default for PlannerConfig {
@@ -39,6 +42,7 @@ impl Default for PlannerConfig {
             tile_degrees: 20.0,
             min_tile_degrees: 0.625,
             row_limit: 100_000,
+            connected_comp_distance: 10_000.0,
         }
     }
 }
@@ -72,6 +76,10 @@ struct PlannerRow {
     direction_pattern_id: String,
     #[diesel(sql_type = Text)]
     station_key: String,
+    #[diesel(sql_type = Double)]
+    lon: f64,
+    #[diesel(sql_type = Double)]
+    lat: f64,
 }
 
 #[derive(QueryableByName, Debug)]
@@ -258,6 +266,53 @@ impl DisjointSet {
     }
 }
 
+/// Geographic equivalent of LOOM LineGraph::distConnectedComponents(d, false).
+/// LOOM joins graph nodes within d *projected* metres before finding
+/// connected components, then deletes the temporary proximity edges.
+/// Unioning their pattern owners has exactly the same transitive effect.
+/// A cell's diagonal is <= d, so all its points have the same DSU root.
+/// Keep every point, however: a boundary point can be within distance of
+/// the next cell even when the first point in that cell is not.
+struct GeographicComponents {
+    bins: HashMap<(i64, i64), Vec<(f64, f64, usize)>>,
+    cell_size: f64,
+    distance: f64,
+}
+
+impl GeographicComponents {
+    fn new(distance: f64) -> Self {
+        Self { bins: HashMap::new(), cell_size: distance / std::f64::consts::SQRT_2, distance }
+    }
+
+    fn add(&mut self, dsu: &mut DisjointSet, pattern: usize, position: Point) {
+        if self.distance <= 0.0 || !self.distance.is_finite() { return; }
+        let (x, y) = crate::loom_graph::web_mercator(position);
+        if !x.is_finite() || !y.is_finite() { return; }
+        let cell = ((x / self.cell_size).floor() as i64, (y / self.cell_size).floor() as i64);
+        // All points within the same cell are at most `distance` apart.
+        if let Some(first) = self.bins.get(&cell).and_then(|v| v.first()) {
+            dsu.union(pattern, first.2);
+        }
+        // Search +/-2 because a radius may span two sqrt(2)-sized cells.
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                let neighbor = (cell.0 + dx, cell.1 + dy);
+                if neighbor == cell { continue; }
+                let Some(points) = self.bins.get(&neighbor) else { continue; };
+                // A bucket is one DSU component. No need to scan hundreds
+                // of stops once that component has already been joined.
+                if dsu.find(pattern) == dsu.find(points[0].2) { continue; }
+                if let Some((_, _, other)) = points.iter().find(|&&(px, py, _)| {
+                    (px - x).hypot(py - y) <= self.distance
+                }) {
+                    dsu.union(pattern, *other);
+                }
+            }
+        }
+        self.bins.entry(cell).or_default().push((x, y, pattern));
+    }
+}
+
 /// Discover independent transit worksets by starting from gtfs.routes.
 ///
 /// Globeflower only wants GTFS route_type 0 and 1, so the routes table is a much
@@ -319,8 +374,12 @@ pub fn discover_components(
         shape_ref_count
     );
 
+    anyhow::ensure!(cfg.connected_comp_distance.is_finite() && cfg.connected_comp_distance >= 0.0,
+        "connected component distance must be finite and >= 0");
     let mut dsu = DisjointSet::default();
     let mut first_pattern_at_station = HashMap::<String, usize>::new();
+    let mut seen_positions = HashMap::<(u64, u64), usize>::new();
+    let mut geographic = GeographicComponents::new(cfg.connected_comp_distance);
     let route_batch_size = cfg.row_limit.clamp(64, 1024);
     let mut membership_count = 0usize;
 
@@ -344,7 +403,9 @@ pub fn discover_components(
                     WHEN s.osm_station_id IS NOT NULL
                         THEN 'osm:' || s.osm_station_id::text
                     ELSE 'gtfs:' || s.onestop_feed_id || '|' || s.attempt_id || '|' || s.gtfs_id
-                END AS station_key
+                END AS station_key,
+                ST_X(s.point) AS lon,
+                ST_Y(s.point) AS lat
             FROM route_workset AS w
             INNER JOIN gtfs.direction_pattern_meta AS dpm
                 ON dpm.onestop_feed_id = w.onestop_feed_id
@@ -379,7 +440,17 @@ pub fn discover_components(
             if let Some(&first) = first_pattern_at_station.get(&row.station_key) {
                 dsu.union(first, idx);
             } else {
-                first_pattern_at_station.insert(row.station_key, idx);
+                first_pattern_at_station.insert(row.station_key.clone(), idx);
+            }
+            // Do not conflate geographic proximity with station identity:
+            // independent agencies can overlap without sharing stop IDs.
+            let coordinate = (row.lon.to_bits(), row.lat.to_bits());
+            if let Some(&first) = seen_positions.get(&coordinate) {
+                // Different GTFS stop IDs can have exactly the same point.
+                dsu.union(first, idx);
+            } else {
+                seen_positions.insert(coordinate, idx);
+                geographic.add(&mut dsu, idx, Point { lon: row.lon, lat: row.lat });
             }
         }
     }
@@ -388,10 +459,12 @@ pub fn discover_components(
     let components = dsu.into_components();
     let largest = components.first().map_or(0, |c| c.patterns.len());
     info!(
-        "[planner] {} station memberships, {} route_type 0/1 direction patterns -> {} connected components; largest={} patterns",
+        "[planner] {} memberships / {} physical stations, {} route_type 0/1 patterns -> {} connected components (LOOM geographic radius {}m); largest={} patterns",
         membership_count,
+        seen_positions.len(),
         pattern_count,
         components.len(),
+        cfg.connected_comp_distance,
         largest
     );
     Ok(components)
@@ -462,7 +535,9 @@ fn load_planner_rows(
                 WHEN s.osm_station_id IS NOT NULL
                     THEN 'osm:' || s.osm_station_id::text
                 ELSE 'gtfs:' || s.onestop_feed_id || '|' || s.attempt_id || '|' || s.gtfs_id
-            END AS station_key
+            END AS station_key,
+            ST_X(s.point) AS lon,
+            ST_Y(s.point) AS lat
         FROM gtfs.stops AS s
         INNER JOIN gtfs.direction_pattern AS dp
             ON dp.onestop_feed_id = s.onestop_feed_id
@@ -517,6 +592,54 @@ struct PatternAccum {
     route_key: (String, String, String),
     shape_id: Option<String>,
     stops: Vec<(i64, (String, String, String), String)>,
+}
+
+#[cfg(test)]
+mod geographic_components_tests {
+    use super::*;
+
+    fn pattern(dsu: &mut DisjointSet, id: usize) -> usize {
+        dsu.ensure(PatternKey {
+            onestop_feed_id: format!("feed{id}"),
+            attempt_id: "0".to_string(),
+            direction_pattern_id: "x".to_string(),
+        })
+    }
+
+    #[test]
+    fn nearby_different_agencies_join_without_shared_station_id() {
+        let mut dsu = DisjointSet::default();
+        let mut geo = GeographicComponents::new(10_000.0);
+        let a = pattern(&mut dsu, 0);
+        let b = pattern(&mut dsu, 1);
+        geo.add(&mut dsu, a, Point { lon: 0.0, lat: 0.0 });
+        geo.add(&mut dsu, b, Point { lon: 0.015, lat: 0.0 });
+        assert_eq!(dsu.find(a), dsu.find(b));
+    }
+
+    #[test]
+    fn far_apart_components_stay_separate() {
+        let mut dsu = DisjointSet::default();
+        let mut geo = GeographicComponents::new(10_000.0);
+        let a = pattern(&mut dsu, 0);
+        let b = pattern(&mut dsu, 1);
+        geo.add(&mut dsu, a, Point { lon: 0.0, lat: 0.0 });
+        geo.add(&mut dsu, b, Point { lon: 1.0, lat: 0.0 });
+        assert_ne!(dsu.find(a), dsu.find(b));
+    }
+
+    #[test]
+    fn geographic_connections_are_transitive() {
+        let mut dsu = DisjointSet::default();
+        let mut geo = GeographicComponents::new(10_000.0);
+        let a = pattern(&mut dsu, 0);
+        let b = pattern(&mut dsu, 1);
+        let c = pattern(&mut dsu, 2);
+        geo.add(&mut dsu, a, Point { lon: 0.0, lat: 0.0 });
+        geo.add(&mut dsu, b, Point { lon: 0.07, lat: 0.0 });
+        geo.add(&mut dsu, c, Point { lon: 0.14, lat: 0.0 });
+        assert_eq!(dsu.find(a), dsu.find(c));
+    }
 }
 
 /// Materialize exactly one station-connected component and construct its
