@@ -4,9 +4,7 @@
 
 use crate::DownloadedFeedsInformation;
 use crate::agency_metadata::unified_agency_id_for;
-use crate::gtfs_handlers::colour_correction::{
-    fix_background_colour_rgb_feed_route, fix_foreground_colour_rgb_feed,
-};
+use crate::gtfs_handlers::colour_correction::corrected_route_colours;
 use crate::gtfs_handlers::shape_colour_calculator::{ShapeToColourResponse, shape_to_colour};
 use crate::gtfs_handlers::stops_associated_items::make_hashmaps_of_children_stop_info;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
@@ -1053,6 +1051,7 @@ pub async fn gtfs_process_large_feed(
                                 attempt_id,
                                 chateau_id,
                                 route,
+                                &agency_gtfs,
                                 *direction_pattern_id,
                                 &linestring,
                                 Arc::clone(&arc_conn_pool),
@@ -1314,9 +1313,8 @@ pub async fn gtfs_process_large_feed(
             .routes
             .iter()
             .map(|(route_id, route)| {
-                let colour = fix_background_colour_rgb_feed_route(feed_id, route.color, route);
-                let text_colour =
-                    fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color);
+                let (colour, text_colour) =
+                    corrected_route_colours(feed_id, &agency_gtfs, route);
 
                 let colour_pg = format!("#{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b);
                 let text_colour_pg = format!(

@@ -1,4 +1,6 @@
 use rgb::RGB;
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 pub const WHITE_RGB: RGB<u8> = RGB::new(255, 255, 255);
 
@@ -265,5 +267,144 @@ pub fn fix_foreground_colour_rgb_feed(
     match feed_id {
         "f-9q5b-longbeachtransit" => WHITE_RGB,
         _ => fix_foreground_colour_rgb(background, foreground),
+    }
+}
+
+ 
+// The DELFI data is sourced from Transitous's agency-name/route-short-name table:
+// https://github.com/public-transport/transitous/blob/main/scripts/de-delfi-colors.lua
+// Transitous generated this from Traewelling/line-colors (SPDX: CC0-1.0).
+// Preserve the supplied background AND foreground, including pure white and black,
+// instead of running them through Maple's generic colour replacement.
+pub fn is_de_delfi_feed(feed_id: &str) -> bool {
+    matches!(
+        feed_id,
+        "f-gtfs~de"
+        | "f-gtfs~de~bayern"
+        | "f-gtfs~de~berlin"
+        | "f-gtfs~de~brandenburg"
+        | "f-gtfs~de~bremen"
+        | "f-gtfs~de~hamburg"
+        | "f-gtfs~de~hessen"
+        | "f-gtfs~de~mecklenburg~vorpommern"
+        | "f-gtfs~de~baden~württemberg"
+        | "f-gtfs~de~niedersachsen"
+        | "f-gtfs~de~nordrhein~westfalen"
+        | "f-gtfs~de~rheinland~pfalz"
+        | "f-gtfs~de~saarland"
+        | "f-gtfs~de~sachsen~anhalt"
+        | "f-gtfs~de~sachsen"
+        | "f-gtfs~de~schleswig~holstein"
+        | "f-gtfs~de~thüringen"
+        | "f-gtfs~de~deutsche~bahn"
+    )
+}
+
+fn parse_delfi_rgb(hex: &str) -> RGB<u8> {
+    let value = u32::from_str_radix(hex, 16).expect("invalid DELFI hex colour");
+    assert_eq!(hex.len(), 6, "DELFI colours must be six hex digits");
+    RGB::new((value >> 16) as u8, (value >> 8) as u8, value as u8)
+}
+
+fn delfi_colours() -> &'static HashMap<(&'static str, &'static str), (RGB<u8>, RGB<u8>)> {
+    static COLORS: OnceLock<HashMap<(&'static str, &'static str), (RGB<u8>, RGB<u8>)>> =
+        OnceLock::new();
+    COLORS.get_or_init(|| {
+        let mut colors = HashMap::new();
+        let mut agency_name = "";
+        for line in include_str!("de_delfi_colors.tsv").lines() {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            if let Some(name) = line.strip_prefix('>') {
+                agency_name = name;
+                continue;
+            }
+            let mut columns = line.split('\t');
+            let short_name = columns.next().expect("DELFI route name");
+            let background = columns.next().expect("DELFI background");
+            let foreground = columns.next().unwrap_or("ffffff");
+            assert!(columns.next().is_none(), "unexpected DELFI TSV column");
+            assert!(!agency_name.is_empty(), "DELFI route without agency");
+            colors.insert(
+                (agency_name, short_name),
+                (parse_delfi_rgb(background), parse_delfi_rgb(foreground)),
+            );
+        }
+        colors
+    })
+}
+
+fn delfi_route_colours(
+    feed_id: &str,
+    gtfs: &gtfs_structures::Gtfs,
+    route: &gtfs_structures::Route,
+) -> Option<(RGB<u8>, RGB<u8>)> {
+    if !is_de_delfi_feed(feed_id) {
+        return None;
+    }
+    let short_name = route.short_name.as_deref()?;
+    // GTFS routes.txt agency_id is optional when agencies.txt has one agency.
+    // Do not guess an agency on multi-agency feeds with a missing agency_id.
+    let agency = route
+        .agency_id
+        .as_ref()
+        .and_then(|id| gtfs.agencies.iter().find(|agency| agency.id.as_ref() == Some(id)))
+        .or_else(|| {
+            if gtfs.agencies.len() == 1 {
+                gtfs.agencies.first()
+            } else {
+                None
+            }
+        })?;
+    delfi_colours()
+        .get(&(agency.name.as_str(), short_name))
+        .copied()
+}
+
+/// Correct both colours together, keeping DELFI overrides ahead of generic
+/// feed-specific and missing/white/black fallbacks.
+pub fn corrected_route_colours(
+    feed_id: &str,
+    gtfs: &gtfs_structures::Gtfs,
+    route: &gtfs_structures::Route,
+) -> (RGB<u8>, RGB<u8>) {
+    if let Some(colours) = delfi_route_colours(feed_id, gtfs, route) {
+        return colours;
+    }
+    (
+        fix_background_colour_rgb_feed_route(feed_id, route.color, route),
+        fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color),
+    )
+}
+
+#[cfg(test)]
+mod delfi_tests {
+    use super::*;
+
+    #[test]
+    fn all_transitous_entries_are_loaded() {
+        assert_eq!(delfi_colours().len(), 7296);
+    }
+
+    #[test]
+    fn berlin_and_white_routes_preserve_exact_colours() {
+        assert_eq!(
+            delfi_colours().get(&("Berliner Verkehrsbetriebe", "U1")),
+            Some(&(RGB::new(0x7d, 0xad, 0x4c), WHITE_RGB))
+        );
+        assert_eq!(
+            delfi_colours().get(&("Albtal-Verkehrs-Gesellschaft mbH", "E")),
+            Some(&(WHITE_RGB, RGB::new(0, 0, 0)))
+        );
+    }
+
+    #[test]
+    fn scope_is_exact_and_unmatched_names_do_not_get_other_agency_colours() {
+        assert!(is_de_delfi_feed("f-gtfs~de~thüringen"));
+        assert!(is_de_delfi_feed("f-gtfs~de~deutsche~bahn"));
+        assert!(!is_de_delfi_feed("f-gtfs~de~unknown"));
+        assert!(!is_de_delfi_feed("f-gtfs~at"));
+        assert!(delfi_colours().get(&("Nonexistent Agency", "U1")).is_none());
     }
 }

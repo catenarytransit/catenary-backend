@@ -11,8 +11,6 @@ use crate::agency_metadata::{
     CountryIndex, unified_agency_id_for, unified_agency_row, upsert_unified_agencies,
 };
 use crate::gtfs_handlers::colour_correction;
-use crate::gtfs_handlers::colour_correction::fix_background_colour_rgb_feed_route;
-use crate::gtfs_handlers::colour_correction::fix_foreground_colour_rgb_feed;
 use crate::gtfs_handlers::shape_colour_calculator::ShapeToColourResponse;
 use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
@@ -2358,6 +2356,7 @@ pub async fn gtfs_process_feed(
                             attempt_id,
                             chateau_id,
                             route,
+                            &gtfs,
                             *direction_pattern_id,
                             &linestring,
                             Arc::clone(&arc_conn_pool),
@@ -2667,9 +2666,8 @@ pub async fn gtfs_process_feed(
         .routes
         .iter()
         .map(|(route_id, route)| {
-            let colour = fix_background_colour_rgb_feed_route(feed_id, route.color, route);
-            let text_colour =
-                fix_foreground_colour_rgb_feed(feed_id, route.color, route.text_color);
+            let (colour, text_colour) =
+                colour_correction::corrected_route_colours(feed_id, &gtfs, route);
 
             let colour_pg = format!("#{:02x}{:02x}{:02x}", colour.r, colour.g, colour.b);
             let text_colour_pg = format!(

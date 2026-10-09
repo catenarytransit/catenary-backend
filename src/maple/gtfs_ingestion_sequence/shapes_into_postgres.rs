@@ -65,6 +65,10 @@ pub async fn shapes_into_postgres(
                 };
 
                 let bg_color = match shape_to_color_lookup.get(shape_id) {
+                    // DELFI's white/black and agency-dependent overrides were already
+                    // resolved while assigning colours to shapes. Don't overwrite them
+                    // using an arbitrary other route sharing this shape.
+                    Some(color) if colour_correction::is_de_delfi_feed(feed_id) => *color,
                     Some(color) => match route {
                         Some(route) => colour_correction::fix_background_colour_rgb_feed_route(
                             feed_id,

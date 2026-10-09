@@ -70,16 +70,13 @@ pub fn shape_to_colour(feed_id: &str, gtfs: &gtfs_structures::Gtfs) -> ShapeToCo
                 if !shape_to_color_lookup.contains_key(shape_id) {
                     //colour not yet assigned to shape, assign it!
 
-                    let color = colour_correction::fix_background_colour_rgb_feed_route(
-                        feed_id,
-                        route.color,
-                        route,
-                    );
+                    let (color, text_color) =
+                        colour_correction::corrected_route_colours(feed_id, gtfs, route);
 
                     shape_to_color_lookup.insert(trip.shape_id.as_ref().unwrap().to_owned(), color);
                     shape_to_text_color_lookup.insert(
                         shape_id.clone(),
-                        route.text_color.unwrap_or_else(|| RGB::new(0, 0, 0)),
+                        text_color,
                     );
                 }
 
