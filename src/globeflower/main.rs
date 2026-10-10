@@ -12,6 +12,8 @@ mod gtfs2graph;
 mod loom_builder_simplify;
 mod loom_cpp_topo;
 mod loom_restr_inferrer;
+mod loom_shape_alignment;
+mod loom_trip_segments;
 mod loom_graph;
 mod loom_map_constructor;
 mod loom_polyline;

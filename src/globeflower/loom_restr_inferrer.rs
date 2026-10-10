@@ -98,6 +98,9 @@ struct Restrictions {
     outgoing: Vec<Vec<usize>>,
     node_origin: Vec<Option<usize>>,
     forbidden: HashMap<(usize, LineId, usize), BTreeSet<usize>>,
+    /// Actual ordered source-trip transitions at original graph nodes.
+    /// Unlike inferred line membership, these can authorize a true reversal.
+    allowed: HashMap<(usize, LineId, usize), BTreeSet<usize>>,
 }
 
 impl Restrictions {
@@ -107,6 +110,7 @@ impl Restrictions {
             outgoing: vec![vec![]; original.nodes.len()],
             node_origin: (0..original.nodes.len()).map(Some).collect(),
             forbidden: HashMap::new(),
+            allowed: HashMap::new(),
         };
         let mut handle_nodes = HashMap::new();
         for edge in original.edges.iter().flatten() {
@@ -141,6 +145,11 @@ impl Restrictions {
             }
         }
         for node in original.nodes.iter().flatten() {
+            for (&line, turns) in &node.allowed_turns {
+                for &(from, to) in turns {
+                    this.allowed.entry((node.id, line, from)).or_default().insert(to);
+                }
+            }
             for (&line, entries) in &node.conn_exc {
                 for (&a, bs) in entries {
                     this.forbidden.entry((node.id, line, a)).or_default().extend(bs.iter().copied());
@@ -171,10 +180,15 @@ impl Restrictions {
             for &next_id in &self.outgoing[incoming.to] {
                 let next = &self.arcs[next_id];
                 if !next.lines.contains(&line) { continue; }
-                // C++ CostFunc blocks reversing an edge (including an immediate U-turn).
-                if next.to == incoming.from { continue; }
+                // Explicit original traversals are authoritative: a reverse
+                // arc is legal only when a source trip actually reversed here.
+                let observed = self.node_origin[incoming.to].is_some_and(|node| {
+                    self.allowed.get(&(node, line, incoming.original))
+                        .is_some_and(|targets| targets.contains(&next.original))
+                });
+                if next.to == incoming.from && !observed { continue; }
                 if let Some(node) = self.node_origin[incoming.to] {
-                    if self.forbidden.get(&(node, line, incoming.original))
+                    if !observed && self.forbidden.get(&(node, line, incoming.original))
                         .is_some_and(|targets| targets.contains(&next.original)) { continue; }
                 }
                 let candidate = cost + next.length;

@@ -5,7 +5,9 @@ use log::{info, warn};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
-use crate::loom_graph::{Graph, Line, LineOcc, Point, Stop as LoomStop, add_line_occ};
+use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
+use crate::loom_shape_alignment::AlignedShape;
+use crate::loom_trip_segments::{EdgeRegistry, SegmentKey};
 
 /// Globeflower intentionally processes only GTFS route_type 0 (tram) and
 /// route_type 1 (subway/metro). Heavy rail is deliberately excluded.
@@ -116,9 +118,9 @@ struct PatternStopRow {
     shape_id: Option<String>,
 }
 
-/// Catenary preserves trip memberships by itinerary pattern.  Summing
-/// trip_ids grouped by direction pattern supplies the C++ Builder::simplify
-/// occurrence weight without expanding all stop_times into memory.
+/// Geometry is itinerary-specific. Direction-pattern IDs depend on stop
+/// sequence, and multiple itineraries under the same ID may use different
+/// GTFS shapes. Weight each distinct shape by the number of represented trips.
 #[derive(QueryableByName, Debug)]
 struct PatternWeightRow {
     #[diesel(sql_type = Text)]
@@ -127,6 +129,8 @@ struct PatternWeightRow {
     attempt_id: String,
     #[diesel(sql_type = Text)]
     direction_pattern_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    shape_id: Option<String>,
     #[diesel(sql_type = BigInt)]
     trip_count: i64,
 }
@@ -725,35 +729,34 @@ pub fn build_component(
                 direction_pattern_id text
             )
         ),
-        route_shapes AS (
+        referenced_shapes AS (
             SELECT DISTINCT
-                r.onestop_feed_id,
-                r.attempt_id,
-                route_shape.shape_id
+                w.onestop_feed_id,
+                w.attempt_id,
+                COALESCE(ipm.shape_id, dpm.gtfs_shape_id) AS shape_id
             FROM workset AS w
             INNER JOIN gtfs.direction_pattern_meta AS dpm
                 ON dpm.onestop_feed_id = w.onestop_feed_id
                AND dpm.attempt_id = w.attempt_id
                AND dpm.direction_pattern_id = w.direction_pattern_id
-            INNER JOIN gtfs.routes AS r
-                ON r.onestop_feed_id = dpm.onestop_feed_id
-               AND r.attempt_id = dpm.attempt_id
-               AND r.route_id = dpm.route_id
-            CROSS JOIN LATERAL unnest(COALESCE(r.shapes_list, ARRAY[]::text[])) AS route_shape(shape_id)
-            WHERE r.route_type IN {route_types}
+            LEFT JOIN gtfs.itinerary_pattern_meta AS ipm
+                ON ipm.onestop_feed_id = w.onestop_feed_id
+               AND ipm.attempt_id = w.attempt_id
+               AND ipm.direction_pattern_id = w.direction_pattern_id
+            WHERE dpm.route_type IN {route_types}
         )
         SELECT DISTINCT
             s.onestop_feed_id,
             s.attempt_id,
             s.shape_id,
             ST_AsGeoJSON(s.linestring) AS geojson
-        FROM route_shapes AS rs
+        FROM referenced_shapes AS rs
         INNER JOIN gtfs.shapes AS s
             ON s.onestop_feed_id = rs.onestop_feed_id
            AND s.attempt_id = rs.attempt_id
            AND s.shape_id = rs.shape_id
-        WHERE s.route_type IN {route_types}
-          AND s.allowed_spatial_query = TRUE
+        WHERE rs.shape_id IS NOT NULL
+          AND s.linestring IS NOT NULL
         "#,
         route_types = ROUTE_TYPES_SQL
     ))
@@ -761,52 +764,52 @@ pub fn build_component(
     .load(conn)
     .context("load shapes for one direction-pattern component")?;
 
-    let mut shape_map = HashMap::<(String, String, String), Vec<Point>>::new();
+    let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
     for row in shape_rows {
-        match parse_linestring_geojson(&row.geojson) {
-            Some(points) if points.len() >= 2 => {
-                shape_map.insert((row.onestop_feed_id, row.attempt_id, row.shape_id), points);
+        match parse_linestring_geojson(&row.geojson).and_then(AlignedShape::new) {
+            Some(shape) => {
+                shape_map.insert((row.onestop_feed_id, row.attempt_id, row.shape_id), shape);
             }
-            _ => warn!(
-                "[gtfs2graph] ignoring malformed/short shape {}",
-                row.shape_id
-            ),
+            None => warn!("[gtfs2graph] ignoring malformed/short shape {}", row.shape_id),
         }
     }
 
-    // Read ONLY trip counts for this connected component.  C++ Builder
-    // iterates every trip; the compressed schema's `trip_ids` field permits
-    // equivalent weighting while we iterate one direction pattern at a time.
+    // Unlike direction patterns, itineraries distinguish GTFS shape IDs.
+    // Preserve every geometry instead of choosing an arbitrary representative
+    // from several itineraries with identical stop sequences.
     let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
         r#"WITH workset AS (
               SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(
                   onestop_feed_id text, attempt_id text, direction_pattern_id text)
             )
             SELECT w.onestop_feed_id, w.attempt_id, w.direction_pattern_id,
+                   COALESCE(ipm.shape_id, dpm.gtfs_shape_id) AS shape_id,
                    GREATEST(1, COALESCE(SUM(cardinality(ipm.trip_ids)), 0))::bigint AS trip_count
             FROM workset w
+            INNER JOIN gtfs.direction_pattern_meta dpm
+              ON dpm.onestop_feed_id = w.onestop_feed_id
+             AND dpm.attempt_id = w.attempt_id
+             AND dpm.direction_pattern_id = w.direction_pattern_id
             LEFT JOIN gtfs.itinerary_pattern_meta ipm
               ON ipm.onestop_feed_id = w.onestop_feed_id
              AND ipm.attempt_id = w.attempt_id
              AND ipm.direction_pattern_id = w.direction_pattern_id
-            GROUP BY w.onestop_feed_id, w.attempt_id, w.direction_pattern_id"#,
+            GROUP BY w.onestop_feed_id, w.attempt_id, w.direction_pattern_id,
+                     COALESCE(ipm.shape_id, dpm.gtfs_shape_id)"#,
     )
     .bind::<Text, _>(&workset_json)
     .load(conn)
-    .context("load direction-pattern trip cardinalities for Builder::simplify")?;
-    let pattern_weights: HashMap<PatternKey, usize> = weight_rows
-        .into_iter()
-        .map(|row| {
-            (
-                PatternKey {
-                    onestop_feed_id: row.onestop_feed_id,
-                    attempt_id: row.attempt_id,
-                    direction_pattern_id: row.direction_pattern_id,
-                },
-                row.trip_count.max(1) as usize,
-            )
-        })
-        .collect();
+    .context("load itinerary-specific shapes and trip cardinalities")?;
+    let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
+    for row in weight_rows {
+        let key = PatternKey {
+            onestop_feed_id: row.onestop_feed_id,
+            attempt_id: row.attempt_id,
+            direction_pattern_id: row.direction_pattern_id,
+        };
+        pattern_weights.entry(key).or_default()
+            .push((row.shape_id, row.trip_count.max(1) as usize));
+    }
 
     let mut graph = Graph::default();
     let mut line_by_key = HashMap::<(String, String, String), usize>::new();
@@ -897,104 +900,68 @@ pub fn build_component(
         node_by_physical.insert(physical_key, node_id);
     }
 
-    // C++ Builder::consume calls getEdg(from, to) before addEdg. Reuse
-    // canonical edges across repeated direction-pattern occurrences.
-    // Geometrically distinct alternatives must not be silently averaged;
-    // retain distinct alternatives by shape until a dedicated ETG simplifier
-    // can choose the reference geometry as in C++ Builder::simplify.
-    let mut edge_by_pair_shape = HashMap::<(usize, usize, Option<String>), usize>::new();
-    let mut edge_trip_weight = HashMap::<usize, usize>::new();
-    let mut edge_line_trip_weight = HashMap::<(usize, usize), usize>::new();
-    let mut preliminary_edge_id = 0usize;
+    // Each (itinerary shape, ordered stop sequence) is matched globally.
+    // Geometries are extracted from arclength intervals, not independently
+    // reprojected endpoints; this preserves circles, lassos and reversals.
+    let mut registry = EdgeRegistry::new();
     for (pattern_key, pattern) in &mut patterns {
         pattern.stops.sort_by_key(|x| x.0);
-        let Some(&line_id) = line_by_key.get(&pattern.route_key) else {
-            continue;
-        };
-        let shape = pattern.shape_id.as_ref().and_then(|shape_id| {
-            shape_map.get(&(
+        let Some(&line_id) = line_by_key.get(&pattern.route_key) else { continue; };
+        let Some(stop_nodes) = pattern.stops.iter()
+            .map(|row| node_by_physical.get(&row.2).copied())
+            .collect::<Option<Vec<usize>>>() else {
+                warn!("[gtfs2graph] incomplete stop sequence for {}", pattern_key.direction_pattern_id);
+                continue;
+            };
+        if stop_nodes.len() < 2 { continue; }
+        let stop_positions: Vec<Point> = stop_nodes.iter()
+            .map(|&id| graph.nodes[id].as_ref().unwrap().pos).collect();
+        let variants = pattern_weights.get(pattern_key).cloned()
+            .unwrap_or_else(|| vec![(pattern.shape_id.clone(), 1)]);
+        for (shape_id, trip_count) in variants {
+            let shape = shape_id.as_ref().and_then(|id| shape_map.get(&(
                 pattern_key.onestop_feed_id.clone(),
                 pattern_key.attempt_id.clone(),
-                shape_id.clone(),
-            ))
-        });
-
-        let mut previous: Option<(usize, usize)> = None; // (end node, edge id)
-
-        for pair in pattern.stops.windows(2) {
-            let Some(&a) = node_by_physical.get(&pair[0].2) else {
-                continue;
-            };
-            let Some(&b) = node_by_physical.get(&pair[1].2) else {
-                continue;
-            };
-            if a == b {
+                id.clone(),
+            )));
+            // A missing referenced shape must not silently become a straight
+            // line through a loop. Unshaped GTFS still uses LOOM's fallback.
+            if shape_id.is_some() && shape.is_none() {
+                warn!("[gtfs2graph] referenced shape {:?} missing for pattern {}",
+                    shape_id, pattern_key.direction_pattern_id);
                 continue;
             }
-            let pa = graph.nodes[a].as_ref().unwrap().pos;
-            let pb = graph.nodes[b].as_ref().unwrap().pos;
-            let geometry = if let Some(shape) = shape {
-                crate::loom_polyline::ordered_segment(shape, pa, pb)
-            } else {
-                vec![pa, pb]
-            };
-            if geometry.len() < 2 {
-                continue;
+            let progression = if let Some(s) = shape {
+                let Some(v) = s.match_stops(&stop_positions) else {
+                    warn!("[gtfs2graph] no monotone shape alignment for pattern {} shape {:?}",
+                        pattern_key.direction_pattern_id, shape_id);
+                    continue;
+                };
+                Some(v)
+            } else { None };
+            let mut previous = None;
+            for i in 0..stop_nodes.len() - 1 {
+                let (a, b) = (stop_nodes[i], stop_nodes[i + 1]);
+                let (geometry, start, end) = if let (Some(s), Some(ds)) = (shape, progression.as_ref()) {
+                    let (start, end) = (ds[i], ds[i + 1]);
+                    let Some(piece) = s.segment(start, end) else { continue; };
+                    (piece, (start * 1000.0).round() as i64, (end * 1000.0).round() as i64)
+                } else {
+                    (vec![stop_positions[i], stop_positions[i + 1]], 0, 0)
+                };
+                let key = SegmentKey {
+                    from: a, to: b, shape_id: shape_id.clone(),
+                    start_mm: start, end_mm: end,
+                };
+                previous = registry.append(&mut graph, key, geometry, line_id, trip_count, previous);
             }
-            // C++ Builder::getSubPolyLine returns projected shape geometry.
-            // It DOES NOT force its endpoints onto the GTFS stop positions.
-            // MapConstructor handles graph-node endpoints separately.
-            let key = (a.min(b), a.max(b), pattern.shape_id.clone());
-            let edge_id = if let Some(&id) = edge_by_pair_shape.get(&key) {
-                id
-            } else {
-                let id = graph.add_edge(a, b, geometry);
-                edge_by_pair_shape.insert(key, id);
-                graph.edges[id]
-                    .as_mut()
-                    .unwrap()
-                    .originals
-                    .insert(preliminary_edge_id);
-                preliminary_edge_id += 1;
-                id
-            };
-            *edge_trip_weight.entry(edge_id).or_default() +=
-                pattern_weights.get(pattern_key).copied().unwrap_or(1);
-            *edge_line_trip_weight.entry((edge_id, line_id)).or_default() +=
-                pattern_weights.get(pattern_key).copied().unwrap_or(1);
-            let edge = graph.edges[edge_id].as_mut().unwrap();
-            // A line used in both directions is represented as bidirectional,
-            // just as C++ EdgeTripGeom::RouteOccurance aggregates trips.
-            add_line_occ(
-                &mut edge.lines,
-                LineOcc {
-                    line: line_id,
-                    direction: Some(b),
-                },
-            );
-
-            // LOOM Builder::consume records each actual consecutive trip
-            // transition. Merely sharing a node and line does NOT establish a
-            // legal transition (particularly on branching metro services).
-            if let Some((previous_end, previous_edge)) = previous {
-                if previous_end == a {
-                    graph.nodes[a]
-                        .as_mut()
-                        .unwrap()
-                        .allowed_turns
-                        .entry(line_id)
-                        .or_default()
-                        .insert((previous_edge, edge_id));
-                }
-            }
-            previous = Some((b, edge_id));
         }
     }
 
     crate::loom_builder_simplify::simplify(
         &mut graph,
-        &edge_trip_weight,
-        &mut edge_line_trip_weight,
+        &registry.weights,
+        &mut registry.line_weights,
         prune_threshold,
     );
     Ok(graph)
