@@ -16,6 +16,57 @@ fn cell(p: Point, scale: f64) -> Cell {
     ((x / scale).floor() as i64, (y / scale).floor() as i64)
 }
 
+// LOOM's distance-only ndCollapseCand can weld orthogonal tunnels together.
+// Angles are unoriented: reverse-direction service on the same alignment is
+// compatible, but a geometric X crossing is not a railway junction.
+const SAME_LINE_COS: f64 = 0.866_025_403_784_438_6; // cos(30 degrees)
+const OTHER_LINE_COS: f64 = 0.939_692_620_785_908_4; // cos(20 degrees)
+const OTHER_LINE_MAX_SNAP_M: f64 = 12.0; // projected metres, intentionally conservative
+const SAME_LINE_MAX_SNAP_M: f64 = 25.0; // different shape instances may be noisier
+
+fn track_tangent(points: &[Point], at: usize) -> Option<(f64, f64)> {
+    if points.len() < 2 || at >= points.len() {
+        return None;
+    }
+    // Use a 4-sample window rather than the immediately adjacent 5m atom.
+    // This suppresses heading noise without treating an entire station-to-
+    // station segment as straight (important for circular services).
+    let a = web_mercator(points[at.saturating_sub(2)]);
+    let b = web_mercator(points[(at + 2).min(points.len() - 1)]);
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let norm = dx.hypot(dy);
+    (norm > 1e-6).then_some((dx / norm, dy / norm))
+}
+
+fn node_track_aligned(
+    graph: &Graph,
+    id: usize,
+    tangent: (f64, f64),
+    cos_limit: f64,
+    required_lines: Option<&BTreeSet<usize>>,
+) -> bool {
+    let Some(node) = graph.nodes.get(id).and_then(Option::as_ref) else {
+        return false;
+    };
+    let from = web_mercator(node.pos);
+    node.adj.iter().any(|&eid| {
+        let Some(edge) = graph.edges[eid].as_ref() else {
+            return false;
+        };
+        if required_lines.is_some_and(|lines| !edge.lines.iter().any(|o| lines.contains(&o.line))) {
+            return false;
+        }
+        let other = if edge.a == id { edge.b } else { edge.a };
+        let Some(to) = graph.nodes.get(other).and_then(Option::as_ref) else {
+            return false;
+        };
+        let to = web_mercator(to.pos);
+        let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+        let norm = dx.hypot(dy);
+        norm > 1e-6 && (dx * tangent.0 + dy * tangent.1).abs() >= norm * cos_limit
+    })
+}
+
 struct NodeIndex {
     bins: HashMap<Cell, HashSet<usize>>,
     scale: f64,
@@ -56,24 +107,100 @@ impl NodeIndex {
             self.bins.entry(new_cell).or_default().insert(id);
         }
     }
+    // Cross-route merging needs evidence of a *corridor*, not one accidental
+    // coincidence. Sample only six bounded lookahead positions; querying the
+    // existing node index preserves O(K) local work, never O(V^2).
+    fn sustained_alignment(
+        &self,
+        points: &[Point],
+        at: usize,
+        out: &Graph,
+        candidate_lines: &BTreeSet<usize>,
+        radius: f64,
+    ) -> bool {
+        let mut supported = 0;
+        let mut first = at;
+        let mut last = at;
+        let mut min_lateral = f64::INFINITY;
+        let mut max_lateral = f64::NEG_INFINITY;
+        for offset in [-8isize, -4, -2, 2, 4, 8] {
+            let Some(j) = at.checked_add_signed(offset).filter(|&j| j < points.len()) else {
+                continue;
+            };
+            let Some(heading) = track_tangent(points, j) else {
+                continue;
+            };
+            let p = points[j];
+            let key = cell(p, self.scale);
+            let mut witness: Option<(f64, f64)> = None;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    if let Some(ids) = self.bins.get(&(key.0 + dx, key.1 + dy)) {
+                        for &id in ids {
+                            let Some(node) = out.nodes[id].as_ref() else {
+                                continue;
+                            };
+                            let dist = metric_distance_m(p, node.pos);
+                            if dist >= radius || witness.is_some_and(|(best, _)| dist >= best) {
+                                continue;
+                            }
+                            if !node_track_aligned(
+                                out,
+                                id,
+                                heading,
+                                OTHER_LINE_COS,
+                                Some(candidate_lines),
+                            ) {
+                                continue;
+                            }
+                            let (px, py) = web_mercator(p);
+                            let (nx, ny) = web_mercator(node.pos);
+                            let lateral = heading.0 * (ny - py) - heading.1 * (nx - px);
+                            witness = Some((dist, lateral));
+                        }
+                    }
+                }
+            }
+            if let Some((_, lateral)) = witness {
+                supported += 1;
+                first = first.min(j);
+                last = last.max(j);
+                // A changing signed offset reveals a shallow-angle crossing.
+                // Even same-route tracklets can intersect on loops or lassos.
+                min_lateral = min_lateral.min(lateral);
+                max_lateral = max_lateral.max(lateral);
+            }
+        }
+        // Densified samples are at most segment_length apart. Measured
+        // arclength avoids treating two indices at a sharp kink as 30m apart.
+        let observed_length: f64 = points[first..=last]
+            .windows(2)
+            .map(|w| metric_distance_m(w[0], w[1]))
+            .sum();
+        supported >= 2 && observed_length >= 25.0 && max_lateral - min_lateral <= 5.0
+    }
+
     fn nearest(
         &self,
-        p: Point,
+        points: &[Point],
+        at: usize,
+        source: &crate::loom_graph::Edge,
         out: &Graph,
         forbidden: &HashSet<usize>,
         span_a: Option<Point>,
         span_b: Option<Point>,
     ) -> Option<usize> {
+        let p = *points.get(at)?;
+        let heading = track_tangent(points, at)?;
         let key = cell(p, self.scale);
-        // C++ MapConstructor::ndCollapseCand: a candidate must be nearer
-        // than both protected ends of the current source-edge span.
+        // Retain LOOM's protection against snapping beyond the original edge
+        // span, but do not let geometric proximity manufacture a rail turnout.
         let span_limit = [span_a, span_b]
             .into_iter()
             .flatten()
             .map(|q| metric_distance_m(p, q) / std::f64::consts::SQRT_2)
             .fold(self.radius, f64::min);
         let mut best = (span_limit, None);
-        // A 3x3 search is complete for a radius-sized WebMercator cell.
         for dx in -1..=1 {
             for dy in -1..=1 {
                 if let Some(ids) = self.bins.get(&(key.0 + dx, key.1 + dy)) {
@@ -84,18 +211,50 @@ impl NodeIndex {
                         let Some(node) = out.nodes[id].as_ref() else {
                             continue;
                         };
-                        // C++ ndCollapseCand excludes isolated nodes. These can
-                        // otherwise attract an unrelated edge and create a spur.
                         if node.adj.is_empty() {
                             continue;
                         }
+                        let shared_route = node.adj.iter().any(|&eid| {
+                            out.edges[eid].as_ref().is_some_and(|e| {
+                                e.lines
+                                    .iter()
+                                    .any(|a| source.lines.iter().any(|b| a.line == b.line))
+                            })
+                        });
+                        let radius = if shared_route {
+                            self.radius.min(SAME_LINE_MAX_SNAP_M)
+                        } else {
+                            self.radius.min(OTHER_LINE_MAX_SNAP_M)
+                        };
                         let distance = metric_distance_m(p, node.pos);
-                        if distance < best.0
+                        if distance >= radius
+                            || distance > best.0
                             || ((distance - best.0).abs() < 1e-9
-                                && best.1.is_some_and(|current| id < current))
+                                && best.1.is_none_or(|current| id >= current))
                         {
-                            best = (distance, Some(id));
+                            continue;
                         }
+                        let cos_limit = if shared_route {
+                            SAME_LINE_COS
+                        } else {
+                            OTHER_LINE_COS
+                        };
+                        if !node_track_aligned(out, id, heading, cos_limit, None) {
+                            continue;
+                        }
+                        // Apply sustained-track evidence even when the routes
+                        // agree: circles, turnbacks and lassos can cross *their
+                        // own* alignment without forming a new junction.
+                        let candidate_lines: BTreeSet<_> = node
+                            .adj
+                            .iter()
+                            .filter_map(|&eid| out.edges[eid].as_ref())
+                            .flat_map(|e| e.lines.iter().map(|o| o.line))
+                            .collect();
+                        if !self.sustained_alignment(points, at, out, &candidate_lines, radius) {
+                            continue;
+                        }
+                        best = (distance, Some(id));
                     }
                 }
             }
@@ -228,7 +387,7 @@ fn construct_once(input: &Graph, radius: f64, segment_length: f64) -> Graph {
             } else {
                 Some(input.nodes[edge.b].as_ref().unwrap().pos)
             };
-            let candidate = index.nearest(point, &out, &forbidden, span_a, span_b);
+            let candidate = index.nearest(&points, i, edge, &out, &forbidden, span_a, span_b);
             let id = candidate.unwrap_or_else(|| {
                 let new_id = out.add_node(point);
                 index.add(point, new_id);
@@ -561,6 +720,24 @@ pub(crate) fn combine_nodes(
     {
         return false;
     }
+    // A short artificial connector between distinct line families is not
+    // evidence that their adjacent tracks form a junction. This is a guard
+    // for the subsequent soft-cleanup / short-edge contraction passes.
+    if left.adj.len() > 1 && right.adj.len() > 1 {
+        let arm_lines = |node: &crate::loom_graph::Node| -> BTreeSet<usize> {
+            node.adj
+                .iter()
+                .filter(|&&eid| eid != connecting)
+                .filter_map(|&eid| graph.edges[eid].as_ref())
+                .flat_map(|e| e.lines.iter().map(|o| o.line))
+                .collect()
+        };
+        let a = arm_lines(left);
+        let b = arm_lines(right);
+        if !a.is_empty() && !b.is_empty() && a.is_disjoint(&b) {
+            return false;
+        }
+    }
     let connecting_originals = connector.originals.clone();
     let midpoint = lerp(left.pos, right.pos, 0.5);
     let incident: Vec<usize> = left
@@ -802,6 +979,175 @@ mod parity_tests {
 
     fn point(x: f64) -> Point {
         Point { lon: x, lat: 0.0 }
+    }
+
+    fn metres(x: f64, y: f64) -> Point {
+        Point {
+            lon: x / 111_319.490_793_273_6,
+            lat: y / 111_319.490_793_273_6,
+        }
+    }
+
+    fn track(graph: &mut Graph, start: Point, end: Point, line: usize, original: usize) {
+        let a = graph.add_node(start);
+        let b = graph.add_node(end);
+        let id = graph.add_edge(a, b, vec![start, end]);
+        graph.edges[id].as_mut().unwrap().lines.insert(LineOcc {
+            line,
+            direction: Some(b),
+        });
+        graph.edges[id].as_mut().unwrap().originals.insert(original);
+    }
+
+    fn mixed_line_nodes(graph: &Graph) -> usize {
+        graph
+            .nodes
+            .iter()
+            .flatten()
+            .filter(|n| {
+                n.adj
+                    .iter()
+                    .filter_map(|&eid| graph.edges[eid].as_ref())
+                    .flat_map(|e| e.lines.iter().map(|o| o.line))
+                    .collect::<BTreeSet<_>>()
+                    .len()
+                    > 1
+            })
+            .count()
+    }
+
+    #[test]
+    fn orthogonal_lines_do_not_acquire_artificial_interchange() {
+        let mut graph = Graph::default();
+        track(&mut graph, metres(-120.0, 0.0), metres(120.0, 0.0), 3, 100);
+        track(&mut graph, metres(0.0, -120.0), metres(0.0, 120.0), 9, 200);
+        let result = construct_once(&graph, 50.0, 5.0);
+        assert_eq!(mixed_line_nodes(&result), 0, "independent X crossing fused");
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn distinct_parallel_routes_do_not_merge_at_twenty_metres() {
+        let mut graph = Graph::default();
+        track(&mut graph, metres(0.0, 0.0), metres(180.0, 0.0), 3, 100);
+        track(&mut graph, metres(0.0, 20.0), metres(180.0, 20.0), 9, 200);
+        let result = construct_once(&graph, 50.0, 5.0);
+        assert_eq!(mixed_line_nodes(&result), 0);
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn coincident_distinct_routes_can_share_corridor() {
+        let mut graph = Graph::default();
+        track(&mut graph, metres(0.0, 0.0), metres(180.0, 0.0), 3, 100);
+        track(&mut graph, metres(0.0, 0.0), metres(180.0, 0.0), 9, 200);
+        let result = construct_once(&graph, 50.0, 5.0);
+        assert!(
+            mixed_line_nodes(&result) > 0,
+            "coincident track was not merged"
+        );
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn shallow_crossing_does_not_become_shared_track() {
+        let mut graph = Graph::default();
+        track(&mut graph, metres(-120.0, 0.0), metres(120.0, 0.0), 3, 100);
+        track(
+            &mut graph,
+            metres(-120.0, -25.5),
+            metres(120.0, 25.5),
+            9,
+            200,
+        );
+        let result = construct_once(&graph, 50.0, 5.0);
+        assert_eq!(mixed_line_nodes(&result), 0, "shallow X crossing fused");
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn shallow_self_crossing_of_one_route_remains_independent() {
+        let mut graph = Graph::default();
+        track(&mut graph, metres(-120.0, 0.0), metres(120.0, 0.0), 3, 100);
+        track(
+            &mut graph,
+            metres(-120.0, -25.5),
+            metres(120.0, 25.5),
+            3,
+            200,
+        );
+        let result = construct_once(&graph, 50.0, 5.0);
+        assert!(
+            !result.edges.iter().flatten().any(|e| e.originals.len() > 1),
+            "self-crossing tracklets collapsed into a shared segment"
+        );
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn explicit_source_turn_is_not_disconnected() {
+        let mut graph = Graph::default();
+        let a = graph.add_node(metres(-100.0, 0.0));
+        let junction = graph.add_node(metres(0.0, 0.0));
+        let b = graph.add_node(metres(85.0, 65.0));
+        let first = graph.add_edge(a, junction, vec![metres(-100.0, 0.0), metres(0.0, 0.0)]);
+        let second = graph.add_edge(junction, b, vec![metres(0.0, 0.0), metres(85.0, 65.0)]);
+        for id in [first, second] {
+            graph.edges[id].as_mut().unwrap().lines.insert(LineOcc {
+                line: 3,
+                direction: None,
+            });
+            graph.edges[id].as_mut().unwrap().originals.insert(id);
+        }
+        let result = construct_once(&graph, 50.0, 5.0);
+        let closest = |p: Point| {
+            result
+                .nodes
+                .iter()
+                .flatten()
+                .min_by(|a, b| metric_distance_m(a.pos, p).total_cmp(&metric_distance_m(b.pos, p)))
+                .unwrap()
+                .id
+        };
+        let from = closest(metres(-100.0, 0.0));
+        let to = closest(metres(85.0, 65.0));
+        let mut queue = VecDeque::from([from]);
+        let mut seen = HashSet::from([from]);
+        while let Some(n) = queue.pop_front() {
+            for &eid in &result.nodes[n].as_ref().unwrap().adj {
+                let next = result.other(eid, n);
+                if seen.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        assert!(seen.contains(&to), "a verified input turn was disconnected");
+        result.assert_consistent();
+    }
+
+    #[test]
+    fn unrelated_routes_on_a_short_connector_are_not_welded() {
+        let mut graph = Graph::default();
+        let left = graph.add_node(metres(0.0, 0.0));
+        let right = graph.add_node(metres(1.0, 0.0));
+        let connector = graph.add_edge(left, right, vec![metres(0.0, 0.0), metres(1.0, 0.0)]);
+        for (center, a, b, line) in [
+            (left, metres(-30.0, 0.0), metres(0.0, 30.0), 3),
+            (right, metres(30.0, 0.0), metres(1.0, -30.0), 9),
+        ] {
+            for endpoint in [a, b] {
+                let tip = graph.add_node(endpoint);
+                let geom = vec![graph.nodes[center].as_ref().unwrap().pos, endpoint];
+                let eid = graph.add_edge(center, tip, geom);
+                graph.edges[eid].as_mut().unwrap().lines.insert(LineOcc {
+                    line,
+                    direction: None,
+                });
+            }
+        }
+        assert!(!combine_nodes(&mut graph, left, right, connector));
+        assert!(graph.nodes[left].is_some() && graph.nodes[right].is_some());
+        graph.assert_consistent();
     }
 
     #[test]

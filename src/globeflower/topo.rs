@@ -129,32 +129,80 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
 }
 
 fn collect_stations(graph: &mut Graph) -> Vec<StationOcc> {
-    let mut by_name = BTreeMap::<String, StationOcc>::new();
-
+    // Retain the exact *physical graph-node identity* assigned by gtfs2graph.
+    // Grouping by station name (C++ StatInserter::init) manufactures railway
+    // interchanges between independent metro tunnels. Grouping by GTFS stop_id
+    // is also unsafe across feeds/attempts; the graph already resolved those.
+    // Passenger interchange groups belong to rendering, not railway topology.
+    let mut occurrences = Vec::new();
     for node in graph.nodes.iter_mut().filter_map(Option::as_mut) {
-        for stop in std::mem::take(&mut node.stops) {
-            let entry = by_name
-                .entry(stop.name.clone())
-                .or_insert_with(|| StationOcc {
-                    stops: Vec::new(),
-                    originals: BTreeSet::new(),
-                    lines: BTreeSet::new(),
-                    geom: Vec::new(),
-                });
-
-            entry.geom.push(stop.pos);
-            entry.stops.push(stop);
-
-            for &edge_id in &node.adj {
-                if let Some(edge) = &graph.edges[edge_id] {
-                    entry.originals.extend(edge.originals.iter().copied());
-                    entry.lines.extend(edge.lines.iter().map(|occ| occ.line));
-                }
+        let stops = std::mem::take(&mut node.stops);
+        if stops.is_empty() {
+            continue;
+        }
+        let mut originals = BTreeSet::new();
+        let mut lines = BTreeSet::new();
+        for &edge_id in &node.adj {
+            if let Some(edge) = &graph.edges[edge_id] {
+                originals.extend(edge.originals.iter().copied());
+                lines.extend(edge.lines.iter().map(|occ| occ.line));
             }
         }
+        let geom = stops.iter().map(|stop| stop.pos).collect();
+        occurrences.push(StationOcc {
+            stops,
+            originals,
+            lines,
+            geom,
+        });
     }
+    occurrences
+}
 
-    by_name.into_values().collect()
+#[cfg(test)]
+mod platform_identity_tests {
+    use super::*;
+
+    #[test]
+    fn same_name_and_stop_id_on_different_nodes_remain_separate() {
+        let mut graph = Graph::default();
+        for line in [3, 9] {
+            let a = graph.add_node(Point {
+                lon: 2.326,
+                lat: 48.872,
+            });
+            let b = graph.add_node(Point {
+                lon: 2.327,
+                lat: 48.873,
+            });
+            graph.nodes[a].as_mut().unwrap().stops.push(Stop {
+                chateau: "paris".to_owned(),
+                stop_id: "same-id-in-different-feed".to_owned(),
+                name: "Havre-Caumartin".to_owned(),
+                pos: Point {
+                    lon: 2.326,
+                    lat: 48.872,
+                },
+            });
+            let geom = vec![
+                graph.nodes[a].as_ref().unwrap().pos,
+                graph.nodes[b].as_ref().unwrap().pos,
+            ];
+            let edge = graph.add_edge(a, b, geom);
+            graph.edges[edge].as_mut().unwrap().lines.insert(LineOcc {
+                line,
+                direction: None,
+            });
+            graph.edges[edge].as_mut().unwrap().originals.insert(line);
+        }
+        let occurrences = collect_stations(&mut graph);
+        assert_eq!(occurrences.len(), 2);
+        for occ in &occurrences {
+            assert_eq!(occ.lines.len(), 1);
+            assert_eq!(occ.originals.len(), 1);
+            assert_eq!(occ.stops.len(), 1);
+        }
+    }
 }
 
 fn atomize(graph: &Graph, step_m: f64) -> Vec<Atom> {
