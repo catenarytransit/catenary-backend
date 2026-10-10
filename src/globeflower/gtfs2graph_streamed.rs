@@ -285,14 +285,25 @@ struct GeographicComponents {
 
 impl GeographicComponents {
     fn new(distance: f64) -> Self {
-        Self { bins: HashMap::new(), cell_size: distance / std::f64::consts::SQRT_2, distance }
+        Self {
+            bins: HashMap::new(),
+            cell_size: distance / std::f64::consts::SQRT_2,
+            distance,
+        }
     }
 
     fn add(&mut self, dsu: &mut DisjointSet, pattern: usize, position: Point) {
-        if self.distance <= 0.0 || !self.distance.is_finite() { return; }
+        if self.distance <= 0.0 || !self.distance.is_finite() {
+            return;
+        }
         let (x, y) = crate::loom_graph::web_mercator(position);
-        if !x.is_finite() || !y.is_finite() { return; }
-        let cell = ((x / self.cell_size).floor() as i64, (y / self.cell_size).floor() as i64);
+        if !x.is_finite() || !y.is_finite() {
+            return;
+        }
+        let cell = (
+            (x / self.cell_size).floor() as i64,
+            (y / self.cell_size).floor() as i64,
+        );
         // All points within the same cell are at most `distance` apart.
         if let Some(first) = self.bins.get(&cell).and_then(|v| v.first()) {
             dsu.union(pattern, first.2);
@@ -301,14 +312,21 @@ impl GeographicComponents {
         for dx in -2..=2 {
             for dy in -2..=2 {
                 let neighbor = (cell.0 + dx, cell.1 + dy);
-                if neighbor == cell { continue; }
-                let Some(points) = self.bins.get(&neighbor) else { continue; };
+                if neighbor == cell {
+                    continue;
+                }
+                let Some(points) = self.bins.get(&neighbor) else {
+                    continue;
+                };
                 // A bucket is one DSU component. No need to scan hundreds
                 // of stops once that component has already been joined.
-                if dsu.find(pattern) == dsu.find(points[0].2) { continue; }
-                if let Some((_, _, other)) = points.iter().find(|&&(px, py, _)| {
-                    (px - x).hypot(py - y) <= self.distance
-                }) {
+                if dsu.find(pattern) == dsu.find(points[0].2) {
+                    continue;
+                }
+                if let Some((_, _, other)) = points
+                    .iter()
+                    .find(|&&(px, py, _)| (px - x).hypot(py - y) <= self.distance)
+                {
                     dsu.union(pattern, *other);
                 }
             }
@@ -378,8 +396,10 @@ pub fn discover_components(
         shape_ref_count
     );
 
-    anyhow::ensure!(cfg.connected_comp_distance.is_finite() && cfg.connected_comp_distance >= 0.0,
-        "connected component distance must be finite and >= 0");
+    anyhow::ensure!(
+        cfg.connected_comp_distance.is_finite() && cfg.connected_comp_distance >= 0.0,
+        "connected component distance must be finite and >= 0"
+    );
     let mut dsu = DisjointSet::default();
     let mut first_pattern_at_station = HashMap::<String, usize>::new();
     let mut seen_positions = HashMap::<(u64, u64), usize>::new();
@@ -454,7 +474,14 @@ pub fn discover_components(
                 dsu.union(first, idx);
             } else {
                 seen_positions.insert(coordinate, idx);
-                geographic.add(&mut dsu, idx, Point { lon: row.lon, lat: row.lat });
+                geographic.add(
+                    &mut dsu,
+                    idx,
+                    Point {
+                        lon: row.lon,
+                        lat: row.lat,
+                    },
+                );
             }
         }
     }
@@ -617,7 +644,14 @@ mod geographic_components_tests {
         let a = pattern(&mut dsu, 0);
         let b = pattern(&mut dsu, 1);
         geo.add(&mut dsu, a, Point { lon: 0.0, lat: 0.0 });
-        geo.add(&mut dsu, b, Point { lon: 0.015, lat: 0.0 });
+        geo.add(
+            &mut dsu,
+            b,
+            Point {
+                lon: 0.015,
+                lat: 0.0,
+            },
+        );
         assert_eq!(dsu.find(a), dsu.find(b));
     }
 
@@ -640,8 +674,22 @@ mod geographic_components_tests {
         let b = pattern(&mut dsu, 1);
         let c = pattern(&mut dsu, 2);
         geo.add(&mut dsu, a, Point { lon: 0.0, lat: 0.0 });
-        geo.add(&mut dsu, b, Point { lon: 0.07, lat: 0.0 });
-        geo.add(&mut dsu, c, Point { lon: 0.14, lat: 0.0 });
+        geo.add(
+            &mut dsu,
+            b,
+            Point {
+                lon: 0.07,
+                lat: 0.0,
+            },
+        );
+        geo.add(
+            &mut dsu,
+            c,
+            Point {
+                lon: 0.14,
+                lat: 0.0,
+            },
+        );
         assert_eq!(dsu.find(a), dsu.find(c));
     }
 }
@@ -770,7 +818,10 @@ pub fn build_component(
             Some(shape) => {
                 shape_map.insert((row.onestop_feed_id, row.attempt_id, row.shape_id), shape);
             }
-            None => warn!("[gtfs2graph] ignoring malformed/short shape {}", row.shape_id),
+            None => warn!(
+                "[gtfs2graph] ignoring malformed/short shape {}",
+                row.shape_id
+            ),
         }
     }
 
@@ -807,7 +858,9 @@ pub fn build_component(
             attempt_id: row.attempt_id,
             direction_pattern_id: row.direction_pattern_id,
         };
-        pattern_weights.entry(key).or_default()
+        pattern_weights
+            .entry(key)
+            .or_default()
             .push((row.shape_id, row.trip_count.max(1) as usize));
     }
 
@@ -906,54 +959,87 @@ pub fn build_component(
     let mut registry = EdgeRegistry::new();
     for (pattern_key, pattern) in &mut patterns {
         pattern.stops.sort_by_key(|x| x.0);
-        let Some(&line_id) = line_by_key.get(&pattern.route_key) else { continue; };
-        let Some(stop_nodes) = pattern.stops.iter()
+        let Some(&line_id) = line_by_key.get(&pattern.route_key) else {
+            continue;
+        };
+        let Some(stop_nodes) = pattern
+            .stops
+            .iter()
             .map(|row| node_by_physical.get(&row.2).copied())
-            .collect::<Option<Vec<usize>>>() else {
-                warn!("[gtfs2graph] incomplete stop sequence for {}", pattern_key.direction_pattern_id);
-                continue;
-            };
-        if stop_nodes.len() < 2 { continue; }
-        let stop_positions: Vec<Point> = stop_nodes.iter()
-            .map(|&id| graph.nodes[id].as_ref().unwrap().pos).collect();
-        let variants = pattern_weights.get(pattern_key).cloned()
+            .collect::<Option<Vec<usize>>>()
+        else {
+            warn!(
+                "[gtfs2graph] incomplete stop sequence for {}",
+                pattern_key.direction_pattern_id
+            );
+            continue;
+        };
+        if stop_nodes.len() < 2 {
+            continue;
+        }
+        let stop_positions: Vec<Point> = stop_nodes
+            .iter()
+            .map(|&id| graph.nodes[id].as_ref().unwrap().pos)
+            .collect();
+        let variants = pattern_weights
+            .get(pattern_key)
+            .cloned()
             .unwrap_or_else(|| vec![(pattern.shape_id.clone(), 1)]);
         for (shape_id, trip_count) in variants {
-            let shape = shape_id.as_ref().and_then(|id| shape_map.get(&(
-                pattern_key.onestop_feed_id.clone(),
-                pattern_key.attempt_id.clone(),
-                id.clone(),
-            )));
+            let shape = shape_id.as_ref().and_then(|id| {
+                shape_map.get(&(
+                    pattern_key.onestop_feed_id.clone(),
+                    pattern_key.attempt_id.clone(),
+                    id.clone(),
+                ))
+            });
             // A missing referenced shape must not silently become a straight
             // line through a loop. Unshaped GTFS still uses LOOM's fallback.
             if shape_id.is_some() && shape.is_none() {
-                warn!("[gtfs2graph] referenced shape {:?} missing for pattern {}",
-                    shape_id, pattern_key.direction_pattern_id);
+                warn!(
+                    "[gtfs2graph] referenced shape {:?} missing for pattern {}",
+                    shape_id, pattern_key.direction_pattern_id
+                );
                 continue;
             }
             let progression = if let Some(s) = shape {
                 let Some(v) = s.match_stops(&stop_positions) else {
-                    warn!("[gtfs2graph] no monotone shape alignment for pattern {} shape {:?}",
-                        pattern_key.direction_pattern_id, shape_id);
+                    warn!(
+                        "[gtfs2graph] no monotone shape alignment for pattern {} shape {:?}",
+                        pattern_key.direction_pattern_id, shape_id
+                    );
                     continue;
                 };
                 Some(v)
-            } else { None };
+            } else {
+                None
+            };
             let mut previous = None;
             for i in 0..stop_nodes.len() - 1 {
                 let (a, b) = (stop_nodes[i], stop_nodes[i + 1]);
-                let (geometry, start, end) = if let (Some(s), Some(ds)) = (shape, progression.as_ref()) {
-                    let (start, end) = (ds[i], ds[i + 1]);
-                    let Some(piece) = s.segment(start, end) else { continue; };
-                    (piece, (start * 1000.0).round() as i64, (end * 1000.0).round() as i64)
-                } else {
-                    (vec![stop_positions[i], stop_positions[i + 1]], 0, 0)
-                };
+                let (geometry, start, end) =
+                    if let (Some(s), Some(ds)) = (shape, progression.as_ref()) {
+                        let (start, end) = (ds[i], ds[i + 1]);
+                        let Some(piece) = s.segment(start, end) else {
+                            continue;
+                        };
+                        (
+                            piece,
+                            (start * 1000.0).round() as i64,
+                            (end * 1000.0).round() as i64,
+                        )
+                    } else {
+                        (vec![stop_positions[i], stop_positions[i + 1]], 0, 0)
+                    };
                 let key = SegmentKey {
-                    from: a, to: b, shape_id: shape_id.clone(),
-                    start_mm: start, end_mm: end,
+                    from: a,
+                    to: b,
+                    shape_id: shape_id.clone(),
+                    start_mm: start,
+                    end_mm: end,
                 };
-                previous = registry.append(&mut graph, key, geometry, line_id, trip_count, previous);
+                previous =
+                    registry.append(&mut graph, key, geometry, line_id, trip_count, previous);
             }
         }
     }
