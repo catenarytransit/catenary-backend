@@ -26,8 +26,13 @@ mod topo;
     about = "LOOM Chapter-3 gtfs2graph + topo over Catenary PostgreSQL GTFS"
 )]
 struct Args {
-    #[arg(long, default_value = "globeflower.geojson")]
+    /// GeoJSON output path (parent directories are created if needed).
+    #[arg(short = 'o', long, default_value = "globeflower.geojson")]
     output: PathBuf,
+    /// Limit GTFS processing to one or more comma-separated chateau IDs.
+    /// Omit to process all production tram/metro routes.
+    #[arg(long, visible_alias = "chateaux", value_name = "ID[,ID...]")]
+    chateau: Option<String>,
     #[arg(long, default_value_t = 50.0)]
     max_aggr_distance: f64,
     #[arg(long, default_value_t = 5.0)]
@@ -54,10 +59,34 @@ struct Args {
     connected_comp_distance: f64,
 }
 
+/// Parse the optional CLI filter once, before any database queries.
+/// Preserve case because chateau IDs are PostgreSQL text identifiers.
+fn parse_chateaux(raw: Option<&str>) -> Result<Option<Vec<String>>> {
+    raw.map(|value| {
+        let mut ids = Vec::<String>::new();
+        for part in value.split(',') {
+            let id = part.trim();
+            anyhow::ensure!(
+                !id.is_empty(),
+                "--chateau needs nonempty comma-separated IDs (e.g. --chateau A,B)"
+            );
+            if !ids.iter().any(|existing| existing == id) {
+                ids.push(id.to_owned());
+            }
+        }
+        Ok(ids)
+    })
+    .transpose()
+}
+
 fn main() -> Result<()> {
     dotenvy::dotenv().ok();
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    let chateaux = parse_chateaux(args.chateau.as_deref())?;
+    if let Some(selected) = &chateaux {
+        info!("[planner] chateau filter: {}", selected.join(", "));
+    }
     let started = Instant::now();
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL not set")?;
     let mut conn = PgConnection::establish(&url).context("connect PostgreSQL")?;
@@ -73,6 +102,7 @@ fn main() -> Result<()> {
             row_limit: args.planner_row_limit,
             connected_comp_distance: args.connected_comp_distance,
         },
+        chateaux.as_deref(),
     )?;
 
     let cfg = topo::TopoConfig {
@@ -131,4 +161,57 @@ fn main() -> Result<()> {
         started.elapsed()
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn single_chateau_and_custom_output() {
+        let args = Args::try_parse_from([
+            "globeflower",
+            "--chateau",
+            "regionaltransportationdistrict",
+            "--output",
+            "testing/denver.geojson",
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_chateaux(args.chateau.as_deref()).unwrap(),
+            Some(vec!["regionaltransportationdistrict".to_owned()])
+        );
+        assert_eq!(args.output, PathBuf::from("testing/denver.geojson"));
+    }
+
+    #[test]
+    fn comma_separated_chateaux_are_trimmed_and_deduplicated() {
+        let args = Args::try_parse_from([
+            "globeflower",
+            "--chateaux",
+            "first, second,first",
+            "-o",
+            "testing/two.geojson",
+        ])
+        .unwrap();
+        assert_eq!(
+            parse_chateaux(args.chateau.as_deref()).unwrap(),
+            Some(vec!["first".to_owned(), "second".to_owned()])
+        );
+        assert_eq!(args.output, PathBuf::from("testing/two.geojson"));
+    }
+
+    #[test]
+    fn absent_filter_means_all_chateaux() {
+        let args = Args::try_parse_from(["globeflower"]).unwrap();
+        assert_eq!(parse_chateaux(args.chateau.as_deref()).unwrap(), None);
+        assert_eq!(args.output, PathBuf::from("globeflower.geojson"));
+    }
+
+    #[test]
+    fn empty_chateau_tokens_are_rejected() {
+        for input in ["", ",first", "first,", "first,,second", " , "] {
+            assert!(parse_chateaux(Some(input)).is_err(), "accepted {input:?}");
+        }
+    }
 }

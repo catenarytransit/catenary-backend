@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::json;
-use std::fs::File;
+use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -29,6 +29,11 @@ pub struct GeoJsonWriter {
 
 impl GeoJsonWriter {
     pub fn create(path: &Path) -> Result<Self> {
+        // Custom output paths may include directories that do not exist yet.
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create output directory {:?}", parent))?;
+        }
         let file = File::create(path).with_context(|| format!("create {:?}", path))?;
         let mut writer = BufWriter::with_capacity(1024 * 1024, file);
         writer.write_all(br#"{"type":"FeatureCollection","features":["#)?;

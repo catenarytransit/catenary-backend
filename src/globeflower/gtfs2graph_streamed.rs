@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use diesel::prelude::*;
-use diesel::sql_types::{BigInt, Double, Nullable, Text};
+use diesel::sql_types::{Array, BigInt, Double, Nullable, Text};
 use log::{info, warn};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -348,11 +348,20 @@ impl GeographicComponents {
 pub fn discover_components(
     conn: &mut PgConnection,
     cfg: PlannerConfig,
+    chateaux: Option<&[String]>,
 ) -> Result<Vec<WorkComponent>> {
     anyhow::ensure!(cfg.row_limit > 0, "planner row limit must be > 0");
 
     info!("[planner] reading production route_type 0/1 routes first");
-    let route_rows: Vec<RouteSeedRow> = diesel::sql_query(format!(
+    // Select by chateau at the route seed, before materializing direction
+    // patterns, station memberships, or geometry. The SQL suffix is constant;
+    // chateau values are bound as an array, never interpolated into SQL.
+    let chateau_filter = if chateaux.is_some() {
+        "AND r.chateau = ANY($1::text[])"
+    } else {
+        ""
+    };
+    let route_sql = format!(
         r#"
         SELECT
             r.onestop_feed_id,
@@ -366,11 +375,17 @@ pub fn discover_components(
         WHERE r.route_type IN {route_types}
           AND ingest.production = TRUE
           AND ingest.deleted = FALSE
+          {chateau_filter}
         ORDER BY r.onestop_feed_id, r.attempt_id, r.route_id
         "#,
         route_types = ROUTE_TYPES_SQL
-    ))
-    .load(conn)
+    );
+    let route_rows: Vec<RouteSeedRow> = match chateaux {
+        Some(ids) => diesel::sql_query(route_sql)
+            .bind::<Array<Text>, _>(ids.to_vec())
+            .load(conn),
+        None => diesel::sql_query(route_sql).load(conn),
+    }
     .context("load production tram/metro routes")?;
 
     if route_rows.is_empty() {
