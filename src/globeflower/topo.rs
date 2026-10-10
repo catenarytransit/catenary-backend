@@ -122,6 +122,10 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     crate::loom_map_constructor::remove_node_artifacts(&mut output);
     crate::loom_map_constructor::reconstruct_intersections(&mut output, cfg.max_aggr_distance);
     crate::loom_cpp_topo::remove_orphan_lines(&mut output);
+    // Exploit redundant GTFS route turns to restore a geometrically clean
+    // four-arm cartographic junction, without modifying its track connectivity.
+    let normalized = crate::junction_normalizer::normalize(&mut output, &restriction_reference);
+    info!("[topo/junction] normalized {} certified four-arm intersections", normalized);
     #[cfg(debug_assertions)]
     output.assert_consistent();
     info!("[topo] inserted stations in {:.2?}", stage.elapsed());

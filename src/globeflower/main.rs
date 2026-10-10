@@ -9,6 +9,7 @@ use std::time::Instant;
 mod export;
 #[path = "gtfs2graph_streamed.rs"]
 mod gtfs2graph;
+mod junction_normalizer;
 mod loom_builder_simplify;
 mod loom_cpp_topo;
 mod loom_graph;
