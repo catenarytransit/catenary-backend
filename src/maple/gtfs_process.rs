@@ -486,6 +486,16 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-dr5-nj~transit~rail" => {
+            let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                None,
+                true,
+                false,
+            )
+            .await?;
+        }
         "f-dq-mtamaryland~marc" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
