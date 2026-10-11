@@ -48,7 +48,12 @@ This project is built off the work of researchers in Germany and many other plac
 - **Rtc Québec GTFS RT**: conversion of proprietary app RTC Nomade to GTFS realtime
 - **[Via Rail GTFS RT](https://github.com/catenarytransit/via-rail-gtfsrt)**: Conversion of Via Rail tracking to GTFS Realtime.
 
-## Install Dependencies
+
+## For Contributors
+
+Good commit messages are required to contribute to this project.
+
+### Install Dependencies
 
 ```bash
 sudo apt install -y postgresql-common
@@ -61,33 +66,20 @@ sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config 
 sudo apt-get install coinor-cbc coinor-libcbc-dev
 ```
 
-### Install postgres
+#### Install postgres
 ```bash
 sudo apt install postgresql-18 postgresql-18-postgis-3 postgresql-contrib postgresql
 ```
 
+See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions for PostGIS
 You may also use an external database if you prefer.
 
-### Enable PostGis
+#### Enable PostGis
 
 ```sql
 CREATE EXTENSION postgis;
 ```
 
-## For Contributors
-
-Good commit messages are required to contribute to this project.
-
-### Installation of Postgres
-
-See https://www.postgresql.org/download
-
-PostGIS is also required like 
-```bash
-sudo apt install postgresql-16-postgis-3
-```
-
-See https://trac.osgeo.org/postgis/wiki/UsersWikiPostGIS3UbuntuPGSQLApt for more instructions
 
 ### SQL notes
 We've switched to diesel for our queries. Read the diesel documentation to learn how to use it.
