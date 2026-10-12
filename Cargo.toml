@@ -332,3 +332,6 @@ path = "src/osmstationimport/main.rs"
 name = "osm_station_rank_and_clean"
 path = "src/osm_station_rank_and_clean/main.rs"
 
+[[bin]]
+name = "gingko"
+path = "src/gingko/main.rs"
