@@ -720,6 +720,13 @@ pub fn estimate_service_date(
     calendar_structure: &BTreeMap<String, CalendarUnified>,
     _chateau_id: &str,
 ) -> bool {
+    // Explicit GTFS-RT service dates always win over timestamp inference.
+    // For modified trips the date is inside ModifiedTripSelector, not the
+    // outer TripDescriptor. A mismatch must not fall through to inference.
+    if let Some(service_date) = trip_update.trip.effective_start_date() {
+        return service_date == valid_trip.trip_service_date;
+    }
+
     let trip_offset = itin_option.departure_time_since_start.unwrap_or(
         itin_option
             .arrival_time_since_start

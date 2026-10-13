@@ -558,10 +558,32 @@ pub struct AspenRawTripInfo {
     pub modified_trip: Option<ModifiedTripSelector>,
 }
 
+impl AspenRawTripInfo {
+    /// The ModifiedTripSelector identifies the service day when GTFS-RT requires
+    /// the outer TripDescriptor's start_date/start_time to be empty.
+    pub fn effective_start_date(&self) -> Option<chrono::NaiveDate> {
+        self.modified_trip
+            .as_ref()
+            .and_then(|modified| modified.start_date)
+            .or(self.start_date)
+    }
+
+    pub fn effective_start_time(&self) -> Option<&str> {
+        self.modified_trip
+            .as_ref()
+            .and_then(|modified| modified.start_time.as_deref())
+            .or(self.start_time.as_deref())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct ModifiedTripSelector {
     pub modifications_id: Option<String>,
     pub affected_trip_id: Option<String>,
+    #[serde(default)]
+    pub start_time: Option<String>,
+    #[serde(default)]
+    pub start_date: Option<chrono::NaiveDate>,
 }
 
 impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for ModifiedTripSelector {
@@ -569,6 +591,10 @@ impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for ModifiedTrip
         ModifiedTripSelector {
             modifications_id: modified_trip_selector.modifications_id,
             affected_trip_id: modified_trip_selector.affected_trip_id,
+            start_time: modified_trip_selector.start_time,
+            start_date: modified_trip_selector.start_date.and_then(|date| {
+                chrono::NaiveDate::parse_from_str(&date, "%Y%m%d").ok()
+            }),
         }
     }
 }
@@ -596,6 +622,59 @@ impl From<gtfs_realtime::TripDescriptor> for AspenRawTripInfo {
             ),
             modified_trip: trip_descriptor.modified_trip.map(|x| x.into()),
         }
+    }
+}
+
+#[cfg(test)]
+mod modified_trip_service_date_tests {
+    use super::*;
+
+    #[test]
+    fn modified_trip_keeps_its_service_identity() {
+        let descriptor = gtfs_realtime::TripDescriptor {
+            modified_trip: Some(gtfs_realtime::trip_descriptor::ModifiedTripSelector {
+                modifications_id: Some("modification-2026-10-13".into()),
+                affected_trip_id: Some("12905165".into()),
+                start_time: Some("11:09:00".into()),
+                start_date: Some("20261013".into()),
+            }),
+            ..Default::default()
+        };
+        let stored: AspenRawTripInfo = descriptor.into();
+        let october_13 = chrono::NaiveDate::from_ymd_opt(2026, 10, 13).unwrap();
+        let october_12 = chrono::NaiveDate::from_ymd_opt(2026, 10, 12).unwrap();
+
+        assert_eq!(stored.start_date, None);
+        assert_eq!(stored.effective_start_date(), Some(october_13));
+        assert_ne!(stored.effective_start_date(), Some(october_12));
+        assert_eq!(stored.effective_start_time(), Some("11:09:00"));
+        assert_eq!(stored.modified_trip.unwrap().affected_trip_id.as_deref(), Some("12905165"));
+    }
+
+    #[test]
+    fn ordinary_trip_keeps_its_outer_service_date() {
+        let descriptor = gtfs_realtime::TripDescriptor {
+            trip_id: Some("12905165".into()),
+            start_date: Some("20261013".into()),
+            start_time: Some("11:09:00".into()),
+            ..Default::default()
+        };
+        let stored: AspenRawTripInfo = descriptor.into();
+        assert_eq!(stored.effective_start_date(), chrono::NaiveDate::from_ymd_opt(2026, 10, 13));
+        assert_eq!(stored.effective_start_time(), Some("11:09:00"));
+    }
+
+    #[test]
+    fn invalid_modified_date_does_not_invent_a_service_day() {
+        let descriptor = gtfs_realtime::TripDescriptor {
+            modified_trip: Some(gtfs_realtime::trip_descriptor::ModifiedTripSelector {
+                start_date: Some("20261340".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let stored: AspenRawTripInfo = descriptor.into();
+        assert_eq!(stored.effective_start_date(), None);
     }
 }
 

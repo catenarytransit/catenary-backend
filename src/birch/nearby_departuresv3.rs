@@ -1271,11 +1271,17 @@ async fn fetch_chateau_data(
                             {
                                 for uid in update_ids {
                                     if let Some(u) = data.trip_updates.get(uid) {
-                                        if u.trip.start_date == Some(*date) {
-                                            active_update = Some(u);
-                                            break;
+                                        // ModifiedTripSelector carries its own start_date.
+                                        // Never infer a different service day for a dated update:
+                                        // this can attach today's vehicle to yesterday's trip.
+                                        if let Some(service_date) = u.trip.effective_start_date() {
+                                            if service_date == *date {
+                                                active_update = Some(u);
+                                                break;
+                                            }
+                                            continue;
                                         }
-                                        if u.trip.start_date.is_none() {
+                                        if u.trip.effective_start_date().is_none() {
                                             for stu in &u.stop_time_update {
                                                 let update_time =
                                                     stu.departure.as_ref().and_then(|d| d.time).or(

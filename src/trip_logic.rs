@@ -1297,6 +1297,18 @@ pub async fn fetch_trip_information(
                     if let Ok(get_trip) = get_trip {
                         match get_trip {
                             Some(get_trip) => {
+                                // A trip ID can appear on multiple service days. Never use
+                                // an update explicitly dated for another service day, even
+                                // when it is the only update returned by Aspen.
+                                let get_trip: Vec<_> = get_trip
+                                    .into_iter()
+                                    .filter(|update| {
+                                        update
+                                            .trip
+                                            .effective_start_date()
+                                            .map_or(true, |date| date == start_naive_date)
+                                    })
+                                    .collect();
                                 println!("recieved {} trip options from aspen", get_trip.len());
                                 if !get_trip.is_empty() {
                                     let rt_trip_update = match get_trip.len() {
@@ -1310,8 +1322,8 @@ pub async fn fetch_trip_information(
 
                                             let find_trip = get_trip.iter().find(|each_update| {
                                                 let start_time_matches = match (
-                                                    &query.start_time,
-                                                    &each_update.trip.start_time,
+                                                    query.start_time.as_deref(),
+                                                    each_update.trip.effective_start_time(),
                                                 ) {
                                                     (Some(q_time), Some(u_time)) => {
                                                         q_time == u_time
@@ -1321,8 +1333,8 @@ pub async fn fetch_trip_information(
                                                 };
 
                                                 let start_date_matches = match (
-                                                    &query_start_date_parsed,
-                                                    &each_update.trip.start_date,
+                                                    query_start_date_parsed,
+                                                    each_update.trip.effective_start_date(),
                                                 ) {
                                                     (Some(q_date), Some(u_date)) => {
                                                         q_date == u_date

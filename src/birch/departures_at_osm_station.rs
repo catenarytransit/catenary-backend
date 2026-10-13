@@ -1000,14 +1000,6 @@ pub async fn departures_at_osm_station(
                                             .get(valid_trip.trip_id.as_str())
                                         {
                                             if !trip_update_ids.is_empty() {
-                                                let does_trip_set_use_dates = gtfs_trip_aspenised
-                                                    .trip_updates
-                                                    .get(&trip_update_ids[0])
-                                                    .unwrap()
-                                                    .trip
-                                                    .start_date
-                                                    .is_some();
-
                                                 let trip_updates: Vec<(&String, &AspenisedTripUpdate)> =
                                                     trip_update_ids
                                                         .iter()
@@ -1021,21 +1013,15 @@ pub async fn departures_at_osm_station(
                                                             )
                                                         })
                                                         .filter(|(_x, trip_update)| {
-                                                            match does_trip_set_use_dates {
-                                                                true => {
-                                                                    trip_update.trip.start_date
-                                                                        == Some(valid_trip.trip_service_date)
-                                                                }
-                                                                false => estimate_service_date(
-                                                                    &valid_trip,
-                                                                    trip_update,
-                                                                    itin_option,
-                                                                    calendar_structure
-                                                                        .get(chateau_id.as_str())
-                                                                        .unwrap(),
-                                                                    chateau_id,
-                                                                ),
-                                                            }
+                                                            estimate_service_date(
+                                                                &valid_trip,
+                                                                trip_update,
+                                                                itin_option,
+                                                                calendar_structure
+                                                                    .get(chateau_id.as_str())
+                                                                    .unwrap(),
+                                                                chateau_id,
+                                                            )
                                                         })
                                                         .collect();
 
