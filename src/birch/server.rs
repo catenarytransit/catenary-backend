@@ -96,6 +96,7 @@ mod export_route_geom;
 mod feed_metadata;
 mod openrailwaymap_proxy;
 mod osm_station_preview;
+mod route_hit_test;
 mod shapes;
 pub mod stop_matching;
 mod stop_preview;
@@ -1028,6 +1029,7 @@ async fn main() -> std::io::Result<()> {
             .service(directory::directory_route)
             .service(shapes::get_shape)
             .service(shapes::get_shapes)
+            .service(route_hit_test::routes_at_point)
             .service(proxy_for_watchduty_tiles)
             .service(gtfs_rt_api::gtfs_rt)
             .service(shapes_local_rail)
