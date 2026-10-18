@@ -1,0 +1,80 @@
+# Local dev/test config matching docs/dev/docker-compose.yml, modeled on the
+# inline config that .github/workflows/full-test-pipeline.yml generates.
+#
+# Usage: cp docs/dev/catenaryconfig.local.toml.example catenaryconfig.toml
+# (then edit paths/feed ids as needed -- see docs/dev/README.md)
+
+[maple]
+# Clone https://github.com/catenarytransit/transitland-atlas into the repo
+# root first (it's already gitignored), same as the CI "Checkout
+# transitland-atlas" step.
+transitland = "./transitland-atlas"
+use_girolle = false
+no_elastic = false
+delete_before_ingest = true
+# Restrict to one small feed for a fast smoke test, same as CI.
+# Comment this out (or list more feed ids) to ingest more of the atlas --
+# see the "will it ingest all feeds" discussion in docs/dev/README.md.
+only_feed_ids = ["f-vvs~de"]
+gtfs_zip_temp = "./temp/gtfs_zip"
+gtfs_uncompressed_temp = "./temp/gtfs_uncompressed"
+threads_gtfs = 2
+force_ingest_all = true
+bypass_temp_delete = false
+discord_log = ""
+
+[maple.transitland_download]
+download_threads = 64
+croatia_npt_username = ""
+croatia_npt_password = ""
+grand_lyon_username = ""
+grand_lyon_password = ""
+de_username = ""
+de_password = ""
+
+[aspen]
+etcd_urls = ["localhost:2379"]
+channels = 4
+alpenrose_thread_count = 4
+port = 40427
+etcd_username = ""
+etcd_password = ""
+sbb_api_keys = ["Bearer IchLiebeSbbJadoreCFF"]
+
+[aspenleader]
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+
+[alpenrose]
+request_limit = 40
+etcd_urls = ["localhost:2379"]
+only_feed_ids = ["f-vvs~de~rt"]
+etcd_username = ""
+etcd_password = ""
+
+[birch]
+worker_amount = 4
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+
+[spruce]
+worker_amount = 2
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+
+[ramonda]
+worker_amount = 2
+etcd_urls = ["localhost:2379"]
+etcd_username = ""
+etcd_password = ""
+port = 52772
+
+[elasticsearch]
+urls = ["http://localhost:9200"]
+
+[postgres]
+database_url = "postgres://postgres:postgres@localhost:5432/catenary"
+max_connections = 128

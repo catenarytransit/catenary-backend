@@ -1,0 +1,72 @@
+name: catenary-dev-test
+
+# Dockerized stateful services that back .github/workflows/full-test-pipeline.yml.
+# The Rust binaries themselves (maple, birch, spruce, alpenrose, aspen, ...) are
+# NOT built or run here on purpose -- build/run those on the host inside a pixi
+# environment (see ../../pixi.toml and ./README.md) instead of sandboxing the
+# whole workflow in Docker.
+#
+# Credentials and versions are intentionally kept identical to the CI job so
+# that "it passes in CI" and "it works locally" mean the same thing. Ports are
+# bound to 127.0.0.1 only, since the default credentials below are not meant
+# to be reachable from outside your own machine.
+
+services:
+  postgres:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_DB: catenary
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Comment out to get a fully disposable DB (closer to the CI runner, which
+    # always starts from empty). Left on by default so repeated local test
+    # runs don't re-download/re-ingest GTFS data every time.
+    volumes:
+      - catenary_dev_postgres:/var/lib/postgresql/data
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5.9
+    environment:
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_ADVERTISE_CLIENT_URLS: http://0.0.0.0:2379
+    ports:
+      - "127.0.0.1:2379:2379"
+
+  elasticsearch:
+    image: elasticsearch:8.11.1
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: "-Xms512m -Xmx512m"
+    ports:
+      - "127.0.0.1:9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Not listed under `services:` in the GitHub Actions workflow, but the CI
+  # runner `apt-get install`s the `redis` package, which starts redis-server
+  # as a system service on 127.0.0.1:6379 -- aspen (src/aspen/main.rs) hard-
+  # codes that address, so it's a real dependency of the pipeline even though
+  # it isn't declared as a GH Actions "services:" container.
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  catenary_dev_postgres:
