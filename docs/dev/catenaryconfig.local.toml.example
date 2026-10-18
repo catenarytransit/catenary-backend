@@ -3,6 +3,16 @@
 #
 # Usage: cp docs/dev/catenaryconfig.local.toml.example catenaryconfig.toml
 # (then edit paths/feed ids as needed -- see docs/dev/README.md)
+#
+# IMPORTANT: etcd_username/etcd_password are deliberately omitted from every
+# section below, not set to "". Each binary does
+# `match (etcd_username, etcd_password) { (Some(u), Some(p)) => ... }`, and
+# an empty string still deserializes to `Some("")` -- so setting them to ""
+# makes every service try to authenticate with empty credentials, which the
+# docker-compose etcd container (auth disabled) rejects with
+# "etcdserver: authentication is not enabled". Omitting the keys makes them
+# deserialize to `None`, which correctly skips auth, matching what CI's
+# inline-generated catenaryconfig.toml does.
 
 [maple]
 # Clone https://github.com/catenarytransit/transitland-atlas into the repo
@@ -37,39 +47,27 @@ etcd_urls = ["localhost:2379"]
 channels = 4
 alpenrose_thread_count = 4
 port = 40427
-etcd_username = ""
-etcd_password = ""
 sbb_api_keys = ["Bearer IchLiebeSbbJadoreCFF"]
 
 [aspenleader]
 etcd_urls = ["localhost:2379"]
-etcd_username = ""
-etcd_password = ""
 
 [alpenrose]
 request_limit = 40
 etcd_urls = ["localhost:2379"]
 only_feed_ids = ["f-vvs~de~rt"]
-etcd_username = ""
-etcd_password = ""
 
 [birch]
 worker_amount = 4
 etcd_urls = ["localhost:2379"]
-etcd_username = ""
-etcd_password = ""
 
 [spruce]
 worker_amount = 2
 etcd_urls = ["localhost:2379"]
-etcd_username = ""
-etcd_password = ""
 
 [ramonda]
 worker_amount = 2
 etcd_urls = ["localhost:2379"]
-etcd_username = ""
-etcd_password = ""
 port = 52772
 
 [elasticsearch]
