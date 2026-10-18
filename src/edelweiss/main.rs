@@ -1,7 +1,7 @@
 mod hydrator;
 mod zero_copy_loader;
 // mod query_graph;
-mod raptor;
+// The V1 RAPTOR implementation is intentionally disabled until ported to V2.
 mod router;
 
 // #[cfg(test)]
@@ -48,19 +48,7 @@ impl EdelweissService for EdelweissServer {
         let router = Router::new(&self.graph);
         let mut result = router.route(&req);
 
-        // Run RAPTOR if the timetable is available and loaded
-        if let Some(r_res) = self
-            .timetable
-            .with_timetable(|zc| {
-                let raptor = crate::raptor::RaptorRouter::new(zc);
-                raptor.route(&req)
-            })
-            .await
-        {
-            // Merge raptor results here in the future
-            // result.itineraries.extend(r_res.itineraries);
-        }
-
+        // V2 schema is loadable, but transit scanning is not yet implemented.
         // Collect IDs for hydration
         let mut stop_ids = Vec::new();
         let mut route_ids = Vec::new();
