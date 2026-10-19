@@ -253,7 +253,7 @@ fn parse_poly(text: &str) -> Result<Geometry> {
                 if hole {
                     let exterior = polygons.last_mut()
                         .context(".poly hole without preceding exterior")?;
-                    exterior[0].push(std::mem::take(&mut ring));
+                    exterior.push(std::mem::take(&mut ring));
                 } else {
                     polygons.push(vec![std::mem::take(&mut ring)]);
                 }
