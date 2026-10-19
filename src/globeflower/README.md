@@ -36,3 +36,13 @@ Mainline rail GTFS feeds often have hundreds or thousands of route IDs and diffe
 The component planner uses direct reads from `gtfs.direction_pattern_meta`, `gtfs.direction_pattern`, and `gtfs.stops` instead of a multi-table planner join. Each direct direction-pattern query handles at most 256 pattern IDs (or fewer if configured via `--planner-row-limit`), followed by one stop-coordinate lookup for the referenced stops. This is **not** one SQL round trip per pattern; it amortizes latency without joining the large tables. Existing production/MOT/chateau filters are applied before reading the sequences. Graph materialization remains component-scoped and still performs joins; this change targets **planning** only.
 
 Compare before/after with `RUST_LOG=info cargo run --release --bin globeflower -- --chateau YOUR_CHATEAU --mots rail --max-component-patterns 5000 -o /tmp/globeflower-test.geojson`. For database performance, check `EXPLAIN (ANALYZE, BUFFERS)` on the old join and each direct query with representative parameters. A speedup depends on table sizes, index coverage, and database latency, and is not assumed.
+
+### Direction-pattern loading progress
+
+The component planner first enumerates selected direction-pattern IDs per production feed/attempt, then displays a terminal progress bar for the subsequent direct stop-sequence and station lookup batches. Each increment means a full batch has finished processing, including empty patterns; the percentage is based on the exact count of selected pattern IDs rather than feed count or raw stop rows. In a TTY, the bar displays completed/total, percentage, elapsed time and estimated remaining time. For logs and CI without a terminal, it emits newline-separated updates at approximately 10% intervals instead of carriage returns. No new command-line flags are needed.
+
+Example interactive display:
+
+```text
+[planner] Loading direction patterns [################----------------] 500/1000 (50%) elapsed 12.0s ETA 00:12
+```
