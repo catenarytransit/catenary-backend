@@ -12,6 +12,7 @@ const REDRAW_INTERVAL: Duration = Duration::from_millis(150);
 /// Interactive terminals get an in-place bar; redirected output gets
 /// occasional newline-delimited log records instead.
 pub(crate) struct LoadProgress {
+    stage: &'static str,
     label: &'static str,
     total: usize,
     done: usize,
@@ -24,8 +25,13 @@ pub(crate) struct LoadProgress {
 
 impl LoadProgress {
     pub(crate) fn new(label: &'static str, total: usize) -> Self {
+        Self::for_stage("planner", label, total)
+    }
+
+    pub(crate) fn for_stage(stage: &'static str, label: &'static str, total: usize) -> Self {
         let now = Instant::now();
         let mut progress = Self {
+            stage,
             label,
             total,
             done: 0,
@@ -86,7 +92,7 @@ impl LoadProgress {
     }
 
     fn draw(&self) {
-        let rendered = format_bar(self.label, self.done, self.total, self.started.elapsed());
+        let rendered = format_bar(self.stage, self.label, self.done, self.total, self.started.elapsed());
         let mut output = io::stderr().lock();
         let _ = write!(output, "\r\x1b[2K{rendered}");
         let _ = output.flush();
@@ -110,7 +116,7 @@ fn fraction(done: usize, total: usize, scale: usize) -> usize {
     ((done.min(total) as u128 * scale as u128) / total as u128) as usize
 }
 
-fn format_bar(label: &str, done: usize, total: usize, elapsed: Duration) -> String {
+fn format_bar(stage: &str, label: &str, done: usize, total: usize, elapsed: Duration) -> String {
     let filled = fraction(done, total, BAR_WIDTH);
     let bar = format!("{}{}", "#".repeat(filled), "-".repeat(BAR_WIDTH - filled));
     let percent = fraction(done, total, 100);
@@ -126,7 +132,7 @@ fn format_bar(label: &str, done: usize, total: usize, elapsed: Duration) -> Stri
         }
     };
     format!(
-        "[planner] {label} [{bar}] {done}/{total} ({percent}%) elapsed {:.1}s ETA {eta}",
+        "[{stage}] {label} [{bar}] {done}/{total} ({percent}%) elapsed {:.1}s ETA {eta}",
         elapsed.as_secs_f64()
     )
 }
@@ -147,7 +153,7 @@ mod tests {
 
     #[test]
     fn display_includes_counts_bar_and_percentage() {
-        let text = format_bar("Loading direction patterns", 50, 200, Duration::from_secs(10));
+        let text = format_bar("planner", "Loading direction patterns", 50, 200, Duration::from_secs(10));
         assert!(text.contains("Loading direction patterns"));
         assert!(text.contains("50/200 (25%)"));
         assert!(text.contains("########------------------------"));
@@ -155,9 +161,15 @@ mod tests {
     }
 
     #[test]
+    fn stage_is_accurate() {
+        assert!(format_bar("gtfs2graph", "Stops", 2, 4, Duration::from_secs(2))
+            .starts_with("[gtfs2graph] Stops "));
+    }
+
+    #[test]
     fn unknown_eta_until_there_is_a_reliable_rate() {
-        assert!(format_bar("Loading", 0, 100, Duration::from_secs(5)).contains("ETA --:--"));
-        assert!(format_bar("Loading", 100, 100, Duration::from_secs(5)).contains("100%"));
-        assert!(format_bar("Loading", 0, 0, Duration::ZERO).contains("0/0 (100%)"));
+        assert!(format_bar("planner", "Loading", 0, 100, Duration::from_secs(5)).contains("ETA --:--"));
+        assert!(format_bar("planner", "Loading", 100, 100, Duration::from_secs(5)).contains("100%"));
+        assert!(format_bar("planner", "Loading", 0, 0, Duration::ZERO).contains("0/0 (100%)"));
     }
 }
