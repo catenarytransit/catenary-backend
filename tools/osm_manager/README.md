@@ -35,7 +35,7 @@ CLI, which must already be installed. The Rust `osr-ffi` library opens
 these extracted directories for querying but does not perform extraction.
 
 Each region is published under `data_dir/regions/<geofabrik path>/`.
-Inside are the original native OSR `.bin` files, `manifest.json`, and
+Inside are the original native OSR `.bin` files (including `routing.bin`, which contains serialized node and way properties in OSR v0.0.4), `manifest.json`, and
 `boundary.geojson`. The `data_dir/regions.geojson` feature collection
 contains region IDs, relative dataset directories, source revisions,
 and exact polygon boundaries for future coordinate -> region lookup.
