@@ -294,10 +294,49 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
+// Files opened by MOTIS OSR v0.0.4's ways::ways() / ways::routing::read().
+// The graph properties are serialized together in routing.bin; they are NOT
+ // written as node_properties.bin / way_properties.bin.
+const REQUIRED_OSR_FILES: &[&str] = &[
+    "routing.bin",
+    "node_to_osm.bin",
+    "way_osm_idx.bin",
+    "way_polylines_data.bin",
+    "way_polylines_index.bin",
+    "way_osm_nodes_data.bin",
+    "way_osm_nodes_index.bin",
+    "strings_idx.bin",
+    "way_names.bin",
+];
+
+fn validate_osr_output(dir: &Path) -> Result<()> {
+    ensure!(dir.is_dir(), "OSR output directory does not exist: {}", dir.display());
+    let mut missing = Vec::new();
+    let mut empty = Vec::new();
+    for &name in REQUIRED_OSR_FILES {
+        match fs::metadata(dir.join(name)) {
+            Ok(metadata) if metadata.is_file() && metadata.len() > 0 => {}
+            Ok(_) => empty.push(name),
+            Err(_) => missing.push(name),
+        }
+    }
+    if !missing.is_empty() || !empty.is_empty() {
+        let files: Vec<_> = fs::read_dir(dir)?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        bail!(
+            "OSR output at {} is incomplete; missing={missing:?}; empty_or_not_regular={empty:?}; present_files={files:?}",
+            dir.display()
+        );
+    }
+    Ok(())
+}
+
 fn good_output(dir: &Path) -> bool {
-    ["node_properties.bin", "way_properties.bin", "way_polylines_index.bin"]
-        .iter().all(|f| dir.join(f).metadata().is_ok_and(|m| m.is_file() && m.len() > 0))
+    validate_osr_output(dir).is_ok()
         && dir.join("boundary.geojson").is_file()
+        && dir.join("manifest.json").is_file()
 }
 
 fn nonce() -> Result<String> {
@@ -359,10 +398,10 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region, force: bool
             .arg("-i").arg(&pbf).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
-        // OSR writes its data in this directory. Require its core routing files.
-        ensure!(["node_properties.bin", "way_properties.bin", "way_polylines_index.bin"]
-            .iter().all(|name| staging.join(name).metadata().is_ok_and(|m| m.len() > 0)),
-            "OSR extractor did not produce required nonempty .bin files for {}", region.id);
+        // Verify the actual native OSR v0.0.4 on-disk format, including the
+        // serialized routing.bin that contains node and way properties.
+        validate_osr_output(&staging)
+            .with_context(|| format!("validating native OSR output for {}", region.id))?;
         write_json(&staging.join("boundary.geojson"), &geometry)?;
         let manifest = Manifest {
             id: region.id.clone(),
@@ -530,6 +569,31 @@ mod tests {
         let shape = parse_poly("example\n1\n 0 0\n 5 0\n 5 5\n 0 5\nEND\nEND\n").unwrap();
         assert!(contains(&shape, 2.0, 2.0));
         assert!(!contains(&shape, 8.0, 8.0));
+    }
+
+    #[test]
+    fn validates_real_osr_file_layout_not_nonexistent_property_files() {
+        let root = std::env::temp_dir().join(format!("osm-manager-files-{}", nonce().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        for &file in REQUIRED_OSR_FILES {
+            fs::write(root.join(file), b"fixture data").unwrap();
+        }
+        // The v0.0.4 extractor writes routing.bin, NOT individual
+        // node_properties.bin / way_properties.bin files.
+        assert!(validate_osr_output(&root).is_ok());
+        assert!(!good_output(&root)); // published output needs metadata too
+        fs::write(root.join("boundary.geojson"), "{}").unwrap();
+        fs::write(root.join("manifest.json"), "{}").unwrap();
+        assert!(good_output(&root));
+
+        fs::remove_file(root.join("routing.bin")).unwrap();
+        let error = validate_osr_output(&root).unwrap_err().to_string();
+        assert!(error.contains("routing.bin"), "{error}");
+        assert!(!good_output(&root));
+        fs::write(root.join("routing.bin"), b"").unwrap();
+        let error = validate_osr_output(&root).unwrap_err().to_string();
+        assert!(error.contains("routing.bin"), "{error}");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
