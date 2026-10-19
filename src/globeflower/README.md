@@ -46,3 +46,9 @@ Example interactive display:
 ```text
 [planner] Loading direction patterns [################----------------] 500/1000 (50%) elapsed 12.0s ETA 00:12
 ```
+
+### Large rail components: bounded materialization
+
+Component discovery can connect thousands of mainline rail patterns into one geographic workset. Previously `build_component` submitted every pattern to a single PostgreSQL JSONB workset join, which can spend minutes executing without visible progress. Graph materialization now submits groups of at most 128 pattern keys for stop occurrences, referenced shapes and itinerary weights. The existing graph-building and topology logic is unchanged, and the complete connected component is still processed together.
+
+The CLI prints separate progress indicators for loading component stops, shapes, itinerary weights and aligning shape geometry. This is not an out-of-core graph builder: very large components can still need substantial RAM and processing time after SQL loading. Running `EXPLAIN (ANALYZE, BUFFERS)` on representative batches and comparing output geometry before and after the change is recommended.
