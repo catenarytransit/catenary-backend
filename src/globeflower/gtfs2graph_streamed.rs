@@ -4,6 +4,7 @@ use diesel::sql_types::{Array, BigInt, Double, Nullable, Text};
 use log::{info, warn};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
+use std::time::{Duration, Instant};
 
 use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
 use crate::loom_shape_alignment::AlignedShape;
@@ -31,6 +32,9 @@ pub struct PlannerConfig {
     pub min_tile_degrees: f64,
     /// A tile returning more rows than this is subdivided before its rows are used.
     pub row_limit: usize,
+    /// Number of selected routes per direction-pattern membership query.
+    /// Separate from spatial tile row_limit, which is unrelated to route fanout.
+    pub route_batch_size: usize,
     /// LOOM topo/TopoMain.cpp: distConnectedComponents(10000, false).
     /// Web Mercator metres, matching the LOOM geometry operations.
     pub connected_comp_distance: f64,
@@ -42,6 +46,7 @@ impl Default for PlannerConfig {
             tile_degrees: 20.0,
             min_tile_degrees: 0.625,
             row_limit: 100_000,
+            route_batch_size: 1024,
             connected_comp_distance: 10_000.0,
         }
     }
@@ -333,8 +338,8 @@ impl GeographicComponents {
 
 /// Discover independent transit worksets by starting from gtfs.routes.
 ///
-/// Globeflower only wants GTFS route_type 0 and 1, so the routes table is a much
-/// cheaper root than sweeping the entire world through gtfs.stops.  We read the
+/// Route-type selection begins at gtfs.routes, which avoids sweeping
+/// irrelevant rows from gtfs.stops. We read the
 /// selected route keys first, then resolve direction-pattern
 /// station memberships in bounded route batches.  No shape geometry is loaded
 /// during planning.
@@ -349,6 +354,11 @@ pub fn discover_components(
 ) -> Result<Vec<WorkComponent>> {
     anyhow::ensure!(!route_types.is_empty(), "select at least one MOT");
     anyhow::ensure!(cfg.row_limit > 0, "planner row limit must be > 0");
+    anyhow::ensure!(
+        (1..=8192).contains(&cfg.route_batch_size),
+        "planner route batch size must be between 1 and 8192"
+    );
+    let planning_started = Instant::now();
 
     info!("[planner] reading production routes for selected MOTs");
     // Select by chateau at the route seed, before materializing direction
@@ -376,6 +386,7 @@ pub fn discover_components(
         ORDER BY r.onestop_feed_id, r.attempt_id, r.route_id
         "#
     );
+    let route_seed_started = Instant::now();
     let route_rows: Vec<RouteSeedRow> = match chateaux {
         Some(ids) => diesel::sql_query(route_sql)
             .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
@@ -385,6 +396,10 @@ pub fn discover_components(
             .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec()).load(conn),
     }
     .context("load production selected-MOT routes")?;
+    info!(
+        "[planner][route_seeds] loaded {} routes in {:.2?}",
+        route_rows.len(), route_seed_started.elapsed()
+    );
 
     if route_rows.is_empty() {
         return Ok(Vec::new());
@@ -412,10 +427,13 @@ pub fn discover_components(
     let mut first_pattern_at_station = HashMap::<String, usize>::new();
     let mut seen_positions = HashMap::<(u64, u64), usize>::new();
     let mut geographic = GeographicComponents::new(cfg.connected_comp_distance);
-    let route_batch_size = cfg.row_limit.clamp(64, 1024);
+    let route_batch_size = cfg.route_batch_size;
     let mut membership_count = 0usize;
+    let mut sql_time = Duration::ZERO;
+    let mut union_time = Duration::ZERO;
 
-    for route_chunk in route_keys.chunks(route_batch_size) {
+    for (batch_no, route_chunk) in route_keys.chunks(route_batch_size).enumerate() {
+        let sql_started = Instant::now();
         let workset_json = serde_json::to_string(route_chunk)?;
         let rows: Vec<PlannerRow> = diesel::sql_query(format!(
             r#"
@@ -427,7 +445,12 @@ pub fn discover_components(
                     route_id text
                 )
             )
-            SELECT DISTINCT
+            -- Every workset route has a unique feed/attempt/route key.
+            -- The PKs of dpm, dp and stops make this join unique per
+            -- direction-pattern stop occurrence. DISTINCT previously forced
+            -- a sort/hash across every station and its projected coordinates.
+            -- Repeated visits to a stop are harmless to the DSU below.
+            SELECT
                 dp.onestop_feed_id,
                 dp.attempt_id,
                 dp.direction_pattern_id,
@@ -461,7 +484,13 @@ pub fn discover_components(
         .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
         .load(conn)
         .context("load route-batched direction-pattern station memberships")?;
-
+        let sql_elapsed = sql_started.elapsed();
+        sql_time += sql_elapsed;
+        log::debug!(
+            "[planner][memberships] batch {} routes={} rows={} query={:.2?}",
+            batch_no + 1, route_chunk.len(), rows.len(), sql_elapsed
+        );
+        let union_started = Instant::now();
         membership_count += rows.len();
         for row in rows {
             let idx = dsu.ensure(PatternKey {
@@ -492,7 +521,16 @@ pub fn discover_components(
                 );
             }
         }
+        union_time += union_started.elapsed();
     }
+
+    info!(
+        "[planner][memberships] {} route batches, {} stop occurrences, sql/transfer={:.2?}, component-union={:.2?}",
+        route_keys.len().div_ceil(route_batch_size),
+        membership_count,
+        sql_time,
+        union_time
+    );
 
     let pattern_count = dsu.keys.len();
     let components = dsu.into_components();
@@ -506,6 +544,7 @@ pub fn discover_components(
         cfg.connected_comp_distance,
         largest
     );
+    info!("[planner] component discovery finished in {:.2?}", planning_started.elapsed());
     Ok(components)
 }
 
@@ -715,6 +754,7 @@ pub fn build_component(
     }
 
     let workset_json = serde_json::to_string(&component.patterns)?;
+    let stop_query_started = Instant::now();
     let stop_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
         r#"
         WITH workset AS (
@@ -763,18 +803,25 @@ pub fn build_component(
           AND s.allowed_spatial_query = TRUE
           AND s.location_type IN (0, 1)
           AND s.point IS NOT NULL
-        ORDER BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id, dp.stop_sequence
+        -- No ORDER BY: PatternAccum sorts stop sequences by sequence number
+        -- in Rust before alignment. Sorting a rail-sized joined result in
+        -- PostgreSQL previously added a global sort and possible disk spill.
         "#
     ))
     .bind::<Text, _>(&workset_json)
     .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
     .context("load one selected-MOT direction-pattern component")?;
+    info!(
+        "[gtfs2graph][stops] {} patterns, {} stop rows in {:.2?}",
+        component.patterns.len(), stop_rows.len(), stop_query_started.elapsed()
+    );
 
     if stop_rows.is_empty() {
         return Ok(Graph::default());
     }
 
+    let shape_query_started = Instant::now();
     let shape_rows: Vec<ShapeRow> = diesel::sql_query(format!(
         r#"
         WITH workset AS (
@@ -819,6 +866,10 @@ pub fn build_component(
     .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
     .context("load shapes for one direction-pattern component")?;
+    info!(
+        "[gtfs2graph][shapes] loaded {} geometries in {:.2?}",
+        shape_rows.len(), shape_query_started.elapsed()
+    );
 
     let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
     for row in shape_rows {
@@ -836,6 +887,7 @@ pub fn build_component(
     // Unlike direction patterns, itineraries distinguish GTFS shape IDs.
     // Preserve every geometry instead of choosing an arbitrary representative
     // from several itineraries with identical stop sequences.
+    let weights_started = Instant::now();
     let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
         r#"WITH workset AS (
               SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(
@@ -859,6 +911,10 @@ pub fn build_component(
     .bind::<Text, _>(&workset_json)
     .load(conn)
     .context("load itinerary-specific shapes and trip cardinalities")?;
+    info!(
+        "[gtfs2graph][weights] loaded {} shape/itinerary weights in {:.2?}",
+        weight_rows.len(), weights_started.elapsed()
+    );
     let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
     for row in weight_rows {
         let key = PatternKey {
