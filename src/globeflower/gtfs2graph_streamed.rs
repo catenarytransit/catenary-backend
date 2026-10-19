@@ -804,8 +804,17 @@ pub fn build_component(
         return Ok(Graph::default());
     }
 
-    let workset_json = serde_json::to_string(&component.patterns)?;
-    let stop_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
+    // A large rail component may have tens of thousands of patterns. Feeding
+    // all of them through one multi-table join produces enormous intermediate
+    // worksets and makes progress impossible to observe. Bound each SQL query.
+    const COMPONENT_BATCH_SIZE: usize = 128;
+    let total_patterns = component.patterns.len();
+    let mut stop_rows = Vec::<PatternStopRow>::new();
+    let mut stop_progress =
+        LoadProgress::for_stage("gtfs2graph", "Loading component stops", total_patterns);
+    for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
+        let workset_json = serde_json::to_string(batch)?;
+        let mut batch_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
         r#"
         WITH workset AS (
             SELECT *
@@ -859,13 +868,24 @@ pub fn build_component(
     .bind::<Text, _>(&workset_json)
     .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
-    .context("load one selected-MOT direction-pattern component")?;
+    .context("load a bounded direction-pattern stop batch")?;
+        stop_rows.append(&mut batch_rows);
+        stop_progress.advance(batch.len());
+    }
+    stop_progress.finish();
+    info!("[gtfs2graph] loaded {} stop occurrences for {} direction patterns",
+        stop_rows.len(), total_patterns);
 
     if stop_rows.is_empty() {
         return Ok(Graph::default());
     }
 
-    let shape_rows: Vec<ShapeRow> = diesel::sql_query(format!(
+    let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
+    let mut shape_progress =
+        LoadProgress::for_stage("gtfs2graph", "Loading component shapes", total_patterns);
+    for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
+        let workset_json = serde_json::to_string(batch)?;
+        let shape_rows: Vec<ShapeRow> = diesel::sql_query(format!(
         r#"
         WITH workset AS (
             SELECT *
@@ -908,25 +928,34 @@ pub fn build_component(
     .bind::<Text, _>(&workset_json)
     .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
-    .context("load shapes for one direction-pattern component")?;
+    .context("load a bounded component shape batch")?;
 
-    let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
-    for row in shape_rows {
-        match parse_linestring_geojson(&row.geojson).and_then(AlignedShape::new) {
-            Some(shape) => {
-                shape_map.insert((row.onestop_feed_id, row.attempt_id, row.shape_id), shape);
+        for row in shape_rows {
+            let key = (row.onestop_feed_id, row.attempt_id, row.shape_id);
+            if shape_map.contains_key(&key) {
+                continue;
             }
-            None => warn!(
-                "[gtfs2graph] ignoring malformed/short shape {}",
-                row.shape_id
-            ),
+            match parse_linestring_geojson(&row.geojson).and_then(AlignedShape::new) {
+                Some(shape) => {
+                    shape_map.insert(key, shape);
+                }
+                None => warn!("[gtfs2graph] ignoring malformed/short shape {}", key.2),
+            }
         }
+        shape_progress.advance(batch.len());
     }
+    shape_progress.finish();
+    info!("[gtfs2graph] loaded {} unique shapes", shape_map.len());
 
     // Unlike direction patterns, itineraries distinguish GTFS shape IDs.
     // Preserve every geometry instead of choosing an arbitrary representative
     // from several itineraries with identical stop sequences.
-    let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
+    let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
+    let mut weight_progress =
+        LoadProgress::for_stage("gtfs2graph", "Loading itinerary weights", total_patterns);
+    for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
+        let workset_json = serde_json::to_string(batch)?;
+        let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
         r#"WITH workset AS (
               SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(
                   onestop_feed_id text, attempt_id text, direction_pattern_id text)
@@ -948,19 +977,21 @@ pub fn build_component(
     )
     .bind::<Text, _>(&workset_json)
     .load(conn)
-    .context("load itinerary-specific shapes and trip cardinalities")?;
-    let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
-    for row in weight_rows {
-        let key = PatternKey {
-            onestop_feed_id: row.onestop_feed_id,
-            attempt_id: row.attempt_id,
-            direction_pattern_id: row.direction_pattern_id,
-        };
-        pattern_weights
-            .entry(key)
-            .or_default()
-            .push((row.shape_id, row.trip_count.max(1) as usize));
+    .context("load itinerary-specific weights for a bounded pattern batch")?;
+        for row in weight_rows {
+            let key = PatternKey {
+                onestop_feed_id: row.onestop_feed_id,
+                attempt_id: row.attempt_id,
+                direction_pattern_id: row.direction_pattern_id,
+            };
+            pattern_weights
+                .entry(key)
+                .or_default()
+                .push((row.shape_id, row.trip_count.max(1) as usize));
+        }
+        weight_progress.advance(batch.len());
     }
+    weight_progress.finish();
 
     let mut graph = Graph::default();
     let mut line_by_key = HashMap::<(String, String, String), usize>::new();
@@ -1055,7 +1086,10 @@ pub fn build_component(
     // Geometries are extracted from arclength intervals, not independently
     // reprojected endpoints; this preserves circles, lassos and reversals.
     let mut registry = EdgeRegistry::new();
+    let mut alignment_progress =
+        LoadProgress::for_stage("gtfs2graph", "Aligning pattern geometry", patterns.len());
     for (pattern_key, pattern) in &mut patterns {
+        alignment_progress.advance(1);
         pattern.stops.sort_by_key(|x| x.0);
         let Some(&line_id) = line_by_key.get(&pattern.route_key) else {
             continue;
@@ -1142,6 +1176,8 @@ pub fn build_component(
         }
     }
 
+    alignment_progress.finish();
+    info!("[gtfs2graph] simplifying graph after aligning {} direction patterns", patterns.len());
     crate::loom_builder_simplify::simplify(
         &mut graph,
         &registry.weights,
