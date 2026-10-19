@@ -32,9 +32,11 @@ This project is built off the work of researchers in Germany and many other plac
 
 - Round-Based Public Transit Routing, Karlsruhe Institute of Technology, Delling, Daniel; Pajor Thomas, Werneck Renato. https://www.microsoft.com/en-us/research/wp-content/uploads/2012/01/raptor_alenex.pdf
 - Motis Project https://github.com/motis-project Felix Gündling, innovation in in-memory data stores for graphs
+- Open Street Router OSR: https://github.com/motis-project/osr Felix Gündling
 - Hannah Bast, PhD at Freiburg Universitat: Transfer Patterns and Scalable Transfer Patterns
 - Patrick Brosi: Pfaedle and Line optimised shapes
 
+----------------------------------
 ### Submodules maintained 
 - **DMFR dataset reader**: reads data from transitland-atlas into raw structs https://docs.rs/dmfr-dataset-reader/latest/dmfr_dataset_reader/
 - **[Château](https://github.com/catenarytransit/chateau)**: Associates feeds with operators and vise versa using depth first search in knowledge graph
