@@ -1086,7 +1086,10 @@ pub fn build_component(
     // Geometries are extracted from arclength intervals, not independently
     // reprojected endpoints; this preserves circles, lassos and reversals.
     let mut registry = EdgeRegistry::new();
+    let mut alignment_progress =
+        LoadProgress::for_stage("gtfs2graph", "Aligning pattern geometry", patterns.len());
     for (pattern_key, pattern) in &mut patterns {
+        alignment_progress.advance(1);
         pattern.stops.sort_by_key(|x| x.0);
         let Some(&line_id) = line_by_key.get(&pattern.route_key) else {
             continue;
@@ -1173,6 +1176,8 @@ pub fn build_component(
         }
     }
 
+    alignment_progress.finish();
+    info!("[gtfs2graph] simplifying graph after aligning {} direction patterns", patterns.len());
     crate::loom_builder_simplify::simplify(
         &mut graph,
         &registry.weights,
