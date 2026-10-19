@@ -9,9 +9,7 @@ use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
 use crate::loom_shape_alignment::AlignedShape;
 use crate::loom_trip_segments::{EdgeRegistry, SegmentKey};
 
-/// Globeflower intentionally processes only GTFS route_type 0 (tram) and
-/// route_type 1 (subway/metro). Heavy rail is deliberately excluded.
-const ROUTE_TYPES_SQL: &str = "(0, 1)";
+// SQL for the current run uses bound smallint[] values throughout the active pipeline.
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct PatternKey {
@@ -57,8 +55,6 @@ struct RouteSeedRow {
     attempt_id: String,
     #[diesel(sql_type = Text)]
     route_id: String,
-    #[diesel(sql_type = Text)]
-    shapes_json: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -339,7 +335,7 @@ impl GeographicComponents {
 ///
 /// Globeflower only wants GTFS route_type 0 and 1, so the routes table is a much
 /// cheaper root than sweeping the entire world through gtfs.stops.  We read the
-/// selected routes and their shapes_list first, then resolve direction-pattern
+/// selected route keys first, then resolve direction-pattern
 /// station memberships in bounded route batches.  No shape geometry is loaded
 /// during planning.
 ///
@@ -349,15 +345,17 @@ pub fn discover_components(
     conn: &mut PgConnection,
     cfg: PlannerConfig,
     chateaux: Option<&[String]>,
+    route_types: &[i16],
 ) -> Result<Vec<WorkComponent>> {
+    anyhow::ensure!(!route_types.is_empty(), "select at least one MOT");
     anyhow::ensure!(cfg.row_limit > 0, "planner row limit must be > 0");
 
-    info!("[planner] reading production route_type 0/1 routes first");
+    info!("[planner] reading production routes for selected MOTs");
     // Select by chateau at the route seed, before materializing direction
     // patterns, station memberships, or geometry. The SQL suffix is constant;
     // chateau values are bound as an array, never interpolated into SQL.
     let chateau_filter = if chateaux.is_some() {
-        "AND r.chateau = ANY($1::text[])"
+        "AND r.chateau = ANY($2::text[])"
     } else {
         ""
     };
@@ -366,38 +364,34 @@ pub fn discover_components(
         SELECT
             r.onestop_feed_id,
             r.attempt_id,
-            r.route_id,
-            COALESCE(to_jsonb(r.shapes_list)::text, '[]') AS shapes_json
+            r.route_id
         FROM gtfs.routes AS r
         INNER JOIN gtfs.ingested_static AS ingest
             ON ingest.onestop_feed_id = r.onestop_feed_id
            AND ingest.attempt_id = r.attempt_id
-        WHERE r.route_type IN {route_types}
+        WHERE r.route_type = ANY($1::smallint[])
           AND ingest.production = TRUE
           AND ingest.deleted = FALSE
           {chateau_filter}
         ORDER BY r.onestop_feed_id, r.attempt_id, r.route_id
-        "#,
-        route_types = ROUTE_TYPES_SQL
+        "#
     );
     let route_rows: Vec<RouteSeedRow> = match chateaux {
         Some(ids) => diesel::sql_query(route_sql)
+            .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
             .bind::<Array<Text>, _>(ids.to_vec())
             .load(conn),
-        None => diesel::sql_query(route_sql).load(conn),
+        None => diesel::sql_query(route_sql)
+            .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec()).load(conn),
     }
-    .context("load production tram/metro routes")?;
+    .context("load production selected-MOT routes")?;
 
     if route_rows.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut route_keys = Vec::with_capacity(route_rows.len());
-    let mut shape_ref_count = 0usize;
     for row in route_rows {
-        if let Ok(shape_ids) = serde_json::from_str::<Vec<Option<String>>>(&row.shapes_json) {
-            shape_ref_count += shape_ids.into_iter().flatten().count();
-        }
         route_keys.push(RouteWorkKey {
             onestop_feed_id: row.onestop_feed_id,
             attempt_id: row.attempt_id,
@@ -406,9 +400,8 @@ pub fn discover_components(
     }
 
     info!(
-        "[planner] {} routes reference {} shape IDs; geometry remains unloaded",
-        route_keys.len(),
-        shape_ref_count
+        "[planner] {} routes selected; no shape geometries or route shape arrays loaded",
+        route_keys.len()
     );
 
     anyhow::ensure!(
@@ -458,14 +451,14 @@ pub fn discover_components(
                 ON s.onestop_feed_id = dp.onestop_feed_id
                AND s.attempt_id = dp.attempt_id
                AND s.gtfs_id = dp.stop_id
-            WHERE dpm.route_type IN {route_types}
+            WHERE dpm.route_type = ANY($2::smallint[])
               AND s.allowed_spatial_query = TRUE
               AND s.location_type IN (0, 1)
               AND s.point IS NOT NULL
-            "#,
-            route_types = ROUTE_TYPES_SQL
+            "#
         ))
         .bind::<Text, _>(&workset_json)
+        .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
         .load(conn)
         .context("load route-batched direction-pattern station memberships")?;
 
@@ -505,7 +498,7 @@ pub fn discover_components(
     let components = dsu.into_components();
     let largest = components.first().map_or(0, |c| c.patterns.len());
     info!(
-        "[planner] {} memberships / {} physical stations, {} route_type 0/1 patterns -> {} connected components (LOOM geographic radius {}m); largest={} patterns",
+        "[planner] {} memberships / {} physical stations, {} selected-MOT patterns -> {} connected components (LOOM geographic radius {}m); largest={} patterns",
         membership_count,
         seen_positions.len(),
         pattern_count,
@@ -596,10 +589,9 @@ fn load_planner_rows(
         WHERE s.allowed_spatial_query = TRUE
           AND s.location_type IN (0, 1)
           AND s.point IS NOT NULL
-          AND dpm.route_type IN {route_types}
+          AND dpm.route_type IN (0, 1)
           AND s.point && ST_MakeEnvelope($1, $2, $3, $4, 4326)
-        "#,
-        route_types = ROUTE_TYPES_SQL
+        "#
     );
 
     let sql = if limit.is_some() {
@@ -716,6 +708,7 @@ pub fn build_component(
     conn: &mut PgConnection,
     component: &WorkComponent,
     prune_threshold: f64,
+    route_types: &[i16],
 ) -> Result<Graph> {
     if component.patterns.is_empty() {
         return Ok(Graph::default());
@@ -765,18 +758,18 @@ pub fn build_component(
             ON r.onestop_feed_id = dpm.onestop_feed_id
            AND r.attempt_id = dpm.attempt_id
            AND r.route_id = dpm.route_id
-        WHERE dpm.route_type IN {route_types}
-          AND r.route_type IN {route_types}
+        WHERE dpm.route_type = ANY($2::smallint[])
+          AND r.route_type = ANY($2::smallint[])
           AND s.allowed_spatial_query = TRUE
           AND s.location_type IN (0, 1)
           AND s.point IS NOT NULL
         ORDER BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id, dp.stop_sequence
-        "#,
-        route_types = ROUTE_TYPES_SQL
+        "#
     ))
     .bind::<Text, _>(&workset_json)
+    .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
-    .context("load one route_type 0/1 direction-pattern component")?;
+    .context("load one selected-MOT direction-pattern component")?;
 
     if stop_rows.is_empty() {
         return Ok(Graph::default());
@@ -806,7 +799,7 @@ pub fn build_component(
                 ON ipm.onestop_feed_id = w.onestop_feed_id
                AND ipm.attempt_id = w.attempt_id
                AND ipm.direction_pattern_id = w.direction_pattern_id
-            WHERE dpm.route_type IN {route_types}
+            WHERE dpm.route_type = ANY($2::smallint[])
         )
         SELECT DISTINCT
             s.onestop_feed_id,
@@ -820,10 +813,10 @@ pub fn build_component(
            AND s.shape_id = rs.shape_id
         WHERE rs.shape_id IS NOT NULL
           AND s.linestring IS NOT NULL
-        "#,
-        route_types = ROUTE_TYPES_SQL
+        "#
     ))
     .bind::<Text, _>(&workset_json)
+    .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
     .context("load shapes for one direction-pattern component")?;
 
