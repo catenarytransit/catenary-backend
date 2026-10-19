@@ -56,13 +56,25 @@ jobs:
           ./tools/osm_manager/target/release/osm_manager \
             --config tools/osm_manager/test.catenaryconfig.toml run
 
+      - name: Inspect generated native OSR output
+        if: always()
+        run: |
+          if test -d test-osr-output/regions; then
+            find test-osr-output/regions -type f -printf '%p %s bytes\n' | sort | head -100
+          fi
+
       - name: Verify OSR native output and boundaries
         run: |
           set -euo pipefail
           d=test-osr-output/regions/europe/andorra
-          test -s "$d/node_properties.bin"
-          test -s "$d/way_properties.bin"
-          test -s "$d/way_polylines_index.bin"
+          # OSR v0.0.4 stores node/way properties inside routing.bin.
+          # Check the native files actually opened by ways::ways().
+          for f in routing.bin node_to_osm.bin way_osm_idx.bin \
+            way_polylines_data.bin way_polylines_index.bin \
+            way_osm_nodes_data.bin way_osm_nodes_index.bin \
+            strings_idx.bin way_names.bin; do
+            test -s "$d/$f" || { echo "::error::Missing or empty $d/$f"; exit 1; }
+          done
           test -s "$d/manifest.json"
           test -s "$d/boundary.geojson"
           test -s test-osr-output/regions.geojson
