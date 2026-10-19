@@ -3,7 +3,7 @@ use diesel::prelude::*;
 use diesel::sql_types::{Array, BigInt, Double, Nullable, Text};
 use log::{info, warn};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
 use crate::progress::LoadProgress;
@@ -148,15 +148,11 @@ struct DirectStationRow {
     osm_station_id: Option<i64>,
 }
 
-/// Geometry is itinerary-specific. Direction-pattern IDs depend on stop
-/// sequence, and multiple itineraries under the same ID may use different
-/// GTFS shapes. Weight each distinct shape by the number of represented trips.
+/// Itinerary records already identify their direction pattern; retrieve them
+/// directly using a feed/attempt/direction-pattern index. No shape geometry is
+/// fetched or converted while reading these lightweight references.
 #[derive(QueryableByName, Debug)]
-struct PatternWeightRow {
-    #[diesel(sql_type = Text)]
-    onestop_feed_id: String,
-    #[diesel(sql_type = Text)]
-    attempt_id: String,
+struct ItineraryShapeRow {
     #[diesel(sql_type = Text)]
     direction_pattern_id: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -880,118 +876,156 @@ pub fn build_component(
         return Ok(Graph::default());
     }
 
-    let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
-    let mut shape_progress =
-        LoadProgress::for_stage("gtfs2graph", "Loading component shapes", total_patterns);
-    for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
-        let workset_json = serde_json::to_string(batch)?;
-        let shape_rows: Vec<ShapeRow> = diesel::sql_query(format!(
-        r#"
-        WITH workset AS (
-            SELECT *
-            FROM jsonb_to_recordset($1::jsonb) AS w(
-                onestop_feed_id text,
-                attempt_id text,
-                direction_pattern_id text
-            )
-        ),
-        referenced_shapes AS (
-            SELECT DISTINCT
-                w.onestop_feed_id,
-                w.attempt_id,
-                COALESCE(ipm.shape_id, dpm.gtfs_shape_id) AS shape_id
-            FROM workset AS w
-            INNER JOIN gtfs.direction_pattern_meta AS dpm
-                ON dpm.onestop_feed_id = w.onestop_feed_id
-               AND dpm.attempt_id = w.attempt_id
-               AND dpm.direction_pattern_id = w.direction_pattern_id
-            LEFT JOIN gtfs.itinerary_pattern_meta AS ipm
-                ON ipm.onestop_feed_id = w.onestop_feed_id
-               AND ipm.attempt_id = w.attempt_id
-               AND ipm.direction_pattern_id = w.direction_pattern_id
-            WHERE dpm.route_type = ANY($2::smallint[])
-        )
-        SELECT DISTINCT
-            s.onestop_feed_id,
-            s.attempt_id,
-            s.shape_id,
-            ST_AsGeoJSON(s.linestring) AS geojson
-        FROM referenced_shapes AS rs
-        INNER JOIN gtfs.shapes AS s
-            ON s.onestop_feed_id = rs.onestop_feed_id
-           AND s.attempt_id = rs.attempt_id
-           AND s.shape_id = rs.shape_id
-        WHERE rs.shape_id IS NOT NULL
-          AND s.linestring IS NOT NULL
-        "#
-    ))
-    .bind::<Text, _>(&workset_json)
-    .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
-    .load(conn)
-    .context("load a bounded component shape batch")?;
-
-        for row in shape_rows {
-            let key = (row.onestop_feed_id, row.attempt_id, row.shape_id);
-            if shape_map.contains_key(&key) {
-                continue;
-            }
-            match parse_linestring_geojson(&row.geojson).and_then(AlignedShape::new) {
-                Some(shape) => {
-                    shape_map.insert(key, shape);
-                }
-                None => warn!("[gtfs2graph] ignoring malformed/short shape {}", key.2),
-            }
-        }
-        shape_progress.advance(batch.len());
+    // A direction pattern may have multiple itinerary-specific shapes.
+    // Resolve the lightweight shape references and trip weights FIRST.
+    // This eliminates the repeated workset -> metadata -> itinerary ->
+    // shapes joins previously performed once per 128-pattern batch.
+    //
+    // Use the already-loaded direction_pattern_meta fallback shape ID from the
+    // stop rows. The shape ID is identical for all stops in a pattern.
+    let mut fallback_shapes = HashMap::<PatternKey, Option<String>>::new();
+    for row in &stop_rows {
+        fallback_shapes.entry(PatternKey {
+            onestop_feed_id: row.onestop_feed_id.clone(),
+            attempt_id: row.attempt_id.clone(),
+            direction_pattern_id: row.direction_pattern_id.clone(),
+        })
+        .or_insert_with(|| row.shape_id.clone());
     }
-    shape_progress.finish();
-    info!("[gtfs2graph] loaded {} unique shapes", shape_map.len());
 
-    // Unlike direction patterns, itineraries distinguish GTFS shape IDs.
-    // Preserve every geometry instead of choosing an arbitrary representative
-    // from several itineraries with identical stop sequences.
-    let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
+    let mut variants_by_pattern =
+        HashMap::<PatternKey, BTreeMap<Option<String>, i64>>::new();
     let mut weight_progress =
         LoadProgress::for_stage("gtfs2graph", "Loading itinerary weights", total_patterns);
+
+    // Group each bounded workset by feed/attempt to use the composite index.
+    // Each query reads only the selected direction-pattern IDs without SQL
+    // joins, DISTINCT, or GROUP BY over full GTFS geometry rows.
     for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
-        let workset_json = serde_json::to_string(batch)?;
-        let weight_rows: Vec<PatternWeightRow> = diesel::sql_query(
-        r#"WITH workset AS (
-              SELECT * FROM jsonb_to_recordset($1::jsonb) AS w(
-                  onestop_feed_id text, attempt_id text, direction_pattern_id text)
-            )
-            SELECT w.onestop_feed_id, w.attempt_id, w.direction_pattern_id,
-                   COALESCE(ipm.shape_id, dpm.gtfs_shape_id) AS shape_id,
-                   GREATEST(1, COALESCE(SUM(cardinality(ipm.trip_ids)), 0))::bigint AS trip_count
-            FROM workset w
-            INNER JOIN gtfs.direction_pattern_meta dpm
-              ON dpm.onestop_feed_id = w.onestop_feed_id
-             AND dpm.attempt_id = w.attempt_id
-             AND dpm.direction_pattern_id = w.direction_pattern_id
-            LEFT JOIN gtfs.itinerary_pattern_meta ipm
-              ON ipm.onestop_feed_id = w.onestop_feed_id
-             AND ipm.attempt_id = w.attempt_id
-             AND ipm.direction_pattern_id = w.direction_pattern_id
-            GROUP BY w.onestop_feed_id, w.attempt_id, w.direction_pattern_id,
-                     COALESCE(ipm.shape_id, dpm.gtfs_shape_id)"#,
-    )
-    .bind::<Text, _>(&workset_json)
-    .load(conn)
-    .context("load itinerary-specific weights for a bounded pattern batch")?;
-        for row in weight_rows {
-            let key = PatternKey {
-                onestop_feed_id: row.onestop_feed_id,
-                attempt_id: row.attempt_id,
-                direction_pattern_id: row.direction_pattern_id,
-            };
-            pattern_weights
-                .entry(key)
+        let mut by_feed = BTreeMap::<(String, String), Vec<String>>::new();
+        for key in batch {
+            by_feed
+                .entry((key.onestop_feed_id.clone(), key.attempt_id.clone()))
                 .or_default()
-                .push((row.shape_id, row.trip_count.max(1) as usize));
+                .push(key.direction_pattern_id.clone());
+        }
+        for ((feed, attempt), ids) in by_feed {
+            let rows: Vec<ItineraryShapeRow> = diesel::sql_query(
+                r#"
+                SELECT direction_pattern_id, shape_id,
+                       cardinality(trip_ids)::bigint AS trip_count
+                FROM gtfs.itinerary_pattern_meta
+                WHERE onestop_feed_id = $1
+                  AND attempt_id = $2
+                  AND direction_pattern_id = ANY($3::text[])
+                "#,
+            )
+            .bind::<Text, _>(&feed)
+            .bind::<Text, _>(&attempt)
+            .bind::<Array<Text>, _>(ids)
+            .load(conn)
+            .with_context(|| format!("read itinerary shape IDs for {feed}/{attempt}"))?;
+
+            for row in rows {
+                let key = PatternKey {
+                    onestop_feed_id: feed.clone(),
+                    attempt_id: attempt.clone(),
+                    direction_pattern_id: row.direction_pattern_id,
+                };
+                // Only materialize patterns with eligible stop rows. Match the
+                // original COALESCE(ipm.shape_id, dpm.gtfs_shape_id) behavior.
+                if let Some(fallback) = fallback_shapes.get(&key) {
+                    let shape_id = row.shape_id.or_else(|| fallback.clone());
+                    *variants_by_pattern
+                        .entry(key)
+                        .or_default()
+                        .entry(shape_id)
+                        .or_default() += row.trip_count;
+                }
+            }
         }
         weight_progress.advance(batch.len());
     }
     weight_progress.finish();
+
+    // Match the LEFT JOIN behavior: a pattern with no itineraries still has
+    // one shape variant (possibly unshaped), with at least one trip of weight.
+    let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
+    for (key, fallback_shape_id) in fallback_shapes {
+        let variants = variants_by_pattern.remove(&key).unwrap_or_else(|| {
+            BTreeMap::from([(fallback_shape_id, 1)])
+        });
+        pattern_weights.insert(
+            key,
+            variants
+                .into_iter()
+                .map(|(shape, trips)| (shape, trips.max(1) as usize))
+                .collect(),
+        );
+    }
+
+    // Deduplicate shape IDs *globally* across the connected component before
+    // reading or serializing even one linestring. National rail feeds can have
+    // thousands of patterns sharing one geometry; no shape is fetched twice.
+    let mut unique_shape_ids = BTreeMap::<(String, String), BTreeSet<String>>::new();
+    for (key, variants) in &pattern_weights {
+        for (shape_id, _) in variants {
+            if let Some(id) = shape_id {
+                unique_shape_ids
+                    .entry((key.onestop_feed_id.clone(), key.attempt_id.clone()))
+                    .or_default()
+                    .insert(id.clone());
+            }
+        }
+    }
+    let shape_count: usize = unique_shape_ids.values().map(BTreeSet::len).sum();
+    info!(
+        "[gtfs2graph] {} unique shapes referenced by {} patterns",
+        shape_count,
+        pattern_weights.len()
+    );
+
+    let mut shape_map = HashMap::<(String, String, String), AlignedShape>::new();
+    let mut shape_progress =
+        LoadProgress::for_stage("gtfs2graph", "Loading unique shapes", shape_count);
+    for ((feed, attempt), ids) in unique_shape_ids {
+        let ids: Vec<_> = ids.into_iter().collect();
+        for batch in ids.chunks(COMPONENT_BATCH_SIZE) {
+            // Indexed direct lookup by the shapes table's existing primary key.
+            // No direction-pattern or itinerary joins in the shape query.
+            let shape_rows: Vec<ShapeRow> = diesel::sql_query(
+                r#"
+                SELECT onestop_feed_id, attempt_id, shape_id,
+                       ST_AsGeoJSON(linestring) AS geojson
+                FROM gtfs.shapes
+                WHERE onestop_feed_id = $1
+                  AND attempt_id = $2
+                  AND shape_id = ANY($3::text[])
+                  AND linestring IS NOT NULL
+                "#,
+            )
+            .bind::<Text, _>(&feed)
+            .bind::<Text, _>(&attempt)
+            .bind::<Array<Text>, _>(batch.to_vec())
+            .load(conn)
+            .with_context(|| format!("read unique geometry for {feed}/{attempt}"))?;
+
+            for row in shape_rows {
+                let key = (row.onestop_feed_id, row.attempt_id, row.shape_id);
+                match parse_linestring_geojson(&row.geojson).and_then(AlignedShape::new) {
+                    Some(shape) => {
+                        shape_map.insert(key, shape);
+                    }
+                    None => warn!("[gtfs2graph] ignoring malformed/short shape {}", key.2),
+                }
+            }
+            // Count keys looked up, not just rows returned: missing or malformed
+            // shapes should still advance this phase toward completion.
+            shape_progress.advance(batch.len());
+        }
+    }
+    shape_progress.finish();
+    info!("[gtfs2graph] loaded {} unique valid shapes", shape_map.len());
 
     let mut graph = Graph::default();
     let mut line_by_key = HashMap::<(String, String, String), usize>::new();
