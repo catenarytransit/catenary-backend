@@ -804,8 +804,17 @@ pub fn build_component(
         return Ok(Graph::default());
     }
 
-    let workset_json = serde_json::to_string(&component.patterns)?;
-    let stop_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
+    // A large rail component may have tens of thousands of patterns. Feeding
+    // all of them through one multi-table join produces enormous intermediate
+    // worksets and makes progress impossible to observe. Bound each SQL query.
+    const COMPONENT_BATCH_SIZE: usize = 128;
+    let total_patterns = component.patterns.len();
+    let mut stop_rows = Vec::<PatternStopRow>::new();
+    let mut stop_progress =
+        LoadProgress::for_stage("gtfs2graph", "Loading component stops", total_patterns);
+    for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
+        let workset_json = serde_json::to_string(batch)?;
+        let mut batch_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
         r#"
         WITH workset AS (
             SELECT *
@@ -859,7 +868,13 @@ pub fn build_component(
     .bind::<Text, _>(&workset_json)
     .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
-    .context("load one selected-MOT direction-pattern component")?;
+    .context("load a bounded direction-pattern stop batch")?;
+        stop_rows.append(&mut batch_rows);
+        stop_progress.advance(batch.len());
+    }
+    stop_progress.finish();
+    info!("[gtfs2graph] loaded {} stop occurrences for {} direction patterns",
+        stop_rows.len(), total_patterns);
 
     if stop_rows.is_empty() {
         return Ok(Graph::default());
