@@ -15,6 +15,7 @@ mod loom_cpp_topo;
 mod loom_graph;
 mod loom_map_constructor;
 mod modes;
+mod progress;
 mod loom_polyline;
 mod loom_restr_inferrer;
 mod loom_shape_alignment;
