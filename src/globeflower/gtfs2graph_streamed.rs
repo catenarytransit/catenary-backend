@@ -114,6 +114,39 @@ struct PatternStopRow {
     shape_id: Option<String>,
 }
 
+
+#[derive(QueryableByName, Debug)]
+struct DirectionMetaSeedRow {
+    #[diesel(sql_type = Text)]
+    direction_pattern_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    route_id: Option<String>,
+}
+
+/// Direct indexed reads of the stop sequence, without joining either metadata
+/// or gtfs.stops to the much larger direction_pattern table.
+#[derive(QueryableByName, Debug)]
+struct DirectPatternStopRow {
+    #[diesel(sql_type = Text)]
+    direction_pattern_id: String,
+    #[diesel(sql_type = Text)]
+    stop_id: String,
+    #[diesel(sql_type = BigInt)]
+    stop_sequence: i64,
+}
+
+#[derive(QueryableByName, Debug)]
+struct DirectStationRow {
+    #[diesel(sql_type = Text)]
+    stop_id: String,
+    #[diesel(sql_type = Double)]
+    lon: f64,
+    #[diesel(sql_type = Double)]
+    lat: f64,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    osm_station_id: Option<i64>,
+}
+
 /// Geometry is itinerary-specific. Direction-pattern IDs depend on stop
 /// sequence, and multiple itineraries under the same ID may use different
 /// GTFS shapes. Weight each distinct shape by the number of represented trips.
@@ -390,20 +423,23 @@ pub fn discover_components(
         return Ok(Vec::new());
     }
 
-    let mut route_keys = Vec::with_capacity(route_rows.len());
-    for row in route_rows {
-        route_keys.push(RouteWorkKey {
-            onestop_feed_id: row.onestop_feed_id,
-            attempt_id: row.attempt_id,
-            route_id: row.route_id,
-        });
-    }
+    // The route seed already applies production, deleted, selected MOT and
+    // optional chateau filters. Treat it as an allowlist: read metadata one
+    // feed/attempt at a time, avoiding the route_workset/dpm/dp/stops join.
+    let selected_routes: std::collections::HashSet<(String, String, String)> = route_rows
+        .iter()
+        .map(|r| (r.onestop_feed_id.clone(), r.attempt_id.clone(), r.route_id.clone()))
+        .collect();
+    let feed_attempts: std::collections::BTreeSet<(String, String)> = route_rows
+        .iter()
+        .map(|r| (r.onestop_feed_id.clone(), r.attempt_id.clone()))
+        .collect();
 
     info!(
-        "[planner] {} routes selected; no shape geometries or route shape arrays loaded",
-        route_keys.len()
+        "[planner] {} routes across {} production feed attempts selected; fetching patterns directly",
+        selected_routes.len(),
+        feed_attempts.len()
     );
-
     anyhow::ensure!(
         cfg.connected_comp_distance.is_finite() && cfg.connected_comp_distance >= 0.0,
         "connected component distance must be finite and >= 0"
@@ -412,88 +448,131 @@ pub fn discover_components(
     let mut first_pattern_at_station = HashMap::<String, usize>::new();
     let mut seen_positions = HashMap::<(u64, u64), usize>::new();
     let mut geographic = GeographicComponents::new(cfg.connected_comp_distance);
-    let route_batch_size = cfg.row_limit.clamp(64, 1024);
+    // Bound each query's parameter list and result set, not the total number
+    // of patterns in the world. All three tables have composite feed/attempt
+    // keys, and direction_pattern's primary key also includes pattern_id.
+    let pattern_batch_size = cfg.row_limit.clamp(64, 256);
     let mut membership_count = 0usize;
+    let mut pattern_count_selected = 0usize;
 
-    for route_chunk in route_keys.chunks(route_batch_size) {
-        let workset_json = serde_json::to_string(route_chunk)?;
-        let rows: Vec<PlannerRow> = diesel::sql_query(format!(
+    for (feed, attempt) in feed_attempts {
+        let meta: Vec<DirectionMetaSeedRow> = diesel::sql_query(
             r#"
-            WITH route_workset AS (
-                SELECT *
-                FROM jsonb_to_recordset($1::jsonb) AS w(
-                    onestop_feed_id text,
-                    attempt_id text,
-                    route_id text
-                )
-            )
-            SELECT DISTINCT
-                dp.onestop_feed_id,
-                dp.attempt_id,
-                dp.direction_pattern_id,
-                CASE
-                    WHEN s.osm_station_id IS NOT NULL
-                        THEN 'osm:' || s.osm_station_id::text
-                    ELSE 'gtfs:' || s.onestop_feed_id || '|' || s.attempt_id || '|' || s.gtfs_id
-                END AS station_key,
-                ST_X(s.point) AS lon,
-                ST_Y(s.point) AS lat
-            FROM route_workset AS w
-            INNER JOIN gtfs.direction_pattern_meta AS dpm
-                ON dpm.onestop_feed_id = w.onestop_feed_id
-               AND dpm.attempt_id = w.attempt_id
-               AND dpm.route_id = w.route_id
-            INNER JOIN gtfs.direction_pattern AS dp
-                ON dp.onestop_feed_id = dpm.onestop_feed_id
-               AND dp.attempt_id = dpm.attempt_id
-               AND dp.direction_pattern_id = dpm.direction_pattern_id
-            INNER JOIN gtfs.stops AS s
-                ON s.onestop_feed_id = dp.onestop_feed_id
-               AND s.attempt_id = dp.attempt_id
-               AND s.gtfs_id = dp.stop_id
-            WHERE dpm.route_type = ANY($2::smallint[])
-              AND s.allowed_spatial_query = TRUE
-              AND s.location_type IN (0, 1)
-              AND s.point IS NOT NULL
-            "#
-        ))
-        .bind::<Text, _>(&workset_json)
+            SELECT direction_pattern_id, route_id
+            FROM gtfs.direction_pattern_meta
+            WHERE onestop_feed_id = $1
+              AND attempt_id = $2
+              AND route_type = ANY($3::smallint[])
+            ORDER BY direction_pattern_id
+            "#,
+        )
+        .bind::<Text, _>(&feed)
+        .bind::<Text, _>(&attempt)
         .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
         .load(conn)
-        .context("load route-batched direction-pattern station memberships")?;
+        .with_context(|| format!("load direct direction-pattern metadata for {feed}/{attempt}"))?;
 
-        membership_count += rows.len();
-        for row in rows {
-            let idx = dsu.ensure(PatternKey {
-                onestop_feed_id: row.onestop_feed_id,
-                attempt_id: row.attempt_id,
-                direction_pattern_id: row.direction_pattern_id,
-            });
-            if let Some(&first) = first_pattern_at_station.get(&row.station_key) {
-                dsu.union(first, idx);
-            } else {
-                first_pattern_at_station.insert(row.station_key.clone(), idx);
+        let mut ids: Vec<String> = meta
+            .into_iter()
+            .filter(|m| {
+                m.route_id.as_ref().is_some_and(|route_id| {
+                    selected_routes.contains(&(feed.clone(), attempt.clone(), route_id.clone()))
+                })
+            })
+            .map(|m| m.direction_pattern_id)
+            .collect();
+        ids.sort_unstable();
+        ids.dedup();
+        pattern_count_selected += ids.len();
+
+        for batch in ids.chunks(pattern_batch_size) {
+            // Direct PK-prefix lookup; PostgreSQL never has to join every stop
+            // of every direction pattern to its route metadata.
+            let dp: Vec<DirectPatternStopRow> = diesel::sql_query(
+                r#"
+                SELECT direction_pattern_id, stop_id, stop_sequence::bigint AS stop_sequence
+                FROM gtfs.direction_pattern
+                WHERE onestop_feed_id = $1
+                  AND attempt_id = $2
+                  AND direction_pattern_id = ANY($3::text[])
+                ORDER BY direction_pattern_id, stop_sequence
+                "#,
+            )
+            .bind::<Text, _>(&feed)
+            .bind::<Text, _>(&attempt)
+            .bind::<Array<Text>, _>(batch.to_vec())
+            .load(conn)
+            .with_context(|| format!("read direct direction-pattern stops for {feed}/{attempt}"))?;
+
+            let mut stop_ids: Vec<String> = dp.iter().map(|r| r.stop_id.clone()).collect();
+            stop_ids.sort_unstable();
+            stop_ids.dedup();
+            if stop_ids.is_empty() {
+                continue;
             }
-            // Do not conflate geographic proximity with station identity:
-            // independent agencies can overlap without sharing stop IDs.
-            let coordinate = (row.lon.to_bits(), row.lat.to_bits());
-            if let Some(&first) = seen_positions.get(&coordinate) {
-                // Different GTFS stop IDs can have exactly the same point.
-                dsu.union(first, idx);
-            } else {
-                seen_positions.insert(coordinate, idx);
-                geographic.add(
-                    &mut dsu,
-                    idx,
-                    Point {
-                        lon: row.lon,
-                        lat: row.lat,
-                    },
-                );
+            // Resolve only the referenced stops via the stops primary key.
+            // The result map lives for one batch, not for a whole national feed.
+            let station_rows: Vec<DirectStationRow> = diesel::sql_query(
+                r#"
+                SELECT gtfs_id AS stop_id, ST_X(point) AS lon, ST_Y(point) AS lat, osm_station_id
+                FROM gtfs.stops
+                WHERE onestop_feed_id = $1 AND attempt_id = $2
+                  AND gtfs_id = ANY($3::text[])
+                  AND allowed_spatial_query = TRUE
+                  AND location_type IN (0, 1)
+                  AND point IS NOT NULL
+                "#,
+            )
+            .bind::<Text, _>(&feed)
+            .bind::<Text, _>(&attempt)
+            .bind::<Array<Text>, _>(stop_ids)
+            .load(conn)
+            .with_context(|| format!("read direct station coordinates for {feed}/{attempt}"))?;
+            let stations: HashMap<String, DirectStationRow> = station_rows
+                .into_iter()
+                .map(|s| (s.stop_id.clone(), s))
+                .collect();
+
+            // Repeated stops are legal in a loop, but one pattern should not
+            // count the same station twice for component membership.
+            let mut seen_memberships = std::collections::HashSet::new();
+            for row in dp {
+                if !seen_memberships.insert((row.direction_pattern_id.clone(), row.stop_id.clone())) {
+                    continue;
+                }
+                let Some(station) = stations.get(&row.stop_id) else {
+                    continue;
+                };
+                membership_count += 1;
+                let idx = dsu.ensure(PatternKey {
+                    onestop_feed_id: feed.clone(),
+                    attempt_id: attempt.clone(),
+                    direction_pattern_id: row.direction_pattern_id,
+                });
+                let station_key = match station.osm_station_id {
+                    Some(osm_id) => format!("osm:{osm_id}"),
+                    None => format!("gtfs:{feed}|{attempt}|{}", station.stop_id),
+                };
+                if let Some(&first) = first_pattern_at_station.get(&station_key) {
+                    dsu.union(first, idx);
+                } else {
+                    first_pattern_at_station.insert(station_key, idx);
+                }
+                let coordinate = (station.lon.to_bits(), station.lat.to_bits());
+                if let Some(&first) = seen_positions.get(&coordinate) {
+                    dsu.union(first, idx);
+                } else {
+                    seen_positions.insert(coordinate, idx);
+                    geographic.add(&mut dsu, idx, Point { lon: station.lon, lat: station.lat });
+                }
             }
         }
     }
 
+    info!(
+        "[planner] directly scanned {} selected direction-pattern IDs",
+        pattern_count_selected
+    );
     let pattern_count = dsu.keys.len();
     let components = dsu.into_components();
     let largest = components.first().map_or(0, |c| c.patterns.len());
