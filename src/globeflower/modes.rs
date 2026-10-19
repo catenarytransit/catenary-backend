@@ -1,6 +1,10 @@
 use anyhow::{bail, Result};
 use std::collections::BTreeSet;
 
+fn add_range(selected: &mut BTreeSet<i16>, start: i16, end: i16) {
+    selected.extend(start..=end);
+}
+
 /// The default exactly preserves the historic streamed Globeflower run.
 /// Named modes expand to standard and extended GTFS route_type values;
 /// numeric codes select precisely one type (without implicit expansion).
@@ -12,25 +16,22 @@ pub fn parse_mots(raw: Option<&str>) -> Result<Vec<i16>> {
         if name.is_empty() {
             bail!("--mots requires nonempty comma-separated MOT names or GTFS route_type codes");
         }
-        let mut add_range = |start: i16, end: i16| {
-            selected.extend(start..=end);
-        };
         match name.as_str() {
             "tram" | "streetcar" | "light_rail" | "light-rail" => {
                 selected.insert(0);
-                add_range(900, 906);
+                add_range(&mut selected, 900, 906);
             }
             "metro" | "subway" => {
                 selected.insert(1);
-                add_range(400, 405);
+                add_range(&mut selected, 400, 405);
             }
             "rail" | "train" | "heavy_rail" | "heavy-rail" => {
                 selected.insert(2);
-                add_range(100, 117);
+                add_range(&mut selected, 100, 117);
             }
             "bus" => {
                 selected.insert(3);
-                add_range(700, 716);
+                add_range(&mut selected, 700, 716);
             }
             "ferry" => {
                 selected.insert(4);
@@ -53,7 +54,7 @@ pub fn parse_mots(raw: Option<&str>) -> Result<Vec<i16>> {
                 for (from, to) in [(0, 7), (100, 117), (200, 209), (400, 405),
                     (700, 716), (800, 800), (900, 906), (1000, 1021), (1100, 1100),
                     (1200, 1200), (1300, 1300), (1400, 1400), (1500, 1507), (1700, 1702)] {
-                    add_range(from, to);
+                    add_range(&mut selected, from, to);
                 }
                 selected.insert(12);
             }
