@@ -64,6 +64,9 @@ struct Args {
     /// Maximum station/pattern memberships retained for a planner tile.
     #[arg(long, default_value_t = 100_000)]
     planner_row_limit: usize,
+    /// Selected GTFS routes processed per membership query (1-8192).
+    #[arg(long, default_value_t = 1024)]
+    planner_route_batch_size: usize,
     /// LOOM geographic proximity for distConnectedComponents (Web Mercator metres).
     #[arg(long, default_value_t = 10_000.0)]
     connected_comp_distance: f64,
@@ -110,6 +113,7 @@ fn main() -> Result<()> {
             tile_degrees: args.planner_tile_degrees,
             min_tile_degrees: args.planner_min_tile_degrees,
             row_limit: args.planner_row_limit,
+            route_batch_size: args.planner_route_batch_size,
             connected_comp_distance: args.connected_comp_distance,
         },
         chateaux.as_deref(),
@@ -248,6 +252,14 @@ mod cli_tests {
     fn default_modes_keep_tram_and_metro_only() {
         let args = Args::try_parse_from(["globeflower"]).unwrap();
         assert_eq!(modes::parse_mots(args.mots.as_deref()).unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn configurable_planner_route_batch_size() {
+        let args = Args::try_parse_from([
+            "globeflower", "--mots", "rail", "--planner-route-batch-size", "256"
+        ]).unwrap();
+        assert_eq!(args.planner_route_batch_size, 256);
     }
 
     #[test]
