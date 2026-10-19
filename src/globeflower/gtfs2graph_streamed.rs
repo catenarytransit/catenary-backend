@@ -55,8 +55,6 @@ struct RouteSeedRow {
     attempt_id: String,
     #[diesel(sql_type = Text)]
     route_id: String,
-    #[diesel(sql_type = Text)]
-    shapes_json: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -337,7 +335,7 @@ impl GeographicComponents {
 ///
 /// Globeflower only wants GTFS route_type 0 and 1, so the routes table is a much
 /// cheaper root than sweeping the entire world through gtfs.stops.  We read the
-/// selected routes and their shapes_list first, then resolve direction-pattern
+/// selected route keys first, then resolve direction-pattern
 /// station memberships in bounded route batches.  No shape geometry is loaded
 /// during planning.
 ///
@@ -366,8 +364,7 @@ pub fn discover_components(
         SELECT
             r.onestop_feed_id,
             r.attempt_id,
-            r.route_id,
-            COALESCE(to_jsonb(r.shapes_list)::text, '[]') AS shapes_json
+            r.route_id
         FROM gtfs.routes AS r
         INNER JOIN gtfs.ingested_static AS ingest
             ON ingest.onestop_feed_id = r.onestop_feed_id
@@ -394,11 +391,7 @@ pub fn discover_components(
     }
 
     let mut route_keys = Vec::with_capacity(route_rows.len());
-    let mut shape_ref_count = 0usize;
     for row in route_rows {
-        if let Ok(shape_ids) = serde_json::from_str::<Vec<Option<String>>>(&row.shapes_json) {
-            shape_ref_count += shape_ids.into_iter().flatten().count();
-        }
         route_keys.push(RouteWorkKey {
             onestop_feed_id: row.onestop_feed_id,
             attempt_id: row.attempt_id,
@@ -407,9 +400,8 @@ pub fn discover_components(
     }
 
     info!(
-        "[planner] {} routes reference {} shape IDs; geometry remains unloaded",
-        route_keys.len(),
-        shape_ref_count
+        "[planner] {} routes selected; no shape geometries or route shape arrays loaded",
+        route_keys.len()
     );
 
     anyhow::ensure!(
