@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
+use crate::progress::LoadProgress;
 use crate::loom_shape_alignment::AlignedShape;
 use crate::loom_trip_segments::{EdgeRegistry, SegmentKey};
 
@@ -454,7 +455,10 @@ pub fn discover_components(
     let pattern_batch_size = cfg.row_limit.clamp(64, 256);
     let mut membership_count = 0usize;
     let mut pattern_count_selected = 0usize;
+    let mut worksets = Vec::with_capacity(feed_attempts.len());
 
+    // Enumerate metadata first to obtain an exact denominator for the bar.
+    // Preserve one feed's compact pattern IDs per entry, not its stop rows.
     for (feed, attempt) in feed_attempts {
         let meta: Vec<DirectionMetaSeedRow> = diesel::sql_query(
             r#"
@@ -484,7 +488,11 @@ pub fn discover_components(
         ids.sort_unstable();
         ids.dedup();
         pattern_count_selected += ids.len();
+        worksets.push((feed, attempt, ids));
+    }
 
+    let mut progress = LoadProgress::new("Loading direction patterns", pattern_count_selected);
+    for (feed, attempt, ids) in worksets {
         for batch in ids.chunks(pattern_batch_size) {
             // Direct PK-prefix lookup; PostgreSQL never has to join every stop
             // of every direction pattern to its route metadata.
@@ -508,6 +516,7 @@ pub fn discover_components(
             stop_ids.sort_unstable();
             stop_ids.dedup();
             if stop_ids.is_empty() {
+                progress.advance(batch.len());
                 continue;
             }
             // Resolve only the referenced stops via the stops primary key.
@@ -566,8 +575,10 @@ pub fn discover_components(
                     geographic.add(&mut dsu, idx, Point { lon: station.lon, lat: station.lat });
                 }
             }
+            progress.advance(batch.len());
         }
     }
+    progress.finish();
 
     info!(
         "[planner] directly scanned {} selected direction-pattern IDs",
