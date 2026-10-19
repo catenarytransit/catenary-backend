@@ -597,7 +597,7 @@ fn load_planner_rows(
         WHERE s.allowed_spatial_query = TRUE
           AND s.location_type IN (0, 1)
           AND s.point IS NOT NULL
-          AND dpm.route_type IN {route_types}
+          AND dpm.route_type IN (0, 1)
           AND s.point && ST_MakeEnvelope($1, $2, $3, $4, 4326)
         "#
     );
@@ -766,7 +766,7 @@ pub fn build_component(
             ON r.onestop_feed_id = dpm.onestop_feed_id
            AND r.attempt_id = dpm.attempt_id
            AND r.route_id = dpm.route_id
-        WHERE dpm.route_type IN {route_types}
+        WHERE dpm.route_type = ANY($2::smallint[])
           AND r.route_type = ANY($2::smallint[])
           AND s.allowed_spatial_query = TRUE
           AND s.location_type IN (0, 1)
@@ -807,7 +807,7 @@ pub fn build_component(
                 ON ipm.onestop_feed_id = w.onestop_feed_id
                AND ipm.attempt_id = w.attempt_id
                AND ipm.direction_pattern_id = w.direction_pattern_id
-            WHERE dpm.route_type IN {route_types}
+            WHERE dpm.route_type = ANY($2::smallint[])
         )
         SELECT DISTINCT
             s.onestop_feed_id,
@@ -865,7 +865,6 @@ pub fn build_component(
                      COALESCE(ipm.shape_id, dpm.gtfs_shape_id)"#,
     )
     .bind::<Text, _>(&workset_json)
-    .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
     .load(conn)
     .context("load itinerary-specific shapes and trip cardinalities")?;
     let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
