@@ -7,37 +7,14 @@ use geo::{
     MultiPolygon, Point, Polygon,
 };
 use gtfs_structures::RouteType;
-use lazy_static::lazy_static;
 use std::f64::consts::PI;
 
 use catenary::hull::chi_shape;
-
-lazy_static! {
-    static ref BANNED_OCEAN_GEO: geo::MultiPolygon<f64> = geo::MultiPolygon::new(vec![
-        geo::Polygon::new(
-            geo::LineString::new(vec![
-                coord! { x: 5.2, y: 3.6 },
-                coord! { x: -13.84, y: 3.62 },
-                coord! { x: -13.84, y: -15.28 },
-                coord! { x: 5.2, y: -15.28 },
-                coord! { x: 5.2, y: 3.6 },
-            ]),
-            vec![],
-        ),
-        geo::Polygon::new(
-            geo::LineString::new(vec![
-                coord! { x: 51.8397440696757, y: 11.036088030014866 },
-                coord! { x: 51.8397440696757, y: -3.1282014955991713 },
-                coord! { x: 71.36372595923046, y: -3.1282014955991713 },
-                coord! { x: 71.36372595923046, y: 11.036088030014866 },
-                coord! { x: 51.8397440696757, y: 11.036088030014866 },
-            ]),
-            vec![],
-        ),
-    ]);
-}
+use super::ocean_exclusions::open_ocean_exclusions;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Polygon> {
+    let exclusions = open_ocean_exclusions();
+
     let bus_only = gtfs
         .routes
         .iter()
@@ -61,6 +38,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
                     .iter()
                     .filter(|point| !is_null_island(point.longitude, point.latitude))
                     .filter(|point| point.longitude.is_finite() && point.latitude.is_finite())
+                    .filter(|point| !exclusions.excludes(point.longitude, point.latitude))
                     .map(|point| Point::new(point.longitude, point.latitude))
             })
             .collect::<Vec<Point>>(),
@@ -73,6 +51,9 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         .filter(|(_, stop)| !is_null_island(stop.latitude.unwrap(), stop.longitude.unwrap()))
         .filter(|(_, stop)| {
             stop.longitude.unwrap().is_finite() && stop.latitude.unwrap().is_finite()
+        })
+        .filter(|(_, stop)| {
+            !exclusions.excludes(stop.longitude.unwrap(), stop.latitude.unwrap())
         })
         .map(|(_, stop)| Point::new(stop.longitude.unwrap(), stop.latitude.unwrap()))
         .collect::<Vec<Point>>();
