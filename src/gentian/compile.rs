@@ -205,10 +205,12 @@ fn make_schedules(
             let a = anchor + i64::from(trip_start_secs) + i64::from(*arr);
             let d = anchor + i64::from(trip_start_secs) + i64::from(*dep);
             ensure!(a <= d, "negative dwell time in trip {trip_id}");
-            ensure!(a.rem_euclid(60) == 0 && d.rem_euclid(60) == 0,
-                "sub-minute stop times require a seconds-precision timetable: {trip_id}");
-            stamps.push(a / 60);
-            stamps.push(d / 60);
+            // Nigiri's GTFS importer discards the seconds component and stores
+            // UTC event times in whole minutes. Convert after combining the trip
+            // start and pattern offset: rounding each component separately
+            // would lose carries when their seconds sum to 60 or more.
+            stamps.push(a.div_euclid(60));
+            stamps.push(d.div_euclid(60));
         }
         ensure!(stamps.len() >= 4, "trip {trip_id} needs at least two stops");
         ensure!(stamps.windows(2).all(|w| w[0] <= w[1]),
@@ -516,6 +518,40 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn nonzero_gtfs_seconds_are_quantized_after_combining_offsets() {
+        let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        let first_day = i32::try_from(date.signed_duration_since(epoch).num_days()).unwrap();
+        let pattern = Pattern {
+            route_id: "test".into(),
+            route_type: 3,
+            timezone: "America/Los_Angeles".parse().unwrap(),
+            stops: vec![("a".into(), 0, 0), ("b".into(), 20, 80)],
+        };
+        let mut stop_lookup = HashMap::new();
+        stop_lookup.insert("a".into(), LocationIdx(0));
+        stop_lookup.insert("b".into(), LocationIdx(1));
+        let calendar = Calendar {
+            weekdays: [true; 7],
+            range: Some((date, date)),
+            ..Default::default()
+        };
+        // 08:00:50 at the first stop; 08:01:10 arrival and 08:02:10
+        // departure at the second. UTC on this date is PDT + 7 hours.
+        let schedules = make_schedules(
+            "test-trip", 0, &pattern, &stop_lookup,
+            8 * 3600 + 50, &calendar, first_day, 1,
+        ).unwrap();
+        assert_eq!(schedules.len(), 1);
+        let trip = &schedules[0];
+        assert!(trip.days.test(0));
+        assert_eq!(trip.first_minute, 15 * 60);
+        assert_eq!(trip.events[0].departure, 0);
+        assert_eq!(trip.events[1].arrival, 1);
+        assert_eq!(trip.events[1].departure, 2);
+    }
+
     #[test]
     fn spring_forward_uses_gtfs_noon_anchor() {
         let tz: Tz = "America/Los_Angeles".parse().unwrap();
