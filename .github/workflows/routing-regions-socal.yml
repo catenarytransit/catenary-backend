@@ -1,13 +1,31 @@
-name: Gentian SoCal RAPTOR + OSR integration
+name: SoCal routing - Maple, OSR and RAPTOR query
 
 on:
+  pull_request:
+    branches: [routing-dev]
+    paths:
+      - '.github/workflows/routing-regions-socal.yml'
+      - 'src/gentian/**'
+      - 'src/edelweiss/**'
+      - 'src/routing_common/**'
+      - 'tools/gentian_footpaths/**'
+      - 'tools/osm_manager/**'
+      - 'tools/routing_regions/**'
+      - 'routing_regions/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
   workflow_dispatch:
+
+concurrency:
+  group: socal-routing-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   socal-maple-osr-gentian:
+    name: SoCal ingest, compile and UCI-City Hall query
     runs-on: ubuntu-22.04
     timeout-minutes: 300
     services:
@@ -104,6 +122,13 @@ jobs:
             --query temp/uci-cityhall-request.json \
             --database-url "$DATABASE_URL" | tee temp/uci-cityhall-results.json
           python3 tools/routing_regions/print_uci_cityhall_results.py temp/uci-cityhall-results.json
+          {
+            echo '## SoCal RAPTOR example: UCI to Los Angeles City Hall'
+            echo ''
+            echo 'Monday, 2026-10-26 08:00 America/Los_Angeles.'
+            echo 'See the **Execute Edelweiss RAPTOR example** step for printed journeys and GTFS route colors.'
+            echo 'Download **gentian-socal-routing-diagnostics** for the JSON response and OSR logs.'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload build metadata
         if: always()
         uses: actions/upload-artifact@v4
