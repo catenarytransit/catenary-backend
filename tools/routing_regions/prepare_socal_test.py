@@ -47,7 +47,8 @@ def prepare(geojson: Path, output_dir: Path, database_url: str, transitland: str
     region_file = output_dir / "config.toml"
     boundary = os.path.relpath(geojson.resolve(), output_dir.resolve())
     region_file.write_text(
-        "schema_version = 1\n\n"
+        "schema_version = 1\n"
+        'data_dir = "compiled/routing"\n\n'
         "[[regions]]\n"
         'id = "southern-california"\n'
         'name = "Southern California integration test"\n'

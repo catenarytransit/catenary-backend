@@ -19,6 +19,8 @@ pub struct RoutingRegionsConfig {
     /// A local FeatureCollection with ISO 3166-1 alpha-2 country properties.
     /// Required only when a region specifies countries.
     pub country_boundaries: Option<PathBuf>,
+    #[serde(default = "default_data_dir")]
+    pub data_dir: PathBuf,
     pub regions: Vec<RoutingRegion>,
 }
 
@@ -130,6 +132,8 @@ impl RoutingRegionsConfig {
         serde_json::to_string(&geometry).context("encoding routing region geometry")
     }
 }
+
+fn default_data_dir() -> PathBuf { PathBuf::from("compiled/routing") }
 
 fn valid_region_id(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase()
