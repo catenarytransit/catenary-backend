@@ -283,11 +283,15 @@ mod tests {
 
     #[test]
     fn southern_california_fixture_is_polygonal() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("routing_regions/config.toml");
+        let root = fixture_dir();
+        let path = root.join("config.toml");
+        fs::write(&path, "schema_version = 1\n[[regions]]\nid = 'southern-california'\nname = 'Southern California test'\ngeojson = ['boundary.geojson']\n").unwrap();
+        fs::write(root.join("boundary.geojson"), r#"{"type":"Polygon","coordinates":[[[-119,33],[-117,33],[-117,35],[-119,35],[-119,33]]]}"#).unwrap();
         let config = RoutingRegionsConfig::load(&path).unwrap();
         let region = config.region("southern-california").unwrap();
         assert_eq!(region.geojson.len(), 1);
         let geometry = config.geometry_json(&path, &region.id).unwrap();
+        fs::remove_dir_all(root).unwrap();
         assert!(geometry.contains("GeometryCollection"));
         assert!(geometry.contains("Polygon"));
     }

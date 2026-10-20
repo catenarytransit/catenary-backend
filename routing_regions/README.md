@@ -1,78 +1,73 @@
-# Routing regions (Gentian)
+# Gentian routing regions
 
-Routing regions are **timetable selection areas**, not spatial clipping masks.
-A chateau belongs to a region when its stored hull intersects the region's geometry.
-When selected, the **entire chateau** and its completed production GTFS feeds
-belong to the timetable, including stops and trips outside the polygon.
+Regions are configured **locally**, not embedded in the production build.
+`routing_regions/*.toml` and downloaded `routing_regions/*.geojson` are
+Git-ignored. A region can select arbitrary local Polygon/MultiPolygon GeoJSON,
+or countries from a pinned local country-boundary FeatureCollection.
 
-This directory is independent from `region_config/` (SEO/localization) and
-Globeflower's OSM extraction regions.
+A château is included in full if its hull intersects the region geometry
+(`ST_Intersects` with a GiST-compatible `&&` prefilter). Stops, trips and
+feeds are **not clipped** to the geographic boundary. Missing château hulls
+cannot be selected until repaired upstream. Country and GeoJSON selectors can
+be combined.
 
-## Southern California test
+## Repeatable Southern California integration test
 
-`routing_regions/config.toml` provides `southern-california`, an approximate
-test polygon spanning coastal and inland Southern California. The polygon is not
-a legal county boundary. It can be replaced by a more precise MultiPolygon
-without changing the program. Chateaux that overlap its edge are deliberately
-included in full; a national or statewide chateau may extend well outside SoCal.
-
-Resolve the selection from a PostGIS-enabled Catenary database:
+The SoCal example is a **test only**, not a production default. From the
+repository root:
 
 ```sh
-DATABASE_URL='postgres://...' cargo run --bin gentian -- \
-  --regions-config routing_regions/config.toml \
-  --region southern-california --list-chateaux
-```
-
-Write a V2 **schema-only** binary with selected source IDs (no routes or stop
-events are compiled by the current Gentian implementation):
-
-```sh
-DATABASE_URL='postgres://...' cargo run --bin gentian -- \
-  --regions-config routing_regions/config.toml \
+mkdir -p routing_regions
+curl --fail --location --retry 3 \
+  https://download.geofabrik.de/north-america/us/california/socal.geojson \
+  -o routing_regions/socal.geojson
+DATABASE_URL='postgres://postgres:postgres@localhost:5432/catenary' \
+  python3 tools/routing_regions/prepare_socal_test.py \
+  --geojson routing_regions/socal.geojson
+DATABASE_URL='postgres://postgres:postgres@localhost:5432/catenary' \
+  cargo run --bin gentian -- \
   --region southern-california \
-  --output compiled/southern-california.bin
+  --regions-config routing_regions/config.toml --list-chateaux
 ```
 
-The existing `--source CHATEAU,FEED,ATTEMPT` form remains supported for the
-schema-only binary, without a database or routing-region configuration.
+The preparation script creates an ignored `catenaryconfig.toml` that uses
+Maple's real `[maple].only_feed_ids` setting for exactly seven feeds:
+OCTA, Metrolink, LA Metro, Long Beach Transit, Big Blue Bus, PVPTA, and Laguna
+Beach Transit. It disables Elasticsearch for the test, defaults to two GTFS
+ingestion threads, and writes a separate ignored region config.
 
-## Configuration
+The [GitHub Action](../.github/workflows/routing-regions-socal.yml) runs a
+fast synthetic PostGIS integration test on every relevant PR and push; its
+manual `workflow_dispatch` option can additionally ingest the seven real
+feeds. Manual ingestion downloads live GTFS data and has no fixed runtime
+or guaranteed availability.
 
-Each `[[regions]]` entry has an `id` (lowercase ASCII slug), a human-readable
-`name`, and at least one of:
+Production configuration may contain any number of regions, including
+non-SoCal regions. No SoCal boundary or production routing config is tracked.
 
-- `geojson = ["path.geojson"]`: Polygon/MultiPolygon GeoJSON geometry,
-  Feature, or FeatureCollection. Multiple paths are unioned for selection.
-- `countries = ["US", "CA"]`: country boundaries from the configured
-  `country_boundaries` GeoJSON FeatureCollection, selected by ISO 3166-1
-  alpha-2 country code. Both selectors can be combined.
+## Format
 
-Relative paths are resolved from the TOML file directory. Country boundary
-features must have an `ISO3166-1-Alpha-2`, `ISO_A2`, `ISO_A2_EH`, or
-`iso_a2` property with a valid two-letter code. Use a pinned local boundary
-dataset; the compiler never downloads mutable boundaries during a build.
-Missing requested countries produce an error.
+```toml
+schema_version = 1
+country_boundaries = "my-pinned-countries.geojson" # only for countries
 
-The resolver uses `gtfs.chateaus.hull && region_geom` as an indexed bounding
-box prefilter and `ST_Intersects(hull, region_geom)` for exact selection,
-including touching boundaries. The GeoJSON is checked for polygonal structure
-and PostGIS validates the assembled geometry. Null château hulls are excluded;
-these must be repaired upstream rather than guessed.
+[[regions]]
+id = "example-region"
+name = "Example"
+geojson = ["my-region.geojson"]
+# countries = ["US", "MX"]
+```
 
-The source registry includes one latest successfully completed and active
-production `gtfs.ingested_static` attempt per feed belonging to a selected
-chateau, with stable sorted source index assignment. This is a snapshot of the
-database at query time, **not yet** a transactionally pinned timetable
-compilation; implement the latter when schedule compilation is added.
+Relative paths resolve from the TOML directory. Input geometry must be
+Polygon or MultiPolygon (or a Feature/FeatureCollection thereof). Country
+features must expose an ISO alpha-2 code via `ISO3166-1-Alpha-2`, `ISO_A2`,
+`ISO_A2_EH` or `iso_a2`.
 
-## Testing
+Gentian currently writes a **V2 schema-only timetable** and registers selected
+sources; it does not yet compile routes, stop times or transfers.
+
+Run Rust unit tests with:
 
 ```sh
 cargo test --lib routing_common::routing_regions
 ```
-
-The tests validate the sample file, country selection, absent ISO codes,
-duplicate IDs, and malformed polygons. An integration test against PostgreSQL
-should additionally verify exact hull intersection versus bounding-box-only
-false positives and whole-chateau inclusion.
