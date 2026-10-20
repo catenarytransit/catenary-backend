@@ -14,6 +14,8 @@ mod loom_builder_simplify;
 mod loom_cpp_topo;
 mod loom_graph;
 mod loom_map_constructor;
+mod modes;
+mod progress;
 mod loom_polyline;
 mod loom_restr_inferrer;
 mod loom_shape_alignment;
@@ -34,6 +36,14 @@ struct Args {
     /// Omit to process all production tram/metro routes.
     #[arg(long, visible_alias = "chateaux", value_name = "ID[,ID...]")]
     chateau: Option<String>,
+    /// Comma-separated MOTs (e.g. tram,metro,rail), or exact GTFS route_type numbers.
+    /// Names include equivalent extended GTFS route types. Defaults to tram,metro.
+    #[arg(long = "mots", visible_alias = "mot", value_name = "MOT[,MOT...]")]
+    mots: Option<String>,
+    /// Refuse to materialize a connected component larger than this many patterns.
+    /// Useful for exploring large rail datasets before committing to a full run.
+    #[arg(long)]
+    max_component_patterns: Option<usize>,
     #[arg(long, default_value_t = 50.0)]
     max_aggr_distance: f64,
     #[arg(long, default_value_t = 5.0)]
@@ -85,6 +95,8 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
     let chateaux = parse_chateaux(args.chateau.as_deref())?;
+    let route_types = modes::parse_mots(args.mots.as_deref())?;
+    info!("[planner] selected GTFS route types: {:?}", route_types);
     if let Some(selected) = &chateaux {
         info!("[planner] chateau filter: {}", selected.join(", "));
     }
@@ -92,9 +104,7 @@ fn main() -> Result<()> {
     let url = std::env::var("DATABASE_URL").context("DATABASE_URL not set")?;
     let mut conn = PgConnection::establish(&url).context("connect PostgreSQL")?;
 
-    info!(
-        "[planner] discovering route_type 0/1 station-connected components with indexed spatial tiles"
-    );
+    info!("[planner] discovering selected-mode direction-pattern components");
     let components = gtfs2graph::discover_components(
         &mut conn,
         gtfs2graph::PlannerConfig {
@@ -104,7 +114,18 @@ fn main() -> Result<()> {
             connected_comp_distance: args.connected_comp_distance,
         },
         chateaux.as_deref(),
+        &route_types,
     )?;
+    if let Some(limit) = args.max_component_patterns {
+        anyhow::ensure!(limit > 0, "--max-component-patterns must be > 0");
+        if let Some(large) = components.iter().find(|c| c.patterns.len() > limit) {
+            anyhow::bail!(
+                "selected MOTs create a component with {} direction patterns (limit {}); narrow --chateau/--mots, increase --max-component-patterns, or omit the limit",
+                large.patterns.len(),
+                limit
+            );
+        }
+    }
 
     let cfg = topo::TopoConfig {
         max_aggr_distance: args.max_aggr_distance,
@@ -126,7 +147,7 @@ fn main() -> Result<()> {
         );
 
         // Only this component's stops, route metadata and shapes are materialized.
-        let raw = gtfs2graph::build_component(&mut conn, component, args.prune_threshold)?;
+        let raw = gtfs2graph::build_component(&mut conn, component, args.prune_threshold, &route_types)?;
         info!(
             "[component {}/{}][gtfs2graph] {} nodes, {} edges, {} lines",
             index + 1,
@@ -207,6 +228,27 @@ mod cli_tests {
         let args = Args::try_parse_from(["globeflower"]).unwrap();
         assert_eq!(parse_chateaux(args.chateau.as_deref()).unwrap(), None);
         assert_eq!(args.output, PathBuf::from("globeflower.geojson"));
+    }
+
+    #[test]
+    fn select_rail_and_subway_modes_with_existing_chateau_filter() {
+        let args = Args::try_parse_from([
+            "globeflower", "--chateau", "amtrak", "--mots", "rail,metro",
+            "--max-component-patterns", "5000",
+        ]).unwrap();
+        let types = modes::parse_mots(args.mots.as_deref()).unwrap();
+        assert!(types.contains(&2));
+        assert!(types.contains(&100));
+        assert!(types.contains(&1));
+        assert!(types.contains(&400));
+        assert!(!types.contains(&0));
+        assert_eq!(args.max_component_patterns, Some(5000));
+    }
+
+    #[test]
+    fn default_modes_keep_tram_and_metro_only() {
+        let args = Args::try_parse_from(["globeflower"]).unwrap();
+        assert_eq!(modes::parse_mots(args.mots.as_deref()).unwrap(), vec![0, 1]);
     }
 
     #[test]
