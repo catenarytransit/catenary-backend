@@ -38,7 +38,7 @@ impl TrafficDays {
         d < MAX_DAYS && self.words[d / 64] & (1 << (d % 64)) != 0
     }
     pub fn set(&mut self, d: usize, active: bool) -> Result<(), FormatError> {
-        if d >= MAX_DAYS { return Err(FormatError::InvalidIndex); }
+        if d >= MAX_DAYS { return Err(FormatError::Index); }
         let bit = 1_u64 << (d % 64);
         if active { self.words[d / 64] |= bit; } else { self.words[d / 64] &= !bit; }
         Ok(())
@@ -68,7 +68,7 @@ impl PackedStop {
     pub const LOCATION_MASK: u32 = (1 << 28) - 1;
     pub fn new(loc: LocationIdx, inbound: bool, outbound: bool,
                wheelchair_in: bool, wheelchair_out: bool) -> Result<Self, FormatError> {
-        if loc.0 > Self::LOCATION_MASK { return Err(FormatError::InvalidIndex); }
+        if loc.0 > Self::LOCATION_MASK { return Err(FormatError::Index); }
         Ok(Self(loc.0 | (u32::from(inbound) << 28) | (u32::from(outbound) << 29)
             | (u32::from(wheelchair_in) << 30) | (u32::from(wheelchair_out) << 31)))
     }
@@ -86,7 +86,7 @@ impl PackedFootpath {
     pub const TARGET_MASK: u32 = (1 << 23) - 1;
     pub fn new(target: LocationIdx, minutes: u16) -> Result<Self, FormatError> {
         if target.0 > Self::TARGET_MASK || minutes > 511 {
-            return Err(FormatError::InvalidIndex);
+            return Err(FormatError::Index);
         }
         Ok(Self(target.0 | (u32::from(minutes) << 23)))
     }
@@ -99,11 +99,11 @@ impl PackedFootpath {
 pub struct Delta(pub u16);
 impl Delta {
     pub fn new(days: u16, minute: u16) -> Result<Self, FormatError> {
-        if days >= 32 || minute >= 2048 { return Err(FormatError::InvalidIndex); }
+        if days >= 32 || minute >= 2048 { return Err(FormatError::Index); }
         Ok(Self(days | minute << 5))
     }
     pub fn from_minutes(minutes: u32) -> Result<Self, FormatError> {
-        if minutes / 1440 >= 32 { return Err(FormatError::InvalidIndex); }
+        if minutes / 1440 >= 32 { return Err(FormatError::Index); }
         Self::new((minutes/1440) as u16, (minutes%1440) as u16)
     }
     pub fn days(self) -> u16 { self.0 & 31 }
@@ -135,7 +135,7 @@ pub struct TripTransportRange {
     pub stop_to: u16,
 }
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Coordinate { pub lat: f32, pub lon: f32 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
@@ -579,6 +579,19 @@ mod tests {
         assert_eq!(decoded.trip_by_source_id(b,"T1"),Some(TripIdx(1)));
         assert_eq!(decoded.trip_by_source_id(c,"T1"),Some(TripIdx(2)));
         assert_ne!(decoded.route_by_source_id(a,"R1"),decoded.route_by_source_id(b,"R1"));
+    }
+
+    #[test]
+    fn packed_values_reject_out_of_range_indices_and_durations() {
+        assert_eq!(TrafficDays::default().set(MAX_DAYS, true), Err(FormatError::Index));
+        assert_eq!(
+            PackedStop::new(LocationIdx(1 << 28), true, true, false, false),
+            Err(FormatError::Index)
+        );
+        assert_eq!(PackedFootpath::new(LocationIdx(1 << 23), 1), Err(FormatError::Index));
+        assert_eq!(PackedFootpath::new(LocationIdx(1), 512), Err(FormatError::Index));
+        assert_eq!(Delta::new(32, 0), Err(FormatError::Index));
+        assert_eq!(Delta::from_minutes(32 * 1440), Err(FormatError::Index));
     }
     #[test]
     fn rejects_old_version_and_truncation() {

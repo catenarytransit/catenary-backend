@@ -1,4 +1,5 @@
 use crate::routing_common::timetable::{FormatError, ZeroCopyTimetable};
+use anyhow::{Context, Result};
 use memmap2::{Mmap, MmapOptions};
 use std::{fs::File, path::Path};
 
@@ -7,14 +8,17 @@ pub struct MappedTimetable {
 }
 
 impl MappedTimetable {
-    pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        let file = File::open(path)?;
-        let bytes = unsafe { MmapOptions::new().map(&file)? };
-        ZeroCopyTimetable::new(&bytes)?;
+    pub fn open(path: &Path) -> Result<Self> {
+        let file = File::open(path)
+            .with_context(|| format!("opening timetable {}", path.display()))?;
+        let bytes = unsafe { MmapOptions::new().map(&file) }
+            .with_context(|| format!("mapping timetable {}", path.display()))?;
+        ZeroCopyTimetable::new(&bytes)
+            .with_context(|| format!("validating timetable {}", path.display()))?;
         Ok(Self { bytes })
     }
 
-    pub fn view(&self) -> Result<ZeroCopyTimetable<'_>, FormatError> {
+    pub fn view(&self) -> std::result::Result<ZeroCopyTimetable<'_>, FormatError> {
         ZeroCopyTimetable::new(&self.bytes)
     }
 }
