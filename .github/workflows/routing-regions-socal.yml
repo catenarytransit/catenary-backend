@@ -51,6 +51,13 @@ jobs:
         with:
           repository: catenarytransit/transitland-atlas
           path: transitland-atlas
+      - name: Set up Python 3.12 for test fixture generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Python TOML support
+        run: |
+          python3 -c "import sys, tomllib; print(sys.version); assert sys.version_info >= (3, 11)"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install native build dependencies

@@ -94,3 +94,5 @@ The local OSR worker protocol is a development transport without authentication
 or TLS; bind only to loopback or protect it behind a private service boundary.
 Route hydration uses focused PostgreSQL lookups after search rather than
 joining GTFS metadata into the hot RAPTOR scan.
+
+The local fixture generator requires Python 3.11+ (`tomllib`). CI installs Python 3.12 through `actions/setup-python`.
