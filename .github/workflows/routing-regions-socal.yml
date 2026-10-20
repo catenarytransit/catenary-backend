@@ -74,7 +74,7 @@ jobs:
           cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --export-stops temp/stops.tsv
       - name: Route local footpaths through OSR FFI
         run: |
-          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --             --osr-dir temp/osr-data/regions/north-america/us/california/socal             --stops temp/stops.tsv --output temp/footpaths.tsv             --max-seconds 900 --candidate-meters 1200
+          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin gentian_footpaths --             --osr-dir temp/osr-data/regions/north-america/us/california/socal             --stops temp/stops.tsv --output temp/footpaths.tsv             --max-seconds 900 --candidate-meters 1200
       - name: Compile memory-mappable RAPTOR timetable
         run: |
           set -euo pipefail

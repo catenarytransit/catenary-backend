@@ -1,82 +1,96 @@
-# Gentian routing regions and Southern California test
+# Edelweiss routing library and SoCal example
 
-Production routing regions are caller-supplied TOML configurations. They can
-contain multiple GeoJSON polygons and ISO country selectors. The configs and
-downloaded boundaries are Git-ignored. A selected château is included *whole*
-when its hull intersects the region; stops and trips are not geographically
-clipped. Production does not default to Southern California.
+Edelweiss calls the reusable routing modules in \`catenary::routing_common\`:
+\`route_manager\` loads transit mmap files and OSR registry boundaries from
+config; \`raptor_query\` executes marked-round timetable scans with sparse
+footpath Dijkstra, parent reconstruction, and arrival/boardings Pareto filtering.
 
-## Reproduce the SoCal integration environment
+A separate, long-running \`gentian_footpaths --bin server\` process owns the
+native \`osr-ffi\` routers. It opens all configured Geofabrik OSR datasets once
+at startup and accepts line-delimited JSON access/egress routing requests over
+a local TCP socket (default 127.0.0.1:40501). The C++ Router is not shared
+between threads. Edelweiss resolves each endpoint's OSR region independently
+and uses the common loaded transit region for its timetable query.
 
-```sh
-mkdir -p routing_regions temp
-curl -fL https://download.geofabrik.de/north-america/us/california/socal.geojson \
-  -o routing_regions/socal.geojson
-DATABASE_URL='postgres://postgres:postgres@localhost:5432/catenary' \
-  python3 tools/routing_regions/prepare_socal_test.py \
-  --geojson routing_regions/socal.geojson
-```
+## Production routing-region configuration
 
-This writes ignored `catenaryconfig.toml` and `routing_regions/config.toml`.
-The Maple configuration includes only seven requested feeds: OCTA, Metrolink,
-LA Metro, Long Beach Transit, Big Blue Bus, PVPTA, Laguna Beach Transit. It
-also configures `osm_manager` for the Geofabrik SoCal OSR extract.
+\`routing_regions/config.toml\` is a local, ignored runtime file, not a
+production-wide geographic restriction.
 
-Run the standalone OSR manager with the same Catenary config:
+\`\`\`toml
+schema_version = 1
+data_dir = "compiled/routing"
 
-```sh
-cargo run --release --manifest-path tools/osm_manager/Cargo.toml -- \
-  --config catenaryconfig.toml run
-```
+[[regions]]
+id = "example"
+name = "My transit region"
+geojson = ["example.geojson"]
+\`\`\`
 
-The OSR extractor `osr-extract` must be installed at the configured path.
-Use Diesel migrations and Maple to populate PostgreSQL. Then:
+Compiled binary names are \`data_dir/<region-id>.bin\`. A region may also
+specify countries; selected châteaux are included in full.
 
-```sh
-cargo run --release --bin gentian -- --region southern-california \
-  --list-chateaux
-cargo run --release --bin gentian -- --region southern-california \
-  --export-stops temp/stops.tsv
-cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml -- \
-  --osr-dir temp/osr-data/regions/north-america/us/california/socal \
-  --stops temp/stops.tsv --output temp/footpaths.tsv
-cargo run --release --bin gentian -- --region southern-california \
-  --first-utc-day 20745 --day-count 35 --build \
-  --footpaths temp/footpaths.tsv --output temp/socal-timetable.bin
-```
+OSR's \`[osm_manager]\` section stays in \`catenaryconfig.toml\`. The native
+worker opens \`osm_manager.data_dir/regions/<geofabrik-id>/\` based on the
+manager's \`regions.geojson\`. Each endpoint must be inside an OSR polygon.
 
-The GitHub Actions workflow `routing-regions-socal.yml` runs this integration
-pipeline through `workflow_dispatch`. There is no separate spatial-only job.
+Start the native OSR worker:
 
-## Data model and limitations
+\`\`\`sh
+cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml \
+  --bin server -- --config catenaryconfig.toml
+\`\`\`
 
-GTFS is streamed one source at a time, querying `stops`, `calendar`,
-`calendar_dates`, `routes`, `itinerary_pattern_meta`,
-`itinerary_pattern`, and `trips_compressed` separately using the
-`(onestop_feed_id, attempt_id)` index prefixes. This avoids a single massive
-cross-table join. The itinerary pattern carries time offsets and the direction
-pattern establishes the shared stop order. Routes must be separated when trip
-times overtake one another (RAPTOR, Delling–Pajor–Werneck, ALENEX 2012).
+Run the Edelweiss endpoint:
 
-The current compiled representation contains source-qualified IDs, scheduled
-transport service bitfields, event-major relative stop-time deltas, and
-OSR-routed walking edges. Times are converted from local GTFS service days via
-the agency timezone using the GTFS service-day noon-offset convention.
-The file is validated and can be opened with `MappedTimetable`.
+\`\`\`sh
+DATABASE_URL='postgres://...' cargo run --release --bin edelweiss -- \
+  --regions-config routing_regions/config.toml \
+  --catenary-config catenaryconfig.toml \
+  --listen 127.0.0.1:40428
+\`\`\`
 
-**This is an initial compiler and not a complete production RAPTOR engine.**
-The program fails instead of fabricating times when a source has frequency-based
-service, non-minute-aligned stop times, or any stop-time data that does not fit
-the existing packed representation. In particular, the current ingestion tables
-do not preserve per-stop pickup/drop-off permissions; marking every stop as
-boardable is not correct for all feeds. Until those bits are preserved,
-implementations must not deploy this compiled result as an authoritative journey
-planner. The query algorithm, stronger resource-bounded external-sort spill,
-transitive footpaths, and rigorous multi-date/DST/regression tests remain
-required before production use. The OSR worker currently computes a bounded
-walking neighborhood using an in-memory stop index, not a fully disk-backed
-planet-scale preprocessing algorithm. The SoCal OSR graph cannot route footpaths
-outside its extracted area even if a selected château extends beyond it.
+POST \`/v1/route\`:
 
-Do not run the full integration workflow on every pull request: Geofabrik
-extracts, live GTFS ingestion, and the native OSR build are heavyweight.
+\`\`\`json
+{
+  "from": {"lat": 33.6461, "lon": -117.8427},
+  "to": {"lat": 34.0537, "lon": -118.2428},
+  "departure_unix_seconds": 1793026800,
+  "access": [],
+  "egress": [],
+  "direct_walk_minutes": null
+}
+\`\`\`
+
+Empty access/egress arrays trigger native OSR one-to-many routing from the
+given coordinates to nearby transit locations. Results include Pareto journeys
+and per-route metadata from source-qualified \`gtfs.routes\`, including
+\`short_name\`, \`color\` and \`text_color\` when present. Missing database
+metadata is returned as \`null\`, never replaced by arbitrary colors.
+
+For the SoCal example, the GitHub Actions \`workflow_dispatch\` job downloads
+Geofabrik \`socal.geojson\`, generates ignored local configs, runs the OSR
+manager and Maple for the seven selected GTFS feeds, compiles the timetable,
+launches the long-lived OSR worker, and runs a one-shot Edelweiss query for
+Monday October 26, 2026 at 08:00 America/Los_Angeles from UC Irvine to Los
+Angeles City Hall. Its console output is written to
+\`temp/uci-cityhall-results.json\`, with OSR worker logs attached as a
+workflow artifact.
+
+## Known limitations
+
+This PR still needs a successful Rust/native build and end-to-end CI run.
+The compiler does not yet expand frequencies and does not preserve all
+per-stop boarding/alighting restrictions; until fixed, its journey results
+are not authoritative. Time precision remains minutes and routes are scanned
+exhaustively per candidate service day. Transit regions must contain both
+endpoints: cross-region transit federation is not implemented. Nearest stop
+discovery is a bounded in-memory coordinate scan and may truncate dense
+candidate sets; the current OSR candidate cutoff is configurable but is not
+a proof of complete multimodal Pareto optimality.
+
+The local OSR worker protocol is a development transport without authentication
+or TLS; bind only to loopback or protect it behind a private service boundary.
+Route hydration uses focused PostgreSQL lookups after search rather than
+joining GTFS metadata into the hot RAPTOR scan.
