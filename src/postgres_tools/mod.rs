@@ -46,13 +46,21 @@ pub async fn make_async_pool() -> Result<
         .unwrap_or_else(|| "128".to_string())
         .parse::<u32>()
         .unwrap_or(128);
+    if max_size == 0 {
+        return Err("POSTGRES_MAX_CONNECTIONS must be at least 1".into());
+    }
+
     let pool = Pool::builder()
         .max_size(max_size)
-        .min_idle(Some(16))
+        .min_idle(Some(initial_idle_connections(max_size)))
         .build(config)
         .await?;
 
     Ok(pool)
+}
+
+fn initial_idle_connections(max_size: u32) -> u32 {
+    max_size.min(16)
 }
 
 fn database_url_for_env(postgres_config: &catenaryconfig::PostgresConfig) -> String {
@@ -84,4 +92,17 @@ pub async fn check_postgres_alive(
     let _ = diesel::sql_query("SELECT 1").execute(&mut conn).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::initial_idle_connections;
+
+    #[test]
+    fn initial_idle_connections_do_not_exceed_pool_capacity() {
+        assert_eq!(initial_idle_connections(1), 1);
+        assert_eq!(initial_idle_connections(8), 8);
+        assert_eq!(initial_idle_connections(16), 16);
+        assert_eq!(initial_idle_connections(128), 16);
+    }
 }
