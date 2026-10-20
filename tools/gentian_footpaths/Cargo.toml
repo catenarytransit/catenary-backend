@@ -11,6 +11,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 cxx = "1"
-osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "18ca34b4d6bb8ec120e8ecc0eef74a2a95e24afa" }
+osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "5e306e561f0fe6c2666e62cf870d01f68dfc4aa2" }
 
 [build-dependencies]
