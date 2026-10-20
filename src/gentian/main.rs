@@ -12,7 +12,7 @@ mod footpaths;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Compile regional RAPTOR timetables with native OSR footpaths")]
 struct Args {
-    /// Output V2 binary. Optional when only listing selected chateaux.
+    /// Output V3 seconds-precision binary. Optional when only listing selected chateaux.
     #[arg(short, long)]
     output: Option<PathBuf>,
 
@@ -117,7 +117,7 @@ fn main() -> Result<()> {
     std::fs::write(output, &bytes)
         .with_context(|| format!("writing {}", output.display()))?;
     println!(
-        "Wrote V2 schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
+        "Wrote V3 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
         bytes.len(), tt.sources.len()
     );
     Ok(())
