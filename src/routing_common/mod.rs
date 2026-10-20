@@ -7,6 +7,7 @@ pub mod osm_router;
 pub mod profiles;
 pub mod routing_regions;
 pub mod timetable;
+pub mod timetable_mmap;
 pub mod transit_graph;
 pub mod types;
 pub mod ways;

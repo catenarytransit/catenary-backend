@@ -9,12 +9,13 @@ use clap::Parser;
 use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
+mod compile;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Resolve routing regions and write a V2 timetable schema (no route compilation)")]
 struct Args {
     /// Output V2 binary. Optional when only listing selected chateaux.
-    #[arg(short, long, required_unless_present = "list_chateaux")]
+    #[arg(short, long)]
     output: Option<PathBuf>,
 
     /// First UTC traffic day in Unix days, including Nigiri's lookback offset.
@@ -40,6 +41,15 @@ struct Args {
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
 
+    #[arg(long, requires = "region", conflicts_with = "list_chateaux")]
+    build: bool,
+
+    #[arg(long, requires = "region")]
+    export_stops: Option<PathBuf>,
+
+    #[arg(long, requires = "build")]
+    footpaths: Option<PathBuf>,
+
     /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
     #[arg(long, requires = "region")]
     list_chateaux: bool,
@@ -64,6 +74,20 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args.build || args.export_stops.is_some() {
+        let selection = selection.as_ref().context("--region is required")?;
+        let url = args.database_url.as_deref().context("DATABASE_URL is required")?;
+        let mut client = Client::connect(url, NoTls)?;
+        if let Some(path) = &args.export_stops {
+            compile::export_stops(&mut client, &selection.sources, path)?;
+        }
+        if args.build {
+            let output = args.output.as_ref().context("--output is required with --build")?;
+            compile::build(&mut client, &selection.sources, args.first_utc_day,
+                args.day_count, args.footpaths.as_deref(), output)?;
+        }
+        return Ok(());
+    }
     let output = args.output.as_ref().context("--output is required")?;
     let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
     if let Some(selection) = &selection {

@@ -71,7 +71,12 @@ def prepare(geojson: Path, output_dir: Path, database_url: str, transitland: str
         f"only_feed_ids = [\n  {feeds}\n]\n\n"
         "[postgres]\n"
         f"database_url = {json.dumps(database_url)}\n"
-        "max_connections = 8\n",
+        "max_connections = 8\n\n"
+        "[osm_manager]\n"
+        'data_dir = "temp/osr-data"\n'
+        'temp_dir = "temp/osr-working"\n'
+        'osr_extract = "./osr-extract"\n'
+        'regions = ["north-america/us/california/socal"]\n',
         encoding="utf-8",
     )
     with region_file.open("rb") as file:

@@ -85,8 +85,10 @@ pub struct PackedFootpath(pub u32);
 impl PackedFootpath {
     pub const TARGET_MASK: u32 = (1 << 23) - 1;
     pub fn new(target: LocationIdx, minutes: u16) -> Result<Self, FormatError> {
-        if target.0 >= Self::TARGET_MASK { return Err(FormatError::InvalidIndex); }
-        Ok(Self(target.0 | (u32::from(minutes.min(511)) << 23)))
+        if target.0 > Self::TARGET_MASK || minutes > 511 {
+            return Err(FormatError::InvalidIndex);
+        }
+        Ok(Self(target.0 | (u32::from(minutes) << 23)))
     }
     pub fn target(self) -> LocationIdx { LocationIdx(self.0 & Self::TARGET_MASK) }
     pub fn minutes(self) -> u16 { (self.0 >> 23) as u16 }

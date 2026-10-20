@@ -1,36 +1,15 @@
-name: Routing Regions - Southern California
+name: Gentian SoCal RAPTOR + OSR integration
 
 on:
-  push:
-    branches: [routing-dev]
-    paths:
-      - 'src/routing_common/routing_regions.rs'
-      - 'src/gentian/main.rs'
-      - 'routing_regions/README.md'
-      - 'tools/routing_regions/**'
-      - '.github/workflows/routing-regions-socal.yml'
-  pull_request:
-    branches: [routing-dev]
-    paths:
-      - 'src/routing_common/routing_regions.rs'
-      - 'src/gentian/main.rs'
-      - 'routing_regions/README.md'
-      - 'tools/routing_regions/**'
-      - '.github/workflows/routing-regions-socal.yml'
   workflow_dispatch:
-    inputs:
-      ingest_feeds:
-        description: 'Run live Maple ingestion for the seven Southern California feeds'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
 
 jobs:
-  spatial-region-test:
+  socal-maple-osr-gentian:
     runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    timeout-minutes: 300
     services:
       postgres:
         image: postgis/postgis:15-3.3
@@ -47,79 +26,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
       PGPASSWORD: postgres
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: Install native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config cmake libcoinutils-dev coinor-libcbc-dev postgresql-client
-      - name: Fetch Geofabrik boundary (not committed)
-        run: |
-          set -euo pipefail
-          mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
-          curl --fail --location --retry 4 --retry-all-errors \
-            --connect-timeout 20 --max-time 120 \
-            https://download.geofabrik.de/north-america/us/california/socal.geojson \
-            -o routing_regions/socal.geojson
-          test -s routing_regions/socal.geojson
-      - name: Generate ignored local test configs
-        run: |
-          python3 tools/routing_regions/prepare_socal_test.py \
-            --geojson routing_regions/socal.geojson
-          git check-ignore routing_regions/socal.geojson routing_regions/config.toml catenaryconfig.toml
-          test -z "$(git status --porcelain --untracked-files=all)"
-      - name: Set up PostGIS fixture
-        run: |
-          python3 tools/routing_regions/generate_postgis_fixture.py --geojson routing_regions/socal.geojson
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f temp/socal-postgis-fixture.sql
-      - name: Unit tests and Gentian build
-        run: |
-          cargo test --lib routing_common::routing_regions
-          cargo build --bin gentian
-      - name: Verify exact intersection and complete chateaux
-        run: |
-          set -euo pipefail
-          cargo run --quiet --bin gentian -- \
-            --region southern-california \
-            --regions-config routing_regions/config.toml \
-            --list-chateaux > region-selection.json
-          python3 tools/routing_regions/verify_selection.py region-selection.json
-          cargo run --quiet --bin gentian -- \
-            --region southern-california \
-            --regions-config routing_regions/config.toml \
-            --output temp/socal-schema-only.bin
-          test -s temp/socal-schema-only.bin
-      - name: Save selection diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: southern-california-routing-selection
-          path: region-selection.json
-          if-no-files-found: ignore
-
-  maple-seven-feed-ingest:
-    if: github.event_name == 'workflow_dispatch' && inputs.ingest_feeds
-    needs: spatial-region-test
-    runs-on: ubuntu-22.04
-    timeout-minutes: 180
-    services:
-      postgres:
-        image: postgis/postgis:15-3.3
-        env:
-          POSTGRES_DB: catenary
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres -d catenary"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 15
-    env:
-      DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
-      PGPASSWORD: postgres
+      OSR_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -128,38 +35,57 @@ jobs:
           path: transitland-atlas
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install native dependencies and Diesel CLI
+      - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config cmake libcoinutils-dev coinor-libcbc-dev postgresql-client
+          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config cmake             ninja-build libcoinutils-dev coinor-libcbc-dev postgresql-client             libboost-all-dev libzstd-dev liblz4-dev libtbb-dev
           cargo install diesel_cli --no-default-features --features postgres --locked
-      - name: Download SoCal boundary and prepare ignored Maple config
+      - name: Download Geofabrik SoCal boundary and local config
         run: |
           set -euo pipefail
           mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
-          curl --fail --location --retry 4 --retry-all-errors \
-            --connect-timeout 20 --max-time 120 \
-            https://download.geofabrik.de/north-america/us/california/socal.geojson \
-            -o routing_regions/socal.geojson
-          python3 tools/routing_regions/prepare_socal_test.py \
-            --geojson routing_regions/socal.geojson
+          curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
+          python3 tools/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
           git check-ignore routing_regions/socal.geojson routing_regions/config.toml catenaryconfig.toml
-      - name: Migrate database and ingest ONLY configured feeds
+      - name: Download native OSR extractor
         run: |
+          set -euo pipefail
+          curl -fL --retry 3             https://github.com/motis-project/osr/releases/download/v0.0.4/osr-linux-amd64.tar.bz2             -o /tmp/osr-extract.tar.bz2
+          mkdir -p /tmp/osr-release
+          tar -xjf /tmp/osr-extract.tar.bz2 -C /tmp/osr-release
+          find /tmp/osr-release -type f -name osr-extract -exec cp '{}' ./osr-extract \;
+          chmod +x ./osr-extract
+          test -x ./osr-extract
+      - name: Download and extract Southern California OSR graph
+        run: |
+          cargo run --release --manifest-path tools/osm_manager/Cargo.toml --             --config catenaryconfig.toml run
+          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
+      - name: Ingest restricted Maple feeds
+        run: |
+          set -euo pipefail
           diesel migration run
           cargo run --release --bin maple
-      - name: Inspect real region selection
+      - name: Verify selection and export source-indexed stop coordinates
         run: |
-          cargo run --release --bin gentian -- \
-            --region southern-california \
-            --regions-config routing_regions/config.toml --list-chateaux \
-            > region-selection-live.json
-          python3 tools/routing_regions/verify_selection.py \
-            region-selection-live.json --live
-      - name: Upload selection metadata
+          set -euo pipefail
+          cargo test --lib routing_common::routing_regions
+          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --list-chateaux > temp/selection.json
+          python3 tools/routing_regions/verify_selection.py temp/selection.json --live
+          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --export-stops temp/stops.tsv
+      - name: Route local footpaths through OSR FFI
+        run: |
+          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --             --osr-dir temp/osr-data/regions/north-america/us/california/socal             --stops temp/stops.tsv --output temp/footpaths.tsv             --max-seconds 900 --candidate-meters 1200
+      - name: Compile memory-mappable RAPTOR timetable
+        run: |
+          set -euo pipefail
+          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --first-utc-day 20745 --day-count 35             --footpaths temp/footpaths.tsv --build             --output temp/socal-timetable.bin
+          test -s temp/socal-timetable.bin
+      - name: Upload build metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: southern-california-maple-live-selection
-          path: region-selection-live.json
+          name: gentian-socal-routing-diagnostics
+          path: |
+            temp/selection.json
+            temp/stops.tsv
           if-no-files-found: ignore
