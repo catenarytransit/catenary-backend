@@ -26,7 +26,7 @@ permissions:
 jobs:
   socal-maple-osr-gentian:
     name: SoCal ingest, compile and UCI-City Hall query
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     services:
       postgres:
@@ -45,6 +45,8 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
       PGPASSWORD: postgres
       OSR_BUILD_JOBS: "2"
+      CC: gcc-14
+      CXX: g++-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -63,8 +65,54 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config cmake             ninja-build libcoinutils-dev coinor-libcbc-dev postgresql-client             libboost-all-dev libzstd-dev liblz4-dev libtbb-dev
+          sudo apt-get install -y \
+            gcc-14 g++-14 build-essential binutils lld libtbb-dev \
+            protobuf-compiler libpq-dev libssl-dev pkg-config cmake ninja-build \
+            libcoinutils-dev coinor-libcbc-dev postgresql-client \
+            libboost-all-dev libzstd-dev liblz4-dev
           cargo install diesel_cli --no-default-features --features postgres --locked
+      - name: Verify C++23 standard library for native OSR
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -n 1
+          cat > /tmp/osr-cxx23-check.cc <<'EOF'
+          #include <array>
+          #include <ranges>
+          #include <utility>
+          int main() {
+            std::array<int, 3> a{1, 2, 3};
+            std::array<int, 3> b{4, 5, 6};
+            for (auto [x, y] : std::views::zip(a, b)) { (void)x; (void)y; }
+            for (auto chunk : std::views::chunk(a, 2)) { (void)chunk; }
+            if (a.empty()) std::unreachable();
+          }
+          EOF
+          "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
+          echo "C++23 zip, chunk, and unreachable supported by $CXX"
+      - name: Verify C compiler, linker and oneTBB installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cc
+          cc --version | head -n 1
+          command -v ld
+          ld --version | head -n 1
+          command -v "$CXX"
+          ldconfig -p | grep -F 'libtbb.so'
+          printf 'int main(void) { return 0; }\n' | cc -x c - -o /tmp/cc-link-check
+          /tmp/cc-link-check
+          cat > /tmp/tbb-link-check.cc <<'EOF'
+          #include <tbb/task_group.h>
+          int main() {
+            tbb::task_group group;
+            group.run([] {});
+            group.wait();
+          }
+          EOF
+          "$CXX" -std=c++23 /tmp/tbb-link-check.cc -ltbb -o /tmp/tbb-link-check
+          /tmp/tbb-link-check
+          readelf -d /tmp/tbb-link-check | grep -F 'libtbb.so'
       - name: Download Geofabrik SoCal boundary and local config
         run: |
           set -euo pipefail
@@ -97,6 +145,19 @@ jobs:
           cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --list-chateaux > temp/selection.json
           python3 tools/routing_regions/verify_selection.py temp/selection.json --live
           cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --export-stops temp/stops.tsv
+      - name: Build and validate native OSR oneTBB linkage
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin gentian_footpaths
+          bridge="$(find tools/gentian_footpaths/target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          test -n "$bridge"
+          readelf -d "$bridge" | tee /tmp/osr-native-needed.txt
+          grep -F 'libtbb.so' /tmp/osr-native-needed.txt
+          ldd -r "$bridge" | tee /tmp/osr-native-linkage.txt
+          if grep -E 'undefined symbol|not found' /tmp/osr-native-linkage.txt; then
+            exit 1
+          fi
       - name: Route local footpaths through OSR FFI
         run: |
           cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin gentian_footpaths --             --osr-dir temp/osr-data/regions/north-america/us/california/socal             --stops temp/stops.tsv --output temp/footpaths.tsv             --max-seconds 900 --candidate-meters 1200
