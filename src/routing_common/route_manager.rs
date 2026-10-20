@@ -19,11 +19,11 @@ pub struct RouterSettings {
     #[serde(default = "default_boardings")]
     pub max_boardings: usize,
     #[serde(default = "default_duration")]
-    pub max_duration_minutes: u32,
+    pub max_duration_seconds: u32,
 }
 fn default_access() -> f64 { 1500.0 }
 fn default_boardings() -> usize { 5 }
-fn default_duration() -> u32 { 360 }
+fn default_duration() -> u32 { 6 * 60 * 60 }
 
 #[derive(Debug, Deserialize)]
 struct StreetManager { data_dir: PathBuf }
@@ -165,16 +165,16 @@ impl Router {
         departure_unix_seconds: i64,
         access: Vec<WalkingEndpoint>,
         egress: Vec<WalkingEndpoint>,
-        direct_walk_minutes: Option<u32>,
+        direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
         let journeys = raptor_query::route(&tt, &Query {
             departure_unix_seconds,
             access,
             egress,
-            direct_walk_minutes,
+            direct_walk_seconds,
             max_boardings:self.settings.max_boardings,
-            max_duration_minutes:self.settings.max_duration_minutes,
+            max_duration_seconds:self.settings.max_duration_seconds,
         })?;
         Ok(RoutingResponse {selection,journeys})
     }

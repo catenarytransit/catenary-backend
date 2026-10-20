@@ -25,7 +25,7 @@ pub fn compute(
     stops: &[Coordinate],
     max_seconds: u32,
     candidate_meters: f64,
-) -> Result<Vec<Vec<(u32, u16)>>> {
+) -> Result<Vec<Vec<(u32, u32)>>> {
     ensure!((1..=30_660).contains(&max_seconds), "invalid OSR transfer duration");
     ensure!(candidate_meters.is_finite() && candidate_meters > 0.0,
         "candidate radius must be positive and finite");
@@ -84,9 +84,10 @@ pub fn compute(
             ensure!(routes.len() == indices.len(), "OSR one-to-many result count mismatch");
             for (target, path) in indices.into_iter().zip(routes) {
                 if path.found && path.duration_seconds <= max_seconds {
-                    let minutes = path.duration_seconds.div_ceil(60).max(1);
-                    ensure!(minutes <= 511, "OSR footpath exceeds packed duration");
-                    edges.push((u32::try_from(target)?, u16::try_from(minutes)?));
+                    // The native router reports seconds. Preserve them in the
+                    // compiled timetable instead of rounding to whole minutes.
+                    let seconds = path.duration_seconds.max(1);
+                    edges.push((u32::try_from(target)?, seconds));
                 }
             }
         }

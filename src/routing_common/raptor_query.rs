@@ -9,7 +9,7 @@ const INF: i64 = i64::MAX / 4;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalkingEndpoint {
     pub stop: LocationIdx,
-    pub minutes: u32,
+    pub seconds: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -17,16 +17,16 @@ pub struct Query {
     pub departure_unix_seconds: i64,
     pub access: Vec<WalkingEndpoint>,
     pub egress: Vec<WalkingEndpoint>,
-    pub direct_walk_minutes: Option<u32>,
+    pub direct_walk_seconds: Option<u32>,
     pub max_boardings: usize,
-    pub max_duration_minutes: u32,
+    pub max_duration_seconds: u32,
 }
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Leg {
-    Access { to_stop: u32, minutes: u32 },
-    Transfer { from_stop: u32, to_stop: u32, minutes: u32 },
+    Access { to_stop: u32, seconds: u32 },
+    Transfer { from_stop: u32, to_stop: u32, seconds: u32 },
     Ride {
         from_stop: u32,
         to_stop: u32,
@@ -36,8 +36,8 @@ pub enum Leg {
         departure_unix_seconds: i64,
         arrival_unix_seconds: i64,
     },
-    Egress { from_stop: u32, minutes: u32 },
-    DirectWalk { minutes: u32 },
+    Egress { from_stop: u32, seconds: u32 },
+    DirectWalk { seconds: u32 },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -50,9 +50,9 @@ pub struct Journey {
 
 #[derive(Clone, Copy)]
 enum Parent {
-    Access { minutes: u32 },
+    Access { seconds: u32 },
     Carry { previous_round: usize },
-    Walk { from: usize, minutes: u32 },
+    Walk { from: usize, seconds: u32 },
     Ride {
         from: usize,
         route: u32,
@@ -93,11 +93,11 @@ fn relax_walks(
         if labels[from].time != time { continue; }
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
             let to = edge.target().idx();
-            let minutes = u32::from(edge.minutes());
-            if minutes == 0 { continue; }
-            let next = time + i64::from(minutes);
+            let seconds = u32::from(edge.seconds());
+            if seconds == 0 { continue; }
+            let next = time + i64::from(seconds);
             if next <= max_time && improve(
-                labels, to, next, Parent::Walk { from, minutes },
+                labels, to, next, Parent::Walk { from, seconds },
             ) {
                 heap.push(Reverse((next, to)));
             }
@@ -114,8 +114,8 @@ fn traverse_routes(
 ) -> Result<()> {
     let base = i64::from(tt.header().first_utc_day);
     let horizon = i64::from(tt.header().day_count);
-    let first_day = (departure.div_euclid(1440) - base - 31).max(0);
-    let last_day = (max_time.div_euclid(1440) - base).min(horizon - 1);
+    let first_day = (departure.div_euclid(86_400) - base - 31).max(0);
+    let last_day = (max_time.div_euclid(86_400) - base).min(horizon - 1);
     if first_day > last_day { return Ok(()); }
 
     for (r, transport_range) in tt.route_transport_ranges().iter().enumerate() {
@@ -127,17 +127,17 @@ fn traverse_routes(
         for index in transport_range.from..transport_range.to {
             let transport = TransportIdx(index);
             let active_days = tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first_departure = i64::from(tt.transport_first_dep_offset()[transport.idx()].minutes());
+            let first_departure = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
             for day in first_day..=last_day {
                 if !active_days.test(day as usize) { continue; }
-                let absolute_first = (base + day) * 1440 + first_departure;
+                let absolute_first = (base + day) * 86_400 + first_departure;
                 let mut onboard: Option<(usize, i64)> = None;
                 for (position, stop) in stops.iter().enumerate() {
                     let loc = stop.location().idx();
                     if let Some((boarding_loc, boarding_time)) = onboard {
                         if stop.inbound() {
                             if let Some(offset) = tt.event_time(route, transport, position, true) {
-                                let arrival = absolute_first + i64::from(offset.minutes());
+                                let arrival = absolute_first + i64::from(offset.seconds());
                                 if arrival <= max_time {
                                     improve(curr, loc, arrival, Parent::Ride {
                                         from: boarding_loc,
@@ -153,7 +153,7 @@ fn traverse_routes(
                     }
                     if onboard.is_none() && stop.outbound() && position + 1 < stops.len() {
                         if let Some(offset) = tt.event_time(route, transport, position, false) {
-                            let board_time = absolute_first + i64::from(offset.minutes());
+                            let board_time = absolute_first + i64::from(offset.seconds());
                             if prev[loc].time <= board_time && board_time <= max_time {
                                 onboard = Some((loc, board_time));
                             }
@@ -174,7 +174,7 @@ fn reconstruct(
     departure: i64,
 ) -> Option<Journey> {
     let arrival = all[round][destination].time + i64::from(egress);
-    let mut steps = vec![Leg::Egress { from_stop: destination as u32, minutes: egress }];
+    let mut steps = vec![Leg::Egress { from_stop: destination as u32, seconds: egress }];
     let mut loc = destination;
     let mut level = round;
     let mut boarded = 0;
@@ -184,16 +184,16 @@ fn reconstruct(
         if guard > all.len() * all[0].len() + 1 { return None; }
         let label = all[level][loc];
         match label.parent? {
-            Parent::Access { minutes } => {
-                steps.push(Leg::Access { to_stop: loc as u32, minutes });
+            Parent::Access { seconds } => {
+                steps.push(Leg::Access { to_stop: loc as u32, seconds });
                 break;
             }
             Parent::Carry { previous_round } => level = previous_round,
-            Parent::Walk { from, minutes } => {
+            Parent::Walk { from, seconds } => {
                 steps.push(Leg::Transfer {
                     from_stop: from as u32,
                     to_stop: loc as u32,
-                    minutes,
+                    seconds,
                 });
                 loc = from;
             }
@@ -204,8 +204,8 @@ fn reconstruct(
                     route,
                     transport,
                     service_day,
-                    departure_unix_seconds: departure * 60,
-                    arrival_unix_seconds: arrival * 60,
+                    departure_unix_seconds: departure,
+                    arrival_unix_seconds: arrival,
                 });
                 loc = from;
                 if level == 0 { return None; }
@@ -217,29 +217,28 @@ fn reconstruct(
     steps.reverse();
     Some(Journey {
         boardings: boarded,
-        departure_unix_seconds: departure * 60,
-        arrival_unix_seconds: arrival * 60,
+        departure_unix_seconds: departure,
+        arrival_unix_seconds: arrival,
         legs: steps,
     })
 }
 
 pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>> {
     ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
-    ensure!((1..=7 * 1440).contains(&request.max_duration_minutes),
-        "max_duration_minutes must be between 1 minute and 7 days");
+    ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
+        "max_duration_seconds must be between 1 second and 7 days");
     let n = tt.coordinates().len();
     for endpoint in request.access.iter().chain(&request.egress) {
         ensure!(endpoint.stop.idx() < n, "access or egress stop out of range");
     }
-    let departure = request.departure_unix_seconds.div_euclid(60)
-        + i64::from(request.departure_unix_seconds.rem_euclid(60) != 0);
-    let max_time = departure + i64::from(request.max_duration_minutes);
+    let departure = request.departure_unix_seconds;
+    let max_time = departure + i64::from(request.max_duration_seconds);
     let mut round0 = vec![Label {time:INF, parent:None};n];
     for endpoint in &request.access {
-        let time = departure + i64::from(endpoint.minutes);
+        let time = departure + i64::from(endpoint.seconds);
         if time <= max_time {
             improve(&mut round0, endpoint.stop.idx(), time, Parent::Access {
-                minutes: endpoint.minutes,
+                seconds: endpoint.seconds,
             });
         }
     }
@@ -261,23 +260,23 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
     }
 
     let mut journeys = Vec::new();
-    if let Some(minutes) = request.direct_walk_minutes {
-        if minutes <= request.max_duration_minutes {
+    if let Some(seconds) = request.direct_walk_seconds {
+        if seconds <= request.max_duration_seconds {
             journeys.push(Journey {
                 boardings: 0,
                 departure_unix_seconds: request.departure_unix_seconds,
-                arrival_unix_seconds: request.departure_unix_seconds + i64::from(minutes)*60,
-                legs: vec![Leg::DirectWalk {minutes}],
+                arrival_unix_seconds: request.departure_unix_seconds + i64::from(seconds),
+                legs: vec![Leg::DirectWalk {seconds}],
             });
         }
     }
     for (round, layer) in labels.iter().enumerate() {
         let best = request.egress.iter()
-            .filter(|x| layer[x.stop.idx()].time + i64::from(x.minutes) <= max_time)
-            .min_by_key(|x| layer[x.stop.idx()].time + i64::from(x.minutes));
+            .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
+            .min_by_key(|x| layer[x.stop.idx()].time + i64::from(x.seconds));
         if let Some(dest) = best {
             if let Some(journey) = reconstruct(&labels, round, dest.stop.idx(),
-                                               dest.minutes, departure) {
+                                               dest.seconds, departure) {
                 journeys.push(journey);
             }
         }
@@ -310,7 +309,7 @@ mod tests {
             tt.location_source.push(crate::routing_common::timetable::SourceIdx(0));
             tt.location_parent.push(LocationIdx::INVALID);
             tt.location_type.push(1);
-            tt.location_transfer_minutes.push(0);
+            tt.location_transfer_seconds.push(0);
             tt.location_routes_offsets.push(0);
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
@@ -322,12 +321,12 @@ mod tests {
         tt.route_transport_ranges.push(Range {from:0,to:1});
         tt.route_stop_time_ranges.push(Range {from:0,to:4});
         tt.route_stop_times = vec![
-            Delta::from_minutes(0).unwrap(), Delta::from_minutes(10).unwrap(),
-            Delta::from_minutes(12).unwrap(), Delta::from_minutes(22).unwrap(),
+            Delta::from_seconds(0).unwrap(), Delta::from_seconds(10 * 60 + 30).unwrap(),
+            Delta::from_seconds(12 * 60 + 5).unwrap(), Delta::from_seconds(22 * 60 + 45).unwrap(),
         ];
         tt.route_clasz.push(10);
         tt.transport_route.push(RouteIdx(0));
-        tt.transport_first_dep_offset.push(Delta::from_minutes(480).unwrap());
+        tt.transport_first_dep_offset.push(Delta::from_seconds(480 * 60 + 20).unwrap());
         tt.transport_initial_day_offset.push(0);
         let mut days = TrafficDays::default();
         days.set(0,true).unwrap();
@@ -341,21 +340,63 @@ mod tests {
     }
 
     #[test]
+    fn walking_transfer_retains_subminute_seconds() {
+        use crate::routing_common::timetable::PackedFootpath;
+        let mut tt = fixture();
+        // Directed 75-second footpath 0 -> 1. No rounding to two minutes.
+        tt.footpaths_out_offsets = vec![0, 1, 1, 1];
+        tt.footpaths_out = vec![PackedFootpath::new(LocationIdx(1), 75).unwrap()];
+        tt.footpaths_in_offsets = vec![0, 0, 1, 1];
+        tt.footpaths_in = vec![PackedFootpath::new(LocationIdx(0), 75).unwrap()];
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 3;
+        let journeys = route(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 17 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 23 }],
+            direct_walk_seconds: None,
+            max_boardings: 0,
+            max_duration_seconds: 180,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(journeys[0].arrival_unix_seconds, departure + 17 + 75 + 23);
+    }
+
+    #[test]
+    fn boarding_uses_exact_departure_second() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let first_departure = 20_000_i64 * 86_400 + 480 * 60 + 20;
+        let search = |departure, access| route(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: access }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(search(first_departure - 17, 17).len(), 1);
+        assert!(search(first_departure - 17, 18).is_empty());
+    }
+
+    #[test]
     fn route_with_one_vehicle_returns_one_boarding() {
         let tt = fixture();
         let binary = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&binary).unwrap();
         let input = Query {
-            departure_unix_seconds: (20_000_i64*1440 + 475)*60,
-            access:vec![WalkingEndpoint {stop:LocationIdx(0),minutes:2}],
-            egress:vec![WalkingEndpoint {stop:LocationIdx(2),minutes:3}],
-            direct_walk_minutes: None,
-            max_boardings:3, max_duration_minutes:120,
+            departure_unix_seconds: 20_000_i64*86_400 + 475*60 + 33,
+            access:vec![WalkingEndpoint {stop:LocationIdx(0),seconds:2 * 60 + 10}],
+            egress:vec![WalkingEndpoint {stop:LocationIdx(2),seconds:3 * 60 + 15}],
+            direct_walk_seconds: None,
+            max_boardings:3, max_duration_seconds:120 * 60,
         };
         let journeys = route(&view,&input).unwrap();
         assert_eq!(journeys.len(),1);
         assert_eq!(journeys[0].boardings,1);
         assert_eq!(journeys[0].arrival_unix_seconds,
-            (20_000_i64*1440+505)*60);
+            20_000_i64*86_400 + 505*60 + 80);
     }
 }

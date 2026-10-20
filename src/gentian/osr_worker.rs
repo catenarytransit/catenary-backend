@@ -34,7 +34,7 @@ struct Request {
 #[derive(Clone,Deserialize)]
 struct Stop { stop: u32, latitude:f64, longitude:f64 }
 #[derive(Serialize)]
-struct Access {stop:u32,minutes:u32,seconds:u32}
+struct Access {stop:u32,seconds:u32}
 #[derive(Serialize)]
 struct Response {reachable:Vec<Access>,error:Option<String>}
 
@@ -65,7 +65,6 @@ fn run_request(
         if path.found&&path.duration_seconds<=query.max_seconds{
             results.push(Access{
                 stop:stop.stop,
-                minutes:path.duration_seconds.div_ceil(60),
                 seconds:path.duration_seconds,
             });
         }

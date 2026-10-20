@@ -16,7 +16,7 @@ data = {
     "departure_unix_seconds": int(departure.timestamp()),
     "access": [],
     "egress": [],
-    "direct_walk_minutes": None,
+    "direct_walk_seconds": None,
 }
 args.output.write_text(json.dumps(data, indent=2) + "\n")
 print("UCI to Los Angeles City Hall; Monday October 26, 2026, 08:00 America/Los_Angeles")

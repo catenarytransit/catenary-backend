@@ -46,7 +46,7 @@ struct Schedule {
     route_type: i16,
     locations: Vec<LocationIdx>,
     events: Vec<Event>,
-    first_minute: u16,
+    first_second: u32,
     days: TrafficDays,
 }
 
@@ -114,7 +114,7 @@ fn add_locations(
         tt.location_name.push(name_ref);
         tt.location_source.push(catenary::routing_common::timetable::SourceIdx(source_idx));
         tt.location_type.push(if stop.kind == 1 { 2 } else { 1 });
-        tt.location_transfer_minutes.push(0);
+        tt.location_transfer_seconds.push(0);
         tt.location_parent.push(LocationIdx::INVALID);
     }
     for stop in stops {
@@ -192,7 +192,7 @@ fn make_schedules(
     first_utc_day: i32,
     day_count: u32,
 ) -> Result<Vec<Schedule>> {
-    let mut result = BTreeMap::<(u16, Vec<i64>), TrafficDays>::new();
+    let mut result = BTreeMap::<(u32, Vec<i64>), TrafficDays>::new();
     let first_day = start_date(first_utc_day)?;
     for offset in -5_i64..i64::from(day_count) + 5 {
         let service_date = first_day.checked_add_signed(Duration::days(offset))
@@ -205,26 +205,23 @@ fn make_schedules(
             let a = anchor + i64::from(trip_start_secs) + i64::from(*arr);
             let d = anchor + i64::from(trip_start_secs) + i64::from(*dep);
             ensure!(a <= d, "negative dwell time in trip {trip_id}");
-            // Nigiri's GTFS importer discards the seconds component and stores
-            // UTC event times in whole minutes. Convert after combining the trip
-            // start and pattern offset: rounding each component separately
-            // would lose carries when their seconds sum to 60 or more.
-            stamps.push(a.div_euclid(60));
-            stamps.push(d.div_euclid(60));
+            // Preserve the UTC second after adding start and pattern offsets.
+            stamps.push(a);
+            stamps.push(d);
         }
         ensure!(stamps.len() >= 4, "trip {trip_id} needs at least two stops");
         ensure!(stamps.windows(2).all(|w| w[0] <= w[1]),
             "nonmonotonic UTC stop times for trip {trip_id}");
         let departure = stamps[1];
-        let day = departure.div_euclid(1440) - i64::from(first_utc_day);
+        let day = departure.div_euclid(86_400) - i64::from(first_utc_day);
         if !(0..i64::from(day_count)).contains(&day) { continue; }
-        let minute = u16::try_from(departure.rem_euclid(1440))?;
+        let second = u32::try_from(departure.rem_euclid(86_400))?;
         let relative: Vec<i64> = stamps.into_iter().map(|t| t - departure).collect();
-        let key = (minute, relative);
+        let key = (second, relative);
         result.entry(key).or_default().set(day as usize, true)?;
     }
     let mut schedules = Vec::with_capacity(result.len());
-    for ((first_minute, relative), days) in result {
+    for ((first_second, relative), days) in result {
         let events = pattern.stops.iter().enumerate().map(|(i, (id, _, _))| {
             Ok(Event {
                 stop: *stop_lookup.get(id).context("missing pattern stop")?,
@@ -236,7 +233,7 @@ fn make_schedules(
             trip_id: trip_id.to_owned(), source: source_idx,
             route_id: pattern.route_id.clone(), route_type: pattern.route_type,
             locations: events.iter().map(|e| e.stop).collect(), events,
-            first_minute, days,
+            first_second, days,
         });
     }
     Ok(schedules)
@@ -270,12 +267,12 @@ fn intern_days(
 }
 
 fn non_overtaking(a: &Schedule, b: &Schedule) -> bool {
-    a.first_minute <= b.first_minute
+    a.first_second <= b.first_second
         && a.events.iter().zip(&b.events).all(|(x, y)| {
-            x.arrival + i64::from(a.first_minute)
-                <= y.arrival + i64::from(b.first_minute)
-            && x.departure + i64::from(a.first_minute)
-                <= y.departure + i64::from(b.first_minute)
+            x.arrival + i64::from(a.first_second)
+                <= y.arrival + i64::from(b.first_second)
+            && x.departure + i64::from(a.first_second)
+                <= y.departure + i64::from(b.first_second)
         })
 }
 
@@ -291,7 +288,7 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
     let mut stop_routes = vec![Vec::<RouteIdx>::new(); tt.coordinates.len()];
     let mut route_id_index = HashMap::new();
     for ((source, route_id, locations), mut schedules) in buckets {
-        schedules.sort_by(|a, b| a.first_minute.cmp(&b.first_minute)
+        schedules.sort_by(|a, b| a.first_second.cmp(&b.first_second)
             .then_with(|| a.trip_id.cmp(&b.trip_id)));
         let mut chains = Vec::<Vec<Schedule>>::new();
         for schedule in schedules {
@@ -326,9 +323,9 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
                 for schedule in &chain {
                     let e = &schedule.events[event_stop];
                     let delta = if is_arrival { e.arrival } else { e.departure };
-                    ensure!(delta >= 0 && delta <= 44_639,
+                    ensure!(delta >= 0 && delta <= i64::from(Delta::MAX_SECONDS),
                         "time offset outside Delta representation");
-                    tt.route_stop_times.push(Delta::from_minutes(u32::try_from(delta)?)?);
+                    tt.route_stop_times.push(Delta::from_seconds(u32::try_from(delta)?)?);
                 }
             }
             let mut union = TrafficDays::default();
@@ -338,7 +335,7 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
                 let transport = TransportIdx(as_u32(tt.transport_route.len())?);
                 tt.transport_route.push(route);
                 tt.transport_traffic_days.push(idx);
-                tt.transport_first_dep_offset.push(Delta::new(0, schedule.first_minute)?);
+                tt.transport_first_dep_offset.push(Delta::from_seconds(schedule.first_second)?);
                 tt.transport_initial_day_offset.push(0);
                 let trip_idx = TripIdx(as_u32(tt.trip_public_route_ids.len())?);
                 tt.trip_public_route_ids.push(public_route_id);
@@ -453,27 +450,27 @@ fn compile_source(
 
 fn add_footpaths(
     tt: &mut TimetableOwned,
-    mut transfers: Vec<Vec<(u32, u16)>>,
+    mut transfers: Vec<Vec<(u32, u32)>>,
 ) -> Result<()> {
     ensure!(transfers.len() == tt.coordinates.len(), "footpath location count mismatch");
-    let mut incoming = vec![Vec::<(u32, u16)>::new(); transfers.len()];
+    let mut incoming = vec![Vec::<(u32, u32)>::new(); transfers.len()];
     for (from, edges) in transfers.iter_mut().enumerate() {
-        // Preserve the fastest of multiple paths to each target.
-        edges.sort_unstable_by_key(|&(to, minutes)| (to, minutes));
+        // Keep the fastest edge for each directed stop pair.
+        edges.sort_unstable_by_key(|&(to, seconds)| (to, seconds));
         edges.dedup_by_key(|entry| entry.0);
-        for &(to, minutes) in edges.iter() {
+        for &(to, seconds) in edges.iter() {
             ensure!((to as usize) < incoming.len(), "unknown footpath target");
-            ensure!(minutes > 0 && minutes <= 511, "footpath duration exceeds 9-bit limit");
+            ensure!(seconds > 0, "nonpositive OSR transfer duration");
             if from == to as usize { continue; }
-            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(to), minutes)?);
-            incoming[to as usize].push((u32::try_from(from)?, minutes));
+            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(to), seconds)?);
+            incoming[to as usize].push((u32::try_from(from)?, seconds));
         }
         tt.footpaths_out_offsets.push(as_u32(tt.footpaths_out.len())?);
     }
     for edges in &mut incoming {
         edges.sort_unstable();
-        for &(from, minutes) in edges.iter() {
-            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(from), minutes)?);
+        for &(from, seconds) in edges.iter() {
+            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(from), seconds)?);
         }
         tt.footpaths_in_offsets.push(as_u32(tt.footpaths_in.len())?);
     }
@@ -519,7 +516,7 @@ pub fn build(
 mod tests {
     use super::*;
     #[test]
-    fn nonzero_gtfs_seconds_are_quantized_after_combining_offsets() {
+    fn nonzero_gtfs_seconds_are_preserved_after_combining_offsets() {
         let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
         let first_day = i32::try_from(date.signed_duration_since(epoch).num_days()).unwrap();
@@ -546,10 +543,10 @@ mod tests {
         assert_eq!(schedules.len(), 1);
         let trip = &schedules[0];
         assert!(trip.days.test(0));
-        assert_eq!(trip.first_minute, 15 * 60);
+        assert_eq!(trip.first_second, 15 * 3_600 + 50);
         assert_eq!(trip.events[0].departure, 0);
-        assert_eq!(trip.events[1].arrival, 1);
-        assert_eq!(trip.events[1].departure, 2);
+        assert_eq!(trip.events[1].arrival, 20);
+        assert_eq!(trip.events[1].departure, 80);
     }
 
     #[test]
@@ -571,8 +568,8 @@ mod tests {
         let event = |t| Event {stop:LocationIdx(0),arrival:t,departure:t};
         let a=Schedule {trip_id:"a".into(),source:0,route_id:"r".into(),route_type:3,
             locations:vec![LocationIdx(0),LocationIdx(1)],
-            events:vec![event(0),event(20)],first_minute:60,days:TrafficDays::default()};
-        let mut b=a.clone(); b.first_minute=65; b.events[1]=event(10);
+            events:vec![event(0),event(20)],first_second:60,days:TrafficDays::default()};
+        let mut b=a.clone(); b.first_second=65; b.events[1]=event(10);
         assert!(!non_overtaking(&a,&b));
     }
 }

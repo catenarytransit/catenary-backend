@@ -32,7 +32,7 @@ struct Args {
 }
 
 #[derive(Deserialize)]
-struct Endpoint { stop:u32, minutes:u32 }
+struct Endpoint { stop:u32, seconds:u32 }
 
 #[derive(Deserialize)]
 struct Request {
@@ -43,7 +43,7 @@ struct Request {
     access:Vec<Endpoint>,
     #[serde(default)]
     egress:Vec<Endpoint>,
-    direct_walk_minutes:Option<u32>,
+    direct_walk_seconds:Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -110,7 +110,7 @@ struct OsrRequest<'a>{
     region:&'a str,latitude:f64,longitude:f64,max_seconds:u32,stops:Vec<OsrStop>,
 }
 #[derive(Deserialize)]
-struct OsrAccess {stop:u32,minutes:u32}
+struct OsrAccess {stop:u32,seconds:u32}
 #[derive(Deserialize)]
 struct OsrResponse {reachable:Vec<OsrAccess>,error:Option<String>}
 
@@ -142,10 +142,10 @@ fn osr_access(
     let reply:OsrResponse=serde_json::from_str(&line)?;
     if let Some(err)=reply.error { anyhow::bail!("OSR query: {err}"); }
     Ok(reply.reachable.into_iter()
-        .map(|x|WalkingEndpoint{stop:LocationIdx(x.stop),minutes:x.minutes}).collect())
+        .map(|x|WalkingEndpoint{stop:LocationIdx(x.stop),seconds:x.seconds}).collect())
 }
 
-fn direct_osr_minutes(
+fn direct_osr_seconds(
     addr:&str,
     region:&str,
     from:Coordinates,
@@ -165,7 +165,7 @@ fn direct_osr_minutes(
     BufReader::new(stream).read_line(&mut line)?;
     let reply:OsrResponse=serde_json::from_str(&line)?;
     if let Some(error)=reply.error { anyhow::bail!("OSR direct route: {error}"); }
-    Ok(reply.reachable.first().map(|x|x.minutes))
+    Ok(reply.reachable.first().map(|x|x.seconds))
 }
 
 fn run_query(router:&Router,request:Request,url:Option<&str>,osr_worker:&str)->Result<Answer>{
@@ -174,17 +174,17 @@ fn run_query(router:&Router,request:Request,url:Option<&str>,osr_worker:&str)->R
         osr_access(router,osr_worker,&selection.transit_region,&selection.origin_osr_region,request.from)?
     }else{
         request.access.into_iter().map(|e| WalkingEndpoint{
-            stop:LocationIdx(e.stop),minutes:e.minutes}).collect()
+            stop:LocationIdx(e.stop),seconds:e.seconds}).collect()
     };
     let to=if request.egress.is_empty(){
         osr_access(router,osr_worker,&selection.transit_region,&selection.destination_osr_region,request.to)?
     }else{
         request.egress.into_iter().map(|e| WalkingEndpoint{
-            stop:LocationIdx(e.stop),minutes:e.minutes}).collect()
+            stop:LocationIdx(e.stop),seconds:e.seconds}).collect()
     };
-    let direct=if request.direct_walk_minutes.is_some(){request.direct_walk_minutes}
+    let direct=if request.direct_walk_seconds.is_some(){request.direct_walk_seconds}
         else if selection.origin_osr_region==selection.destination_osr_region {
-            direct_osr_minutes(osr_worker,&selection.origin_osr_region,request.from,request.to)?
+            direct_osr_seconds(osr_worker,&selection.origin_osr_region,request.from,request.to)?
         }else{None};
     let routing=router.route_with_access(selection,request.departure_unix_seconds,from,to,direct)?;
     let timetable=router.timetable_for(&routing.selection.transit_region)?;
@@ -209,7 +209,7 @@ async fn main()->Result<()>{
     let config=catenary::routing_common::routing_regions::RoutingRegionsConfig::load(&args.regions_config)?;
     let settings=RouterSettings{
         data_dir:args.data_dir.unwrap_or(config.data_dir),
-        access_radius_meters:5000.0,max_boardings:5,max_duration_minutes:360,
+        access_radius_meters:5000.0,max_boardings:5,max_duration_seconds:360 * 60,
     };
     let router=Arc::new(Router::load(&args.regions_config,&args.catenary_config,settings)?);
     if let Some(path)=args.query {

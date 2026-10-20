@@ -30,6 +30,27 @@ footpath arrays into the memory-mappable RAPTOR timetable. There are no
 stop-export or footpath-import TSV intermediates. Native OSR is required for every
 Gentian timetable build; `--build` fails unless `--osr-dir` is supplied.
 
+## Seconds-precision timetable, wire format v3
+
+The timetable is **not** Nigiri's minute-based binary. Catenary v3 stores exact
+UTC second offsets in 32-bit packed event values and preserves OSR walking
+durations in 64-bit records (32-bit stop index + 32-bit duration in seconds).
+Stop-level transfer durations are also stored in seconds. Day bitsets remain
+calendar-day based; all routing label times and reported Unix timestamps use
+seconds. No GTFS or OSR duration is rounded to a whole minute.
+
+Files with timetable version 2 are intentionally incompatible with v3 and
+must be rebuilt by Gentian. The Edelweiss route request likewise uses
+`access: [{stop, seconds}]`, `egress: [{stop, seconds}]`, and
+`direct_walk_seconds` (instead of the old minute fields). Responses use
+`seconds` for walking/transfer leg durations, and Unix seconds for
+arrival/departure timestamps. The OSR worker's `reachable` list only
+contains `seconds` durations. This API change is intentionally breaking.
+
+The in-memory and on-disk v3 representation is larger than v2: event offsets
+occupy four bytes instead of two, footpaths eight bytes instead of four,
+and stop transfer durations four bytes instead of one.
+
 The `--osr-dir` path is the extracted OSR dataset containing `routing.bin`,
 not the parent manager output directory. One OSR graph is used per Gentian
 invocation; regional OSR graph selection remains a future improvement.
