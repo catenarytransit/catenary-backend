@@ -7,6 +7,7 @@ use catenary::routing_common::timetable::{
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
+use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -64,9 +65,9 @@ fn query_source(
     mut on_row: impl FnMut(Row) -> Result<()>,
 ) -> Result<()> {
     let params: [&(dyn ToSql + Sync); 2] = [&source.onestop_feed_id, &source.attempt_id];
-    let rows = client.query_raw(sql, params)?;
-    for row in rows {
-        on_row(row?)?;
+    let mut rows = client.query_raw(sql, params)?;
+    while let Some(row) = rows.next()? {
+        on_row(row)?;
     }
     Ok(())
 }

@@ -43,6 +43,7 @@ gtfs-structures = "0.46.1"
 geofabrik-handler = { git = "https://github.com/catenarytransit/geofabrik-catenary-handler/" }
 tungstenite = "0.28.0"
 postgres = "0.19.7"
+fallible-iterator = "0.2"
 postgis = "0.9.0"
 arguments = "0.8.0"
 tokio-postgres = { version = "0.7.16", features = [
