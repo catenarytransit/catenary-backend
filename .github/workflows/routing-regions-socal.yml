@@ -8,10 +8,11 @@ on:
       - 'src/gentian/**'
       - 'src/edelweiss/**'
       - 'src/routing_common/**'
-      - 'tools/gentian_footpaths/**'
-      - 'tools/osm_manager/**'
-      - 'tools/routing_regions/**'
+      - 'src/osm_manager/**'
+      - 'src/routing_regions/**'
       - 'routing_regions/**'
+      - 'routing_regions*.toml'
+      - 'build.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
@@ -118,8 +119,8 @@ jobs:
           set -euo pipefail
           mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
           curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
-          python3 tools/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
-          git check-ignore routing_regions/socal.geojson routing_regions/config.toml catenaryconfig.toml
+          python3 src/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
+          git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
       - name: Download native OSR extractor
         run: |
           set -euo pipefail
@@ -131,45 +132,55 @@ jobs:
           test -x ./osr-extract
       - name: Download and extract Southern California OSR graph
         run: |
-          cargo run --release --manifest-path tools/osm_manager/Cargo.toml --             --config catenaryconfig.toml run
+          cargo run --release --manifest-path src/osm_manager/Cargo.toml --             --config catenaryconfig.toml run
           test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
       - name: Ingest restricted Maple feeds
         run: |
           set -euo pipefail
           diesel migration run
           cargo run --release --bin maple
-      - name: Verify selection and export source-indexed stop coordinates
+      - name: Verify routing-region and source selection
         run: |
           set -euo pipefail
           cargo test --lib routing_common::routing_regions
-          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --list-chateaux > temp/selection.json
-          python3 tools/routing_regions/verify_selection.py temp/selection.json --live
-          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --export-stops temp/stops.tsv
-      - name: Build and validate native OSR oneTBB linkage
+          cargo run --release --bin gentian -- \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --list-chateaux > temp/selection.json
+          python3 src/routing_regions/verify_selection.py temp/selection.json --live
+      - name: Build Gentian with native OSR transfer support
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin gentian_footpaths
-          bridge="$(find tools/gentian_footpaths/target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
+          cargo build --release --features gentian-osr --bin gentian --bin osr_worker
+          bridge="$(find target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
           test -n "$bridge"
           readelf -d "$bridge" | tee /tmp/osr-native-needed.txt
           grep -F 'libtbb.so' /tmp/osr-native-needed.txt
-          ldd -r "$bridge" | tee /tmp/osr-native-linkage.txt
-          if grep -E 'undefined symbol|not found' /tmp/osr-native-linkage.txt; then
+          # cxx::bridge uses Rust-owned symbols that legitimately remain
+          # undefined in this shared library until the final Rust executable.
+          # ldd -r on the isolated bridge therefore reports false positives.
+          ldd "$bridge" | tee /tmp/osr-native-linkage.txt
+          if grep -F 'not found' /tmp/osr-native-linkage.txt; then
             exit 1
           fi
-      - name: Route local footpaths through OSR FFI
-        run: |
-          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin gentian_footpaths --             --osr-dir temp/osr-data/regions/north-america/us/california/socal             --stops temp/stops.tsv --output temp/footpaths.tsv             --max-seconds 900 --candidate-meters 1200
-      - name: Compile memory-mappable RAPTOR timetable
+          ./target/release/gentian --help >/dev/null
+          ./target/release/osr_worker --help >/dev/null
+      - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
         run: |
           set -euo pipefail
-          cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --first-utc-day 20745 --day-count 35             --footpaths temp/footpaths.tsv --build             --output compiled/routing/southern-california.bin
+          cargo run --release --features gentian-osr --bin gentian -- \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day 20745 --day-count 35 \
+            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --max-seconds 900 --candidate-meters 1200 \
+            --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
       - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin server -- \
+          cargo run --release --features gentian-osr --bin osr_worker -- \
             --config catenaryconfig.toml > temp/osr-worker.log 2>&1 &
           echo $! > temp/osr-worker.pid
           for attempt in $(seq 1 45); do
@@ -179,17 +190,17 @@ jobs:
           kill -0 "$(cat temp/osr-worker.pid)"
       - name: Prepare UCI to City Hall Monday query
         run: |
-          python3 tools/routing_regions/prepare_uci_cityhall_query.py \
+          python3 src/routing_regions/prepare_uci_cityhall_query.py \
             --output temp/uci-cityhall-request.json
       - name: Execute Edelweiss RAPTOR example and print Pareto journeys
         run: |
           set -euo pipefail
           cargo run --release --bin edelweiss -- \
-            --regions-config routing_regions/config.toml \
+            --regions-config routing_regions.toml \
             --catenary-config catenaryconfig.toml \
             --query temp/uci-cityhall-request.json \
             --database-url "$DATABASE_URL" | tee temp/uci-cityhall-results.json
-          python3 tools/routing_regions/print_uci_cityhall_results.py temp/uci-cityhall-results.json
+          python3 src/routing_regions/print_uci_cityhall_results.py temp/uci-cityhall-results.json
           {
             echo '## SoCal RAPTOR example: UCI to Los Angeles City Hall'
             echo ''

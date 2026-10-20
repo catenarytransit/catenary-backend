@@ -15,7 +15,7 @@ use std::{collections::{BTreeMap, BTreeSet}, fs, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
 struct Args {
-    #[arg(long, default_value = "routing_regions/config.toml")]
+    #[arg(long, default_value = "routing_regions.toml")]
     regions_config: PathBuf,
     #[arg(long, default_value = "catenaryconfig.toml")]
     catenary_config: PathBuf,

@@ -10,8 +10,7 @@ use chrono_tz::Tz;
 use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
 use std::collections::{BTreeMap, HashMap};
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::fs;
 use std::path::Path;
 
 #[derive(Clone)]
@@ -450,58 +449,32 @@ fn compile_source(
     Ok(())
 }
 
-fn add_footpaths(tt: &mut TimetableOwned, input: &Path) -> Result<()> {
-    let mut out = vec![Vec::<(u32, u16)>::new(); tt.coordinates.len()];
-    for (line_num, line) in BufReader::new(File::open(input)?).lines().enumerate() {
-        let line = line?;
-        let mut parts = line.split('\t');
-        let parse = |value: Option<&str>| -> Result<u32> {
-            value.context("truncated footpath record")?.parse().context("invalid footpath integer")
-        };
-        let from = parse(parts.next())?;
-        let to = parse(parts.next())?;
-        let seconds = parse(parts.next())?;
-        ensure!(parts.next().is_none(), "unexpected field in footpath line {}", line_num+1);
-        ensure!((from as usize) < out.len() && (to as usize) < out.len(), "unknown footpath location");
-        if from != to {
-            let minutes = seconds.div_ceil(60).max(1);
-            ensure!(minutes <= 511, "footpath duration exceeds 9-bit limit");
-            out[from as usize].push((to, minutes as u16));
-        }
-    }
-    let mut incoming = vec![Vec::<(u32,u16)>::new(); out.len()];
-    for (from, edges) in out.iter_mut().enumerate() {
-        edges.sort_unstable();
-        let mut last = None;
-        edges.retain(|(to, _)| if last == Some(*to) { false } else { last = Some(*to); true });
-        for &(to, duration) in edges.iter() {
-            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(to), duration)?);
-            incoming[to as usize].push((from as u32, duration));
+fn add_footpaths(
+    tt: &mut TimetableOwned,
+    mut transfers: Vec<Vec<(u32, u16)>>,
+) -> Result<()> {
+    ensure!(transfers.len() == tt.coordinates.len(), "footpath location count mismatch");
+    let mut incoming = vec![Vec::<(u32, u16)>::new(); transfers.len()];
+    for (from, edges) in transfers.iter_mut().enumerate() {
+        // Preserve the fastest of multiple paths to each target.
+        edges.sort_unstable_by_key(|&(to, minutes)| (to, minutes));
+        edges.dedup_by_key(|entry| entry.0);
+        for &(to, minutes) in edges.iter() {
+            ensure!((to as usize) < incoming.len(), "unknown footpath target");
+            ensure!(minutes > 0 && minutes <= 511, "footpath duration exceeds 9-bit limit");
+            if from == to as usize { continue; }
+            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(to), minutes)?);
+            incoming[to as usize].push((u32::try_from(from)?, minutes));
         }
         tt.footpaths_out_offsets.push(as_u32(tt.footpaths_out.len())?);
     }
     for edges in &mut incoming {
         edges.sort_unstable();
-        for &(from, duration) in edges.iter() {
-            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(from), duration)?);
+        for &(from, minutes) in edges.iter() {
+            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(from), minutes)?);
         }
         tt.footpaths_in_offsets.push(as_u32(tt.footpaths_in.len())?);
     }
-    Ok(())
-}
-
-pub fn export_stops(client: &mut Client, sources: &[ChateauSource], output: &Path) -> Result<()> {
-    if let Some(dir) = output.parent() { fs::create_dir_all(dir)?; }
-    let mut writer = BufWriter::new(File::create(output)?);
-    let mut offset = 0usize;
-    for source in sources {
-        let stops = load_stops(client, source)?;
-        for (i, stop) in stops.iter().enumerate() {
-            writeln!(writer, "{}\t{:.8}\t{:.8}", offset+i, stop.lat, stop.lon)?;
-        }
-        offset += stops.len();
-    }
-    writer.flush()?;
     Ok(())
 }
 
@@ -510,7 +483,9 @@ pub fn build(
     sources: &[ChateauSource],
     first_utc_day: i32,
     day_count: u32,
-    footpaths: Option<&Path>,
+    osr_dir: Option<&Path>,
+    max_seconds: u32,
+    candidate_meters: f64,
     output: &Path,
 ) -> Result<()> {
     ensure!((1..=512).contains(&day_count), "invalid timetable horizon");
@@ -522,10 +497,22 @@ pub fn build(
     }
     ensure!(!schedules.is_empty(), "no scheduled trips in selected timetable horizon");
     assemble_routes(&mut tt, schedules)?;
-    if let Some(path) = footpaths { add_footpaths(&mut tt, path)?; }
-    else {
-        tt.footpaths_out_offsets.resize(tt.coordinates.len()+1, 0);
-        tt.footpaths_in_offsets.resize(tt.coordinates.len()+1, 0);
+    if let Some(osr_dir) = osr_dir {
+        #[cfg(feature = "gentian-osr")]
+        {
+            let transfers = super::footpaths::compute(
+                osr_dir, &tt.coordinates, max_seconds, candidate_meters,
+            )?;
+            add_footpaths(&mut tt, transfers)?;
+        }
+        #[cfg(not(feature = "gentian-osr"))]
+        {
+            let _ = (osr_dir, max_seconds, candidate_meters);
+            bail!("OSR footpath compilation requires --features gentian-osr");
+        }
+    } else {
+        tt.footpaths_out_offsets.resize(tt.coordinates.len() + 1, 0);
+        tt.footpaths_in_offsets.resize(tt.coordinates.len() + 1, 0);
     }
     let bytes = tt.encode()?;
     ZeroCopyTimetable::new(&bytes)?;

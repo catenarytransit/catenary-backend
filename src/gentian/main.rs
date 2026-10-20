@@ -1,7 +1,4 @@
-//! Gentian V2 schema writer and routing-region resolver.
-//!
-//! GTFS-to-RAPTOR graph compilation is not yet implemented. Region selection
-//! registers source identities only; it does not create routes or transports.
+//! Gentian's regional timetable and OSR footpath compiler.
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
@@ -10,9 +7,11 @@ use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
 mod compile;
+#[cfg(feature = "gentian-osr")]
+mod footpaths;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Resolve routing regions and write a V2 timetable schema (no route compilation)")]
+#[command(author, version, about = "Compile regional RAPTOR timetables with optional OSR footpaths")]
 struct Args {
     /// Output V2 binary. Optional when only listing selected chateaux.
     #[arg(short, long)]
@@ -34,7 +33,7 @@ struct Args {
     region: Option<String>,
 
     /// TOML definition of routable regions.
-    #[arg(long, default_value = "routing_regions/config.toml")]
+    #[arg(long, default_value = "routing_regions.toml")]
     regions_config: PathBuf,
 
     /// PostgreSQL connection string. Defaults to DATABASE_URL.
@@ -44,11 +43,16 @@ struct Args {
     #[arg(long, requires = "region", conflicts_with = "list_chateaux")]
     build: bool,
 
-    #[arg(long, requires = "region")]
-    export_stops: Option<PathBuf>,
-
+    /// Directory containing an extracted native OSR graph. Transfers are computed
+    /// in-process against the exact location indexes being compiled.
     #[arg(long, requires = "build")]
-    footpaths: Option<PathBuf>,
+    osr_dir: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 900)]
+    max_seconds: u32,
+
+    #[arg(long, default_value_t = 1200.0)]
+    candidate_meters: f64,
 
     /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
     #[arg(long, requires = "region")]
@@ -74,18 +78,15 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    if args.build || args.export_stops.is_some() {
+    if args.build {
         let selection = selection.as_ref().context("--region is required")?;
         let url = args.database_url.as_deref().context("DATABASE_URL is required")?;
         let mut client = Client::connect(url, NoTls)?;
-        if let Some(path) = &args.export_stops {
-            compile::export_stops(&mut client, &selection.sources, path)?;
-        }
-        if args.build {
-            let output = args.output.as_ref().context("--output is required with --build")?;
-            compile::build(&mut client, &selection.sources, args.first_utc_day,
-                args.day_count, args.footpaths.as_deref(), output)?;
-        }
+        let output = args.output.as_ref().context("--output is required with --build")?;
+        compile::build(
+            &mut client, &selection.sources, args.first_utc_day, args.day_count,
+            args.osr_dir.as_deref(), args.max_seconds, args.candidate_meters, output,
+        )?;
         return Ok(());
     }
     let output = args.output.as_ref().context("--output is required")?;

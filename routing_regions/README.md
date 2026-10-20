@@ -1,98 +1,69 @@
-# Edelweiss routing library and SoCal example
+# Regional routing configuration
 
-Edelweiss calls the reusable routing modules in \`catenary::routing_common\`:
-\`route_manager\` loads transit mmap files and OSR registry boundaries from
-config; \`raptor_query\` executes marked-round timetable scans with sparse
-footpath Dijkstra, parent reconstruction, and arrival/boardings Pareto filtering.
+The runtime routing configuration lives at the **repository root** as
+`routing_regions.toml` (ignored by Git). Copy `routing_regions.example.toml`
+and adjust it for the regions you want to compile. Geometry paths are relative
+to the TOML file, and every intersecting château is included in full.
+The `routing_regions/` directory is for local geography files, not config.
 
-A separate, long-running \`gentian_footpaths --bin server\` process owns the
-native \`osr-ffi\` routers. It opens all configured Geofabrik OSR datasets once
-at startup and accepts line-delimited JSON access/egress routing requests over
-a local TCP socket (default 127.0.0.1:40501). The C++ Router is not shared
-between threads. Edelweiss resolves each endpoint's OSR region independently
-and uses the common loaded transit region for its timetable query.
+Run the Geofabrik OSR extractor manager using the independent crate at
+`src/osm_manager/`. It writes OSR graphs under the `[osm_manager]`
+`data_dir` in `catenaryconfig.toml`.
 
-## Production routing-region configuration
+## Compile a timetable and walking footpaths together
 
-\`routing_regions/config.toml\` is a local, ignored runtime file, not a
-production-wide geographic restriction.
+```sh
+cargo run --release --manifest-path src/osm_manager/Cargo.toml -- --config catenaryconfig.toml run
+cargo run --release --features gentian-osr --bin gentian -- \
+  --region southern-california \
+  --regions-config routing_regions.toml \
+  --first-utc-day 20745 --day-count 35 \
+  --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+  --max-seconds 900 --candidate-meters 1200 \
+  --build --output compiled/routing/southern-california.bin
+```
 
-\`\`\`toml
-schema_version = 1
-data_dir = "compiled/routing"
+Gentian reads GTFS from PostgreSQL, generates the timetable's location indices
+and routes, matches stop candidates against the local OSR graph, runs bounded
+native OSR one-to-many searches, and directly writes forward and reverse
+footpath arrays into the memory-mappable RAPTOR timetable. There are no
+stop-export or footpath-import TSV intermediates. The native module is gated by
+`--features gentian-osr`, leaving unrelated backend builds independent of C++.
 
-[[regions]]
-id = "example"
-name = "My transit region"
-geojson = ["example.geojson"]
-\`\`\`
+The `--osr-dir` path is the extracted OSR dataset containing `routing.bin`,
+not the parent manager output directory. One OSR graph is used per Gentian
+invocation; regional OSR graph selection remains a future improvement.
 
-Compiled binary names are \`data_dir/<region-id>.bin\`. A region may also
-specify countries; selected châteaux are included in full.
+For coordinate access/egress requests, Edelweiss continues to use a separate
+long-running native OSR worker. This is **query-time** routing, not compilation:
 
-OSR's \`[osm_manager]\` section stays in \`catenaryconfig.toml\`. The native
-worker opens \`osm_manager.data_dir/regions/<geofabrik-id>/\` based on the
-manager's \`regions.geojson\`. Each endpoint must be inside an OSR polygon.
-
-Start the native OSR worker:
-
-\`\`\`sh
-cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml \
-  --bin server -- --config catenaryconfig.toml
-\`\`\`
-
-Run the Edelweiss endpoint:
-
-\`\`\`sh
+```sh
+cargo run --release --features gentian-osr --bin osr_worker -- \
+  --config catenaryconfig.toml
 DATABASE_URL='postgres://...' cargo run --release --bin edelweiss -- \
-  --regions-config routing_regions/config.toml \
+  --regions-config routing_regions.toml \
   --catenary-config catenaryconfig.toml \
   --listen 127.0.0.1:40428
-\`\`\`
+```
 
-POST \`/v1/route\`:
+## Southern California integration test
 
-\`\`\`json
-{
-  "from": {"lat": 33.6461, "lon": -117.8427},
-  "to": {"lat": 34.0537, "lon": -118.2428},
-  "departure_unix_seconds": 1793026800,
-  "access": [],
-  "egress": [],
-  "direct_walk_minutes": null
-}
-\`\`\`
+`.github/workflows/routing-regions-socal.yml` downloads the Southern
+California Geofabrik geometry, generates an ignored root `routing_regions.toml`,
+ingests a small set of transit feeds, extracts the OSR graph, compiles the
+regional timetable with native footpaths in Gentian, starts the OSR worker
+and executes a UCI-to-Los-Angeles-City-Hall routing query.
 
-Empty access/egress arrays trigger native OSR one-to-many routing from the
-given coordinates to nearby transit locations. Results include Pareto journeys
-and per-route metadata from source-qualified \`gtfs.routes\`, including
-\`short_name\`, \`color\` and \`text_color\` when present. Missing database
-metadata is returned as \`null\`, never replaced by arbitrary colors.
+CI verifies `libtbb.so` is a needed dependency of the native bridge, checks
+the dynamic loader resolves shared libraries, and launches the final Rust
+executables. It intentionally does not run `ldd -r` on the isolated bridge:
+Rust `cxx` bridge symbols are resolved by the final executable and may be
+undefined in the shared library alone.
 
-For the SoCal example, the GitHub Actions \`workflow_dispatch\` job downloads
-Geofabrik \`socal.geojson\`, generates ignored local configs, runs the OSR
-manager and Maple for the seven selected GTFS feeds, compiles the timetable,
-launches the long-lived OSR worker, and runs a one-shot Edelweiss query for
-Monday October 26, 2026 at 08:00 America/Los_Angeles from UC Irvine to Los
-Angeles City Hall. Its console output is written to
-\`temp/uci-cityhall-results.json\`, with OSR worker logs attached as a
-workflow artifact.
+## Current limitations
 
-## Known limitations
-
-This PR still needs a successful Rust/native build and end-to-end CI run.
-The compiler does not yet expand frequencies and does not preserve all
-per-stop boarding/alighting restrictions; until fixed, its journey results
-are not authoritative. Time precision remains minutes and routes are scanned
-exhaustively per candidate service day. Transit regions must contain both
-endpoints: cross-region transit federation is not implemented. Nearest stop
-discovery is a bounded in-memory coordinate scan and may truncate dense
-candidate sets; the current OSR candidate cutoff is configurable but is not
-a proof of complete multimodal Pareto optimality.
-
-The local OSR worker protocol is a development transport without authentication
-or TLS; bind only to loopback or protect it behind a private service boundary.
-Route hydration uses focused PostgreSQL lookups after search rather than
-joining GTFS metadata into the hot RAPTOR scan.
-
-The local fixture generator requires Python 3.11+ (`tomllib`). CI installs Python 3.12 through `actions/setup-python`.
+GTFS frequency expansion, per-stop boarding/alighting restrictions, and
+cross-region route federation remain incomplete. Footpath candidates are
+limited by geographic distance, not proven complete for arbitrary cycling or
+walking networks. The native OSR worker listens on loopback by default; it
+does not provide authentication or TLS.

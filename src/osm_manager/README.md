@@ -24,9 +24,9 @@ regions = [
 Build only this utility:
 
 ```sh
-cargo build --release --manifest-path tools/osm_manager/Cargo.toml --bin osm_manager
-tools/osm_manager/target/release/osm_manager --config catenaryconfig.toml run
-tools/osm_manager/target/release/osm_manager --config catenaryconfig.toml locate --lat 42.5063 --lon 1.5218
+cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+src/osm_manager/target/release/osm_manager --config catenaryconfig.toml run
+src/osm_manager/target/release/osm_manager --config catenaryconfig.toml locate --lat 42.5063 --lon 1.5218
 ```
 
 `CATENARYCONFIG` is not needed for this utility; use `--config` to

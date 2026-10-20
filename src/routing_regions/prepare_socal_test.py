@@ -39,13 +39,12 @@ def validate_geojson(path: Path) -> None:
         raise ValueError("Geofabrik boundary must contain nonempty polygonal geometries")
 
 
-def prepare(geojson: Path, output_dir: Path, database_url: str, transitland: str) -> None:
+def prepare(geojson: Path, region_file: Path, database_url: str, transitland: str) -> None:
     if not database_url:
         raise ValueError("database URL is required")
     validate_geojson(geojson)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    region_file = output_dir / "config.toml"
-    boundary = os.path.relpath(geojson.resolve(), output_dir.resolve())
+    region_file.parent.mkdir(parents=True, exist_ok=True)
+    boundary = os.path.relpath(geojson.resolve(), region_file.resolve().parent)
     region_file.write_text(
         "schema_version = 1\n"
         'data_dir = "compiled/routing"\n\n'
@@ -96,8 +95,8 @@ def prepare(geojson: Path, output_dir: Path, database_url: str, transitland: str
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--geojson", type=Path, required=True)
-    parser.add_argument("--region-dir", type=Path, default=Path("routing_regions"))
+    parser.add_argument("--region-config", type=Path, default=Path("routing_regions.toml"))
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
     parser.add_argument("--transitland", default="./transitland-atlas")
     args = parser.parse_args()
-    prepare(args.geojson, args.region_dir, args.database_url, args.transitland)
+    prepare(args.geojson, args.region_config, args.database_url, args.transitland)
