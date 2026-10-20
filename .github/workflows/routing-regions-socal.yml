@@ -26,7 +26,7 @@ permissions:
 jobs:
   socal-maple-osr-gentian:
     name: SoCal ingest, compile and UCI-City Hall query
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 300
     services:
       postgres:
@@ -45,6 +45,8 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
       PGPASSWORD: postgres
       OSR_BUILD_JOBS: "2"
+      CC: gcc-14
+      CXX: g++-14
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -63,8 +65,27 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler libpq-dev libssl-dev pkg-config cmake             ninja-build libcoinutils-dev coinor-libcbc-dev postgresql-client             libboost-all-dev libzstd-dev liblz4-dev libtbb-dev
+          sudo apt-get install -y gcc-14 g++-14 protobuf-compiler libpq-dev libssl-dev pkg-config cmake             ninja-build libcoinutils-dev coinor-libcbc-dev postgresql-client             libboost-all-dev libzstd-dev liblz4-dev libtbb-dev
           cargo install diesel_cli --no-default-features --features postgres --locked
+      - name: Verify C++23 standard library for native OSR
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -n 1
+          cat > /tmp/osr-cxx23-check.cc <<'EOF'
+          #include <array>
+          #include <ranges>
+          #include <utility>
+          int main() {
+            std::array<int, 3> a{1, 2, 3};
+            std::array<int, 3> b{4, 5, 6};
+            for (auto [x, y] : std::views::zip(a, b)) { (void)x; (void)y; }
+            for (auto chunk : std::views::chunk(a, 2)) { (void)chunk; }
+            if (a.empty()) std::unreachable();
+          }
+          EOF
+          "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
+          echo "C++23 zip, chunk, and unreachable supported by $CXX"
       - name: Download Geofabrik SoCal boundary and local config
         run: |
           set -euo pipefail
