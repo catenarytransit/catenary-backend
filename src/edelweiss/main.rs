@@ -9,6 +9,8 @@ use catenary::routing_common::raptor_query::Leg;
 use clap::Parser;
 use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader, Write};
+use std::net::TcpStream;
 use std::{collections::{BTreeMap, BTreeSet}, fs, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
@@ -25,6 +27,8 @@ struct Args {
     query: Option<PathBuf>,
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
+    #[arg(long, default_value = "127.0.0.1:40501")]
+    osr_worker: String,
 }
 
 #[derive(Deserialize)]
@@ -35,7 +39,9 @@ struct Request {
     from: Coordinates,
     to: Coordinates,
     departure_unix_seconds:i64,
+    #[serde(default)]
     access:Vec<Endpoint>,
+    #[serde(default)]
     egress:Vec<Endpoint>,
     direct_walk_minutes:Option<u32>,
 }
@@ -53,7 +59,7 @@ struct Answer {
     route_styles:Vec<RouteStyle>,
 }
 
-struct State {router:Arc<Router>,database_url:Option<String>}
+struct State {router:Arc<Router>,database_url:Option<String>,osr_worker:String}
 
 fn hydrate(
     tt:&catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
@@ -96,14 +102,91 @@ fn hydrate(
     Ok(styles.into_values().collect())
 }
 
-fn run_query(router:&Router,request:Request,url:Option<&str>)->Result<Answer>{
+
+#[derive(Serialize)]
+struct OsrStop {stop:u32,latitude:f64,longitude:f64}
+#[derive(Serialize)]
+struct OsrRequest<'a>{
+    region:&'a str,latitude:f64,longitude:f64,max_seconds:u32,stops:Vec<OsrStop>,
+}
+#[derive(Deserialize)]
+struct OsrAccess {stop:u32,minutes:u32}
+#[derive(Deserialize)]
+struct OsrResponse {reachable:Vec<OsrAccess>,error:Option<String>}
+
+fn osr_access(
+    router:&Router,
+    addr:&str,
+    transit_region:&str,
+    osr_region:&str,
+    point:Coordinates,
+)->Result<Vec<WalkingEndpoint>>{
+    let nearest=router.nearest_stops(transit_region,point,4096)?;
+    let table=router.timetable_for(transit_region)?;
+    let stops=nearest.into_iter().map(|(id,_)|{
+        let c=table.coordinates()[id.idx()];
+        OsrStop{stop:id.0,latitude:f64::from(c.lat),longitude:f64::from(c.lon)}
+    }).collect();
+    let request=OsrRequest{
+        region:osr_region,latitude:point.lat,longitude:point.lon,
+        max_seconds:1800,stops,
+    };
+    let mut stream=TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
+    serde_json::to_writer(&mut stream,&request)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    let mut line=String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    let reply:OsrResponse=serde_json::from_str(&line)?;
+    if let Some(err)=reply.error { anyhow::bail!("OSR query: {err}"); }
+    Ok(reply.reachable.into_iter()
+        .map(|x|WalkingEndpoint{stop:LocationIdx(x.stop),minutes:x.minutes}).collect())
+}
+
+fn direct_osr_minutes(
+    addr:&str,
+    region:&str,
+    from:Coordinates,
+    to:Coordinates,
+)->Result<Option<u32>>{
+    let request=OsrRequest{
+        region,latitude:from.lat,longitude:from.lon,max_seconds:3600,
+        stops:vec![OsrStop{stop:0,latitude:to.lat,longitude:to.lon}],
+    };
+    let mut stream=TcpStream::connect(addr)?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
+    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
+    serde_json::to_writer(&mut stream,&request)?;
+    stream.write_all(b"\n")?;
+    stream.flush()?;
+    let mut line=String::new();
+    BufReader::new(stream).read_line(&mut line)?;
+    let reply:OsrResponse=serde_json::from_str(&line)?;
+    if let Some(error)=reply.error { anyhow::bail!("OSR direct route: {error}"); }
+    Ok(reply.reachable.first().map(|x|x.minutes))
+}
+
+fn run_query(router:&Router,request:Request,url:Option<&str>,osr_worker:&str)->Result<Answer>{
     let selection=router.select(request.from,request.to)?;
-    let from=request.access.into_iter().map(|e| WalkingEndpoint{
-        stop:LocationIdx(e.stop),minutes:e.minutes}).collect();
-    let to=request.egress.into_iter().map(|e|WalkingEndpoint{
-        stop:LocationIdx(e.stop),minutes:e.minutes}).collect();
-    let routing=router.route_with_access(selection,request.departure_unix_seconds,from,to,
-        request.direct_walk_minutes)?;
+    let from=if request.access.is_empty(){
+        osr_access(router,osr_worker,&selection.transit_region,&selection.origin_osr_region,request.from)?
+    }else{
+        request.access.into_iter().map(|e| WalkingEndpoint{
+            stop:LocationIdx(e.stop),minutes:e.minutes}).collect()
+    };
+    let to=if request.egress.is_empty(){
+        osr_access(router,osr_worker,&selection.transit_region,&selection.destination_osr_region,request.to)?
+    }else{
+        request.egress.into_iter().map(|e| WalkingEndpoint{
+            stop:LocationIdx(e.stop),minutes:e.minutes}).collect()
+    };
+    let direct=if request.direct_walk_minutes.is_some(){request.direct_walk_minutes}
+        else if selection.origin_osr_region==selection.destination_osr_region {
+            direct_osr_minutes(osr_worker,&selection.origin_osr_region,request.from,request.to)?
+        }else{None};
+    let routing=router.route_with_access(selection,request.departure_unix_seconds,from,to,direct)?;
     let timetable=router.timetable_for(&routing.selection.transit_region)?;
     let route_styles=hydrate(&timetable,&routing.journeys,url)?;
     Ok(Answer{routing,route_styles})
@@ -112,7 +195,7 @@ fn run_query(router:&Router,request:Request,url:Option<&str>)->Result<Answer>{
 async fn route(state:web::Data<State>,payload:web::Json<Request>)->HttpResponse{
     let state=state.into_inner();
     let request=payload.into_inner();
-    let result=web::block(move||run_query(&state.router,request,state.database_url.as_deref())).await;
+    let result=web::block(move||run_query(&state.router,request,state.database_url.as_deref(),&state.osr_worker)).await;
     match result {
         Ok(Ok(answer))=>HttpResponse::Ok().json(answer),
         Ok(Err(err))=>HttpResponse::UnprocessableEntity().body(err.to_string()),
@@ -126,17 +209,17 @@ async fn main()->Result<()>{
     let config=catenary::routing_common::routing_regions::RoutingRegionsConfig::load(&args.regions_config)?;
     let settings=RouterSettings{
         data_dir:args.data_dir.unwrap_or(config.data_dir),
-        access_radius_meters:1800.0,max_boardings:5,max_duration_minutes:360,
+        access_radius_meters:5000.0,max_boardings:5,max_duration_minutes:360,
     };
     let router=Arc::new(Router::load(&args.regions_config,&args.catenary_config,settings)?);
     if let Some(path)=args.query {
         let request:Request=serde_json::from_slice(&fs::read(&path)
             .with_context(||format!("reading {}",path.display()))?)?;
-        let response=run_query(&router,request,args.database_url.as_deref())?;
+        let response=run_query(&router,request,args.database_url.as_deref(),&args.osr_worker)?;
         println!("{}",serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
-    let state=web::Data::new(State{router,database_url:args.database_url});
+    let state=web::Data::new(State{router,database_url:args.database_url,osr_worker:args.osr_worker});
     HttpServer::new(move||App::new().app_data(state.clone()).route("/v1/route",web::post().to(route)))
         .bind(&args.listen)?.run().await?;
     Ok(())

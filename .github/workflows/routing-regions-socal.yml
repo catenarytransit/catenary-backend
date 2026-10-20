@@ -80,19 +80,20 @@ jobs:
           set -euo pipefail
           cargo run --release --bin gentian --             --region southern-california             --regions-config routing_regions/config.toml             --first-utc-day 20745 --day-count 35             --footpaths temp/footpaths.tsv --build             --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
-      - name: Compute OSR access and egress for UCI to Los Angeles City Hall
+      - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
-          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin access -- \
-            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
-            --stops temp/stops.tsv --latitude 33.6461 --longitude -117.8427 \
-            --output temp/uci-access.json --radius-meters 2200
-          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin access -- \
-            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
-            --stops temp/stops.tsv --latitude 34.0537 --longitude -118.2428 \
-            --output temp/cityhall-egress.json --radius-meters 2200
+          cargo run --release --manifest-path tools/gentian_footpaths/Cargo.toml --bin server -- \
+            --config catenaryconfig.toml > temp/osr-worker.log 2>&1 &
+          echo $! > temp/osr-worker.pid
+          for attempt in $(seq 1 45); do
+            if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then break; fi
+            sleep 2
+          done
+          kill -0 "$(cat temp/osr-worker.pid)"
+      - name: Prepare UCI to City Hall Monday query
+        run: |
           python3 tools/routing_regions/prepare_uci_cityhall_query.py \
-            --access temp/uci-access.json --egress temp/cityhall-egress.json \
             --output temp/uci-cityhall-request.json
       - name: Execute Edelweiss RAPTOR example and print Pareto journeys
         run: |
@@ -112,4 +113,5 @@ jobs:
             temp/selection.json
             temp/stops.tsv
             temp/uci-cityhall-results.json
+            temp/osr-worker.log
           if-no-files-found: ignore
