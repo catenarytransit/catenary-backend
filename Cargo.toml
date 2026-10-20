@@ -14,12 +14,9 @@ non_ascii_idents = "deny"
 [profile.release]
 lto = "thin"
 
-[features]
-gentian-osr = ["dep:osr-ffi", "dep:cxx"]
-
 [dependencies]
-osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "42734767fe8ed7cca50ce123627f714f771853a4", optional = true }
-cxx = { version = "1", optional = true }
+osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "42734767fe8ed7cca50ce123627f714f771853a4" }
+cxx = "1"
 good_lp = { version = "1.0", features = ["coin_cbc"] }
 mvt = "0.10"
 ahash = { version = "0.8.12", features = ["serde"] }
@@ -313,7 +310,6 @@ path = "src/gentian/main.rs"
 [[bin]]
 name = "osr_worker"
 path = "src/gentian/osr_worker.rs"
-required-features = ["gentian-osr"]
 
 [[bin]]
 name = "linnaea"

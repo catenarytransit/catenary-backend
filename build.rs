@@ -2,11 +2,9 @@ use prost_build::Config;
 
 fn main() {
     #[cfg(target_os = "linux")]
-    if std::env::var_os("CARGO_FEATURE_GENTIAN_OSR").is_some() {
-        if let Ok(dir) = std::env::var("DEP_CATENARY_OSR_BRIDGE_LIB_DIR") {
-            println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
-            println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
-        }
+    if let Ok(dir) = std::env::var("DEP_CATENARY_OSR_BRIDGE_LIB_DIR") {
+        println!("cargo:rustc-link-arg=-Wl,-rpath,{dir}");
+        println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/lib");
     }
 
     Config::new()

@@ -483,7 +483,7 @@ pub fn build(
     sources: &[ChateauSource],
     first_utc_day: i32,
     day_count: u32,
-    osr_dir: Option<&Path>,
+    osr_dir: &Path,
     max_seconds: u32,
     candidate_meters: f64,
     output: &Path,
@@ -497,23 +497,10 @@ pub fn build(
     }
     ensure!(!schedules.is_empty(), "no scheduled trips in selected timetable horizon");
     assemble_routes(&mut tt, schedules)?;
-    if let Some(osr_dir) = osr_dir {
-        #[cfg(feature = "gentian-osr")]
-        {
-            let transfers = super::footpaths::compute(
-                osr_dir, &tt.coordinates, max_seconds, candidate_meters,
-            )?;
-            add_footpaths(&mut tt, transfers)?;
-        }
-        #[cfg(not(feature = "gentian-osr"))]
-        {
-            let _ = (osr_dir, max_seconds, candidate_meters);
-            bail!("OSR footpath compilation requires --features gentian-osr");
-        }
-    } else {
-        tt.footpaths_out_offsets.resize(tt.coordinates.len() + 1, 0);
-        tt.footpaths_in_offsets.resize(tt.coordinates.len() + 1, 0);
-    }
+    let transfers = super::footpaths::compute(
+        osr_dir, &tt.coordinates, max_seconds, candidate_meters,
+    )?;
+    add_footpaths(&mut tt, transfers)?;
     let bytes = tt.encode()?;
     ZeroCopyTimetable::new(&bytes)?;
     if let Some(dir) = output.parent() { fs::create_dir_all(dir)?; }

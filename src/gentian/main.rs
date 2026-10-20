@@ -7,11 +7,10 @@ use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
 mod compile;
-#[cfg(feature = "gentian-osr")]
 mod footpaths;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Compile regional RAPTOR timetables with optional OSR footpaths")]
+#[command(author, version, about = "Compile regional RAPTOR timetables with native OSR footpaths")]
 struct Args {
     /// Output V2 binary. Optional when only listing selected chateaux.
     #[arg(short, long)]
@@ -83,9 +82,11 @@ fn main() -> Result<()> {
         let url = args.database_url.as_deref().context("DATABASE_URL is required")?;
         let mut client = Client::connect(url, NoTls)?;
         let output = args.output.as_ref().context("--output is required with --build")?;
+        let osr_dir = args.osr_dir.as_deref()
+            .context("--osr-dir is required for native OSR transfer compilation")?;
         compile::build(
             &mut client, &selection.sources, args.first_utc_day, args.day_count,
-            args.osr_dir.as_deref(), args.max_seconds, args.candidate_meters, output,
+            osr_dir, args.max_seconds, args.candidate_meters, output,
         )?;
         return Ok(());
     }

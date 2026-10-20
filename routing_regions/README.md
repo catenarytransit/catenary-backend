@@ -14,7 +14,7 @@ Run the Geofabrik OSR extractor manager using the independent crate at
 
 ```sh
 cargo run --release --manifest-path src/osm_manager/Cargo.toml -- --config catenaryconfig.toml run
-cargo run --release --features gentian-osr --bin gentian -- \
+cargo run --release --bin gentian -- \
   --region southern-california \
   --regions-config routing_regions.toml \
   --first-utc-day 20745 --day-count 35 \
@@ -27,8 +27,8 @@ Gentian reads GTFS from PostgreSQL, generates the timetable's location indices
 and routes, matches stop candidates against the local OSR graph, runs bounded
 native OSR one-to-many searches, and directly writes forward and reverse
 footpath arrays into the memory-mappable RAPTOR timetable. There are no
-stop-export or footpath-import TSV intermediates. The native module is gated by
-`--features gentian-osr`, leaving unrelated backend builds independent of C++.
+stop-export or footpath-import TSV intermediates. Native OSR is required for every
+Gentian timetable build; `--build` fails unless `--osr-dir` is supplied.
 
 The `--osr-dir` path is the extracted OSR dataset containing `routing.bin`,
 not the parent manager output directory. One OSR graph is used per Gentian
@@ -38,7 +38,7 @@ For coordinate access/egress requests, Edelweiss continues to use a separate
 long-running native OSR worker. This is **query-time** routing, not compilation:
 
 ```sh
-cargo run --release --features gentian-osr --bin osr_worker -- \
+cargo run --release --bin osr_worker -- \
   --config catenaryconfig.toml
 DATABASE_URL='postgres://...' cargo run --release --bin edelweiss -- \
   --regions-config routing_regions.toml \

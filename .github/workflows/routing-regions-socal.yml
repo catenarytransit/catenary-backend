@@ -152,7 +152,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --release --features gentian-osr --bin gentian --bin osr_worker
+          cargo build --release --bin gentian --bin osr_worker
           bridge="$(find target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
           test -n "$bridge"
           readelf -d "$bridge" | tee /tmp/osr-native-needed.txt
@@ -169,7 +169,7 @@ jobs:
       - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
         run: |
           set -euo pipefail
-          cargo run --release --features gentian-osr --bin gentian -- \
+          cargo run --release --bin gentian -- \
             --region southern-california \
             --regions-config routing_regions.toml \
             --first-utc-day 20745 --day-count 35 \
@@ -180,7 +180,7 @@ jobs:
       - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
-          cargo run --release --features gentian-osr --bin osr_worker -- \
+          cargo run --release --bin osr_worker -- \
             --config catenaryconfig.toml > temp/osr-worker.log 2>&1 &
           echo $! > temp/osr-worker.pid
           for attempt in $(seq 1 45); do
