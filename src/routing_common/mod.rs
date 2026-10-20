@@ -5,6 +5,7 @@ pub mod graph_loader;
 pub mod lookup;
 pub mod osm_router;
 pub mod profiles;
+pub mod routing_regions;
 pub mod timetable;
 pub mod transit_graph;
 pub mod types;
