@@ -23,6 +23,59 @@ impl MappedTimetable {
     }
 }
 
+/// Publish a timetable only after its streamed representation has been
+/// flushed, synced and validated through the same mmap reader as Edelweiss.
+/// A unique sibling avoids collisions between concurrent Gentian compilers.
+pub fn publish(tt: &crate::routing_common::timetable::TimetableOwned, output: &Path) -> Result<u64> {
+    use std::fs::{self, OpenOptions};
+    use std::io::BufWriter;
+
+    let dir = output.parent().filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating {}", dir.display()))?;
+    let name = output.file_name().context("timetable output has no file name")?;
+    let name = name.to_string_lossy();
+
+    let mut last_error = None;
+    for _ in 0..8 {
+        let temporary = dir.join(format!(".{name}.{}.building", uuid::Uuid::new_v4()));
+        let file = match OpenOptions::new().write(true).create_new(true).open(&temporary) {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                last_error = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error).with_context(|| format!("creating {}", temporary.display())),
+        };
+
+        // Cleanup on every early return, including validation and rename failure.
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+        }
+        let cleanup = Cleanup(temporary.clone());
+
+        let mut writer = BufWriter::new(file);
+        let bytes = tt.write_to(&mut writer)
+            .with_context(|| format!("serializing {}", temporary.display()))?;
+        let file = writer.into_inner()
+            .map_err(|e| anyhow::anyhow!("flushing {}: {}", temporary.display(), e))?;
+        file.sync_all().with_context(|| format!("syncing {}", temporary.display()))?;
+        drop(file);
+
+        let mapped = MappedTimetable::open(&temporary)?;
+        drop(mapped);
+        fs::rename(&temporary, output)
+            .with_context(|| format!("publishing {}", output.display()))?;
+        #[cfg(unix)]
+        File::open(dir)?.sync_all().with_context(|| format!("syncing {}", dir.display()))?;
+        drop(cleanup);
+        return Ok(bytes);
+    }
+    Err(last_error.context("could not allocate a unique temporary timetable path")?.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
