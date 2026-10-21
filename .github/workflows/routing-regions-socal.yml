@@ -263,11 +263,13 @@ jobs:
             echo '## Southern California RAPTOR query benchmarks'
             echo ''
             echo 'All durations are **milliseconds**. RAPTOR excludes OSR, GTFS metadata hydration,'
-            echo 'and startup. Query total measures end-to-end inside Edelweiss; CLI wall'
+            echo 'and startup. OSR branch timings overlap; OSR parallel wall is the'
+            echo 'actual elapsed interval enclosing all three searches. Query total'
+            echo 'measures end-to-end inside Edelweiss; CLI wall'
             echo 'also includes cold process startup and mmap initialization.'
             echo ''
-            echo '| Query | Journeys | RAPTOR | OSR access | OSR egress | OSR direct | Metadata | Query total | CLI wall |'
-            echo '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |'
+            echo '| Query | Journeys | RAPTOR | OSR access | OSR egress | OSR direct | OSR parallel wall | Metadata | Query total | CLI wall |'
+            echo '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |'
           } >> "$GITHUB_STEP_SUMMARY"
           python3 src/routing_regions/run_timed_query.py \
             --label 'UCI to City Hall (Mon Oct 26 08:00 PDT)' \
