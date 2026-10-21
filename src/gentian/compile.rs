@@ -10,7 +10,6 @@ use chrono_tz::Tz;
 use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
 use std::path::Path;
 
 #[derive(Clone)]
@@ -508,14 +507,9 @@ pub fn build(
     super::footpaths::add_station_links(&tt, &mut transfers)?;
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
-    let bytes = tt.encode()?;
-    ZeroCopyTimetable::new(&bytes)?;
-    if let Some(dir) = output.parent() { fs::create_dir_all(dir)?; }
-    let temp = output.with_extension("building");
-    fs::write(&temp, &bytes)?;
-    fs::rename(&temp, output)?;
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!("Wrote {} bytes; {} stops, {} RAPTOR routes, {} trips, {} footpaths",
-        bytes.len(), tt.coordinates.len(), tt.route_transport_ranges.len(),
+        bytes, tt.coordinates.len(), tt.route_transport_ranges.len(),
         tt.trip_public_route_ids.len(), tt.footpaths_out.len());
     Ok(())
 }
