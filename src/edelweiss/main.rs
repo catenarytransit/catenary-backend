@@ -1,3 +1,7 @@
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use actix_web::{web, App, HttpResponse, HttpServer};
 use anyhow::{Context, Result};
 use catenary::routing_common::route_manager::{
