@@ -1,11 +1,11 @@
-use anyhow::{Context, Result, ensure, bail};
+use anyhow::{Context, Result, ensure};
 use clap::Parser;
 use osr_ffi::{ffi, Profile};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
-    io::{BufRead, BufReader, BufWriter, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
     sync::{mpsc, Arc, Mutex},
@@ -94,11 +94,15 @@ fn handle(
 ) -> Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    let mut reader=BufReader::new(stream.try_clone()?);
-    let mut input=String::new();
-    reader.read_line(&mut input)?;
-    ensure!(input.len()<=524_288,"OSR request exceeds 512KiB");
-    let response=match serde_json::from_str::<Request>(&input){
+    let reader = BufReader::new(stream.try_clone()?);
+    // Enforce the wire budget while reading. Checking after read_line could
+    // allocate an unbounded String per concurrent client.
+    let mut limited = reader.take(524_289);
+    let mut input = Vec::new();
+    let received = limited.read_until(b'\n', &mut input)?;
+    ensure!(received > 0 && received <= 524_288 && input.last() == Some(&b'\n'),
+        "OSR request exceeds 512KiB or is not newline terminated");
+    let response=match serde_json::from_slice::<Request>(&input){
         Ok(req)=>match run_request(graphs,paths,req){
             Ok(reachable)=>Response{reachable,error:None},
             Err(e)=>Response{reachable:Vec::new(),error:Some(e.to_string())},
