@@ -1,10 +1,11 @@
-use crate::routing_common::timetable::{FormatError, ZeroCopyTimetable};
+use crate::routing_common::timetable::{FormatError, ValidatedTimetableHeader, ZeroCopyTimetable};
 use anyhow::{Context, Result};
 use memmap2::{Mmap, MmapOptions};
 use std::{fs::File, path::Path};
 
 pub struct MappedTimetable {
     bytes: Mmap,
+    validated_header: ValidatedTimetableHeader,
 }
 
 impl MappedTimetable {
@@ -13,13 +14,14 @@ impl MappedTimetable {
             .with_context(|| format!("opening timetable {}", path.display()))?;
         let bytes = unsafe { MmapOptions::new().map(&file) }
             .with_context(|| format!("mapping timetable {}", path.display()))?;
-        ZeroCopyTimetable::new(&bytes)
-            .with_context(|| format!("validating timetable {}", path.display()))?;
-        Ok(Self { bytes })
+        let validated_header = ZeroCopyTimetable::new(&bytes)
+            .with_context(|| format!("validating timetable {}", path.display()))?
+            .validated_header();
+        Ok(Self { bytes, validated_header })
     }
 
     pub fn view(&self) -> std::result::Result<ZeroCopyTimetable<'_>, FormatError> {
-        ZeroCopyTimetable::new(&self.bytes)
+        Ok(ZeroCopyTimetable::from_validated_header(&self.bytes, self.validated_header))
     }
 }
 
@@ -101,6 +103,36 @@ mod tests {
         let leftovers: Vec<_> = std::fs::read_dir(&directory).unwrap().collect();
         assert_eq!(leftovers.len(), 1, "scratch files must be removed");
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cached_view_matches_checked_view() {
+        let path = std::env::temp_dir().join(format!("gentian-mmap-{}", uuid::Uuid::new_v4()));
+        let tt = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10);
+        std::fs::write(&path, tt.encode().unwrap()).unwrap();
+        let mapped = MappedTimetable::open(&path).unwrap();
+        let expected = ZeroCopyTimetable::new(&mapped.bytes).unwrap();
+        for _ in 0..32 {
+            let view = mapped.view().unwrap();
+            assert_eq!(view.header().magic, expected.header().magic);
+            assert_eq!(view.header().version, expected.header().version);
+            assert_eq!(view.header().day_count, expected.header().day_count);
+            assert_eq!(view.coordinates().len(), expected.coordinates().len());
+            assert_eq!(view.route_transport_ranges().len(), expected.route_transport_ranges().len());
+        }
+        drop(mapped);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn rejects_invalid_timetable_before_caching_header() {
+        let path = std::env::temp_dir().join(format!("gentian-mmap-{}", uuid::Uuid::new_v4()));
+        let mut encoded = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10)
+            .encode().unwrap();
+        encoded[0] ^= 0xff;
+        std::fs::write(&path, encoded).unwrap();
+        assert!(MappedTimetable::open(&path).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
