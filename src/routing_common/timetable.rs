@@ -691,36 +691,19 @@ mod tests {
     #[test]
     fn streamed_binary_matches_encoded_v4_bytes() {
         use std::io::Cursor;
-
         for day_count in [1, 35, 512] {
             let mut tt = TimetableOwned::empty(20_000, day_count);
-            let source = tt.add_source("chateau", "feed", "attempt").unwrap();
-            tt.add_route_id(source, "route").unwrap();
-            for (id, name, lat, lon) in [
-                ("stop-1", "Station 1", 34.0, -118.0),
-                ("stop-2", "Station 2", 34.01, -118.01),
-            ] {
-                let id = tt.add_string(id).unwrap();
-                let name = tt.add_string(name).unwrap();
-                tt.coordinates.push(Coordinate { lat, lon });
-                tt.location_id.push(id);
-                tt.location_name.push(name);
-                tt.location_source.push(source);
-                tt.location_parent.push(LocationIdx::INVALID);
-                tt.location_type.push(1);
-                tt.location_transfer_seconds.push(DEFAULT_TRANSFER_SECONDS);
-                tt.location_routes_offsets.push(0);
-            }
-            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(1), 75).unwrap());
-            tt.footpaths_out_offsets.extend([1, 1]);
-            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(0), 75).unwrap());
-            tt.footpaths_in_offsets.extend([0, 1]);
+            let a = tt.add_source("C1", "F1", "A1").unwrap();
+            let b = tt.add_source("C2", "F2", "A2").unwrap();
+            tt.add_route_id(a, "R1").unwrap();
+            tt.add_route_id(b, "R2").unwrap();
             let expected = tt.encode().unwrap();
-
             let mut output = Cursor::new(Vec::new());
             let written = tt.write_to(&mut output).unwrap();
             assert_eq!(written as usize, expected.len());
-            assert_eq!(output.into_inner(), expected);
+            let bytes = output.into_inner();
+            assert_eq!(bytes, expected);
+            ZeroCopyTimetable::new(&bytes).unwrap();
         }
     }
 
