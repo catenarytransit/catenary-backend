@@ -45,12 +45,20 @@ struct Access {stop:u32,seconds:u32}
 struct Response {reachable:Vec<Access>,error:Option<String>}
 
 fn run_request(
-    graphs: &BTreeMap<String,cxx::UniquePtr<ffi::Router>>,
-    query:Request,
-)->Result<Vec<Access>>{
+    graphs: &mut BTreeMap<String,cxx::UniquePtr<ffi::Router>>,
+    paths: &BTreeMap<String, PathBuf>,
+    query: Request,
+) -> Result<Vec<Access>> {
     ensure!(query.latitude.is_finite() && query.longitude.is_finite(),"invalid origin");
     ensure!((1..=3600).contains(&query.max_seconds),"invalid OSR duration budget");
     ensure!(query.stops.len()<=4096,"too many stops for one OSR query");
+    if !graphs.contains_key(&query.region) {
+        let dir = paths.get(&query.region).context("unknown OSR region")?;
+        let router = ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
+        ensure!(!router.is_null(), "OSR graph is null: {}", query.region);
+        eprintln!("Opened native OSR mmap: {}", query.region);
+        graphs.insert(query.region.clone(), router);
+    }
     let graph=graphs.get(&query.region).context("OSR region is not loaded")?;
     let router=graph.as_ref().context("OSR graph is null")?;
     let options=ffi::RoutingOptions {
@@ -79,7 +87,11 @@ fn run_request(
     Ok(results)
 }
 
-fn handle(stream:TcpStream,graphs:&BTreeMap<String,cxx::UniquePtr<ffi::Router>>)->Result<()>{
+fn handle(
+    stream: TcpStream,
+    graphs: &mut BTreeMap<String, cxx::UniquePtr<ffi::Router>>,
+    paths: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
     let mut reader=BufReader::new(stream.try_clone()?);
@@ -87,7 +99,7 @@ fn handle(stream:TcpStream,graphs:&BTreeMap<String,cxx::UniquePtr<ffi::Router>>)
     reader.read_line(&mut input)?;
     ensure!(input.len()<=524_288,"OSR request exceeds 512KiB");
     let response=match serde_json::from_str::<Request>(&input){
-        Ok(req)=>match run_request(graphs,req){
+        Ok(req)=>match run_request(graphs,paths,req){
             Ok(reachable)=>Response{reachable,error:None},
             Err(e)=>Response{reachable:Vec::new(),error:Some(e.to_string())},
         },
@@ -120,9 +132,9 @@ fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>>
     Ok(paths)
 }
 
-/// Loaded once on each worker thread, so native routing state never crosses
-/// a Rust Send/Sync boundary. Linux page cache backs the same OSR graph files
-/// across workers, but per-router mutable native memory is not shared.
+/// The primary worker eagerly initializes the configured regions. Additional
+/// workers initialize handles lazily per region. Native handles never cross
+/// thread boundaries; read-only mmap pages share the Linux page cache.
 fn open_graphs(
     paths: &BTreeMap<String, PathBuf>,
 ) -> Result<BTreeMap<String, cxx::UniquePtr<ffi::Router>>> {
@@ -153,23 +165,28 @@ fn main() -> Result<()> {
         let paths = Arc::clone(&paths);
         let ready = ready_tx.clone();
         thread::Builder::new().name(format!("osr-query-{worker}")).spawn(move || {
-            let graphs = match open_graphs(&paths) {
-                Ok(g) => {
-                    let _ = ready.send(Ok(()));
-                    g
+            // One eagerly initialized context retains the previous startup
+            // validation behavior. Additional contexts initialize lazily,
+            // avoiding duplicate native memory for OSR regions never queried.
+            let mut graphs = if worker == 0 {
+                match open_graphs(&paths) {
+                    Ok(g) => g,
+                    Err(error) => {
+                        let _ = ready.send(Err(error));
+                        return;
+                    }
                 }
-                Err(error) => {
-                    let _ = ready.send(Err(error));
-                    return;
-                }
+            } else {
+                BTreeMap::new()
             };
+            let _ = ready.send(Ok(()));
             loop {
                 // Do not hold the receiver mutex while running native OSR.
                 let stream = match recv.lock().expect("OSR queue poisoned").recv() {
                     Ok(stream) => stream,
                     Err(_) => break,
                 };
-                if let Err(error) = handle(stream, &graphs) {
+                if let Err(error) = handle(stream, &mut graphs, &paths) {
                     eprintln!("OSR client: {error}");
                 }
             }
