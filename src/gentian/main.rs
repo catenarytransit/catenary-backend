@@ -1,3 +1,7 @@
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 //! Gentian's regional timetable and OSR footpath compiler.
 use std::path::PathBuf;
 
@@ -110,16 +114,10 @@ fn main() -> Result<()> {
         }
     }
 
-    let bytes = tt.encode()?;
-    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
-    }
-    std::fs::write(output, &bytes)
-        .with_context(|| format!("writing {}", output.display()))?;
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!(
         "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
-        bytes.len(), tt.sources.len()
+        bytes, tt.sources.len()
     );
     Ok(())
 }
