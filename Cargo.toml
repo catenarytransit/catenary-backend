@@ -15,7 +15,7 @@ non_ascii_idents = "deny"
 lto = "thin"
 
 [dependencies]
-osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "86fee7c2d7cbdc91f258164c7c67cccc129069e0" }
+osr-ffi = { git = "https://github.com/catenarytransit/osr-ffi", rev = "695d95b2419e0e88ed00cd16cca2ba26da4472ed" }
 cxx = "1"
 good_lp = { version = "1.0", features = ["coin_cbc"] }
 mvt = "0.10"
