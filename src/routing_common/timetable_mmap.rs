@@ -80,6 +80,30 @@ pub fn publish(tt: &crate::routing_common::timetable::TimetableOwned, output: &P
 mod tests {
     use super::*;
     #[test]
+    fn publishing_keeps_existing_file_on_serialization_failure() {
+        let directory = std::env::temp_dir().join(format!(
+            "gentian-publish-test-{}", uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("routing.bin");
+        let old = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10);
+        let old_size = publish(&old, &path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), old_size);
+        let old_bytes = std::fs::read(&path).unwrap();
+
+        let invalid = crate::routing_common::timetable::TimetableOwned::empty(20_000, 513);
+        assert!(publish(&invalid, &path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), old_bytes);
+
+        let next = crate::routing_common::timetable::TimetableOwned::empty(20_010, 35);
+        publish(&next, &path).unwrap();
+        assert_eq!(MappedTimetable::open(&path).unwrap().view().unwrap().header().day_count, 35);
+        let leftovers: Vec<_> = std::fs::read_dir(&directory).unwrap().collect();
+        assert_eq!(leftovers.len(), 1, "scratch files must be removed");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn opens_a_mapped_timetable() {
         let path = std::env::temp_dir().join(format!("gentian-mmap-{}", std::process::id()));
         let tt = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10);
