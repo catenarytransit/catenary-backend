@@ -121,34 +121,7 @@ jobs:
           curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
           python3 src/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
           git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
-      - name: Download native OSR extractor
-        run: |
-          set -euo pipefail
-          curl -fL --retry 3             https://github.com/motis-project/osr/releases/download/v0.0.4/osr-linux-amd64.tar.bz2             -o /tmp/osr-extract.tar.bz2
-          mkdir -p /tmp/osr-release
-          tar -xjf /tmp/osr-extract.tar.bz2 -C /tmp/osr-release
-          find /tmp/osr-release -type f -name osr-extract -exec cp '{}' ./osr-extract \;
-          chmod +x ./osr-extract
-          test -x ./osr-extract
-      - name: Download and extract Southern California OSR graph
-        run: |
-          cargo run --release --manifest-path src/osm_manager/Cargo.toml --             --config catenaryconfig.toml run
-          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
-      - name: Ingest restricted Maple feeds
-        run: |
-          set -euo pipefail
-          diesel migration run
-          cargo run --release --bin maple
-      - name: Verify routing-region and source selection
-        run: |
-          set -euo pipefail
-          cargo test --lib routing_common::routing_regions
-          cargo run --release --bin gentian -- \
-            --region southern-california \
-            --regions-config routing_regions.toml \
-            --list-chateaux > temp/selection.json
-          python3 src/routing_regions/verify_selection.py temp/selection.json --live
-      - name: Build Gentian with native OSR transfer support
+      - name: Build native OSR reader and matching extractor
         shell: bash
         run: |
           set -euo pipefail
@@ -166,6 +139,49 @@ jobs:
           fi
           ./target/release/gentian --help >/dev/null
           ./target/release/osr_worker --help >/dev/null
+          bash src/osm_manager/build_matched_extractor.sh
+          test -x ./osr-extract
+      - name: Download and extract Southern California OSR graph
+        run: |
+          set -euo pipefail
+          cargo run --release --manifest-path src/osm_manager/Cargo.toml -- \
+            --config catenaryconfig.toml run
+          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
+      - name: Verify extracted graph opens with the same native OSR reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/release/osr_worker --config catenaryconfig.toml > temp/osr-validation.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log; then
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat temp/osr-validation.log
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log || {
+            cat temp/osr-validation.log
+            exit 1
+          }
+      - name: Ingest restricted Maple feeds
+        run: |
+          set -euo pipefail
+          diesel migration run
+          cargo run --release --bin maple
+      - name: Verify routing-region and source selection
+        run: |
+          set -euo pipefail
+          cargo test --lib routing_common::routing_regions
+          cargo run --release --bin gentian -- \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --list-chateaux > temp/selection.json
+          python3 src/routing_regions/verify_selection.py temp/selection.json --live
       - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
         run: |
           set -euo pipefail
@@ -218,4 +234,6 @@ jobs:
             temp/stops.tsv
             temp/uci-cityhall-results.json
             temp/osr-worker.log
+            temp/osr-validation.log
+            temp/osr-data/regions/north-america/us/california/socal/manifest.json
           if-no-files-found: ignore

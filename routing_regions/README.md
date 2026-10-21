@@ -23,6 +23,20 @@ cargo run --release --bin gentian -- \
   --build --output compiled/routing/southern-california.bin
 ```
 
+**OSR graph compatibility:** Before running Gentian, build the native OSR
+reader and its matching extractor from the same pinned source:
+
+```sh
+cargo build --release --bin osr_worker
+bash src/osm_manager/build_matched_extractor.sh
+```
+
+Do not generate a `routing.bin` using a separately downloaded OSR v0.0.4
+release while querying it with the newer `osr-ffi` reader. The OSM manager
+now fingerprints the extractor and regenerates previously cached output on
+a change. The SoCal CI workflow verifies the graph opens with the native
+reader immediately after extraction, before loading GTFS.
+
 Gentian reads GTFS from PostgreSQL, generates the timetable's location indices
 and routes, matches stop candidates against the local OSR graph, runs bounded
 native OSR one-to-many searches, and directly writes forward and reverse
