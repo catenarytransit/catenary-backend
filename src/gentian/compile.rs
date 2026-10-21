@@ -3,14 +3,14 @@ use catenary::routing_common::routing_regions::ChateauSource;
 use catenary::routing_common::timetable::{
     BitfieldIdx, Clasz, Coordinate, Delta, LocationIdx, PackedFootpath, PackedStop,
     Range, RouteIdx, TrafficDays, TransportIdx, TripIdx, TripTransportRange,
-    TimetableOwned, ZeroCopyTimetable,
+    TimetableOwned,
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
 use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
 use std::collections::{BTreeMap, HashMap};
-use std::fs;
+use super::external_assembly::ScheduleRuns;
 use std::path::Path;
 
 #[derive(Clone)]
@@ -24,10 +24,10 @@ struct Stop {
 }
 
 #[derive(Clone)]
-struct Event {
-    stop: LocationIdx,
-    arrival: i64,
-    departure: i64,
+pub(super) struct Event {
+    pub(super) stop: LocationIdx,
+    pub(super) arrival: i64,
+    pub(super) departure: i64,
 }
 
 #[derive(Clone)]
@@ -39,15 +39,15 @@ struct Pattern {
 }
 
 #[derive(Clone)]
-struct Schedule {
-    trip_id: String,
-    source: u16,
-    route_id: String,
-    route_type: i16,
-    locations: Vec<LocationIdx>,
-    events: Vec<Event>,
-    first_second: u32,
-    days: TrafficDays,
+pub(super) struct Schedule {
+    pub(super) trip_id: String,
+    pub(super) source: u16,
+    pub(super) route_id: String,
+    pub(super) route_type: i16,
+    pub(super) locations: Vec<LocationIdx>,
+    pub(super) events: Vec<Event>,
+    pub(super) first_second: u32,
+    pub(super) days: TrafficDays,
 }
 
 #[derive(Default)]
@@ -276,20 +276,21 @@ fn non_overtaking(a: &Schedule, b: &Schedule) -> bool {
         })
 }
 
-fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<()> {
-    let mut buckets = BTreeMap::<(u16, String, Vec<u32>), Vec<Schedule>>::new();
-    for schedule in schedules {
-        let stops = schedule.locations.iter().map(|s| s.0).collect();
-        buckets.entry((schedule.source, schedule.route_id.clone(), stops))
-            .or_default().push(schedule);
-    }
-    let mut days_index = HashMap::new();
-    days_index.insert(TrafficDays::default(), BitfieldIdx(0));
-    let mut stop_routes = vec![Vec::<RouteIdx>::new(); tt.coordinates.len()];
-    let mut route_id_index = HashMap::new();
-    for ((source, route_id, locations), mut schedules) in buckets {
-        schedules.sort_by(|a, b| a.first_second.cmp(&b.first_second)
-            .then_with(|| a.trip_id.cmp(&b.trip_id)));
+fn assemble_batch(
+    tt: &mut TimetableOwned,
+    schedules: Vec<Schedule>,
+    days_index: &mut HashMap<TrafficDays, BitfieldIdx>,
+    route_id_index: &mut HashMap<(u16, String), catenary::routing_common::timetable::RouteIdIdx>,
+) -> Result<()> {
+    ensure!(!schedules.is_empty(), "empty schedule batch");
+    let source = schedules[0].source;
+    let route_id = schedules[0].route_id.clone();
+    let locations: Vec<u32> = schedules[0].locations.iter().map(|s| s.0).collect();
+    ensure!(schedules.iter().all(|s| s.source == source
+        && s.route_id == route_id
+        && s.locations.iter().map(|x| x.0).eq(locations.iter().copied())),
+        "schedule batch contains mixed route patterns");
+    {
         let mut chains = Vec::<Vec<Schedule>>::new();
         for schedule in schedules {
             if let Some(chain) = chains.iter_mut().find(|chain| {
@@ -312,7 +313,6 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
             tt.route_stop_offsets.push(as_u32(tt.route_stops.len() + locations.len())?);
             for &stop in &locations {
                 tt.route_stops.push(PackedStop::new(LocationIdx(stop), true, true, true, true)?);
-                stop_routes[stop as usize].push(route);
             }
             let first = tt.transport_route.len();
             let width = chain.len();
@@ -330,7 +330,7 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
             }
             let mut union = TrafficDays::default();
             for schedule in &chain {
-                let idx = intern_days(tt, &mut days_index, schedule.days)?;
+                let idx = intern_days(tt, days_index, schedule.days)?;
                 union.or_assign(&schedule.days);
                 let transport = TransportIdx(as_u32(tt.transport_route.len())?);
                 tt.transport_route.push(route);
@@ -356,20 +356,67 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: Vec<Schedule>) -> Result<
                 to: as_u32(tt.route_stop_times.len())?,
             });
             tt.route_clasz.push(clasz(chain[0].route_type));
-            let route_days = intern_days(tt, &mut days_index, union)?;
+            let route_days = intern_days(tt, days_index, union)?;
             tt.route_traffic_days.push(route_days);
             tt.route_section_clasz_offsets.push(as_u32(tt.route_section_clasz.len())?);
             tt.section_flag_offsets.push(as_u32(tt.route_section_clasz.len())?);
         }
     }
-    tt.location_routes.clear();
-    for routes in &mut stop_routes {
-        routes.sort_unstable_by_key(|r| r.0);
-        routes.dedup();
-        tt.location_routes.extend_from_slice(routes);
-        tt.location_routes_offsets.push(as_u32(tt.location_routes.len())?);
-    }
     Ok(())
+}
+
+fn route_unique_stops(tt: &TimetableOwned, route: usize, locations: usize) -> Result<Vec<usize>> {
+    let from = tt.route_stop_offsets[route] as usize;
+    let to = tt.route_stop_offsets[route + 1] as usize;
+    let mut stops = tt.route_stops[from..to].iter()
+        .map(|stop| stop.location().idx()).collect::<Vec<_>>();
+    stops.sort_unstable();
+    stops.dedup();
+    ensure!(stops.iter().all(|&stop| stop < locations), "route references unknown stop");
+    Ok(stops)
+}
+
+/// Build stop-to-route CSR directly in the final V4 columns. A route visits
+/// a location at most once in this inverted index, even if its pattern loops.
+fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
+    let locations = tt.coordinates.len();
+    let mut counts = vec![0u32; locations];
+    let routes = tt.route_transport_ranges.len();
+    for route in 0..routes {
+        for stop in route_unique_stops(tt, route, locations)? {
+            counts[stop] = counts[stop].checked_add(1)
+                .context("stop-to-route index exceeds u32 range")?;
+        }
+    }
+    tt.location_routes_offsets.clear();
+    tt.location_routes_offsets.push(0);
+    let mut total = 0u32;
+    for count in counts {
+        total = total.checked_add(count).context("stop-to-route column exceeds u32 range")?;
+        tt.location_routes_offsets.push(total);
+    }
+    tt.location_routes.clear();
+    tt.location_routes.resize(total as usize, RouteIdx(0));
+    let mut cursor = tt.location_routes_offsets[..locations].iter()
+        .map(|&offset| offset as usize).collect::<Vec<_>>();
+    for route in 0..routes {
+        for stop in route_unique_stops(tt, route, locations)? {
+            tt.location_routes[cursor[stop]] = RouteIdx(as_u32(route)?);
+            cursor[stop] += 1;
+        }
+    }
+    ensure!(cursor.iter().zip(&tt.location_routes_offsets[1..])
+        .all(|(&current, &end)| current == end as usize),
+        "incomplete stop-to-route CSR");
+    Ok(())
+}
+
+fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<()> {
+    let mut days_index = HashMap::new();
+    days_index.insert(TrafficDays::default(), BitfieldIdx(0));
+    let mut route_id_index = HashMap::new();
+    schedules.consume(|batch| assemble_batch(tt, batch, &mut days_index, &mut route_id_index))?;
+    build_stop_routes_index(tt)
 }
 
 fn compile_source(
@@ -377,7 +424,7 @@ fn compile_source(
     tt: &mut TimetableOwned,
     source_idx: u16,
     source: &ChateauSource,
-    schedules: &mut Vec<Schedule>,
+    schedules: &mut ScheduleRuns,
     transfer_rules: &mut super::transfer_rules::TransferRules,
 ) -> Result<()> {
     let stops = load_stops(client, source)?;
@@ -443,8 +490,10 @@ fn compile_source(
             .with_context(|| format!("trip {trip_id} has unknown itinerary pattern {itinerary}"))?;
         let calendar = calendars.get(&service)
             .with_context(|| format!("trip {trip_id} has unknown service {service}"))?;
-        schedules.extend(make_schedules(&trip_id, source_idx, pattern, &lookup,
-            start as u32, calendar, tt.first_utc_day, tt.day_count)?);
+        for schedule in make_schedules(&trip_id, source_idx, pattern, &lookup,
+            start as u32, calendar, tt.first_utc_day, tt.day_count)? {
+            schedules.push(schedule)?;
+        }
         Ok(())
     })?;
     Ok(())
@@ -488,10 +537,14 @@ pub fn build(
     max_seconds: u32,
     candidate_meters: f64,
     output: &Path,
+    scratch_dir: Option<&Path>,
+    schedule_memory_mib: usize,
 ) -> Result<()> {
     ensure!((1..=512).contains(&day_count), "invalid timetable horizon");
     let mut tt = TimetableOwned::empty(first_utc_day, day_count);
-    let mut schedules = Vec::new();
+    let scratch_root = scratch_dir.unwrap_or_else(|| output.parent()
+        .filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| Path::new(".")));
+    let mut schedules = ScheduleRuns::new(scratch_root, schedule_memory_mib)?;
     let mut transfer_rules = super::transfer_rules::TransferRules::default();
     for (source_idx, source) in sources.iter().enumerate() {
         tt.add_source(&source.chateau, &source.onestop_feed_id, &source.attempt_id)?;
@@ -508,14 +561,9 @@ pub fn build(
     super::footpaths::add_station_links(&tt, &mut transfers)?;
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
-    let bytes = tt.encode()?;
-    ZeroCopyTimetable::new(&bytes)?;
-    if let Some(dir) = output.parent() { fs::create_dir_all(dir)?; }
-    let temp = output.with_extension("building");
-    fs::write(&temp, &bytes)?;
-    fs::rename(&temp, output)?;
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!("Wrote {} bytes; {} stops, {} RAPTOR routes, {} trips, {} footpaths",
-        bytes.len(), tt.coordinates.len(), tt.route_transport_ranges.len(),
+        bytes, tt.coordinates.len(), tt.route_transport_ranges.len(),
         tt.trip_public_route_ids.len(), tt.footpaths_out.len());
     Ok(())
 }
@@ -590,6 +638,55 @@ mod tests {
         let after = utc_anchor(NaiveDate::from_ymd_opt(2026,11,1).unwrap(),tz).unwrap();
         assert_eq!(after-before, 25*3600);
     }
+    #[test]
+    fn externally_assembled_routes_preserve_overtaking_and_stop_index() {
+        use catenary::routing_common::timetable::{SourceIdx, ZeroCopyTimetable};
+        let root = std::env::temp_dir().join(format!("gentian-assemble-{}", uuid::Uuid::new_v4()));
+        let mut tt = TimetableOwned::empty(20_000, 2);
+        tt.add_source("chateau", "feed", "attempt").unwrap();
+        let stops = ["a", "b", "c"].iter().map(|id| Stop {
+            id: (*id).into(), name: (*id).into(),
+            lat: 33.6, lon: -117.8, parent: None, kind: 0,
+        }).collect::<Vec<_>>();
+        add_locations(&mut tt, 0, &stops).unwrap();
+        tt.footpaths_out_offsets.extend([0, 0, 0]);
+        tt.footpaths_in_offsets.extend([0, 0, 0]);
+        let mut schedules = ScheduleRuns::new(&root, 1).unwrap();
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        let make = |trip: &str, first: u32, middle: i64, last: i64| Schedule {
+            trip_id: trip.into(), source: 0, route_id: "R".into(), route_type: 3,
+            locations: vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
+            events: vec![
+                Event { stop: LocationIdx(0), arrival: 0, departure: 0 },
+                Event { stop: LocationIdx(1), arrival: middle, departure: middle },
+                Event { stop: LocationIdx(0), arrival: last, departure: last },
+            ],
+            first_second: first, days,
+        };
+        // b departs later but reaches the intermediate stop earlier: putting
+        // both journeys into the same non-overtaking RAPTOR route is unsound.
+        for schedule in [
+            make("b", 130, 20, 450),
+            make("a", 100, 200, 400),
+            make("c", 800, 200, 400),
+        ] { schedules.push(schedule).unwrap(); }
+        assemble_routes(&mut tt, schedules).unwrap();
+        assert_eq!(tt.trip_public_route_ids.len(), 3);
+        assert!(tt.route_transport_ranges.len() >= 2);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        for trip in ["a", "b", "c"] {
+            assert!(view.trip_by_source_id(SourceIdx(0), trip).is_some());
+        }
+        // A circular route visits stop a twice, but must appear only once in
+        // stop a's route index, which is sorted by internal route index.
+        let indexed = view.routes_at(LocationIdx(0));
+        assert_eq!(indexed.len(), view.route_transport_ranges().len());
+        assert!(indexed.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        std::fs::remove_dir(root).unwrap();
+    }
+
     #[test]
     fn no_overtaking_when_middle_stop_is_faster() {
         let event = |t| Event {stop:LocationIdx(0),arrival:t,departure:t};

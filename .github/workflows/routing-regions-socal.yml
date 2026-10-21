@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   socal-maple-osr-gentian:
-    name: SoCal ingest, compile and UCI-City Hall query
+    name: SoCal ingest, compile and timed transit queries
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     services:
@@ -208,38 +208,100 @@ jobs:
             --first-utc-day 20745 --day-count 35 \
             --osr-dir temp/osr-data/regions/north-america/us/california/socal \
             --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
             --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
+          test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
+          cargo run --release --bin gentian -- \
+            --regions-config routing_regions.toml \
+            --data-dir compiled/routing \
+            --list-timetable-sizes | tee temp/timetable-file-sizes.log
+          grep -F 'southern-california:' temp/timetable-file-sizes.log
+          grep -F 'Total published timetables:' temp/timetable-file-sizes.log
       - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
           cargo run --release --bin osr_worker -- \
-            --config catenaryconfig.toml > temp/osr-worker.log 2>&1 &
+            --config catenaryconfig.toml --workers 3 > temp/osr-worker.log 2>&1 &
           echo $! > temp/osr-worker.pid
           for attempt in $(seq 1 45); do
             if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then break; fi
             sleep 2
           done
           kill -0 "$(cat temp/osr-worker.pid)"
-      - name: Prepare UCI to City Hall Monday query
-        run: |
-          python3 src/routing_regions/prepare_uci_cityhall_query.py \
-            --output temp/uci-cityhall-request.json
-      - name: Execute Edelweiss RAPTOR example and print Pareto journeys
+          python3 src/routing_regions/verify_concurrent_osr_worker.py \
+            --region north-america/us/california/socal --workers 3
+      - name: Prepare reproducible Monday and Saturday routing queries
         run: |
           set -euo pipefail
-          cargo run --release --bin edelweiss -- \
+          python3 src/routing_regions/prepare_uci_cityhall_query.py \
+            --output temp/uci-cityhall-request.json
+          python3 src/routing_regions/prepare_alhambra_pier_query.py \
+            --output temp/alhambra-pier-request.json
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          monday = json.loads(Path("temp/uci-cityhall-request.json").read_text())
+          saturday = json.loads(Path("temp/alhambra-pier-request.json").read_text())
+          assert datetime.fromtimestamp(monday["departure_unix_seconds"], timezone.utc).date().isoformat() == "2026-10-26"
+          assert saturday["departure_unix_seconds"] == 1792864800
+          assert saturday["from"] == {"lat": 34.0931745, "lon": -118.1312313}
+          assert saturday["to"] == {"lat": 34.01023, "lon": -118.49635}
+          # The timetable horizon starts on 2026-10-19 (UTC day 20745),
+          # and both query departure days must be within its 35-day span.
+          for request in (monday, saturday):
+              day = request["departure_unix_seconds"] // 86400
+              assert 20745 <= day < 20745 + 35, day
+          PY
+      - name: Run Edelweiss queries and publish timings
+        run: |
+          set -euo pipefail
+          # Build only once, before beginning any timing measurements.
+          cargo build --release --bin edelweiss
+          {
+            echo '## Southern California RAPTOR query benchmarks'
+            echo ''
+            echo 'All durations are **milliseconds**. RAPTOR excludes OSR, GTFS metadata hydration,'
+            echo 'and startup. OSR branch timings overlap; OSR parallel wall is the'
+            echo 'actual elapsed interval enclosing all three searches. Query total'
+            echo 'measures end-to-end inside Edelweiss; CLI wall'
+            echo 'also includes cold process startup and mmap initialization.'
+            echo ''
+            echo '| Query | Journeys | RAPTOR | OSR access | OSR egress | OSR direct | OSR parallel wall | Metadata | Query total | CLI wall |'
+            echo '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'UCI to City Hall (Mon Oct 26 08:00 PDT)' \
+            --binary target/release/edelweiss \
             --regions-config routing_regions.toml \
             --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
             --query temp/uci-cityhall-request.json \
-            --database-url "$DATABASE_URL" | tee temp/uci-cityhall-results.json
-          python3 src/routing_regions/print_uci_cityhall_results.py temp/uci-cityhall-results.json
+            --result temp/uci-cityhall-results.json \
+            --timings temp/uci-cityhall-timings.json \
+            --stderr temp/uci-cityhall-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/uci-cityhall-results.json | tee temp/uci-cityhall-journeys.txt
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'Alhambra to Santa Monica Pier (Sat Oct 24 11:00 PDT)' \
+            --binary target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --query temp/alhambra-pier-request.json \
+            --result temp/alhambra-pier-results.json \
+            --timings temp/alhambra-pier-timings.json \
+            --stderr temp/alhambra-pier-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/alhambra-pier-results.json | tee temp/alhambra-pier-journeys.txt
           {
-            echo '## SoCal RAPTOR example: UCI to Los Angeles City Hall'
             echo ''
-            echo 'Monday, 2026-10-26 08:00 America/Los_Angeles.'
-            echo 'See the **Execute Edelweiss RAPTOR example** step for printed journeys and GTFS route colors.'
-            echo 'Download **gentian-socal-routing-diagnostics** for the JSON response and OSR logs.'
+            echo 'The Monday fixture departs October 26, 2026 at 08:00 PDT.'
+            echo 'The Saturday fixture departs October 24, 2026 at 11:00 PDT,'
+            echo 'from Main Street in Alhambra to the Santa Monica Pier entrance.'
+            echo 'See the gentian-socal-routing-diagnostics artifact for both JSON'
+            echo 'responses, route-leg logs and detailed timing metrics.'
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Upload build metadata
         if: always()
@@ -248,8 +310,18 @@ jobs:
           name: gentian-socal-routing-diagnostics
           path: |
             temp/selection.json
+            temp/timetable-file-sizes.log
             temp/stops.tsv
+            temp/uci-cityhall-request.json
             temp/uci-cityhall-results.json
+            temp/uci-cityhall-timings.json
+            temp/uci-cityhall-query-stderr.log
+            temp/uci-cityhall-journeys.txt
+            temp/alhambra-pier-request.json
+            temp/alhambra-pier-results.json
+            temp/alhambra-pier-timings.json
+            temp/alhambra-pier-query-stderr.log
+            temp/alhambra-pier-journeys.txt
             temp/osr-worker.log
             temp/osr-validation.log
             temp/osr-data/regions/north-america/us/california/socal/manifest.json

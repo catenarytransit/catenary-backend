@@ -1,3 +1,7 @@
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use actix_web::{web, App, HttpResponse, HttpServer};
 use anyhow::{Context, Result};
 use catenary::routing_common::route_manager::{
@@ -11,6 +15,7 @@ use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
+use std::time::Instant;
 use std::{collections::{BTreeMap, BTreeSet}, fs, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
@@ -25,6 +30,9 @@ struct Args {
     listen: String,
     #[arg(long)]
     query: Option<PathBuf>,
+    /// Write per-phase query timings as JSON; only available with --query.
+    #[arg(long, requires = "query")]
+    query_timings: Option<PathBuf>,
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
     #[arg(long, default_value = "127.0.0.1:40501")]
@@ -57,6 +65,25 @@ struct RouteStyle {
 struct Answer {
     routing:RoutingResponse,
     route_styles:Vec<RouteStyle>,
+}
+
+/// Milliseconds measured within the query engine, excluding process startup.
+/// OSR access/egress and PostgreSQL metadata lookup are tracked separately
+/// from the RAPTOR algorithm itself.
+#[derive(Default, Serialize)]
+struct QueryTimings {
+    selection_ms: f64,
+    access_ms: f64,
+    egress_ms: f64,
+    direct_walk_ms: f64,
+    osr_parallel_wall_ms: f64,
+    raptor_ms: f64,
+    metadata_ms: f64,
+    query_total_ms: f64,
+}
+
+fn milliseconds(start: Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
 }
 
 struct State {router:Arc<Router>,database_url:Option<String>,osr_worker:String}
@@ -168,28 +195,84 @@ fn direct_osr_seconds(
     Ok(reply.reachable.first().map(|x|x.seconds))
 }
 
-fn run_query(router:&Router,request:Request,url:Option<&str>,osr_worker:&str)->Result<Answer>{
-    let selection=router.select(request.from,request.to)?;
-    let from=if request.access.is_empty(){
-        osr_access(router,osr_worker,&selection.transit_region,&selection.origin_osr_region,request.from)?
-    }else{
-        request.access.into_iter().map(|e| WalkingEndpoint{
-            stop:LocationIdx(e.stop),seconds:e.seconds}).collect()
-    };
-    let to=if request.egress.is_empty(){
-        osr_access(router,osr_worker,&selection.transit_region,&selection.destination_osr_region,request.to)?
-    }else{
-        request.egress.into_iter().map(|e| WalkingEndpoint{
-            stop:LocationIdx(e.stop),seconds:e.seconds}).collect()
-    };
-    let direct=if request.direct_walk_seconds.is_some(){request.direct_walk_seconds}
-        else if selection.origin_osr_region==selection.destination_osr_region {
-            direct_osr_seconds(osr_worker,&selection.origin_osr_region,request.from,request.to)?
-        }else{None};
-    let routing=router.route_with_access(selection,request.departure_unix_seconds,from,to,direct)?;
-    let timetable=router.timetable_for(&routing.selection.transit_region)?;
-    let route_styles=hydrate(&timetable,&routing.journeys,url)?;
-    Ok(Answer{routing,route_styles})
+fn run_query(
+    router: &Router,
+    request: Request,
+    url: Option<&str>,
+    osr_worker: &str,
+) -> Result<(Answer, QueryTimings)> {
+    let query_start = Instant::now();
+    let mut timings = QueryTimings::default();
+
+    let phase = Instant::now();
+    let selection = router.select(request.from, request.to)?;
+    timings.selection_ms = milliseconds(phase);
+
+    // Access, egress and direct walking have no data dependencies.
+    // Use Rayon's existing bounded pool, rather than spawning up to three
+    // operating-system threads per HTTP request. Native routers are isolated
+    // by the OSR worker's own fixed-size worker pool.
+    let osr_start = Instant::now();
+    let (access, (egress, direct)) = rayon::join(
+        || {
+            let start = Instant::now();
+            let result = if request.access.is_empty() {
+                osr_access(router, osr_worker, &selection.transit_region,
+                    &selection.origin_osr_region, request.from)
+            } else {
+                Ok(request.access.iter().map(|e| WalkingEndpoint {
+                    stop: LocationIdx(e.stop), seconds: e.seconds,
+                }).collect())
+            };
+            (result, milliseconds(start))
+        },
+        || rayon::join(
+            || {
+                let start = Instant::now();
+                let result = if request.egress.is_empty() {
+                    osr_access(router, osr_worker, &selection.transit_region,
+                        &selection.destination_osr_region, request.to)
+                } else {
+                    Ok(request.egress.iter().map(|e| WalkingEndpoint {
+                        stop: LocationIdx(e.stop), seconds: e.seconds,
+                    }).collect())
+                };
+                (result, milliseconds(start))
+            },
+            || {
+                let start = Instant::now();
+                let result = if let Some(seconds) = request.direct_walk_seconds {
+                    Ok(Some(seconds))
+                } else if selection.origin_osr_region == selection.destination_osr_region {
+                    direct_osr_seconds(osr_worker, &selection.origin_osr_region,
+                        request.from, request.to)
+                } else {
+                    Ok(None)
+                };
+                (result, milliseconds(start))
+            },
+        ),
+    );
+    timings.osr_parallel_wall_ms = milliseconds(osr_start);
+    timings.access_ms = access.1;
+    timings.egress_ms = egress.1;
+    timings.direct_walk_ms = direct.1;
+    let from = access.0?;
+    let to = egress.0?;
+    let direct = direct.0?;
+
+    let phase = Instant::now();
+    let routing = router.route_with_access(selection, request.departure_unix_seconds,
+        from, to, direct)?;
+    timings.raptor_ms = milliseconds(phase);
+
+    let phase = Instant::now();
+    let timetable = router.timetable_for(&routing.selection.transit_region)?;
+    let route_styles = hydrate(&timetable, &routing.journeys, url)?;
+    timings.metadata_ms = milliseconds(phase);
+    timings.query_total_ms = milliseconds(query_start);
+
+    Ok((Answer { routing, route_styles }, timings))
 }
 
 async fn route(state:web::Data<State>,payload:web::Json<Request>)->HttpResponse{
@@ -197,7 +280,7 @@ async fn route(state:web::Data<State>,payload:web::Json<Request>)->HttpResponse{
     let request=payload.into_inner();
     let result=web::block(move||run_query(&state.router,request,state.database_url.as_deref(),&state.osr_worker)).await;
     match result {
-        Ok(Ok(answer))=>HttpResponse::Ok().json(answer),
+        Ok(Ok((answer, _timings)))=>HttpResponse::Ok().json(answer),
         Ok(Err(err))=>HttpResponse::UnprocessableEntity().body(err.to_string()),
         Err(err)=>HttpResponse::InternalServerError().body(err.to_string()),
     }
@@ -213,16 +296,26 @@ async fn main()->Result<()>{
     };
     let router=Arc::new(Router::load(&args.regions_config,&args.catenary_config,settings)?);
     if let Some(path)=args.query {
+        let timing_output = args.query_timings.clone();
         let request:Request=serde_json::from_slice(&fs::read(&path)
             .with_context(||format!("reading {}",path.display()))?)?;
         // The synchronous postgres client creates and blocks on its own Tokio
         // runtime. Running it on an Actix worker thread would nest runtimes and
         // panic; use the same blocking pool as the HTTP route handler.
-        let response = web::block(move || {
+        let (response, timings) = web::block(move || {
             run_query(&router, request, args.database_url.as_deref(), &args.osr_worker)
         })
         .await
         .context("CLI route-query worker failed")??;
+        if let Some(path) = &timing_output {
+            fs::write(path, serde_json::to_vec_pretty(&timings)?)
+                .with_context(|| format!("writing query timings to {}", path.display()))?;
+        }
+        eprintln!(
+            "Edelweiss query: total {:.3} ms; RAPTOR {:.3} ms; concurrent OSR wall {:.3} ms; OSR access {:.3} ms; OSR egress {:.3} ms; OSR direct {:.3} ms; metadata {:.3} ms",
+            timings.query_total_ms, timings.raptor_ms, timings.osr_parallel_wall_ms, timings.access_ms,
+            timings.egress_ms, timings.direct_walk_ms, timings.metadata_ms
+        );
         println!("{}",serde_json::to_string_pretty(&response)?);
         return Ok(());
     }

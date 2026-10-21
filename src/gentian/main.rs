@@ -1,4 +1,8 @@
 //! Gentian's regional timetable and OSR footpath compiler.
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
@@ -7,6 +11,8 @@ use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
 mod compile;
+mod external_assembly;
+mod file_sizes;
 mod footpaths;
 mod transfer_rules;
 
@@ -54,13 +60,37 @@ struct Args {
     #[arg(long, default_value_t = 1200.0)]
     candidate_meters: f64,
 
+    /// Maximum in-memory schedule buffer for sorting and route assembly.
+    /// This does not cap stop indexes, final timetable columns or OSR memory.
+    #[arg(long, default_value_t = 64)]
+    schedule_memory_mib: usize,
+
+    /// Scratch filesystem for external schedule runs. Defaults to the output
+    /// directory so /tmp tmpfs does not consume the compiler's memory budget.
+    #[arg(long, value_name = "DIRECTORY", requires = "build")]
+    scratch_dir: Option<PathBuf>,
+
     /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
     #[arg(long, requires = "region")]
     list_chateaux: bool,
+
+    /// Print the actual file size of every configured region timetable.
+    /// Does not require a database connection.
+    #[arg(long, conflicts_with_all = ["region", "sources", "build", "list_chateaux"])]
+    list_timetable_sizes: bool,
+
+    /// Override the configured timetable directory when listing file sizes.
+    #[arg(long, requires = "list_timetable_sizes")]
+    data_dir: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.list_timetable_sizes {
+        let config = RoutingRegionsConfig::load(&args.regions_config)?;
+        let dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
+        return file_sizes::print_configured(&config, dir);
+    }
     let selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
         let url = args.database_url.as_deref()
@@ -88,8 +118,9 @@ fn main() -> Result<()> {
         compile::build(
             &mut client, &selection.sources, args.first_utc_day, args.day_count,
             osr_dir, args.max_seconds, args.candidate_meters, output,
+            args.scratch_dir.as_deref(), args.schedule_memory_mib,
         )?;
-        return Ok(());
+        return file_sizes::print_published(&selection.id, output);
     }
     let output = args.output.as_ref().context("--output is required")?;
     let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
@@ -110,16 +141,13 @@ fn main() -> Result<()> {
         }
     }
 
-    let bytes = tt.encode()?;
-    if let Some(parent) = output.parent().filter(|path| !path.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating output directory {}", parent.display()))?;
-    }
-    std::fs::write(output, &bytes)
-        .with_context(|| format!("writing {}", output.display()))?;
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!(
         "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
-        bytes.len(), tt.sources.len()
+        bytes, tt.sources.len()
     );
+    if let Some(selection) = &selection {
+        file_sizes::print_published(&selection.id, output)?;
+    }
     Ok(())
 }

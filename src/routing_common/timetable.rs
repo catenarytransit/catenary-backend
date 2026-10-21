@@ -228,6 +228,29 @@ macro_rules! columns {
                 ZeroCopyTimetable::new(&b)?;
                 Ok(b)
             }
+
+            /// Write the V4 column format without allocating a second copy of
+            /// the timetable. The caller must supply an empty, truncated output.
+            pub fn write_to<W: std::io::Write + std::io::Seek>(
+                &self,
+                output: &mut W,
+            ) -> anyhow::Result<u64> {
+                if self.day_count as usize > MAX_DAYS {
+                    return Err(FormatError::Layout.into());
+                }
+                output.seek(std::io::SeekFrom::Start(0))?;
+                output.write_all(bytemuck::bytes_of(&TimetableHeader::default()))?;
+                let mut h = TimetableHeader {
+                    magic: MAGIC, version: VERSION, first_utc_day: self.first_utc_day,
+                    day_count: self.day_count, ..Default::default()
+                };
+                $(h.$name = write_section(output, &self.$name)?;)*
+                let len = output.stream_position()?;
+                output.seek(std::io::SeekFrom::Start(0))?;
+                output.write_all(bytemuck::bytes_of(&h))?;
+                output.seek(std::io::SeekFrom::Start(len))?;
+                Ok(len)
+            }
         }
         #[derive(Clone, Copy)]
         pub struct ZeroCopyTimetable<'a> { b: &'a [u8], h: TimetableHeader }
@@ -260,6 +283,21 @@ fn push<T: Pod>(b: &mut Vec<u8>, a: &[T]) -> Result<Section, FormatError> {
     b.extend_from_slice(bytemuck::cast_slice(a));
     Ok(Section { offset, count })
 }
+/// Identical alignment and section order to `push`, but writes directly
+/// to a seekable destination instead of allocating an output-sized Vec.
+fn write_section<W: std::io::Write + std::io::Seek, T: Pod>(
+    output: &mut W,
+    values: &[T],
+) -> anyhow::Result<Section> {
+    let at = output.stream_position()?;
+    let padding = ((8 - at % 8) % 8) as usize;
+    output.write_all(&[0u8; 8][..padding])?;
+    let offset = at.checked_add(padding as u64).ok_or(FormatError::Overflow)?;
+    let count = u64::try_from(values.len()).map_err(|_| FormatError::Overflow)?;
+    output.write_all(bytemuck::cast_slice(values))?;
+    Ok(Section { offset, count })
+}
+
 fn view<'a, T: Pod>(b: &'a [u8], sec: Section) -> Result<&'a [T], FormatError> {
     let at = usize::try_from(sec.offset).map_err(|_| FormatError::Overflow)?;
     let n = usize::try_from(sec.count).map_err(|_| FormatError::Overflow)?
@@ -650,6 +688,36 @@ mod tests {
         assert_eq!(Delta::from_seconds(32 * 86_400), Err(FormatError::Index));
         assert_eq!(Delta::new(0, 86_400), Err(FormatError::Index));
     }
+    #[test]
+    fn streamed_binary_matches_encoded_v4_bytes() {
+        use std::io::Cursor;
+        for day_count in [1, 35, 512] {
+            let mut tt = TimetableOwned::empty(20_000, day_count);
+            let a = tt.add_source("C1", "F1", "A1").unwrap();
+            let b = tt.add_source("C2", "F2", "A2").unwrap();
+            tt.add_route_id(a, "R1").unwrap();
+            tt.add_route_id(b, "R2").unwrap();
+            let expected = tt.encode().unwrap();
+            let mut output = Cursor::new(Vec::new());
+            let written = tt.write_to(&mut output).unwrap();
+            assert_eq!(written as usize, expected.len());
+            let bytes = output.into_inner();
+            assert_eq!(bytes, expected);
+            ZeroCopyTimetable::new(&bytes).unwrap();
+        }
+    }
+
+    #[test]
+    fn streaming_rejects_invalid_day_count_before_writing() {
+        use std::io::Cursor;
+        let mut tt = TimetableOwned::empty(0, 513);
+        let mut output = Cursor::new(Vec::new());
+        assert!(tt.write_to(&mut output).is_err());
+        assert!(output.into_inner().is_empty());
+        tt.day_count = 512;
+        assert!(tt.write_to(&mut Cursor::new(Vec::new())).is_ok());
+    }
+
     #[test]
     fn rejects_old_version_and_truncation() {
         let b=TimetableOwned::empty(20000,400).encode().unwrap();

@@ -126,10 +126,38 @@ fn relax_walks(
     }
 }
 
+/// RAPTOR's route marking: only routes incident to a newly improved
+/// location can produce new labels in the next round. The CSR index was
+/// built during Gentian compilation, so no global route scan is necessary.
+///
+/// A bitmap deduplicates looped stops and routes shared by several marked
+/// locations. Sorting the resulting route indices preserves the deterministic
+/// tie-breaking order of the previous exhaustive scan.
+fn routes_from_marked(
+    tt: &ZeroCopyTimetable<'_>,
+    marked_stops: &[usize],
+    seen_epoch: &mut [u8],
+    epoch: u8,
+) -> Vec<RouteIdx> {
+    debug_assert_eq!(seen_epoch.len(), tt.route_transport_ranges().len());
+    let mut routes = Vec::new();
+    for &stop in marked_stops {
+        for &route in tt.routes_at(LocationIdx(stop as u32)) {
+            if seen_epoch[route.idx()] != epoch {
+                seen_epoch[route.idx()] = epoch;
+                routes.push(route);
+            }
+        }
+    }
+    routes.sort_unstable_by_key(|r| r.0);
+    routes
+}
+
 fn traverse_routes(
     tt: &ZeroCopyTimetable<'_>,
     prev: &[Label],
     curr: &mut [Label],
+    marked_routes: &[RouteIdx],
     departure: i64,
     max_time: i64,
 ) -> Result<()> {
@@ -139,10 +167,10 @@ fn traverse_routes(
     let last_day = (max_time.div_euclid(86_400) - base).min(horizon - 1);
     if first_day > last_day { return Ok(()); }
 
-    for (r, transport_range) in tt.route_transport_ranges().iter().enumerate() {
-        let route = RouteIdx(r as u32);
+    for &route in marked_routes {
+        let transport_range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
-        if stops.len() < 2 || !stops.iter().any(|s| prev[s.location().idx()].time < INF) {
+        if stops.len() < 2 {
             continue;
         }
         for index in transport_range.from..transport_range.to {
@@ -266,7 +294,13 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
         }
     }
     relax_walks(tt, &mut round0, max_time);
+    let mut marked_stops = round0.iter().enumerate()
+        .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
+        .collect::<Vec<_>>();
     let mut labels = vec![round0];
+    // A single route-sized bitmap is sufficient for the whole search.
+    // Rounds are limited to 16, so a u8 epoch never wraps.
+    let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
         let prev = &labels[round - 1];
         let mut curr: Vec<Label> = prev.iter().map(|label| Label {
@@ -276,11 +310,15 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             },
             last_alight: label.last_alight,
         }).collect();
-        traverse_routes(tt, prev, &mut curr, departure, max_time)?;
+        let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
+        if routes.is_empty() { break; }
+        traverse_routes(tt, prev, &mut curr, &routes, departure, max_time)?;
         relax_walks(tt, &mut curr, max_time);
-        let improved = curr.iter().zip(prev).any(|(a,b)| a.time < b.time);
+        marked_stops = curr.iter().zip(prev).enumerate()
+            .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
+            .collect();
         labels.push(curr);
-        if !improved { break; }
+        if marked_stops.is_empty() { break; }
     }
 
     let mut journeys = Vec::new();
@@ -334,7 +372,8 @@ mod tests {
             tt.location_parent.push(LocationIdx::INVALID);
             tt.location_type.push(1);
             tt.location_transfer_seconds.push(0);
-            tt.location_routes_offsets.push(0);
+            tt.location_routes_offsets.push((tt.location_routes_offsets.len()) as u32);
+            tt.location_routes.push(RouteIdx(0));
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
         }
@@ -361,6 +400,114 @@ mod tests {
         tt.section_flag_offsets.push(0);
         tt.transport_to_trip_section_offsets.push(0);
         tt
+    }
+
+    fn multi_route_fixture() -> TimetableOwned {
+        let mut tt = fixture();
+        tt.coordinates.push(Default::default());
+        tt.location_id.push(Default::default());
+        tt.location_name.push(Default::default());
+        tt.location_source.push(crate::routing_common::timetable::SourceIdx(0));
+        tt.location_parent.push(LocationIdx::INVALID);
+        tt.location_type.push(1);
+        tt.location_transfer_seconds.push(0);
+        tt.footpaths_out_offsets.push(0);
+        tt.footpaths_in_offsets.push(0);
+
+        // First trip 0 -> 1 -> 2 arrives at 08:23:05.
+        // Second trip 2 -> 3 departs at 08:30 and arrives 08:35.
+        tt.route_stops.extend([
+            PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
+            PackedStop::new(LocationIdx(3), true, true, true, true).unwrap(),
+        ]);
+        tt.route_stop_offsets.push(5);
+        tt.route_transport_ranges.push(Range { from: 1, to: 2 });
+        tt.route_stop_time_ranges.push(Range { from: 4, to: 6 });
+        tt.route_stop_times.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(5 * 60).unwrap(),
+        ]);
+        tt.route_clasz.push(10);
+        tt.route_traffic_days.push(BitfieldIdx(1));
+        tt.transport_route.push(RouteIdx(1));
+        tt.transport_first_dep_offset.push(Delta::from_seconds(510 * 60).unwrap());
+        tt.transport_initial_day_offset.push(0);
+        tt.transport_traffic_days.push(BitfieldIdx(1));
+        tt.route_section_clasz_offsets.push(0);
+        tt.section_flag_offsets.push(0);
+        tt.transport_to_trip_section_offsets.push(0);
+        // CSR rows: 0->[0], 1->[0], 2->[0,1], 3->[1].
+        tt.location_routes_offsets = vec![0, 1, 2, 4, 5];
+        tt.location_routes = vec![RouteIdx(0), RouteIdx(0),
+            RouteIdx(0), RouteIdx(1), RouteIdx(1)];
+        tt
+    }
+
+    #[test]
+    fn marked_routes_select_only_incident_routes_without_duplicates() {
+        let tt = multi_route_fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut stamps = vec![0; view.route_transport_ranges().len()];
+        assert!(routes_from_marked(&view, &[], &mut stamps, 1).is_empty());
+        assert_eq!(routes_from_marked(&view, &[0, 1, 0], &mut stamps, 1),
+            vec![RouteIdx(0)]);
+        assert_eq!(routes_from_marked(&view, &[3], &mut stamps, 2),
+            vec![RouteIdx(1)]);
+        assert_eq!(routes_from_marked(&view, &[2, 2], &mut stamps, 3),
+            vec![RouteIdx(0), RouteIdx(1)]);
+    }
+
+    #[test]
+    fn marked_scan_matches_exhaustive_rounds_and_reconstructs_connection() {
+        let tt = multi_route_fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let dep = 20_000_i64 * 86_400 + 7 * 3_600 + 59 * 60;
+        let max = dep + 2 * 3_600;
+        let mut init = vec![Label { time: INF, parent: None, last_alight: None }; 4];
+        improve(&mut init, 0, dep, Parent::Access { seconds: 0 }, None);
+        relax_walks(&view, &mut init, max);
+
+        let mut marked = vec![0];
+        let mut stamps = vec![0; view.route_transport_ranges().len()];
+        let mut optimized = init.clone();
+        let mut exhaustive = init;
+        for round in 1..=3 {
+            let mut next_optimized = optimized.iter().map(|l| Label {
+                time: l.time, parent: Some(Parent::Carry { previous_round: round - 1 }),
+                last_alight: l.last_alight,
+            }).collect::<Vec<_>>();
+            let mut next_exhaustive = exhaustive.iter().map(|l| Label {
+                time: l.time, parent: Some(Parent::Carry { previous_round: round - 1 }),
+                last_alight: l.last_alight,
+            }).collect::<Vec<_>>();
+            let selected = routes_from_marked(&view, &marked, &mut stamps, round as u8);
+            traverse_routes(&view, &optimized, &mut next_optimized, &selected, dep, max).unwrap();
+            let all = [RouteIdx(0), RouteIdx(1)];
+            traverse_routes(&view, &exhaustive, &mut next_exhaustive, &all, dep, max).unwrap();
+            relax_walks(&view, &mut next_optimized, max);
+            relax_walks(&view, &mut next_exhaustive, max);
+            marked = next_optimized.iter().zip(&optimized).enumerate()
+                .filter_map(|(i,(new,old))| (new.time < old.time).then_some(i)).collect();
+            assert_eq!(
+                next_optimized.iter().map(|l| (l.time, l.last_alight)).collect::<Vec<_>>(),
+                next_exhaustive.iter().map(|l| (l.time, l.last_alight)).collect::<Vec<_>>(),
+                "round {round} differs from exhaustive route scanning"
+            );
+            optimized = next_optimized;
+            exhaustive = next_exhaustive;
+        }
+        let journeys = route(&view, &Query {
+            departure_unix_seconds: dep,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(3), seconds: 0 }],
+            direct_walk_seconds: None, max_boardings: 3, max_duration_seconds: 7200,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(journeys[0].boardings, 2);
+        assert_eq!(journeys[0].arrival_unix_seconds,
+            20_000_i64 * 86_400 + 8 * 3_600 + 35 * 60);
     }
 
     #[test]
