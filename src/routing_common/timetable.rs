@@ -202,11 +202,6 @@ impl fmt::Display for FormatError {
 }
 impl std::error::Error for FormatError {}
 
-// Only constructed from a successfully validated timetable. The header may
-// be reused with the same immutable bytes without repeating the full scan.
-#[derive(Clone, Copy)]
-pub(crate) struct ValidatedTimetableHeader(TimetableHeader);
-
 macro_rules! columns {
     ($($name:ident: $ty:ty,)*) => {
         #[repr(C)]
@@ -216,6 +211,10 @@ macro_rules! columns {
             pub first_utc_day: i32, pub day_count: u32,
             $(pub $name: Section,)*
         }
+        // This token can only be issued after validating a complete timetable.
+        #[derive(Clone, Copy)]
+        pub(crate) struct ValidatedTimetableHeader(TimetableHeader);
+
         #[derive(Default, Debug)]
         pub struct TimetableOwned {
             pub first_utc_day: i32, pub day_count: u32,
