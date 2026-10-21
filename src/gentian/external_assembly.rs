@@ -9,7 +9,7 @@
 //! Runs and merge intermediates live beside the output by default, *not* in
 //! /tmp (which is commonly tmpfs on build hosts).
 use super::compile::{Event, Schedule};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use catenary::routing_common::timetable::{LocationIdx, TrafficDays};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
@@ -19,7 +19,10 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
 const FAN_IN: usize = 16;
-const IO_BUFFER: usize = 128 * 1024;
+const IO_BUFFER: usize = 16 * 1024;
+// A multiway merge holds up to FAN_IN records simultaneously. Reserve room
+// for readers, the output buffer and heap/allocator overhead even at 1 MiB.
+const RECORD_DIVISOR: usize = 32;
 
 /// Approximate the retained heap footprint, including Vec capacities and
 /// per-record allocator metadata. The limit is a bound on records retained by
@@ -99,9 +102,9 @@ impl ScheduleRuns {
 
     pub fn push(&mut self, record: Schedule) -> Result<()> {
         let size = charge(&record);
-        ensure!(size <= self.limit,
-            "single schedule requires {size} bytes, exceeding sort buffer {} bytes",
-            self.limit);
+        ensure!(size <= self.limit / RECORD_DIVISOR,
+            "single schedule requires {size} bytes, exceeding the per-record cap of {} bytes (increase --schedule-memory-mib)",
+            self.limit / RECORD_DIVISOR);
         if self.bytes > self.limit - size { self.spill()?; }
         self.bytes += size;
         self.count += 1;
@@ -151,7 +154,7 @@ impl ScheduleRuns {
         let mut processed = 0u64;
         while let Some(schedule) = read_record(&mut input, self.limit)? {
             let size = charge(&schedule);
-            ensure!(size <= self.limit, "schedule over memory cap during merge");
+            ensure!(size <= self.limit / RECORD_DIVISOR, "schedule over per-record cap during merge");
             let boundary = batch.first().is_some_and(|a| !same_pattern(a, &schedule))
                 || batch_bytes > self.limit - size;
             if boundary {
@@ -238,7 +241,8 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     if r.read(&mut size[..1])? == 0 { return Ok(None); }
     r.read_exact(&mut size[1..])?;
     let payload = u32::from_le_bytes(size) as usize;
-    ensure!(payload >= 84 && payload <= limit, "invalid or oversized sort-run record");
+    ensure!(payload >= 84 && payload <= limit / RECORD_DIVISOR,
+        "invalid or oversized sort-run record");
     let mut reader = r.take(payload as u64);
     fn u16le(r: &mut impl Read) -> Result<u16> { let mut b = [0; 2]; r.read_exact(&mut b)?; Ok(u16::from_le_bytes(b)) }
     fn i16le(r: &mut impl Read) -> Result<i16> { let mut b = [0; 2]; r.read_exact(&mut b)?; Ok(i16::from_le_bytes(b)) }
@@ -298,7 +302,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("gentian-sort-test-{}", uuid::Uuid::new_v4()));
         let mut sorter = ScheduleRuns::new(&root, 1).unwrap();
         let mut original = Vec::new();
-        for i in (0..160).rev() {
+        for i in (0..8_000).rev() {
             let schedule = sample(&format!("t{i:04}"), i * 60, &[0, 1, 2]);
             original.push(schedule.clone());
             sorter.push(schedule).unwrap();
@@ -315,6 +319,28 @@ mod tests {
             assert_eq!(a.days, b.days);
         }
         assert!(fs::read_dir(&root).unwrap().next().is_none());
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn a_large_stop_pattern_is_split_without_losing_departures() {
+        let root = std::env::temp_dir().join(format!("gentian-sort-test-{}", uuid::Uuid::new_v4()));
+        let mut sorter = ScheduleRuns::new(&root, 1).unwrap();
+        for i in (0..8_000).rev() {
+            sorter.push(sample(&format!("trip-{i:05}"), i * 10, &[0, 1])).unwrap();
+        }
+        let mut batches = 0;
+        let mut departures = Vec::new();
+        sorter.consume(|batch| {
+            assert!(!batch.is_empty());
+            batches += 1;
+            for schedule in batch {
+                departures.push(schedule.first_second);
+            }
+            Ok(())
+        }).unwrap();
+        assert!(batches >= 2, "an oversized pattern must be assembled in multiple batches");
+        assert_eq!(departures, (0..8_000).map(|i| i * 10).collect::<Vec<_>>());
         fs::remove_dir(root).unwrap();
     }
 
