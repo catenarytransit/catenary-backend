@@ -1,8 +1,8 @@
+//! Gentian's regional timetable and OSR footpath compiler.
+
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-//! Gentian's regional timetable and OSR footpath compiler.
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
