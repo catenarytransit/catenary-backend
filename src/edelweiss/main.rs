@@ -215,7 +215,14 @@ async fn main()->Result<()>{
     if let Some(path)=args.query {
         let request:Request=serde_json::from_slice(&fs::read(&path)
             .with_context(||format!("reading {}",path.display()))?)?;
-        let response=run_query(&router,request,args.database_url.as_deref(),&args.osr_worker)?;
+        // The synchronous postgres client creates and blocks on its own Tokio
+        // runtime. Running it on an Actix worker thread would nest runtimes and
+        // panic; use the same blocking pool as the HTTP route handler.
+        let response = web::block(move || {
+            run_query(&router, request, args.database_url.as_deref(), &args.osr_worker)
+        })
+        .await
+        .context("CLI route-query worker failed")??;
         println!("{}",serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
@@ -223,4 +230,26 @@ async fn main()->Result<()>{
     HttpServer::new(move||App::new().app_data(state.clone()).route("/v1/route",web::post().to(route)))
         .bind(&args.listen)?.run().await?;
     Ok(())
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[actix_web::test]
+    async fn postgres_client_runs_outside_actix_runtime() {
+        // The synchronous postgres crate starts an internal Tokio runtime.
+        // Verify the blocking worker is outside the HTTP executor; an
+        // unreachable port is sufficient and requires no database fixture.
+        let result = web::block(|| {
+            Client::connect(
+                "host=127.0.0.1 port=1 user=postgres dbname=unavailable connect_timeout=1",
+                NoTls,
+            )
+            .is_err()
+        })
+        .await;
+        assert_eq!(result.unwrap(), true, "PostgreSQL should fail normally, not panic");
+    }
 }

@@ -62,7 +62,17 @@ jobs:
         run: |
           python3 -c "import sys, tomllib; print(sys.version); assert sys.version_info >= (3, 11)"
       - uses: dtolnay/rust-toolchain@stable
+      # Preserve successful native compilation even when downstream GTFS,
+      # timetable, or query integration steps fail.
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: socal-routing-gcc14
+          cache-on-failure: true
+          cache-targets: true
+          cache-workspace-crates: true
+          workspaces: |
+            . -> target
+            src/osm_manager -> target
       - name: Install native build dependencies
         run: |
           sudo apt-get update

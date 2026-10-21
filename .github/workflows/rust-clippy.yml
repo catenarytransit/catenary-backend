@@ -25,6 +25,9 @@ jobs:
             components: clippy
             override: true
       - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+        cache-workspace-crates: true
       - run: cargo install clippy-sarif sarif-fmt
       - run: set -o pipefail; cargo clippy --all-targets --all-features --message-format=json |
           clippy-sarif | tee results.sarif | sarif-fmt
