@@ -639,6 +639,53 @@ mod tests {
         assert_eq!(after-before, 25*3600);
     }
     #[test]
+    fn externally_assembled_routes_preserve_overtaking_and_stop_index() {
+        use catenary::routing_common::timetable::{SourceIdx, ZeroCopyTimetable};
+        let root = std::env::temp_dir().join(format!("gentian-assemble-{}", uuid::Uuid::new_v4()));
+        let mut tt = TimetableOwned::empty(20_000, 2);
+        tt.add_source("chateau", "feed", "attempt").unwrap();
+        let stops = ["a", "b", "c"].iter().map(|id| Stop {
+            id: (*id).into(), name: (*id).into(),
+            lat: 33.6, lon: -117.8, parent: None, kind: 0,
+        }).collect::<Vec<_>>();
+        add_locations(&mut tt, 0, &stops).unwrap();
+        let mut schedules = ScheduleRuns::new(&root, 1).unwrap();
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        let make = |trip: &str, first: u32, middle: i64, last: i64| Schedule {
+            trip_id: trip.into(), source: 0, route_id: "R".into(), route_type: 3,
+            locations: vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
+            events: vec![
+                Event { stop: LocationIdx(0), arrival: 0, departure: 0 },
+                Event { stop: LocationIdx(1), arrival: middle, departure: middle },
+                Event { stop: LocationIdx(0), arrival: last, departure: last },
+            ],
+            first_second: first, days,
+        };
+        // b departs later but reaches the intermediate stop earlier: putting
+        // both journeys into the same non-overtaking RAPTOR route is unsound.
+        for schedule in [
+            make("b", 130, 20, 450),
+            make("a", 100, 200, 400),
+            make("c", 800, 200, 400),
+        ] { schedules.push(schedule).unwrap(); }
+        assemble_routes(&mut tt, schedules).unwrap();
+        assert_eq!(tt.trip_public_route_ids.len(), 3);
+        assert!(tt.route_transport_ranges.len() >= 2);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        for trip in ["a", "b", "c"] {
+            assert!(view.trip_by_source_id(SourceIdx(0), trip).is_some());
+        }
+        // A circular route visits stop a twice, but must appear only once in
+        // stop a's route index, which is sorted by internal route index.
+        let indexed = view.routes_at(LocationIdx(0));
+        assert_eq!(indexed.len(), view.route_transport_ranges().len());
+        assert!(indexed.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
     fn no_overtaking_when_middle_stop_is_faster() {
         let event = |t| Event {stop:LocationIdx(0),arrival:t,departure:t};
         let a=Schedule {trip_id:"a".into(),source:0,route_id:"r".into(),route_type:3,
