@@ -21,6 +21,7 @@ TIMING_FIELDS = (
     "access_ms",
     "egress_ms",
     "direct_walk_ms",
+    "osr_parallel_wall_ms",
     "raptor_ms",
     "metadata_ms",
     "query_total_ms",
@@ -75,7 +76,8 @@ def run_query(args: argparse.Namespace) -> dict:
         f"cold CLI wall {command_wall_ms:.3f} ms"
     )
     print(
-        f"  OSR access {timings['access_ms']:.3f} ms; "
+        f"  OSR parallel wall {timings['osr_parallel_wall_ms']:.3f} ms; "
+        f"access {timings['access_ms']:.3f} ms; "
         f"egress {timings['egress_ms']:.3f} ms; "
         f"direct {timings['direct_walk_ms']:.3f} ms; "
         f"metadata {timings['metadata_ms']:.3f} ms"
@@ -90,6 +92,7 @@ def run_query(args: argparse.Namespace) -> dict:
                 f"{timings['access_ms']:.3f} | "
                 f"{timings['egress_ms']:.3f} | "
                 f"{timings['direct_walk_ms']:.3f} | "
+                f"{timings['osr_parallel_wall_ms']:.3f} | "
                 f"{timings['metadata_ms']:.3f} | "
                 f"{timings['query_total_ms']:.3f} | "
                 f"{command_wall_ms:.3f} |\n"
