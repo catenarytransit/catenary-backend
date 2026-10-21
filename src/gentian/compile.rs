@@ -330,7 +330,7 @@ fn assemble_batch(
             }
             let mut union = TrafficDays::default();
             for schedule in &chain {
-                let idx = intern_days(tt, &mut days_index, schedule.days)?;
+                let idx = intern_days(tt, days_index, schedule.days)?;
                 union.or_assign(&schedule.days);
                 let transport = TransportIdx(as_u32(tt.transport_route.len())?);
                 tt.transport_route.push(route);
@@ -356,7 +356,7 @@ fn assemble_batch(
                 to: as_u32(tt.route_stop_times.len())?,
             });
             tt.route_clasz.push(clasz(chain[0].route_type));
-            let route_days = intern_days(tt, &mut days_index, union)?;
+            let route_days = intern_days(tt, days_index, union)?;
             tt.route_traffic_days.push(route_days);
             tt.route_section_clasz_offsets.push(as_u32(tt.route_section_clasz.len())?);
             tt.section_flag_offsets.push(as_u32(tt.route_section_clasz.len())?);
@@ -365,24 +365,25 @@ fn assemble_batch(
     Ok(())
 }
 
+fn route_unique_stops(tt: &TimetableOwned, route: usize, locations: usize) -> Result<Vec<usize>> {
+    let from = tt.route_stop_offsets[route] as usize;
+    let to = tt.route_stop_offsets[route + 1] as usize;
+    let mut stops = tt.route_stops[from..to].iter()
+        .map(|stop| stop.location().idx()).collect::<Vec<_>>();
+    stops.sort_unstable();
+    stops.dedup();
+    ensure!(stops.iter().all(|&stop| stop < locations), "route references unknown stop");
+    Ok(stops)
+}
+
 /// Build stop-to-route CSR directly in the final V4 columns. A route visits
 /// a location at most once in this inverted index, even if its pattern loops.
 fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
     let locations = tt.coordinates.len();
     let mut counts = vec![0u32; locations];
-    let unique_stops = |route: usize| -> Result<Vec<usize>> {
-        let from = tt.route_stop_offsets[route] as usize;
-        let to = tt.route_stop_offsets[route + 1] as usize;
-        let mut stops = tt.route_stops[from..to].iter()
-            .map(|stop| stop.location().idx()).collect::<Vec<_>>();
-        stops.sort_unstable();
-        stops.dedup();
-        ensure!(stops.iter().all(|&stop| stop < locations), "route references unknown stop");
-        Ok(stops)
-    };
     let routes = tt.route_transport_ranges.len();
     for route in 0..routes {
-        for stop in unique_stops(route)? {
+        for stop in route_unique_stops(tt, route, locations)? {
             counts[stop] = counts[stop].checked_add(1)
                 .context("stop-to-route index exceeds u32 range")?;
         }
@@ -399,7 +400,7 @@ fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
     let mut cursor = tt.location_routes_offsets[..locations].iter()
         .map(|&offset| offset as usize).collect::<Vec<_>>();
     for route in 0..routes {
-        for stop in unique_stops(route)? {
+        for stop in route_unique_stops(tt, route, locations)? {
             tt.location_routes[cursor[stop]] = RouteIdx(as_u32(route)?);
             cursor[stop] += 1;
         }
