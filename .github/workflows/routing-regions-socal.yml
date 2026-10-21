@@ -208,8 +208,10 @@ jobs:
             --first-utc-day 20745 --day-count 35 \
             --osr-dir temp/osr-data/regions/north-america/us/california/socal \
             --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
             --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
+          test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
       - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
