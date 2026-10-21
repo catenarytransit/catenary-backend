@@ -12,6 +12,7 @@ use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
 mod compile;
 mod external_assembly;
+mod file_sizes;
 mod footpaths;
 mod transfer_rules;
 
@@ -72,10 +73,24 @@ struct Args {
     /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
     #[arg(long, requires = "region")]
     list_chateaux: bool,
+
+    /// Print the actual file size of every configured region timetable.
+    /// Does not require a database connection.
+    #[arg(long, conflicts_with_all = ["region", "sources", "build", "list_chateaux"])]
+    list_timetable_sizes: bool,
+
+    /// Override the configured timetable directory when listing file sizes.
+    #[arg(long, requires = "list_timetable_sizes")]
+    data_dir: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    if args.list_timetable_sizes {
+        let config = RoutingRegionsConfig::load(&args.regions_config)?;
+        let dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
+        return file_sizes::print_configured(&config, dir);
+    }
     let selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
         let url = args.database_url.as_deref()
@@ -105,7 +120,7 @@ fn main() -> Result<()> {
             osr_dir, args.max_seconds, args.candidate_meters, output,
             args.scratch_dir.as_deref(), args.schedule_memory_mib,
         )?;
-        return Ok(());
+        return file_sizes::print_published(&selection.id, output);
     }
     let output = args.output.as_ref().context("--output is required")?;
     let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
@@ -131,5 +146,8 @@ fn main() -> Result<()> {
         "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
         bytes, tt.sources.len()
     );
+    if let Some(selection) = &selection {
+        file_sizes::print_published(&selection.id, output)?;
+    }
     Ok(())
 }
