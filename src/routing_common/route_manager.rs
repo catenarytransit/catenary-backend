@@ -1,4 +1,5 @@
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
+use crate::routing_common::metadata_index::MetadataIndex;
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
@@ -34,6 +35,7 @@ pub struct TransitRegion {
     pub id: String,
     geometry: Vec<geo::Geometry<f64>>,
     pub timetable: MappedTimetable,
+    pub metadata: MetadataIndex,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -122,7 +124,8 @@ impl Router {
             let path = settings.data_dir.join(format!("{}.bin", region.id));
             let timetable = MappedTimetable::open(&path)
                 .with_context(|| format!("mapping transit region {} from {}",region.id,path.display()))?;
-            transit.push(TransitRegion {id:region.id.clone(),geometry:geometries,timetable});
+            let metadata = MetadataIndex::build(&timetable.view()?)?;
+            transit.push(TransitRegion {id:region.id.clone(),geometry:geometries,timetable,metadata});
         }
         ensure!(!transit.is_empty() && !streets.is_empty(), "no routable regions");
         Ok(Self {transit, streets, settings})
@@ -157,6 +160,12 @@ impl Router {
         self.transit.iter().find(|r|r.id == name)
             .context("routing region disappeared")?.timetable.view()
             .map_err(Into::into)
+    }
+
+    pub fn metadata_for(&self, name: &str) -> Result<&MetadataIndex> {
+        self.transit.iter().find(|r|r.id == name)
+            .map(|r| &r.metadata)
+            .context("routing region disappeared")
     }
 
     pub fn route_with_access(
