@@ -706,6 +706,46 @@ mod tests {
     }
 
     #[test]
+    fn equal_patterns_share_storage_across_external_batches() {
+        use catenary::routing_common::timetable::ZeroCopyTimetable;
+        let root = std::env::temp_dir().join(format!("gentian-profiles-{}", uuid::Uuid::new_v4()));
+        let mut tt = TimetableOwned::empty(20_000, 1);
+        tt.add_source("chateau", "feed", "attempt").unwrap();
+        let stops = ["a", "b"].iter().map(|id| Stop {
+            id: (*id).into(), name: (*id).into(), lat: 33.6,
+            lon: -117.8, parent: None, kind: 0,
+        }).collect::<Vec<_>>();
+        add_locations(&mut tt, 0, &stops).unwrap();
+        tt.footpaths_out_offsets.extend([0, 0]);
+        tt.footpaths_in_offsets.extend([0, 0]);
+        let mut runs = ScheduleRuns::new(&root, 1).unwrap();
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        for i in 0..2_500u32 {
+            runs.push(Schedule {
+                trip_id: format!("trip-{i}"), source: 0,
+                route_id: "R".into(), route_type: 3,
+                locations: vec![LocationIdx(0), LocationIdx(1)],
+                events: vec![
+                    Event { stop: LocationIdx(0), arrival: 0, departure: 0 },
+                    Event { stop: LocationIdx(1), arrival: 601, departure: 601 },
+                ],
+                first_second: i * 25, days,
+            }).unwrap();
+        }
+        assemble_routes(&mut tt, runs).unwrap();
+        assert_eq!(tt.transport_timing_profile.len(), 2_500);
+        assert_eq!(tt.timing_profile_offsets.len(), 2);
+        assert_eq!(tt.timing_profile_events.len(), 2);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(0), 1, true)
+            .unwrap().seconds(), 601);
+        assert!(view.transport_timing_profile().iter().all(|p| p.0 == 0));
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
     fn no_overtaking_when_middle_stop_is_faster() {
         let event = |t| Event {stop:LocationIdx(0),arrival:t,departure:t};
         let a=Schedule {trip_id:"a".into(),source:0,route_id:"r".into(),route_type:3,
