@@ -76,6 +76,7 @@ struct QueryTimings {
     access_ms: f64,
     egress_ms: f64,
     direct_walk_ms: f64,
+    osr_parallel_wall_ms: f64,
     raptor_ms: f64,
     metadata_ms: f64,
     query_total_ms: f64,
@@ -211,6 +212,7 @@ fn run_query(
     // Use Rayon's existing bounded pool, rather than spawning up to three
     // operating-system threads per HTTP request. Native routers are isolated
     // by the OSR worker's own fixed-size worker pool.
+    let osr_start = Instant::now();
     let (access, (egress, direct)) = rayon::join(
         || {
             let start = Instant::now();
@@ -251,6 +253,7 @@ fn run_query(
             },
         ),
     );
+    timings.osr_parallel_wall_ms = milliseconds(osr_start);
     timings.access_ms = access.1;
     timings.egress_ms = egress.1;
     timings.direct_walk_ms = direct.1;
@@ -309,8 +312,8 @@ async fn main()->Result<()>{
                 .with_context(|| format!("writing query timings to {}", path.display()))?;
         }
         eprintln!(
-            "Edelweiss query: total {:.3} ms; RAPTOR {:.3} ms; OSR access {:.3} ms; OSR egress {:.3} ms; OSR direct {:.3} ms; metadata {:.3} ms",
-            timings.query_total_ms, timings.raptor_ms, timings.access_ms,
+            "Edelweiss query: total {:.3} ms; RAPTOR {:.3} ms; concurrent OSR wall {:.3} ms; OSR access {:.3} ms; OSR egress {:.3} ms; OSR direct {:.3} ms; metadata {:.3} ms",
+            timings.query_total_ms, timings.raptor_ms, timings.osr_parallel_wall_ms, timings.access_ms,
             timings.egress_ms, timings.direct_walk_ms, timings.metadata_ms
         );
         println!("{}",serde_json::to_string_pretty(&response)?);
