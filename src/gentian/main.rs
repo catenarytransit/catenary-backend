@@ -11,6 +11,7 @@ use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use postgres::{Client, NoTls};
 mod compile;
+mod external_assembly;
 mod footpaths;
 mod transfer_rules;
 
@@ -58,6 +59,16 @@ struct Args {
     #[arg(long, default_value_t = 1200.0)]
     candidate_meters: f64,
 
+    /// Maximum in-memory schedule buffer for sorting and route assembly.
+    /// This does not cap stop indexes, final timetable columns or OSR memory.
+    #[arg(long, default_value_t = 64)]
+    schedule_memory_mib: usize,
+
+    /// Scratch filesystem for external schedule runs. Defaults to the output
+    /// directory so /tmp tmpfs does not consume the compiler's memory budget.
+    #[arg(long, value_name = "DIRECTORY", requires = "build")]
+    scratch_dir: Option<PathBuf>,
+
     /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
     #[arg(long, requires = "region")]
     list_chateaux: bool,
@@ -92,6 +103,7 @@ fn main() -> Result<()> {
         compile::build(
             &mut client, &selection.sources, args.first_utc_day, args.day_count,
             osr_dir, args.max_seconds, args.candidate_meters, output,
+            args.scratch_dir.as_deref(), args.schedule_memory_mib,
         )?;
         return Ok(());
     }
