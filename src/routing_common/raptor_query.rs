@@ -126,10 +126,36 @@ fn relax_walks(
     }
 }
 
+/// RAPTOR's route marking: only routes incident to a newly improved
+/// location can produce new labels in the next round. The CSR index was
+/// built during Gentian compilation, so no global route scan is necessary.
+///
+/// A bitmap deduplicates looped stops and routes shared by several marked
+/// locations. Sorting the resulting route indices preserves the deterministic
+/// tie-breaking order of the previous exhaustive scan.
+fn routes_from_marked(
+    tt: &ZeroCopyTimetable<'_>,
+    marked_stops: &[usize],
+) -> Vec<RouteIdx> {
+    let mut seen = vec![false; tt.route_transport_ranges().len()];
+    let mut routes = Vec::new();
+    for &stop in marked_stops {
+        for &route in tt.routes_at(LocationIdx(stop as u32)) {
+            if !seen[route.idx()] {
+                seen[route.idx()] = true;
+                routes.push(route);
+            }
+        }
+    }
+    routes.sort_unstable_by_key(|r| r.0);
+    routes
+}
+
 fn traverse_routes(
     tt: &ZeroCopyTimetable<'_>,
     prev: &[Label],
     curr: &mut [Label],
+    marked_routes: &[RouteIdx],
     departure: i64,
     max_time: i64,
 ) -> Result<()> {
@@ -139,10 +165,10 @@ fn traverse_routes(
     let last_day = (max_time.div_euclid(86_400) - base).min(horizon - 1);
     if first_day > last_day { return Ok(()); }
 
-    for (r, transport_range) in tt.route_transport_ranges().iter().enumerate() {
-        let route = RouteIdx(r as u32);
+    for &route in marked_routes {
+        let transport_range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
-        if stops.len() < 2 || !stops.iter().any(|s| prev[s.location().idx()].time < INF) {
+        if stops.len() < 2 {
             continue;
         }
         for index in transport_range.from..transport_range.to {
@@ -266,6 +292,9 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
         }
     }
     relax_walks(tt, &mut round0, max_time);
+    let mut marked_stops = round0.iter().enumerate()
+        .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
+        .collect::<Vec<_>>();
     let mut labels = vec![round0];
     for round in 1..=request.max_boardings {
         let prev = &labels[round - 1];
@@ -276,11 +305,15 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             },
             last_alight: label.last_alight,
         }).collect();
-        traverse_routes(tt, prev, &mut curr, departure, max_time)?;
+        let routes = routes_from_marked(tt, &marked_stops);
+        if routes.is_empty() { break; }
+        traverse_routes(tt, prev, &mut curr, &routes, departure, max_time)?;
         relax_walks(tt, &mut curr, max_time);
-        let improved = curr.iter().zip(prev).any(|(a,b)| a.time < b.time);
+        marked_stops = curr.iter().zip(prev).enumerate()
+            .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
+            .collect();
         labels.push(curr);
-        if !improved { break; }
+        if marked_stops.is_empty() { break; }
     }
 
     let mut journeys = Vec::new();
@@ -334,7 +367,8 @@ mod tests {
             tt.location_parent.push(LocationIdx::INVALID);
             tt.location_type.push(1);
             tt.location_transfer_seconds.push(0);
-            tt.location_routes_offsets.push(0);
+            tt.location_routes_offsets.push((tt.location_routes_offsets.len()) as u32);
+            tt.location_routes.push(RouteIdx(0));
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
         }
