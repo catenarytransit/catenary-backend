@@ -8,6 +8,8 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
+    sync::{mpsc, Arc, Mutex},
+    thread,
 };
 
 #[derive(Parser)]
@@ -16,6 +18,10 @@ struct Args {
     config: PathBuf,
     #[arg(long,default_value="127.0.0.1:40501")]
     listen: String,
+    /// Concurrent native OSR search contexts. Each worker owns its router
+    /// handles: CXX UniquePtr/router state is never shared across threads.
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(usize).range(1..=16))]
+    workers: usize,
 }
 
 #[derive(Deserialize)]
@@ -94,31 +100,91 @@ fn handle(stream:TcpStream,graphs:&BTreeMap<String,cxx::UniquePtr<ffi::Router>>)
     Ok(())
 }
 
-fn main()->Result<()> {
-    let args=Args::parse();
-    let cfg:Config=toml::from_str(&fs::read_to_string(&args.config)?)?;
-    let registry=cfg.osm_manager.data_dir.join("regions.geojson");
-    let document:serde_json::Value=serde_json::from_slice(&fs::read(&registry)?)?;
-    let features=document.get("features").and_then(|x|x.as_array())
+/// Resolve graph directories in the acceptor thread; CXX native routers are
+/// opened independently inside their owning worker threads.
+fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>> {
+    let registry = data_dir.join("regions.geojson");
+    let document: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
+    let features = document.get("features").and_then(|x| x.as_array())
         .context("OSR regions registry missing features")?;
-    let mut graphs=BTreeMap::new();
+    let mut paths = BTreeMap::new();
     for feature in features {
-        let id=feature.get("properties").and_then(|x|x.get("id"))
-            .and_then(|x|x.as_str()).context("OSR registry entry missing id")?;
-        ensure!(!id.split('/').any(|p|p==".."||p=="."||p.is_empty()),"invalid OSR id");
-        let dir=cfg.osm_manager.data_dir.join("regions").join(id);
-        let router=ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
-        ensure!(!router.is_null(),"OSR graph is null: {id}");
-        eprintln!("Opened native OSR mmap: {id}");
-        graphs.insert(id.to_owned(),router);
+        let id = feature.get("properties").and_then(|x| x.get("id"))
+            .and_then(|x| x.as_str()).context("OSR registry entry missing id")?;
+        ensure!(!id.split('/').any(|p| p == ".." || p == "." || p.is_empty()),
+            "invalid OSR id");
+        ensure!(paths.insert(id.to_owned(), data_dir.join("regions").join(id)).is_none(),
+            "duplicate OSR region ID: {id}");
     }
-    ensure!(!graphs.is_empty(),"no OSR regions loaded");
-    let listener=TcpListener::bind(&args.listen)?;
-    eprintln!("OSR worker listening at {}",args.listen);
+    ensure!(!paths.is_empty(), "no OSR regions configured");
+    Ok(paths)
+}
+
+/// Loaded once on each worker thread, so native routing state never crosses
+/// a Rust Send/Sync boundary. Linux page cache backs the same OSR graph files
+/// across workers, but per-router mutable native memory is not shared.
+fn open_graphs(
+    paths: &BTreeMap<String, PathBuf>,
+) -> Result<BTreeMap<String, cxx::UniquePtr<ffi::Router>>> {
+    let mut graphs = BTreeMap::new();
+    for (id, dir) in paths {
+        let router = ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
+        ensure!(!router.is_null(), "OSR graph is null: {id}");
+        eprintln!("Opened native OSR mmap: {id}");
+        graphs.insert(id.clone(), router);
+    }
+    Ok(graphs)
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    let cfg: Config = toml::from_str(&fs::read(&args.config)?)?;
+    let paths = Arc::new(region_paths(&cfg.osm_manager.data_dir)?);
+    let listener = TcpListener::bind(&args.listen)?;
+
+    // Bounded queue provides backpressure under load. Only TcpStreams, never
+    // native CXX routers, cross thread boundaries.
+    let (send, recv) = mpsc::sync_channel::<TcpStream>(args.workers * 4);
+    let recv = Arc::new(Mutex::new(recv));
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
+    for worker in 0..args.workers {
+        let recv = Arc::clone(&recv);
+        let paths = Arc::clone(&paths);
+        let ready = ready_tx.clone();
+        thread::Builder::new().name(format!("osr-query-{worker}")).spawn(move || {
+            let graphs = match open_graphs(&paths) {
+                Ok(g) => {
+                    let _ = ready.send(Ok(()));
+                    g
+                }
+                Err(error) => {
+                    let _ = ready.send(Err(error));
+                    return;
+                }
+            };
+            loop {
+                // Do not hold the receiver mutex while running native OSR.
+                let stream = match recv.lock().expect("OSR queue poisoned").recv() {
+                    Ok(stream) => stream,
+                    Err(_) => break,
+                };
+                if let Err(error) = handle(stream, &graphs) {
+                    eprintln!("OSR client: {error}");
+                }
+            }
+        }).context("spawning OSR worker")?;
+    }
+    drop(ready_tx);
+    // Do not advertise a listening worker until all routers have opened.
+    for _ in 0..args.workers {
+        ready_rx.recv().context("OSR worker failed to initialize")??;
+    }
+    eprintln!("OSR worker listening at {} ({} concurrent queries)",
+        args.listen, args.workers);
     for stream in listener.incoming() {
         match stream {
-            Ok(stream)=>if let Err(e)=handle(stream,&graphs){eprintln!("OSR client: {e}")},
-            Err(e)=>eprintln!("OSR accept: {e}"),
+            Ok(stream) => send.send(stream).context("OSR worker queue closed")?,
+            Err(error) => eprintln!("OSR accept: {error}"),
         }
     }
     Ok(())
