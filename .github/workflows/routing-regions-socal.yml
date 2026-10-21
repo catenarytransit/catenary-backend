@@ -212,6 +212,12 @@ jobs:
             --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
           test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
+          cargo run --release --bin gentian -- \
+            --regions-config routing_regions.toml \
+            --data-dir compiled/routing \
+            --list-timetable-sizes | tee temp/timetable-file-sizes.log
+          grep -F 'southern-california:' temp/timetable-file-sizes.log
+          grep -F 'Total published timetables:' temp/timetable-file-sizes.log
       - name: Start long-running native OSR worker
         run: |
           set -euo pipefail
@@ -250,6 +256,7 @@ jobs:
           name: gentian-socal-routing-diagnostics
           path: |
             temp/selection.json
+            temp/timetable-file-sizes.log
             temp/stops.tsv
             temp/uci-cityhall-results.json
             temp/osr-worker.log
