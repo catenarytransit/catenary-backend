@@ -207,38 +207,56 @@ fn run_query(
     let selection = router.select(request.from, request.to)?;
     timings.selection_ms = milliseconds(phase);
 
-    let phase = Instant::now();
-    let from = if request.access.is_empty() {
-        osr_access(router, osr_worker, &selection.transit_region,
-            &selection.origin_osr_region, request.from)?
-    } else {
-        request.access.into_iter().map(|e| WalkingEndpoint {
-            stop: LocationIdx(e.stop), seconds: e.seconds,
-        }).collect()
-    };
-    timings.access_ms = milliseconds(phase);
-
-    let phase = Instant::now();
-    let to = if request.egress.is_empty() {
-        osr_access(router, osr_worker, &selection.transit_region,
-            &selection.destination_osr_region, request.to)?
-    } else {
-        request.egress.into_iter().map(|e| WalkingEndpoint {
-            stop: LocationIdx(e.stop), seconds: e.seconds,
-        }).collect()
-    };
-    timings.egress_ms = milliseconds(phase);
-
-    let phase = Instant::now();
-    let direct = if request.direct_walk_seconds.is_some() {
-        request.direct_walk_seconds
-    } else if selection.origin_osr_region == selection.destination_osr_region {
-        direct_osr_seconds(osr_worker, &selection.origin_osr_region,
-            request.from, request.to)?
-    } else {
-        None
-    };
-    timings.direct_walk_ms = milliseconds(phase);
+    // Access, egress and direct walking have no data dependencies.
+    // Use Rayon's existing bounded pool, rather than spawning up to three
+    // operating-system threads per HTTP request. Native routers are isolated
+    // by the OSR worker's own fixed-size worker pool.
+    let (access, (egress, direct)) = rayon::join(
+        || {
+            let start = Instant::now();
+            let result = if request.access.is_empty() {
+                osr_access(router, osr_worker, &selection.transit_region,
+                    &selection.origin_osr_region, request.from)
+            } else {
+                Ok(request.access.iter().map(|e| WalkingEndpoint {
+                    stop: LocationIdx(e.stop), seconds: e.seconds,
+                }).collect())
+            };
+            (result, milliseconds(start))
+        },
+        || rayon::join(
+            || {
+                let start = Instant::now();
+                let result = if request.egress.is_empty() {
+                    osr_access(router, osr_worker, &selection.transit_region,
+                        &selection.destination_osr_region, request.to)
+                } else {
+                    Ok(request.egress.iter().map(|e| WalkingEndpoint {
+                        stop: LocationIdx(e.stop), seconds: e.seconds,
+                    }).collect())
+                };
+                (result, milliseconds(start))
+            },
+            || {
+                let start = Instant::now();
+                let result = if let Some(seconds) = request.direct_walk_seconds {
+                    Ok(Some(seconds))
+                } else if selection.origin_osr_region == selection.destination_osr_region {
+                    direct_osr_seconds(osr_worker, &selection.origin_osr_region,
+                        request.from, request.to)
+                } else {
+                    Ok(None)
+                };
+                (result, milliseconds(start))
+            },
+        ),
+    );
+    timings.access_ms = access.1;
+    timings.egress_ms = egress.1;
+    timings.direct_walk_ms = direct.1;
+    let from = access.0?;
+    let to = egress.0?;
+    let direct = direct.0?;
 
     let phase = Instant::now();
     let routing = router.route_with_access(selection, request.departure_unix_seconds,
