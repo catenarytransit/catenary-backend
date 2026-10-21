@@ -1,4 +1,4 @@
-//! Nigiri-shaped static timetable data model; Catenary wire version 4.
+//! Nigiri-shaped static timetable data model; Catenary wire version 5.
 //! Unlike Nigiri's minute-based wire representation, every duration is in seconds.
 //! This is NOT binary compatible with Cista's serializer.
 //! Compiler and RAPTOR algorithms are deliberately deferred.
@@ -11,7 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use std::fmt;
 
 pub const MAGIC: u32 = 0x4341_544E;
-pub const VERSION: u32 = 4;
+pub const VERSION: u32 = 5;
 pub const MAX_DAYS: usize = 512;
 pub const TIMETABLE_OFFSET_DAYS: i32 = 5;
 pub const DEFAULT_TRANSFER_SECONDS: u32 = 120;
@@ -30,6 +30,7 @@ macro_rules! strong_idx {
 strong_idx! {
     LocationIdx: u32; RouteIdx: u32; TransportIdx: u32; TripIdx: u32;
     BitfieldIdx: u32; RouteIdIdx: u32; TripIdIdx: u32; MergedTripsIdx: u32;
+    TimingProfileIdx: u32;
     SourceIdx: u16; DayIdx: u16;
 }
 #[repr(C)]
@@ -328,8 +329,11 @@ columns! {
     route_stop_offsets: u32,
     route_stops: PackedStop,
     route_transport_ranges: Range,
-    route_stop_time_ranges: Range,
-    route_stop_times: Delta,
+    // Profile events are [departure(0), arrival(1), departure(1), ...,
+    // arrival(last)]. The first arrival and final departure are unused.
+    timing_profile_offsets: u32,
+    timing_profile_events: Delta,
+    transport_timing_profile: TimingProfileIdx,
     route_clasz: u8,
     route_section_clasz_offsets: u32,
     route_section_clasz: u8,
@@ -370,6 +374,7 @@ impl TimetableOwned {
         tt.footpaths_out_offsets.push(0);
         tt.footpaths_in_offsets.push(0);
         tt.route_stop_offsets.push(0);
+        tt.timing_profile_offsets.push(0);
         tt.route_section_clasz_offsets.push(0);
         tt.section_flag_offsets.push(0);
         tt.trip_transport_offsets.push(0);
@@ -483,11 +488,12 @@ impl ZeroCopyTimetable<'_> {
         csr(self.route_stop_offsets(),self.route_stops().len(),r)?;
         csr(self.route_section_clasz_offsets(),self.route_section_clasz().len(),r)?;
         csr(self.section_flag_offsets(),self.route_section_clasz().len(),r)?;
-        for len in [self.route_stop_time_ranges().len(),self.route_clasz().len(),
+        for len in [self.route_clasz().len(),
                     self.route_traffic_days().len()] {
             if len != r { return Err(FormatError::Layout); }
         }
         for len in [self.transport_traffic_days().len(),
+                    self.transport_timing_profile().len(),
                     self.transport_first_dep_offset().len(),
                     self.transport_initial_day_offset().len()] {
             if len != t { return Err(FormatError::Layout); }
@@ -536,7 +542,10 @@ impl ZeroCopyTimetable<'_> {
         for p in self.footpaths_out().iter().chain(self.footpaths_in()) {
             if p.target().idx() >= n || p.seconds() == 0 { return Err(FormatError::Index); }
         }
-        for time in self.route_stop_times().iter().chain(self.transport_first_dep_offset()) {
+        let profiles = self.timing_profile_offsets().len().checked_sub(1)
+            .ok_or(FormatError::Layout)?;
+        csr(self.timing_profile_offsets(), self.timing_profile_events().len(), profiles)?;
+        for time in self.timing_profile_events().iter().chain(self.transport_first_dep_offset()) {
             if time.seconds_after_midnight() >= Delta::SECONDS_PER_DAY {
                 return Err(FormatError::Index);
             }
@@ -556,18 +565,21 @@ impl ZeroCopyTimetable<'_> {
             if group.idx() >= self.merged_trip_offsets().len()-1 { return Err(FormatError::Index); }
         }
         for (i, rr) in self.route_transport_ranges().iter().enumerate() {
-            let times = self.route_stop_time_ranges()[i];
-            if rr.from > rr.to || rr.to as usize > t || times.from > times.to
-                || times.to as usize > self.route_stop_times().len() {
+            if rr.from > rr.to || rr.to as usize > t {
                 return Err(FormatError::Index);
             }
             let stops = (self.route_stop_offsets()[i+1]-self.route_stop_offsets()[i]) as usize;
-            let events = stops.saturating_sub(1).checked_mul(2)
-                .and_then(|n| n.checked_mul((rr.to-rr.from) as usize))
+            let events = stops.checked_sub(1).and_then(|n| n.checked_mul(2))
                 .ok_or(FormatError::Overflow)?;
-            if (times.to-times.from) as usize != events { return Err(FormatError::Layout); }
             for j in rr.from..rr.to {
-                if self.transport_route()[j as usize] != RouteIdx(i as u32) {
+                let transport = j as usize;
+                if self.transport_route()[transport] != RouteIdx(i as u32) {
+                    return Err(FormatError::Layout);
+                }
+                let profile = self.transport_timing_profile()[transport].idx();
+                if profile >= profiles { return Err(FormatError::Index); }
+                let offsets = self.timing_profile_offsets();
+                if (offsets[profile + 1] - offsets[profile]) as usize != events {
                     return Err(FormatError::Layout);
                 }
             }
@@ -614,24 +626,79 @@ impl ZeroCopyTimetable<'_> {
         if i+1 >= o.len() { return &[]; }
         &self.footpaths_out()[o[i] as usize..o[i+1] as usize]
     }
+    /// Shared, stop-order event offsets for one transport. Resolution is O(1)
+    /// and the slice can be reused throughout an entire RAPTOR route scan.
+    pub fn events_for_transport(&self, transport: TransportIdx) -> Option<&[Delta]> {
+        let profile = self.transport_timing_profile().get(transport.idx())?.idx();
+        let from = *self.timing_profile_offsets().get(profile)? as usize;
+        let to = *self.timing_profile_offsets().get(profile + 1)? as usize;
+        self.timing_profile_events().get(from..to)
+    }
+
     pub fn event_time(&self, route: RouteIdx, transport: TransportIdx,
                       stop: usize, arrival: bool) -> Option<Delta> {
-        let rr=*self.route_transport_ranges().get(route.idx())?;
-        let times=*self.route_stop_time_ranges().get(route.idx())?;
-        let n=self.stops_on(route).len();
-        if transport.0 < rr.from || transport.0 >= rr.to || 
-            (arrival && (stop==0 || stop>=n)) ||
+        let rr = *self.route_transport_ranges().get(route.idx())?;
+        let n = self.stops_on(route).len();
+        if transport.0 < rr.from || transport.0 >= rr.to ||
+            (arrival && (stop == 0 || stop >= n)) ||
             (!arrival && stop.checked_add(1)? >= n) { return None; }
-        let width=(rr.to-rr.from) as usize;
-        let slot=if arrival {stop*2-1} else {stop*2};
-        self.route_stop_times().get(times.from as usize+slot*width+
-            (transport.0-rr.from) as usize).copied()
+        let slot = if arrival { stop * 2 - 1 } else { stop * 2 };
+        self.events_for_transport(transport)?.get(slot).copied()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_shared_profile_preserves_second_exact_event_lookups() {
+        let mut tt = TimetableOwned::empty(20_000, 1);
+        tt.add_source("c", "f", "a").unwrap();
+        for _ in 0..3 {
+            tt.coordinates.push(Coordinate::default());
+            tt.location_id.push(StringRef::default());
+            tt.location_name.push(StringRef::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(0);
+            tt.location_transfer_seconds.push(120);
+            tt.location_routes_offsets.push(0);
+            tt.footpaths_out_offsets.push(0);
+            tt.footpaths_in_offsets.push(0);
+            tt.route_stops.push(PackedStop::new(LocationIdx(tt.route_stops.len() as u32), true, true, true, true).unwrap());
+        }
+        tt.route_stop_offsets.push(3);
+        tt.route_transport_ranges.push(Range { from: 0, to: 2 });
+        tt.route_clasz.push(Clasz::Bus as u8);
+        tt.route_traffic_days.push(BitfieldIdx(0));
+        tt.route_section_clasz_offsets.push(0);
+        tt.section_flag_offsets.push(0);
+        tt.timing_profile_events.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(631).unwrap(),
+            Delta::from_seconds(725).unwrap(),
+            Delta::from_seconds(1409).unwrap(),
+        ]);
+        tt.timing_profile_offsets.push(4);
+        tt.transport_route.extend([RouteIdx(0), RouteIdx(0)]);
+        tt.transport_timing_profile.extend([TimingProfileIdx(0), TimingProfileIdx(0)]);
+        tt.transport_traffic_days.extend([BitfieldIdx(0), BitfieldIdx(0)]);
+        tt.transport_first_dep_offset.extend([
+            Delta::from_seconds(28_800).unwrap(),
+            Delta::from_seconds(29_700).unwrap(),
+        ]);
+        tt.transport_initial_day_offset.extend([0, 0]);
+        tt.transport_to_trip_section_offsets.extend([0, 0]);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        assert_eq!(view.events_for_transport(TransportIdx(0)), view.events_for_transport(TransportIdx(1)));
+        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(1), 1, true).unwrap().seconds(), 631);
+        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(0), 2, true).unwrap().seconds(), 1409);
+        assert!(view.event_time(RouteIdx(0), TransportIdx(1), 2, false).is_none());
+        let mut invalid = bytes.clone();
+        invalid[4..8].copy_from_slice(&4u32.to_ne_bytes());
+        assert!(matches!(ZeroCopyTimetable::new(&invalid), Err(FormatError::Version)));
+    }
     #[test]
     fn second_precision_storage_layout() {
         assert_eq!(std::mem::size_of::<SourceIdx>(),2);
