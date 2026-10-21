@@ -4,10 +4,17 @@
 # in a format incompatible with the reader bundled into the Rust executable.
 set -euo pipefail
 
-native_root="${CARGO_TARGET_DIR:-target}/release/build"
-bridge="$(find "$native_root" -path '*/out/native-lib/libcatenary_osr_bridge.so' -type f -print -quit)"
-if [[ -z "$bridge" ]]; then
-  echo "No compiled osr-ffi bridge found; build Gentian or osr_worker first." >&2
+# Resolve the actual bridge linked by Gentian. Cargo caches can retain
+# older osr-ffi build trees, so choosing the first matching OUT_DIR is unsafe.
+gentian="${CARGO_TARGET_DIR:-target}/release/gentian"
+test -x "$gentian" || {
+  echo "Build the Gentian executable before preparing the OSR extractor." >&2
+  exit 1
+}
+bridge="$(ldd "$gentian" | awk '$1 == "libcatenary_osr_bridge.so" && $2 == "=>" && $3 != "not" { print $3; exit }')"
+if [[ -z "$bridge" || ! -f "$bridge" ]]; then
+  echo "Gentian cannot resolve libcatenary_osr_bridge.so; check its RPATH." >&2
+  ldd "$gentian" >&2
   exit 1
 fi
 

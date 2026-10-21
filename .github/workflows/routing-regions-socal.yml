@@ -126,8 +126,8 @@ jobs:
         run: |
           set -euo pipefail
           cargo build --release --bin gentian --bin osr_worker
-          bridge="$(find target/release/build -path '*/out/native-lib/libcatenary_osr_bridge.so' -print -quit)"
-          test -n "$bridge"
+          bridge="$(ldd ./target/release/gentian | awk '$1 == "libcatenary_osr_bridge.so" && $2 == "=>" && $3 != "not" { print $3; exit }')"
+          test -f "$bridge"
           readelf -d "$bridge" | tee /tmp/osr-native-needed.txt
           grep -F 'libtbb.so' /tmp/osr-native-needed.txt
           # cxx::bridge uses Rust-owned symbols that legitimately remain
