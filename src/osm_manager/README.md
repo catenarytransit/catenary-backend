@@ -24,15 +24,33 @@ regions = [
 Build only this utility:
 
 ```sh
-cargo build --release --manifest-path tools/osm_manager/Cargo.toml --bin osm_manager
-tools/osm_manager/target/release/osm_manager --config catenaryconfig.toml run
-tools/osm_manager/target/release/osm_manager --config catenaryconfig.toml locate --lat 42.5063 --lon 1.5218
+cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+src/osm_manager/target/release/osm_manager --config catenaryconfig.toml run
+src/osm_manager/target/release/osm_manager --config catenaryconfig.toml locate --lat 42.5063 --lon 1.5218
 ```
 
 `CATENARYCONFIG` is not needed for this utility; use `--config` to
-select a file explicitly. The manager uses the upstream **osr-extract**
-CLI, which must already be installed. The Rust `osr-ffi` library opens
-these extracted directories for querying but does not perform extraction.
+select a file explicitly. The manager invokes a configured `osr-extract` executable. **Its on-disk
+OSR serialization must match the `osr-ffi` reader that will load the data.**
+An OSR release executable and a newer source checkout can produce incompatible
+`routing.bin` files even when both builds succeed.
+
+For Catenary, build the extractor using the *same* pinned OSR CMake source
+and dependencies as the native Rust reader:
+
+```sh
+cargo build --release --bin osr_worker
+bash src/osm_manager/build_matched_extractor.sh
+cargo run --release --manifest-path src/osm_manager/Cargo.toml -- \
+  --config catenaryconfig.toml run
+```
+
+Point `[osm_manager].osr_extract` to `./osr-extract` (or install the
+matching executable elsewhere). The helper reuses the CMake tree generated
+by the `osr-ffi` build, so the exporter and reader cannot drift across OSR
+revisions or pinned Cista dependencies. It does not download a GitHub release.
+The lightweight OSM manager itself remains buildable independently of the
+backend; it only launches the configured extractor.
 
 Each region is published under `data_dir/regions/<geofabrik path>/`.
 Inside are the original native OSR `.bin` files (including `routing.bin`, which contains serialized node and way properties in OSR v0.0.4), `manifest.json`, and
@@ -42,6 +60,11 @@ and exact polygon boundaries for future coordinate -> region lookup.
 
 The updater prefers Geofabrik `.osm.pbf.md5` checksum manifests,
 falling back to HTTP ETag / Last-Modified / Content-Length validators.
+It additionally fingerprints the extractor executable and records
+`extractor_md5` in `manifest.json`. Replacing the extractor forces a
+re-extract even when the OSM download has not changed. Previously written
+manifests without that field are rebuilt automatically. The checksum is a
+local cache key, not an authentication mechanism.
 It streams each download to `temp_dir`, checks the MD5 when available,
 extracts to an isolated staging directory on the output filesystem,
 validates core files, and renames the staged dataset into place. On

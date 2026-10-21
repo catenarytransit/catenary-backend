@@ -74,6 +74,10 @@ struct Manifest {
     boundary_url: String,
     generated_unix_seconds: u64,
     extractor: String,
+    /// Fingerprint of the executable that wrote routing.bin. Older manifests
+    /// have no fingerprint and must be regenerated.
+    #[serde(default)]
+    extractor_md5: Option<String>,
 }
 
 struct Lock {
@@ -175,6 +179,30 @@ fn remote_revision(client: &Client, region: &Region) -> Result<(String, Option<S
     ensure!(!etag.is_empty() || (!modified.is_empty() && !size.is_empty()),
         "Geofabrik did not provide an MD5 or usable HTTP validators for {}", region.id);
     Ok((format!("http:{etag}|{modified}|{size}"), None))
+}
+
+/// Detect a changed OSR serializer even when the upstream PBF is unchanged.
+/// MD5 is used solely as a local cache identity, not as an authenticity check.
+fn extractor_fingerprint(extractor: &Path) -> Result<String> {
+    let executable = if extractor.components().count() > 1 {
+        extractor.to_path_buf()
+    } else {
+        let path = std::env::var_os("PATH").context("PATH is unset; cannot find OSR extractor")?;
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(extractor))
+            .find(|candidate| candidate.is_file())
+            .with_context(|| format!("OSR extractor not found in PATH: {}", extractor.display()))?
+    };
+    let mut file = File::open(&executable)
+        .with_context(|| format!("reading OSR extractor {}", executable.display()))?;
+    let mut digest = md5::Context::new();
+    let mut buf = [0u8; 128 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 { break; }
+        digest.consume(&buf[..n]);
+    }
+    Ok(format!("md5:{:x}", digest.compute()))
 }
 
 fn download_pbf(client: &Client, url: &str, destination: &Path, expected_md5: Option<&str>) -> Result<()> {
@@ -294,7 +322,7 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-// Files opened by MOTIS OSR v0.0.4's ways::ways() / ways::routing::read().
+// Files opened by the pinned MOTIS OSR ways::ways()/ways::routing::read().
 // The graph properties are serialized together in routing.bin; they are NOT
  // written as node_properties.bin / way_properties.bin.
 const REQUIRED_OSR_FILES: &[&str] = &[
@@ -365,7 +393,8 @@ fn publish(staging: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region, force: bool) -> Result<()> {
+fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
+              extractor_md5: &str, force: bool) -> Result<()> {
     let output = cfg.data_dir.join("regions").join(&region.id);
     let parent = output.parent().context("no output parent")?;
     fs::create_dir_all(parent)?;
@@ -374,7 +403,10 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region, force: bool
     if !force && good_output(&output) {
         if let Ok(bytes) = fs::read(&manifest_path) {
             if let Ok(previous) = serde_json::from_slice::<Manifest>(&bytes) {
-                if previous.pbf_url == region.pbf_url && previous.revision == revision {
+                if previous.pbf_url == region.pbf_url
+                    && previous.revision == revision
+                    && previous.extractor_md5.as_deref() == Some(extractor_md5)
+                {
                     println!("{}: current ({revision}), skipping extract", region.id);
                     return Ok(());
                 }
@@ -398,8 +430,8 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region, force: bool
             .arg("-i").arg(&pbf).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
-        // Verify the actual native OSR v0.0.4 on-disk format, including the
-        // serialized routing.bin that contains node and way properties.
+        // Verify expected files. Actual serializer compatibility is checked
+        // by opening the output with the matching osr-ffi reader in CI.
         validate_osr_output(&staging)
             .with_context(|| format!("validating native OSR output for {}", region.id))?;
         write_json(&staging.join("boundary.geojson"), &geometry)?;
@@ -411,6 +443,7 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region, force: bool
             boundary_url,
             generated_unix_seconds: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             extractor: cfg.osr_extract.to_string_lossy().into_owned(),
+            extractor_md5: Some(extractor_md5.to_owned()),
         };
         write_json(&staging.join("manifest.json"), &manifest)?;
         publish(&staging, &output)?;
@@ -527,9 +560,11 @@ fn run(cfg: ManagerConfig, force: bool) -> Result<()> {
         ensure!(seen.insert(region.id.clone()), "duplicate region {}", region.id);
         regions.push(region);
     }
+    let fingerprint = extractor_fingerprint(&cfg.osr_extract)?;
+    println!("OSR extractor cache identity: {fingerprint}");
     let client = client()?;
     for region in &regions {
-        run_region(&client, &cfg, region, force)
+        run_region(&client, &cfg, region, &fingerprint, force)
             .with_context(|| format!("OSR region {}", region.id))?;
     }
     let features = regions.iter().map(|r| feature_for_region(&cfg, r))
@@ -578,7 +613,7 @@ mod tests {
         for &file in REQUIRED_OSR_FILES {
             fs::write(root.join(file), b"fixture data").unwrap();
         }
-        // The v0.0.4 extractor writes routing.bin, NOT individual
+        // The OSR extractor writes routing.bin, NOT individual
         // node_properties.bin / way_properties.bin files.
         assert!(validate_osr_output(&root).is_ok());
         assert!(!good_output(&root)); // published output needs metadata too
@@ -594,6 +629,28 @@ mod tests {
         let error = validate_osr_output(&root).unwrap_err().to_string();
         assert!(error.contains("routing.bin"), "{error}");
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extractor_fingerprint_changes_when_binary_changes() {
+        let path = std::env::temp_dir().join(format!("osr-extractor-fingerprint-{}", nonce().unwrap()));
+        fs::write(&path, b"extractor-version-a").unwrap();
+        let first = extractor_fingerprint(&path).unwrap();
+        assert_eq!(first.len(), 36);
+        assert_eq!(first, extractor_fingerprint(&path).unwrap());
+        fs::write(&path, b"extractor-version-b").unwrap();
+        assert_ne!(first, extractor_fingerprint(&path).unwrap());
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn old_manifest_requires_rebuild_for_extractor_revision() {
+        let source = r#"{"id":"x","pbf_url":"url","revision":"md5:x",
+                          "pbf_md5":null,"boundary_url":"url",
+                          "generated_unix_seconds":0,"extractor":"./osr-extract"}"#;
+        let old: Manifest = serde_json::from_str(source).unwrap();
+        assert_eq!(old.extractor_md5, None);
+        assert_ne!(old.extractor_md5.as_deref(), Some("md5:new"));
     }
 
     #[test]

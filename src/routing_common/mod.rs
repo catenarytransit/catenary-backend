@@ -5,10 +5,14 @@ pub mod graph_loader;
 pub mod lookup;
 pub mod osm_router;
 pub mod profiles;
+pub mod routing_regions;
 pub mod timetable;
+pub mod timetable_mmap;
 pub mod transit_graph;
 pub mod types;
 pub mod ways;
 
 #[cfg(test)]
 mod graph_tests;
+pub mod raptor_query;
+pub mod route_manager;

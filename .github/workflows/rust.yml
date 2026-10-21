@@ -8,12 +8,22 @@ env:
 jobs:
   build:
 
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
 
     steps:
     - uses: actions/checkout@v4
     - name: Install Dependencies
-      run: sudo apt install -y protobuf-compiler redis cmake
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler redis cmake ninja-build \
+          gcc-14 g++-14 build-essential binutils libtbb-dev pkg-config coinor-libcbc-dev libcoinutils-dev
+
     - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+        cache-workspace-crates: true
     - name: Build
       run: cargo build --verbose

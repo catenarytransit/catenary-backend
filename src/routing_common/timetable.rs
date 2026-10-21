@@ -1,4 +1,5 @@
-//! Nigiri-shaped static timetable data model; Catenary wire version 2.
+//! Nigiri-shaped static timetable data model; Catenary wire version 4.
+//! Unlike Nigiri's minute-based wire representation, every duration is in seconds.
 //! This is NOT binary compatible with Cista's serializer.
 //! Compiler and RAPTOR algorithms are deliberately deferred.
 //! Nigiri references: include/nigiri/{timetable.h,types.h,stop.h,footpath.h}.
@@ -10,9 +11,10 @@ use bytemuck::{Pod, Zeroable};
 use std::fmt;
 
 pub const MAGIC: u32 = 0x4341_544E;
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 4;
 pub const MAX_DAYS: usize = 512;
 pub const TIMETABLE_OFFSET_DAYS: i32 = 5;
+pub const DEFAULT_TRANSFER_SECONDS: u32 = 120;
 
 macro_rules! strong_idx {
     ($($name:ident : $base:ty;)*) => {$(
@@ -38,7 +40,7 @@ impl TrafficDays {
         d < MAX_DAYS && self.words[d / 64] & (1 << (d % 64)) != 0
     }
     pub fn set(&mut self, d: usize, active: bool) -> Result<(), FormatError> {
-        if d >= MAX_DAYS { return Err(FormatError::InvalidIndex); }
+        if d >= MAX_DAYS { return Err(FormatError::Index); }
         let bit = 1_u64 << (d % 64);
         if active { self.words[d / 64] |= bit; } else { self.words[d / 64] &= !bit; }
         Ok(())
@@ -68,7 +70,7 @@ impl PackedStop {
     pub const LOCATION_MASK: u32 = (1 << 28) - 1;
     pub fn new(loc: LocationIdx, inbound: bool, outbound: bool,
                wheelchair_in: bool, wheelchair_out: bool) -> Result<Self, FormatError> {
-        if loc.0 > Self::LOCATION_MASK { return Err(FormatError::InvalidIndex); }
+        if loc.0 > Self::LOCATION_MASK { return Err(FormatError::Index); }
         Ok(Self(loc.0 | (u32::from(inbound) << 28) | (u32::from(outbound) << 29)
             | (u32::from(wheelchair_in) << 30) | (u32::from(wheelchair_out) << 31)))
     }
@@ -78,36 +80,46 @@ impl PackedStop {
     pub fn wheelchair_in(self) -> bool { self.0 & (1 << 30) != 0 }
     pub fn wheelchair_out(self) -> bool { self.0 & (1 << 31) != 0 }
 }
-/// Nigiri: 23-bit target + 9-bit duration IN MINUTES.
+/// Catenary v3: 32-bit location index + 32-bit walking duration in seconds.
+/// Using a u64 instead of Nigiri's 23+9 packed u32 prevents truncating transfers
+/// longer than 511 seconds or losing sub-minute precision.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
-pub struct PackedFootpath(pub u32);
+pub struct PackedFootpath(pub u64);
 impl PackedFootpath {
-    pub const TARGET_MASK: u32 = (1 << 23) - 1;
-    pub fn new(target: LocationIdx, minutes: u16) -> Result<Self, FormatError> {
-        if target.0 >= Self::TARGET_MASK { return Err(FormatError::InvalidIndex); }
-        Ok(Self(target.0 | (u32::from(minutes.min(511)) << 23)))
+    pub fn new(target: LocationIdx, seconds: u32) -> Result<Self, FormatError> {
+        if target == LocationIdx::INVALID || seconds == 0 {
+            return Err(FormatError::Index);
+        }
+        Ok(Self(u64::from(target.0) | (u64::from(seconds) << 32)))
     }
-    pub fn target(self) -> LocationIdx { LocationIdx(self.0 & Self::TARGET_MASK) }
-    pub fn minutes(self) -> u16 { (self.0 >> 23) as u16 }
+    pub fn target(self) -> LocationIdx { LocationIdx(self.0 as u32) }
+    pub fn seconds(self) -> u32 { (self.0 >> 32) as u32 }
 }
-/// Nigiri: day offset (5 bits) + minute after midnight (11 bits).
+/// Catenary v3: 5-bit day offset plus second-of-day in the upper bits.
+/// Supports up to 31 days and 23:59:59, preserving exact GTFS seconds.
 #[repr(transparent)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
-pub struct Delta(pub u16);
+pub struct Delta(pub u32);
 impl Delta {
-    pub fn new(days: u16, minute: u16) -> Result<Self, FormatError> {
-        if days >= 32 || minute >= 2048 { return Err(FormatError::InvalidIndex); }
-        Ok(Self(days | minute << 5))
+    pub const SECONDS_PER_DAY: u32 = 86_400;
+    pub const MAX_SECONDS: u32 = 32 * Self::SECONDS_PER_DAY - 1;
+
+    pub fn new(days: u16, seconds_after_midnight: u32) -> Result<Self, FormatError> {
+        if days >= 32 || seconds_after_midnight >= Self::SECONDS_PER_DAY {
+            return Err(FormatError::Index);
+        }
+        Ok(Self((seconds_after_midnight << 5) | u32::from(days)))
     }
-    pub fn from_minutes(minutes: u32) -> Result<Self, FormatError> {
-        if minutes / 1440 >= 32 { return Err(FormatError::InvalidIndex); }
-        Self::new((minutes/1440) as u16, (minutes%1440) as u16)
+    pub fn from_seconds(seconds: u32) -> Result<Self, FormatError> {
+        if seconds > Self::MAX_SECONDS { return Err(FormatError::Index); }
+        Self::new((seconds / Self::SECONDS_PER_DAY) as u16,
+                  seconds % Self::SECONDS_PER_DAY)
     }
-    pub fn days(self) -> u16 { self.0 & 31 }
-    pub fn minutes_after_midnight(self) -> u16 { self.0 >> 5 }
-    pub fn minutes(self) -> u32 {
-        self.days() as u32 * 1440 + self.minutes_after_midnight() as u32
+    pub fn days(self) -> u16 { (self.0 & 31) as u16 }
+    pub fn seconds_after_midnight(self) -> u32 { self.0 >> 5 }
+    pub fn seconds(self) -> u32 {
+        u32::from(self.days()) * Self::SECONDS_PER_DAY + self.seconds_after_midnight()
     }
 }
 #[repr(u8)]
@@ -122,6 +134,21 @@ pub enum Clasz {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocationType { GeneratedTrack, Track, Station }
+/// A source-scoped GTFS stop-pair transfer constraint (v4).
+/// Identifiers use compiled LocationIdx, never unqualified GTFS stop IDs.
+/// A blocked rule applies to vehicle changes, not to physical pedestrian access.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct StationTransferRule {
+    pub from: LocationIdx,
+    pub to: LocationIdx,
+    pub min_seconds: u32,
+    /// 1: prohibited (GTFS transfer_type=3), 0: permitted.
+    pub flags: u32,
+}
+impl StationTransferRule {
+    pub fn prohibited(self) -> bool { self.flags & 1 != 0 }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct Range { pub from: u32, pub to: u32 }
@@ -133,7 +160,7 @@ pub struct TripTransportRange {
     pub stop_to: u16,
 }
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
 pub struct Coordinate { pub lat: f32, pub lon: f32 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
@@ -252,7 +279,8 @@ columns! {
     location_name: StringRef,
     location_parent: LocationIdx,
     location_type: u8,
-    location_transfer_minutes: u8,
+    location_transfer_seconds: u32,
+    station_transfer_rules: StationTransferRule,
     location_routes_offsets: u32,
     location_routes: RouteIdx,
     footpaths_out_offsets: u32,
@@ -374,6 +402,17 @@ fn csr(o: &[u32], n: usize, rows: usize) -> Result<(), FormatError> {
     Ok(())
 }
 impl ZeroCopyTimetable<'_> {
+    /// Sparse, sorted stop-pair interchange constraints. Unlisted stop pairs
+    /// inherit the timetable's per-location minimum transfer times.
+    pub fn station_transfer_rule(&self, from: LocationIdx, to: LocationIdx)
+        -> Option<StationTransferRule>
+    {
+        let rules = self.station_transfer_rules();
+        rules.binary_search_by_key(&(from.0, to.0), |r| (r.from.0, r.to.0))
+            .ok().map(|idx| rules[idx])
+    }
+}
+impl ZeroCopyTimetable<'_> {
     fn validate(&self) -> Result<(), FormatError> {
         let n = self.coordinates().len();
         let r = self.route_transport_ranges().len();
@@ -387,8 +426,19 @@ impl ZeroCopyTimetable<'_> {
         for len in [
             self.location_id().len(), self.location_source().len(),
             self.location_name().len(), self.location_parent().len(),
-            self.location_type().len(), self.location_transfer_minutes().len()
+            self.location_type().len(), self.location_transfer_seconds().len()
         ] { if len != n { return Err(FormatError::Layout); } }
+        let mut previous = None;
+        for rule in self.station_transfer_rules() {
+            if rule.from.idx() >= n || rule.to.idx() >= n || rule.flags > 1 {
+                return Err(FormatError::Index);
+            }
+            let key = (rule.from.0, rule.to.0);
+            if previous.is_some_and(|p| p >= key) {
+                return Err(FormatError::Layout);
+            }
+            previous = Some(key);
+        }
         csr(self.location_routes_offsets(),self.location_routes().len(),n)?;
         csr(self.footpaths_out_offsets(),self.footpaths_out().len(),n)?;
         csr(self.footpaths_in_offsets(),self.footpaths_in().len(),n)?;
@@ -446,7 +496,12 @@ impl ZeroCopyTimetable<'_> {
             if *p != LocationIdx::INVALID && p.idx() >= n { return Err(FormatError::Index); }
         }
         for p in self.footpaths_out().iter().chain(self.footpaths_in()) {
-            if p.target().idx() >= n { return Err(FormatError::Index); }
+            if p.target().idx() >= n || p.seconds() == 0 { return Err(FormatError::Index); }
+        }
+        for time in self.route_stop_times().iter().chain(self.transport_first_dep_offset()) {
+            if time.seconds_after_midnight() >= Delta::SECONDS_PER_DAY {
+                return Err(FormatError::Index);
+            }
         }
         for p in self.route_stops() {
             if p.location().idx() >= n { return Err(FormatError::Index); }
@@ -540,16 +595,17 @@ impl ZeroCopyTimetable<'_> {
 mod tests {
     use super::*;
     #[test]
-    fn bit_packing_matches_nigiri_widths() {
+    fn second_precision_storage_layout() {
         assert_eq!(std::mem::size_of::<SourceIdx>(),2);
         assert_eq!(std::mem::size_of::<TrafficDays>(),64);
         assert_eq!(std::mem::size_of::<PackedStop>(),4);
-        assert_eq!(std::mem::size_of::<PackedFootpath>(),4);
-        assert_eq!(std::mem::size_of::<Delta>(),2);
+        assert_eq!(std::mem::size_of::<PackedFootpath>(),8);
+        assert_eq!(std::mem::size_of::<Delta>(),4);
         let p=PackedStop::new(LocationIdx(42),true,false,true,false).unwrap();
         assert_eq!(p.0,42|(1<<28)|(1<<30));
-        assert_eq!(PackedFootpath::new(LocationIdx(7),9).unwrap().0,7|(9<<23));
-        assert_eq!(Delta::from_minutes(1455).unwrap().minutes(),1455);
+        assert_eq!(PackedFootpath::new(LocationIdx(7),9).unwrap().0,7|(9_u64<<32));
+        assert_eq!(Delta::from_seconds(86_400 + 55).unwrap().seconds(),86_455);
+        assert_eq!(Delta::from_seconds(86_400 + 55).unwrap().days(), 1);
         let mut b=TrafficDays::default();
         for n in [0,63,64,511] {b.set(n,true).unwrap();}
         for n in [1,64,65] {assert!(b.shift_left(1).test(n));}
@@ -578,12 +634,32 @@ mod tests {
         assert_eq!(decoded.trip_by_source_id(c,"T1"),Some(TripIdx(2)));
         assert_ne!(decoded.route_by_source_id(a,"R1"),decoded.route_by_source_id(b,"R1"));
     }
+
+    #[test]
+    fn packed_values_reject_out_of_range_indices_and_durations() {
+        assert_eq!(TrafficDays::default().set(MAX_DAYS, true), Err(FormatError::Index));
+        assert_eq!(
+            PackedStop::new(LocationIdx(1 << 28), true, true, false, false),
+            Err(FormatError::Index)
+        );
+        assert_eq!(PackedFootpath::new(LocationIdx(u32::MAX), 1), Err(FormatError::Index));
+        assert_eq!(PackedFootpath::new(LocationIdx(1), 0), Err(FormatError::Index));
+        assert_eq!(PackedFootpath::new(LocationIdx(1), 512).unwrap().seconds(), 512);
+        assert_eq!(PackedFootpath::new(LocationIdx(1), 9_001).unwrap().seconds(), 9_001);
+        assert_eq!(Delta::new(32, 0), Err(FormatError::Index));
+        assert_eq!(Delta::from_seconds(32 * 86_400), Err(FormatError::Index));
+        assert_eq!(Delta::new(0, 86_400), Err(FormatError::Index));
+    }
     #[test]
     fn rejects_old_version_and_truncation() {
         let b=TimetableOwned::empty(20000,400).encode().unwrap();
         assert_eq!(ZeroCopyTimetable::new(&b).unwrap().header().version,VERSION);
         let mut older=b.clone();older[4..8].copy_from_slice(&1u32.to_ne_bytes());
         assert!(matches!(ZeroCopyTimetable::new(&older),Err(FormatError::Version)));
+        let mut v2=b.clone(); v2[4..8].copy_from_slice(&2u32.to_ne_bytes());
+        assert!(matches!(ZeroCopyTimetable::new(&v2),Err(FormatError::Version)));
+        let mut v3=b.clone(); v3[4..8].copy_from_slice(&3u32.to_ne_bytes());
+        assert!(matches!(ZeroCopyTimetable::new(&v3),Err(FormatError::Version)));
         let mut cut=b;cut.pop();
         assert!(ZeroCopyTimetable::new(&cut).is_err());
     }

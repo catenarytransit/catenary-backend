@@ -220,7 +220,7 @@ fn deduplicate(values: impl IntoIterator<Item = String>) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RegionNames::{CountriesFile, GeographyConfig, RegionsFile};
+    use crate::region_names::{CountriesFile, GeographyConfig, RegionsFile};
 
     fn geography() -> GeographyIndex {
         let config = GeographyConfig {

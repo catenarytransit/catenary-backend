@@ -7,10 +7,17 @@ jobs:
       security-events: write
       checks: write
       contents: read
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
     steps:
       - name: Install Dependencies
-        run: sudo apt install -y protobuf-compiler cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler cmake ninja-build \
+            gcc-14 g++-14 build-essential binutils libtbb-dev pkg-config coinor-libcbc-dev libcoinutils-dev
+
       - uses: actions/checkout@v4
       - uses: actions-rs/toolchain@v1
         with:
@@ -18,8 +25,11 @@ jobs:
             components: clippy
             override: true
       - uses: Swatinem/rust-cache@v2
+      with:
+        cache-on-failure: true
+        cache-workspace-crates: true
       - run: cargo install clippy-sarif sarif-fmt
-      - run: cargo clippy --all-targets --all-features --message-format=json |
+      - run: set -o pipefail; cargo clippy --all-targets --all-features --message-format=json |
           clippy-sarif | tee results.sarif | sarif-fmt
       - name: Upload SARIF file
         uses: github/codeql-action/upload-sarif@v3

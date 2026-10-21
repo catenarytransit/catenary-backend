@@ -1,0 +1,256 @@
+name: SoCal routing - Maple, OSR and RAPTOR query
+
+on:
+  pull_request:
+    branches: [routing-dev]
+    paths:
+      - '.github/workflows/routing-regions-socal.yml'
+      - 'src/gentian/**'
+      - 'src/maple/gtfs_process.rs'
+      - 'src/maple/gtfs_ingestion_sequence/**'
+      - 'migrations/**'
+      - 'src/schema.rs'
+      - 'src/edelweiss/**'
+      - 'src/routing_common/**'
+      - 'src/osm_manager/**'
+      - 'src/routing_regions/**'
+      - 'routing_regions/**'
+      - 'routing_regions*.toml'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+concurrency:
+  group: socal-routing-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  socal-maple-osr-gentian:
+    name: SoCal ingest, compile and UCI-City Hall query
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_DB: catenary
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d catenary"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
+      PGPASSWORD: postgres
+      OSR_BUILD_JOBS: "2"
+      CC: gcc-14
+      CXX: g++-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: catenarytransit/transitland-atlas
+          path: transitland-atlas
+      - name: Set up Python 3.12 for test fixture generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify Python TOML support
+        run: |
+          python3 -c "import sys, tomllib; print(sys.version); assert sys.version_info >= (3, 11)"
+      - uses: dtolnay/rust-toolchain@stable
+      # Preserve successful native compilation even when downstream GTFS,
+      # timetable, or query integration steps fail.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: socal-routing-gcc14
+          cache-on-failure: true
+          cache-targets: true
+          cache-workspace-crates: true
+          workspaces: |
+            . -> target
+            src/osm_manager -> target
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-14 g++-14 build-essential binutils lld libtbb-dev \
+            protobuf-compiler libpq-dev libssl-dev pkg-config cmake ninja-build \
+            libcoinutils-dev coinor-libcbc-dev postgresql-client \
+            libboost-all-dev libzstd-dev liblz4-dev
+          cargo install diesel_cli --no-default-features --features postgres --locked
+      - name: Verify C++23 standard library for native OSR
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$CXX" --version | head -n 1
+          cat > /tmp/osr-cxx23-check.cc <<'EOF'
+          #include <array>
+          #include <ranges>
+          #include <utility>
+          int main() {
+            std::array<int, 3> a{1, 2, 3};
+            std::array<int, 3> b{4, 5, 6};
+            for (auto [x, y] : std::views::zip(a, b)) { (void)x; (void)y; }
+            for (auto chunk : std::views::chunk(a, 2)) { (void)chunk; }
+            if (a.empty()) std::unreachable();
+          }
+          EOF
+          "$CXX" -std=c++23 -Wall -Wextra -Werror -fsyntax-only /tmp/osr-cxx23-check.cc
+          echo "C++23 zip, chunk, and unreachable supported by $CXX"
+      - name: Verify C compiler, linker and oneTBB installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v cc
+          cc --version | head -n 1
+          command -v ld
+          ld --version | head -n 1
+          command -v "$CXX"
+          ldconfig -p | grep -F 'libtbb.so'
+          printf 'int main(void) { return 0; }\n' | cc -x c - -o /tmp/cc-link-check
+          /tmp/cc-link-check
+          cat > /tmp/tbb-link-check.cc <<'EOF'
+          #include <tbb/task_group.h>
+          int main() {
+            tbb::task_group group;
+            group.run([] {});
+            group.wait();
+          }
+          EOF
+          "$CXX" -std=c++23 /tmp/tbb-link-check.cc -ltbb -o /tmp/tbb-link-check
+          /tmp/tbb-link-check
+          readelf -d /tmp/tbb-link-check | grep -F 'libtbb.so'
+      - name: Download Geofabrik SoCal boundary and local config
+        run: |
+          set -euo pipefail
+          mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
+          curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
+          python3 src/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
+          git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
+      - name: Build native OSR reader and matching extractor
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --release --bin gentian --bin osr_worker
+          bridge="$(ldd ./target/release/gentian | awk '$1 == "libcatenary_osr_bridge.so" && $2 == "=>" && $3 != "not" { print $3; exit }')"
+          test -f "$bridge"
+          readelf -d "$bridge" | tee /tmp/osr-native-needed.txt
+          grep -F 'libtbb.so' /tmp/osr-native-needed.txt
+          # cxx::bridge uses Rust-owned symbols that legitimately remain
+          # undefined in this shared library until the final Rust executable.
+          # ldd -r on the isolated bridge therefore reports false positives.
+          ldd "$bridge" | tee /tmp/osr-native-linkage.txt
+          if grep -F 'not found' /tmp/osr-native-linkage.txt; then
+            exit 1
+          fi
+          ./target/release/gentian --help >/dev/null
+          ./target/release/osr_worker --help >/dev/null
+          bash src/osm_manager/build_matched_extractor.sh
+          test -x ./osr-extract
+      - name: Download and extract Southern California OSR graph
+        run: |
+          set -euo pipefail
+          cargo run --release --manifest-path src/osm_manager/Cargo.toml -- \
+            --config catenaryconfig.toml run
+          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
+      - name: Verify extracted graph opens with the same native OSR reader
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./target/release/osr_worker --config catenaryconfig.toml > temp/osr-validation.log 2>&1 &
+          pid=$!
+          trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log; then
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat temp/osr-validation.log
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log || {
+            cat temp/osr-validation.log
+            exit 1
+          }
+      - name: Ingest restricted Maple feeds
+        run: |
+          set -euo pipefail
+          diesel migration run
+          cargo run --release --bin maple
+      - name: Verify routing-region and source selection
+        run: |
+          set -euo pipefail
+          cargo test --lib routing_common::routing_regions
+          cargo test --lib routing_common::raptor_query
+          cargo test --lib routing_common::timetable
+          cargo test --bin gentian
+          cargo run --release --bin gentian -- \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --list-chateaux > temp/selection.json
+          python3 src/routing_regions/verify_selection.py temp/selection.json --live
+      - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
+        run: |
+          set -euo pipefail
+          cargo run --release --bin gentian -- \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day 20745 --day-count 35 \
+            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --max-seconds 900 --candidate-meters 1200 \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+      - name: Start long-running native OSR worker
+        run: |
+          set -euo pipefail
+          cargo run --release --bin osr_worker -- \
+            --config catenaryconfig.toml > temp/osr-worker.log 2>&1 &
+          echo $! > temp/osr-worker.pid
+          for attempt in $(seq 1 45); do
+            if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then break; fi
+            sleep 2
+          done
+          kill -0 "$(cat temp/osr-worker.pid)"
+      - name: Prepare UCI to City Hall Monday query
+        run: |
+          python3 src/routing_regions/prepare_uci_cityhall_query.py \
+            --output temp/uci-cityhall-request.json
+      - name: Execute Edelweiss RAPTOR example and print Pareto journeys
+        run: |
+          set -euo pipefail
+          cargo run --release --bin edelweiss -- \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --query temp/uci-cityhall-request.json \
+            --database-url "$DATABASE_URL" | tee temp/uci-cityhall-results.json
+          python3 src/routing_regions/print_uci_cityhall_results.py temp/uci-cityhall-results.json
+          {
+            echo '## SoCal RAPTOR example: UCI to Los Angeles City Hall'
+            echo ''
+            echo 'Monday, 2026-10-26 08:00 America/Los_Angeles.'
+            echo 'See the **Execute Edelweiss RAPTOR example** step for printed journeys and GTFS route colors.'
+            echo 'Download **gentian-socal-routing-diagnostics** for the JSON response and OSR logs.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload build metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gentian-socal-routing-diagnostics
+          path: |
+            temp/selection.json
+            temp/stops.tsv
+            temp/uci-cityhall-results.json
+            temp/osr-worker.log
+            temp/osr-validation.log
+            temp/osr-data/regions/north-america/us/california/socal/manifest.json
+          if-no-files-found: ignore
