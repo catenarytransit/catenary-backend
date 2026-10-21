@@ -119,11 +119,15 @@ impl ScheduleRuns {
 
     fn spill(&mut self) -> Result<()> {
         if self.records.is_empty() { return Ok(()); }
-        self.records.sort_by(compare);
+        // Total comparator order makes unstable sorting safe and avoids the
+        // O(batch-size) scratch allocation used by stable slice sorting.
+        self.records.sort_unstable_by(compare);
         let path = self.scratch.next();
         let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
         let mut out = BufWriter::with_capacity(IO_BUFFER, file);
-        for record in self.records.drain(..) {
+        // Drop the backing allocation after spilling: retaining a 64 MiB
+        // Vec during multiway merge would undermine the configured cap.
+        for record in std::mem::take(&mut self.records) {
             write_record(&mut out, &record)?;
         }
         out.flush()?;
