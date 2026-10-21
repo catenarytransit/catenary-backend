@@ -211,6 +211,10 @@ macro_rules! columns {
             pub first_utc_day: i32, pub day_count: u32,
             $(pub $name: Section,)*
         }
+        // This token can only be issued after validating a complete timetable.
+        #[derive(Clone, Copy)]
+        pub(crate) struct ValidatedTimetableHeader(TimetableHeader);
+
         #[derive(Default, Debug)]
         pub struct TimetableOwned {
             pub first_utc_day: i32, pub day_count: u32,
@@ -271,6 +275,21 @@ macro_rules! columns {
                 Ok(tt)
             }
             pub fn header(&self) -> TimetableHeader { self.h }
+
+            pub(crate) fn validated_header(&self) -> ValidatedTimetableHeader {
+                ValidatedTimetableHeader(self.h)
+            }
+
+            /// Construct a view over the same immutable bytes validated at open.
+            /// Only the mmap owner may reuse this header; never use it for
+            /// arbitrary or replaced file contents.
+            pub(crate) fn from_validated_header(
+                bytes: &'a [u8],
+                header: ValidatedTimetableHeader,
+            ) -> Self {
+                Self { b: bytes, h: header.0 }
+            }
+
             $(pub fn $name(&self) -> &'a [$ty] {
                 view::<$ty>(self.b, self.h.$name).expect("validated column")
             })*
