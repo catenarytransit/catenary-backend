@@ -649,6 +649,8 @@ mod tests {
             lat: 33.6, lon: -117.8, parent: None, kind: 0,
         }).collect::<Vec<_>>();
         add_locations(&mut tt, 0, &stops).unwrap();
+        tt.footpaths_out_offsets.extend([0, 0, 0]);
+        tt.footpaths_in_offsets.extend([0, 0, 0]);
         let mut schedules = ScheduleRuns::new(&root, 1).unwrap();
         let mut days = TrafficDays::default();
         days.set(0, true).unwrap();
