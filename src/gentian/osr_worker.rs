@@ -20,7 +20,7 @@ struct Args {
     listen: String,
     /// Concurrent native OSR search contexts. Each worker owns its router
     /// handles: CXX UniquePtr/router state is never shared across threads.
-    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(usize).range(1..=16))]
+    #[arg(long, default_value_t = 3)]
     workers: usize,
 }
 
@@ -138,6 +138,7 @@ fn open_graphs(
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    ensure!((1..=16).contains(&args.workers), "--workers must be in 1..=16");
     let cfg: Config = toml::from_str(&fs::read(&args.config)?)?;
     let paths = Arc::new(region_paths(&cfg.osm_manager.data_dir)?);
     let listener = TcpListener::bind(&args.listen)?;
