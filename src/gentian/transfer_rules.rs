@@ -3,7 +3,7 @@
 //! These are *boarding restrictions*, not walking times: they are checked
 //! against the last transit alighting event by RAPTOR, so access and egress
 //! pedestrian journeys are never charged a station change-time penalty.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use catenary::routing_common::routing_regions::ChateauSource;
 use catenary::routing_common::timetable::{
     LocationIdx, StationTransferRule, TimetableOwned,
