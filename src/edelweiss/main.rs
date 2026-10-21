@@ -275,6 +275,7 @@ async fn main()->Result<()>{
     };
     let router=Arc::new(Router::load(&args.regions_config,&args.catenary_config,settings)?);
     if let Some(path)=args.query {
+        let timing_output = args.query_timings.clone();
         let request:Request=serde_json::from_slice(&fs::read(&path)
             .with_context(||format!("reading {}",path.display()))?)?;
         // The synchronous postgres client creates and blocks on its own Tokio
@@ -285,7 +286,7 @@ async fn main()->Result<()>{
         })
         .await
         .context("CLI route-query worker failed")??;
-        if let Some(path) = &args.query_timings {
+        if let Some(path) = &timing_output {
             fs::write(path, serde_json::to_vec_pretty(&timings)?)
                 .with_context(|| format!("writing query timings to {}", path.display()))?;
         }
