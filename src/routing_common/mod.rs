@@ -3,6 +3,7 @@ pub mod dijkstra;
 pub mod extract;
 pub mod graph_loader;
 pub mod lookup;
+pub mod metadata_index;
 pub mod osm_router;
 pub mod profiles;
 pub mod routing_regions;
