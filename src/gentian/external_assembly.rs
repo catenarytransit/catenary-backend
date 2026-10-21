@@ -19,6 +19,9 @@ use std::mem::size_of;
 use std::path::{Path, PathBuf};
 
 const FAN_IN: usize = 16;
+// Caps quadratic worst-case first-fit chain partitioning on highly
+// interleaved services independently of the memory allowance.
+const MAX_BATCH_RECORDS: usize = 1024;
 const IO_BUFFER: usize = 16 * 1024;
 // A multiway merge holds up to FAN_IN records simultaneously. Reserve room
 // for readers, the output buffer and heap/allocator overhead even at 1 MiB.
@@ -130,8 +133,8 @@ impl ScheduleRuns {
     }
 
     /// Exhaust all sorted runs in bounded-memory batches. The callback is
-    /// invoked for a single stop pattern and never with more than `limit`
-    /// bytes of schedule payloads. Large patterns are split into multiple
+    /// invoked for a single stop pattern, never with more than `limit`
+    /// bytes or MAX_BATCH_RECORDS schedules. Large patterns become multiple
     /// RAPTOR routes, all of which are independently non-overtaking.
     pub fn consume(mut self, mut on_batch: impl FnMut(Vec<Schedule>) -> Result<()>) -> Result<()> {
         self.spill()?;
@@ -142,8 +145,10 @@ impl ScheduleRuns {
                 let target = self.scratch.next();
                 merge_files(files, &target, self.limit)?;
                 self.runs.push(target);
+                // Free each merge group's inputs immediately, so the whole
+                // previous generation is not duplicated on scratch storage.
+                for file in files { fs::remove_file(file)?; }
             }
-            for file in previous { fs::remove_file(file)?; }
             pass += 1;
             eprintln!("Gentian external sort: merge pass {pass}, {} runs", self.runs.len());
         }
@@ -156,7 +161,8 @@ impl ScheduleRuns {
             let size = charge(&schedule);
             ensure!(size <= self.limit / RECORD_DIVISOR, "schedule over per-record cap during merge");
             let boundary = batch.first().is_some_and(|a| !same_pattern(a, &schedule))
-                || batch_bytes > self.limit - size;
+                || batch_bytes > self.limit - size
+                || batch.len() >= MAX_BATCH_RECORDS;
             if boundary {
                 on_batch(std::mem::take(&mut batch))?;
                 batch_bytes = 0;
