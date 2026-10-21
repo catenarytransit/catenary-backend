@@ -3,7 +3,7 @@ use catenary::routing_common::routing_regions::ChateauSource;
 use catenary::routing_common::timetable::{
     BitfieldIdx, Clasz, Coordinate, Delta, LocationIdx, PackedFootpath, PackedStop,
     Range, RouteIdx, TrafficDays, TransportIdx, TripIdx, TripTransportRange,
-    TimetableOwned,
+    TimetableOwned, TimingProfileIdx,
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
@@ -192,41 +192,36 @@ fn make_schedules(
     first_utc_day: i32,
     day_count: u32,
 ) -> Result<Vec<Schedule>> {
-    let mut result = BTreeMap::<(u32, Vec<i64>), TrafficDays>::new();
+    let mut result = BTreeMap::<u32, TrafficDays>::new();
     let first_day = start_date(first_utc_day)?;
     for offset in -5_i64..i64::from(day_count) + 5 {
         let service_date = first_day.checked_add_signed(Duration::days(offset))
             .context("service date out of range")?;
         if !active(calendar, service_date) { continue; }
         let anchor = utc_anchor(service_date, pattern.timezone)?;
-        let mut stamps = Vec::with_capacity(pattern.stops.len() * 2);
-        for (stop_id, arr, dep) in &pattern.stops {
-            ensure!(stop_lookup.contains_key(stop_id), "unknown stop {stop_id} on trip {trip_id}");
-            let a = anchor + i64::from(trip_start_secs) + i64::from(*arr);
-            let d = anchor + i64::from(trip_start_secs) + i64::from(*dep);
-            ensure!(a <= d, "negative dwell time in trip {trip_id}");
-            // Preserve the UTC second after adding start and pattern offsets.
-            stamps.push(a);
-            stamps.push(d);
-        }
-        ensure!(stamps.len() >= 4, "trip {trip_id} needs at least two stops");
-        ensure!(stamps.windows(2).all(|w| w[0] <= w[1]),
-            "nonmonotonic UTC stop times for trip {trip_id}");
-        let departure = stamps[1];
+        // The PostgreSQL itinerary pattern is already relative to trip start.
+        // Validate it once per service date, without constructing an expanded
+        // timestamp vector for every trip and every active day.
+        ensure!(pattern.stops.len() >= 2, "trip {trip_id} needs at least two stops");
+        ensure!(pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
+            && pattern.stops.iter().all(|(stop, arr, dep)| {
+                stop_lookup.contains_key(stop) && arr <= dep
+            }), "invalid/nonmonotonic pattern for trip {trip_id}");
+        let departure = anchor + i64::from(trip_start_secs)
+            + i64::from(pattern.stops[0].2);
         let day = departure.div_euclid(86_400) - i64::from(first_utc_day);
         if !(0..i64::from(day_count)).contains(&day) { continue; }
         let second = u32::try_from(departure.rem_euclid(86_400))?;
-        let relative: Vec<i64> = stamps.into_iter().map(|t| t - departure).collect();
-        let key = (second, relative);
-        result.entry(key).or_default().set(day as usize, true)?;
+        result.entry(second).or_default().set(day as usize, true)?;
     }
     let mut schedules = Vec::with_capacity(result.len());
-    for ((first_second, relative), days) in result {
-        let events = pattern.stops.iter().enumerate().map(|(i, (id, _, _))| {
+    for (first_second, days) in result {
+        let first_departure = i64::from(pattern.stops[0].2);
+        let events = pattern.stops.iter().map(|(id, arrival, departure)| {
             Ok(Event {
                 stop: *stop_lookup.get(id).context("missing pattern stop")?,
-                arrival: relative[2*i],
-                departure: relative[2*i+1],
+                arrival: i64::from(*arrival) - first_departure,
+                departure: i64::from(*departure) - first_departure,
             })
         }).collect::<Result<Vec<_>>>()?;
         schedules.push(Schedule {
@@ -281,6 +276,7 @@ fn assemble_batch(
     schedules: Vec<Schedule>,
     days_index: &mut HashMap<TrafficDays, BitfieldIdx>,
     route_id_index: &mut HashMap<(u16, String), catenary::routing_common::timetable::RouteIdIdx>,
+    profile_index: &mut HashMap<Vec<u32>, TimingProfileIdx>,
 ) -> Result<()> {
     ensure!(!schedules.is_empty(), "empty schedule batch");
     let source = schedules[0].source;
@@ -315,21 +311,42 @@ fn assemble_batch(
                 tt.route_stops.push(PackedStop::new(LocationIdx(stop), true, true, true, true)?);
             }
             let first = tt.transport_route.len();
-            let width = chain.len();
-            let first_events = &chain[0].events;
-            for i in 0..first_events.len() * 2 - 2 {
-                let event_stop = if i % 2 == 0 { i/2 } else { i/2+1 };
-                let is_arrival = i % 2 == 1;
-                for schedule in &chain {
-                    let e = &schedule.events[event_stop];
-                    let delta = if is_arrival { e.arrival } else { e.departure };
-                    ensure!(delta >= 0 && delta <= i64::from(Delta::MAX_SECONDS),
-                        "time offset outside Delta representation");
-                    tt.route_stop_times.push(Delta::from_seconds(u32::try_from(delta)?)?);
+            // Intern exact offset vectors across batches and RAPTOR chains.
+            // The key is the encoded event sequence, never merely the stop list:
+            // different running times on the same stops must remain distinct.
+            let mut profiles = Vec::with_capacity(chain.len());
+            for schedule in &chain {
+                let mut encoded = Vec::with_capacity(schedule.events.len() * 2 - 2);
+                for (i, event) in schedule.events.iter().enumerate() {
+                    if i + 1 < schedule.events.len() {
+                        ensure!(event.departure >= 0
+                            && event.departure <= i64::from(Delta::MAX_SECONDS),
+                            "departure offset outside Delta representation");
+                        encoded.push(Delta::from_seconds(u32::try_from(event.departure)?)?.0);
+                    }
+                    if i > 0 {
+                        ensure!(event.arrival >= 0
+                            && event.arrival <= i64::from(Delta::MAX_SECONDS),
+                            "arrival offset outside Delta representation");
+                        encoded.push(Delta::from_seconds(u32::try_from(event.arrival)?)?.0);
+                    }
                 }
+                // Interleaved event order: departure(0), arrival(1),
+                // departure(1), ..., arrival(last).
+                let profile = if let Some(&existing) = profile_index.get(&encoded) {
+                    existing
+                } else {
+                    let idx = TimingProfileIdx(as_u32(tt.timing_profile_offsets.len() - 1)?);
+                    tt.timing_profile_events.extend(encoded.iter().copied().map(Delta));
+                    tt.timing_profile_offsets.push(as_u32(tt.timing_profile_events.len())?);
+                    profile_index.insert(encoded, idx);
+                    idx
+                };
+                profiles.push(profile);
             }
             let mut union = TrafficDays::default();
-            for schedule in &chain {
+            for (schedule, profile) in chain.iter().zip(profiles) {
+                tt.transport_timing_profile.push(profile);
                 let idx = intern_days(tt, days_index, schedule.days)?;
                 union.or_assign(&schedule.days);
                 let transport = TransportIdx(as_u32(tt.transport_route.len())?);
@@ -348,13 +365,9 @@ fn assemble_batch(
                 tt.trip_transport_offsets.push(as_u32(tt.trip_transport_ranges.len())?);
                 tt.transport_to_trip_section_offsets.push(as_u32(tt.transport_to_trip_section.len())?);
             }
-            ensure!(tt.transport_route.len() == first + width, "transport indexing error");
+            ensure!(tt.transport_route.len() == first + chain.len(), "transport indexing error");
             tt.route_transport_ranges.push(Range { from: as_u32(first)?,
                 to: as_u32(tt.transport_route.len())? });
-            tt.route_stop_time_ranges.push(Range {
-                from: as_u32(tt.route_stop_times.len() - (first_events.len() * 2 - 2) * width)?,
-                to: as_u32(tt.route_stop_times.len())?,
-            });
             tt.route_clasz.push(clasz(chain[0].route_type));
             let route_days = intern_days(tt, days_index, union)?;
             tt.route_traffic_days.push(route_days);
@@ -415,7 +428,10 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<(
     let mut days_index = HashMap::new();
     days_index.insert(TrafficDays::default(), BitfieldIdx(0));
     let mut route_id_index = HashMap::new();
-    schedules.consume(|batch| assemble_batch(tt, batch, &mut days_index, &mut route_id_index))?;
+    let mut profile_index = HashMap::new();
+    schedules.consume(|batch| assemble_batch(
+        tt, batch, &mut days_index, &mut route_id_index, &mut profile_index,
+    ))?;
     build_stop_routes_index(tt)
 }
 
@@ -674,6 +690,8 @@ mod tests {
         assemble_routes(&mut tt, schedules).unwrap();
         assert_eq!(tt.trip_public_route_ids.len(), 3);
         assert!(tt.route_transport_ranges.len() >= 2);
+        assert_eq!(tt.timing_profile_offsets.len() - 1, 2);
+        assert_eq!(tt.transport_timing_profile.len(), 3);
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         for trip in ["a", "b", "c"] {
@@ -684,6 +702,46 @@ mod tests {
         let indexed = view.routes_at(LocationIdx(0));
         assert_eq!(indexed.len(), view.route_transport_ranges().len());
         assert!(indexed.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        std::fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
+    fn equal_patterns_share_storage_across_external_batches() {
+        use catenary::routing_common::timetable::ZeroCopyTimetable;
+        let root = std::env::temp_dir().join(format!("gentian-profiles-{}", uuid::Uuid::new_v4()));
+        let mut tt = TimetableOwned::empty(20_000, 1);
+        tt.add_source("chateau", "feed", "attempt").unwrap();
+        let stops = ["a", "b"].iter().map(|id| Stop {
+            id: (*id).into(), name: (*id).into(), lat: 33.6,
+            lon: -117.8, parent: None, kind: 0,
+        }).collect::<Vec<_>>();
+        add_locations(&mut tt, 0, &stops).unwrap();
+        tt.footpaths_out_offsets.extend([0, 0]);
+        tt.footpaths_in_offsets.extend([0, 0]);
+        let mut runs = ScheduleRuns::new(&root, 1).unwrap();
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        for i in 0..2_500u32 {
+            runs.push(Schedule {
+                trip_id: format!("trip-{i}"), source: 0,
+                route_id: "R".into(), route_type: 3,
+                locations: vec![LocationIdx(0), LocationIdx(1)],
+                events: vec![
+                    Event { stop: LocationIdx(0), arrival: 0, departure: 0 },
+                    Event { stop: LocationIdx(1), arrival: 601, departure: 601 },
+                ],
+                first_second: i * 25, days,
+            }).unwrap();
+        }
+        assemble_routes(&mut tt, runs).unwrap();
+        assert_eq!(tt.transport_timing_profile.len(), 2_500);
+        assert_eq!(tt.timing_profile_offsets.len(), 2);
+        assert_eq!(tt.timing_profile_events.len(), 2);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(0), 1, true)
+            .unwrap().seconds(), 601);
+        assert!(view.transport_timing_profile().iter().all(|p| p.0 == 0));
         std::fs::remove_dir(root).unwrap();
     }
 

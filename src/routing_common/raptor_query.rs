@@ -177,6 +177,8 @@ fn traverse_routes(
             let transport = TransportIdx(index);
             let active_days = tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
             let first_departure = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
+            // Resolve a shared profile once per transport, not once per stop.
+            let Some(events) = tt.events_for_transport(transport) else { continue };
             for day in first_day..=last_day {
                 if !active_days.test(day as usize) { continue; }
                 let absolute_first = (base + day) * 86_400 + first_departure;
@@ -185,7 +187,7 @@ fn traverse_routes(
                     let loc = stop.location().idx();
                     if let Some((boarding_loc, boarding_time)) = onboard {
                         if stop.inbound() {
-                            if let Some(offset) = tt.event_time(route, transport, position, true) {
+                            if let Some(offset) = position.checked_mul(2).and_then(|i| i.checked_sub(1)).and_then(|i| events.get(i)) {
                                 let arrival = absolute_first + i64::from(offset.seconds());
                                 if arrival <= max_time {
                                     improve(curr, loc, arrival, Parent::Ride {
@@ -201,7 +203,7 @@ fn traverse_routes(
                         }
                     }
                     if onboard.is_none() && stop.outbound() && position + 1 < stops.len() {
-                        if let Some(offset) = tt.event_time(route, transport, position, false) {
+                        if let Some(offset) = position.checked_mul(2).and_then(|i| events.get(i)) {
                             let board_time = absolute_first + i64::from(offset.seconds());
                             if board_time <= max_time &&
                                can_board(tt, prev[loc], loc, board_time)
@@ -382,13 +384,14 @@ mod tests {
         }
         tt.route_stop_offsets.push(3);
         tt.route_transport_ranges.push(Range {from:0,to:1});
-        tt.route_stop_time_ranges.push(Range {from:0,to:4});
-        tt.route_stop_times = vec![
+        tt.timing_profile_offsets.push(4);
+        tt.timing_profile_events = vec![
             Delta::from_seconds(0).unwrap(), Delta::from_seconds(10 * 60 + 30).unwrap(),
             Delta::from_seconds(12 * 60 + 5).unwrap(), Delta::from_seconds(22 * 60 + 45).unwrap(),
         ];
         tt.route_clasz.push(10);
         tt.transport_route.push(RouteIdx(0));
+        tt.transport_timing_profile.push(crate::routing_common::timetable::TimingProfileIdx(0));
         tt.transport_first_dep_offset.push(Delta::from_seconds(480 * 60 + 20).unwrap());
         tt.transport_initial_day_offset.push(0);
         let mut days = TrafficDays::default();
@@ -422,14 +425,15 @@ mod tests {
         ]);
         tt.route_stop_offsets.push(5);
         tt.route_transport_ranges.push(Range { from: 1, to: 2 });
-        tt.route_stop_time_ranges.push(Range { from: 4, to: 6 });
-        tt.route_stop_times.extend([
+        tt.timing_profile_offsets.push(6);
+        tt.timing_profile_events.extend([
             Delta::from_seconds(0).unwrap(),
             Delta::from_seconds(5 * 60).unwrap(),
         ]);
         tt.route_clasz.push(10);
         tt.route_traffic_days.push(BitfieldIdx(1));
         tt.transport_route.push(RouteIdx(1));
+        tt.transport_timing_profile.push(crate::routing_common::timetable::TimingProfileIdx(1));
         tt.transport_first_dep_offset.push(Delta::from_seconds(510 * 60).unwrap());
         tt.transport_initial_day_offset.push(0);
         tt.transport_traffic_days.push(BitfieldIdx(1));
