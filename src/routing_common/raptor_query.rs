@@ -136,13 +136,15 @@ fn relax_walks(
 fn routes_from_marked(
     tt: &ZeroCopyTimetable<'_>,
     marked_stops: &[usize],
+    seen_epoch: &mut [u8],
+    epoch: u8,
 ) -> Vec<RouteIdx> {
-    let mut seen = vec![false; tt.route_transport_ranges().len()];
+    debug_assert_eq!(seen_epoch.len(), tt.route_transport_ranges().len());
     let mut routes = Vec::new();
     for &stop in marked_stops {
         for &route in tt.routes_at(LocationIdx(stop as u32)) {
-            if !seen[route.idx()] {
-                seen[route.idx()] = true;
+            if seen_epoch[route.idx()] != epoch {
+                seen_epoch[route.idx()] = epoch;
                 routes.push(route);
             }
         }
@@ -296,6 +298,9 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
         .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
         .collect::<Vec<_>>();
     let mut labels = vec![round0];
+    // A single route-sized bitmap is sufficient for the whole search.
+    // Rounds are limited to 16, so a u8 epoch never wraps.
+    let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
         let prev = &labels[round - 1];
         let mut curr: Vec<Label> = prev.iter().map(|label| Label {
@@ -305,7 +310,7 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             },
             last_alight: label.last_alight,
         }).collect();
-        let routes = routes_from_marked(tt, &marked_stops);
+        let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
         if routes.is_empty() { break; }
         traverse_routes(tt, prev, &mut curr, &routes, departure, max_time)?;
         relax_walks(tt, &mut curr, max_time);
