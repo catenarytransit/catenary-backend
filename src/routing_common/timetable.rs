@@ -202,6 +202,11 @@ impl fmt::Display for FormatError {
 }
 impl std::error::Error for FormatError {}
 
+// Only constructed from a successfully validated timetable. The header may
+// be reused with the same immutable bytes without repeating the full scan.
+#[derive(Clone, Copy)]
+pub(crate) struct ValidatedTimetableHeader(TimetableHeader);
+
 macro_rules! columns {
     ($($name:ident: $ty:ty,)*) => {
         #[repr(C)]
@@ -271,6 +276,21 @@ macro_rules! columns {
                 Ok(tt)
             }
             pub fn header(&self) -> TimetableHeader { self.h }
+
+            pub(crate) fn validated_header(&self) -> ValidatedTimetableHeader {
+                ValidatedTimetableHeader(self.h)
+            }
+
+            /// Construct a view over the same immutable bytes validated at open.
+            /// Only the mmap owner may reuse this header; never use it for
+            /// arbitrary or replaced file contents.
+            pub(crate) fn from_validated_header(
+                bytes: &'a [u8],
+                header: ValidatedTimetableHeader,
+            ) -> Self {
+                Self { b: bytes, h: header.0 }
+            }
+
             $(pub fn $name(&self) -> &'a [$ty] {
                 view::<$ty>(self.b, self.h.$name).expect("validated column")
             })*
