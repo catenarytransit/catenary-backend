@@ -500,9 +500,12 @@ pub fn build(
     }
     ensure!(!schedules.is_empty(), "no scheduled trips in selected timetable horizon");
     assemble_routes(&mut tt, schedules)?;
-    let transfers = super::footpaths::compute(
+    let mut transfers = super::footpaths::compute(
         osr_dir, &tt.coordinates, max_seconds, candidate_meters,
     )?;
+    // Nigiri also connects nearby platforms under one station, where the
+    // street graph often omits indoor passages. Never replace a routed OSR edge.
+    super::footpaths::add_station_links(&tt, &mut transfers)?;
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
     let bytes = tt.encode()?;

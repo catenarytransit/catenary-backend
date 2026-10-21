@@ -431,6 +431,29 @@ mod tests {
     }
 
     #[test]
+    fn walking_preserves_alighting_provenance_for_pair_rules() {
+        use crate::routing_common::timetable::{PackedFootpath, StationTransferRule};
+        let mut tt = fixture();
+        tt.footpaths_out_offsets = vec![0, 0, 1, 1];
+        tt.footpaths_out = vec![PackedFootpath::new(LocationIdx(2), 25).unwrap()];
+        tt.footpaths_in_offsets = vec![0, 0, 0, 1];
+        tt.footpaths_in = vec![PackedFootpath::new(LocationIdx(1), 25).unwrap()];
+        tt.station_transfer_rules.push(StationTransferRule {
+            from: LocationIdx(0), to: LocationIdx(2), min_seconds: 0, flags: 1,
+        });
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut labels = vec![Label { time: INF, parent: None, last_alight: None }; 3];
+        labels[1] = Label {
+            time: 1000, parent: None, last_alight: Some((0, 1000)),
+        };
+        relax_walks(&view, &mut labels, 2000);
+        assert_eq!(labels[2].time, 1025);
+        assert_eq!(labels[2].last_alight, Some((0, 1000)));
+        assert!(!can_board(&view, labels[2], 2, 2000));
+    }
+
+    #[test]
     fn boarding_uses_exact_departure_second() {
         let tt = fixture();
         let bytes = tt.encode().unwrap();

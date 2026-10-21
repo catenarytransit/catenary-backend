@@ -6,6 +6,10 @@ on:
     paths:
       - '.github/workflows/routing-regions-socal.yml'
       - 'src/gentian/**'
+      - 'src/maple/gtfs_process.rs'
+      - 'src/maple/gtfs_ingestion_sequence/**'
+      - 'migrations/**'
+      - 'src/schema.rs'
       - 'src/edelweiss/**'
       - 'src/routing_common/**'
       - 'src/osm_manager/**'
@@ -187,6 +191,9 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --lib routing_common::routing_regions
+          cargo test --lib routing_common::raptor_query
+          cargo test --lib routing_common::timetable
+          cargo test --bin gentian
           cargo run --release --bin gentian -- \
             --region southern-california \
             --regions-config routing_regions.toml \

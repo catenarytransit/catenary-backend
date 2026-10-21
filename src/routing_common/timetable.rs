@@ -658,6 +658,8 @@ mod tests {
         assert!(matches!(ZeroCopyTimetable::new(&older),Err(FormatError::Version)));
         let mut v2=b.clone(); v2[4..8].copy_from_slice(&2u32.to_ne_bytes());
         assert!(matches!(ZeroCopyTimetable::new(&v2),Err(FormatError::Version)));
+        let mut v3=b.clone(); v3[4..8].copy_from_slice(&3u32.to_ne_bytes());
+        assert!(matches!(ZeroCopyTimetable::new(&v3),Err(FormatError::Version)));
         let mut cut=b;cut.pop();
         assert!(ZeroCopyTimetable::new(&cut).is_err());
     }

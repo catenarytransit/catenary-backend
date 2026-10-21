@@ -67,12 +67,21 @@ rules into a sparse, directed station-transfer table:
   walking search visits intermediate stops.
 - Rules referencing station parents are expanded to their child platforms
   within the same GTFS source.
+- As in Nigiri, very close platforms and their shared parent station get
+  conservative local links when the OSM graph lacks indoor passages. Only
+  pairs within 100 metres are linked, at no faster than 0.7 m/s and with
+  at least the station's minimum change time; an existing OSR route wins.
+  No synthetic link is created between unrelated stations.
 - Route/trip-scoped rules and stay-seated `transfer_type=4` are retained in
   PostgreSQL but require an additional multi-label / through-service routing
   implementation. Gentian logs how many it has not applied; it does not
   incorrectly turn such rules into unrestricted global footpaths.
 - `transfer_type=1` timed connections have no automatic vehicle-holding
   mechanism; the scheduled departure still must be reachable.
+- The first implementation keeps only the earliest arrival label per stop.
+  Provenance is propagated for checking prohibitions, but alternate arrivals
+  from different vehicles are not yet all retained; fully sound GTFS transfer
+  restrictions require multi-label, provenance-aware RAPTOR.
 
 The sparse transfer-rule column changes the mmap layout; **v3 binaries must be
 rebuilt with v4 Gentian**. In addition, previously imported GTFS attempts must

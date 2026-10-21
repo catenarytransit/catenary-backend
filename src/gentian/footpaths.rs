@@ -102,9 +102,80 @@ pub fn compute(
     Ok(out)
 }
 
+/// Nigiri also creates local links between the parent station and its
+/// platforms. Only fill gaps in native OSR's results, for station members
+/// within MOTIS's 100m nearby-stop default. This fallback is deliberately
+/// conservative: it never connects unrelated stations, never replaces a
+/// routed OSR duration, and requires matching GTFS source identities.
+pub fn add_station_links(
+    tt: &catenary::routing_common::timetable::TimetableOwned,
+    edges: &mut [Vec<(u32, u32)>],
+) -> Result<()> {
+    use catenary::routing_common::timetable::LocationIdx;
+    ensure!(edges.len() == tt.coordinates.len(), "station transfer count mismatch");
+    let mut children: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (child, &parent) in tt.location_parent.iter().enumerate() {
+        if parent != LocationIdx::INVALID {
+            ensure!(parent.idx() < edges.len(), "invalid parent station");
+            if tt.location_type[parent.idx()] == 2 &&
+                tt.location_source[child] == tt.location_source[parent.idx()]
+            {
+                children.entry(parent.0).or_default().push(child);
+            }
+        }
+    }
+    for (parent, child_stops) in children {
+        let mut members = Vec::with_capacity(child_stops.len() + 1);
+        members.push(parent as usize);
+        members.extend(child_stops);
+        for &from in &members {
+            for &to in &members {
+                if from == to ||
+                   edges[from].iter().any(|&(existing, _)| existing as usize == to)
+                {
+                    continue;
+                }
+                let distance = meters(tt.coordinates[from], tt.coordinates[to]);
+                if distance > 100.0 { continue; }
+                // Nigiri uses a conservative 0.7m/s for missing links.
+                let seconds = (distance / 0.7).ceil() as u32;
+                let seconds = seconds.max(1)
+                    .max(tt.location_transfer_seconds[from])
+                    .max(tt.location_transfer_seconds[to]);
+                edges[from].push((u32::try_from(to)?, seconds));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn same_station_local_links_fill_unmatched_platforms_only() {
+        use catenary::routing_common::timetable::{LocationIdx, SourceIdx, TimetableOwned};
+        let mut tt = TimetableOwned::empty(0, 1);
+        for (lat, lon, parent, kind) in [
+            (33.0, -117.0, LocationIdx::INVALID, 2u8),
+            (33.0001, -117.0, LocationIdx(0), 1),
+            (33.0002, -117.0, LocationIdx(0), 1),
+            (34.0, -118.0, LocationIdx::INVALID, 2),
+        ] {
+            tt.coordinates.push(Coordinate {lat, lon});
+            tt.location_parent.push(parent);
+            tt.location_type.push(kind);
+            tt.location_transfer_seconds.push(120);
+            tt.location_source.push(SourceIdx(0));
+        }
+        let mut paths = vec![vec![], vec![(2, 188)], vec![], vec![]];
+        add_station_links(&tt, &mut paths).unwrap();
+        assert!(paths[0].iter().any(|&(to, t)| to == 1 && t >= 120));
+        assert!(paths[1].iter().any(|&(to, t)| to == 2 && t == 188));
+        assert!(paths[2].iter().any(|&(to, _)| to == 1));
+        assert!(paths[3].is_empty());
+    }
+
     #[test]
     fn geographic_candidate_filter_excludes_distant_stops() {
         let a = Coordinate { lat: 33.646, lon: -117.843 };
