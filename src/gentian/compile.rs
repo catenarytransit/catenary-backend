@@ -114,7 +114,7 @@ fn add_locations(
         tt.location_name.push(name_ref);
         tt.location_source.push(catenary::routing_common::timetable::SourceIdx(source_idx));
         tt.location_type.push(if stop.kind == 1 { 2 } else { 1 });
-        tt.location_transfer_seconds.push(0);
+        tt.location_transfer_seconds.push(catenary::routing_common::timetable::DEFAULT_TRANSFER_SECONDS);
         tt.location_parent.push(LocationIdx::INVALID);
     }
     for stop in stops {
@@ -378,9 +378,11 @@ fn compile_source(
     source_idx: u16,
     source: &ChateauSource,
     schedules: &mut Vec<Schedule>,
+    transfer_rules: &mut super::transfer_rules::TransferRules,
 ) -> Result<()> {
     let stops = load_stops(client, source)?;
     let lookup = add_locations(tt, source_idx, &stops)?;
+    super::transfer_rules::load(client, source, &lookup, tt, transfer_rules)?;
     let calendars = load_calendars(client, source)?;
     let mut route_types = HashMap::new();
     query_source(client, "
@@ -490,9 +492,11 @@ pub fn build(
     ensure!((1..=512).contains(&day_count), "invalid timetable horizon");
     let mut tt = TimetableOwned::empty(first_utc_day, day_count);
     let mut schedules = Vec::new();
+    let mut transfer_rules = super::transfer_rules::TransferRules::default();
     for (source_idx, source) in sources.iter().enumerate() {
         tt.add_source(&source.chateau, &source.onestop_feed_id, &source.attempt_id)?;
-        compile_source(client, &mut tt, u16::try_from(source_idx)?, source, &mut schedules)?;
+        compile_source(client, &mut tt, u16::try_from(source_idx)?, source, &mut schedules,
+                       &mut transfer_rules)?;
     }
     ensure!(!schedules.is_empty(), "no scheduled trips in selected timetable horizon");
     assemble_routes(&mut tt, schedules)?;
@@ -500,6 +504,7 @@ pub fn build(
         osr_dir, &tt.coordinates, max_seconds, candidate_meters,
     )?;
     add_footpaths(&mut tt, transfers)?;
+    transfer_rules.finish(&mut tt);
     let bytes = tt.encode()?;
     ZeroCopyTimetable::new(&bytes)?;
     if let Some(dir) = output.parent() { fs::create_dir_all(dir)?; }
@@ -515,6 +520,25 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn locations_default_to_two_minutes_and_keep_station_parent() {
+        let mut tt = TimetableOwned::empty(0, 1);
+        tt.add_source("test", "feed", "attempt").unwrap();
+        let stops = vec![
+            Stop {
+                id: "station".into(), name: "Station".into(),
+                lat: 33.65, lon: -117.82, parent: None, kind: 1,
+            },
+            Stop {
+                id: "platform".into(), name: "Platform".into(),
+                lat: 33.6501, lon: -117.8201, parent: Some("station".into()), kind: 0,
+            },
+        ];
+        let lookup = add_locations(&mut tt, 0, &stops).unwrap();
+        assert_eq!(tt.location_transfer_seconds, vec![120, 120]);
+        assert_eq!(tt.location_parent[lookup["platform"].idx()], lookup["station"]);
+    }
+
     #[test]
     fn nonzero_gtfs_seconds_are_preserved_after_combining_offsets() {
         let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();

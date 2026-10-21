@@ -18,6 +18,7 @@ use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgr
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
+use crate::gtfs_ingestion_sequence::transfers_into_postgres::transfers_into_postgres;
 use crate::shapes_reader::*;
 use anyhow::Context;
 use catenary::enum_to_int::*;
@@ -2291,6 +2292,13 @@ pub async fn gtfs_process_feed(
     .await?;
 
     println!("Stops inserted for {}", feed_id);
+
+    // Preserve GTFS stop-, route-, and trip-scoped interchange declarations
+    // before compiling the regional timetable.
+    transfers_into_postgres(
+        std::path::Path::new(&path), feed_id, attempt_id,
+        Arc::clone(&arc_conn_pool),
+    ).await?;
 
     // insert trip and itineraries
 

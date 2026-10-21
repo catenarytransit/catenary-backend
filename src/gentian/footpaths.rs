@@ -47,6 +47,9 @@ pub fn compute(
     let router = graph.as_ref().context("OSR returned null router")?;
     let options = ffi::RoutingOptions {
         max_cost: max_seconds,
+        // MOTIS timetable.max_matching_distance_ defaults to 25 metres.
+        // The general-purpose osr-ffi default is 100 metres.
+        max_match_distance_meters: 25.0,
         include_segments: false,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };

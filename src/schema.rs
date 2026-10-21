@@ -736,6 +736,24 @@ pub mod gtfs {
         }
     }
 
+    diesel::table! {
+        use diesel::sql_types::*;
+
+        gtfs.transfers (id) {
+            id -> Int8,
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            from_stop_id -> Text,
+            to_stop_id -> Text,
+            transfer_type -> Int2,
+            min_transfer_seconds -> Nullable<Int4>,
+            from_route_id -> Nullable<Text>,
+            to_route_id -> Nullable<Text>,
+            from_trip_id -> Nullable<Text>,
+            to_trip_id -> Nullable<Text>,
+        }
+    }
+
     diesel::joinable!(osm_stations -> osm_station_imports (import_id));
     diesel::joinable!(stop_mappings -> stations (station_id));
 
@@ -774,6 +792,7 @@ pub mod gtfs {
         stops,
         stopsforroute,
         tile_storage,
+        transfers,
         trip_frequencies,
         trips_compressed,
         unified_agency,

@@ -44,16 +44,50 @@ footpath arrays into the memory-mappable RAPTOR timetable. There are no
 stop-export or footpath-import TSV intermediates. Native OSR is required for every
 Gentian timetable build; `--build` fails unless `--osr-dir` is supplied.
 
-## Seconds-precision timetable, wire format v3
+## Station transfers and footpath matching (wire format v4)
 
-The timetable is **not** Nigiri's minute-based binary. Catenary v3 stores exact
+Gentian now uses MOTIS's **25-metre footpath way-matching limit**, overriding
+the more permissive 100-metre generic default in `osr-ffi`. The one-to-many
+walking limit remains 900 seconds by default and OSR durations remain in exact
+seconds.
+
+GTFS `transfers.txt` must be persisted by **re-ingesting the affected feed**
+through Maple after applying the `gtfs.transfers` migration. Old imported
+attempts have no transfer rules in the database and must not be assumed to have
+an empty `transfers.txt`. The transfer import preserves original source,
+stop, route, and trip selectors. Gentian currently compiles **stop-scoped**
+rules into a sparse, directed station-transfer table:
+
+- Default change time is 120 seconds after transit alighting (MOTIS default);
+  the first boarding from street access is not charged this interchange time.
+- Explicit same-stop minimums can override that default.
+- Explicit directed stop-pair minimums apply between vehicle alighting and
+  subsequent boarding; they do not artificially lengthen physical OSR walks.
+- `transfer_type=3` forbids a stop-pair interchange at boarding, even if a
+  walking search visits intermediate stops.
+- Rules referencing station parents are expanded to their child platforms
+  within the same GTFS source.
+- Route/trip-scoped rules and stay-seated `transfer_type=4` are retained in
+  PostgreSQL but require an additional multi-label / through-service routing
+  implementation. Gentian logs how many it has not applied; it does not
+  incorrectly turn such rules into unrestricted global footpaths.
+- `transfer_type=1` timed connections have no automatic vehicle-holding
+  mechanism; the scheduled departure still must be reachable.
+
+The sparse transfer-rule column changes the mmap layout; **v3 binaries must be
+rebuilt with v4 Gentian**. In addition, previously imported GTFS attempts must
+be re-ingested to populate their stop-level transfer rules.
+
+## Seconds-precision timetable, wire format v4
+
+The timetable is **not** Nigiri's minute-based binary. Catenary v4 stores exact
 UTC second offsets in 32-bit packed event values and preserves OSR walking
 durations in 64-bit records (32-bit stop index + 32-bit duration in seconds).
 Stop-level transfer durations are also stored in seconds. Day bitsets remain
 calendar-day based; all routing label times and reported Unix timestamps use
 seconds. No GTFS or OSR duration is rounded to a whole minute.
 
-Files with timetable version 2 are intentionally incompatible with v3 and
+Files with timetable versions 2 and 3 are intentionally incompatible with v4 and
 must be rebuilt by Gentian. The Edelweiss route request likewise uses
 `access: [{stop, seconds}]`, `egress: [{stop, seconds}]`, and
 `direct_walk_seconds` (instead of the old minute fields). Responses use
@@ -61,7 +95,7 @@ must be rebuilt by Gentian. The Edelweiss route request likewise uses
 arrival/departure timestamps. The OSR worker's `reachable` list only
 contains `seconds` durations. This API change is intentionally breaking.
 
-The in-memory and on-disk v3 representation is larger than v2: event offsets
+The in-memory and on-disk v4 representation is larger than v2: event offsets
 occupy four bytes instead of two, footpaths eight bytes instead of four,
 and stop transfer durations four bytes instead of one.
 

@@ -1,4 +1,4 @@
-//! Nigiri-shaped static timetable data model; Catenary wire version 3.
+//! Nigiri-shaped static timetable data model; Catenary wire version 4.
 //! Unlike Nigiri's minute-based wire representation, every duration is in seconds.
 //! This is NOT binary compatible with Cista's serializer.
 //! Compiler and RAPTOR algorithms are deliberately deferred.
@@ -11,9 +11,10 @@ use bytemuck::{Pod, Zeroable};
 use std::fmt;
 
 pub const MAGIC: u32 = 0x4341_544E;
-pub const VERSION: u32 = 3;
+pub const VERSION: u32 = 4;
 pub const MAX_DAYS: usize = 512;
 pub const TIMETABLE_OFFSET_DAYS: i32 = 5;
+pub const DEFAULT_TRANSFER_SECONDS: u32 = 120;
 
 macro_rules! strong_idx {
     ($($name:ident : $base:ty;)*) => {$(
@@ -133,6 +134,21 @@ pub enum Clasz {
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocationType { GeneratedTrack, Track, Station }
+/// A source-scoped GTFS stop-pair transfer constraint (v4).
+/// Identifiers use compiled LocationIdx, never unqualified GTFS stop IDs.
+/// A blocked rule applies to vehicle changes, not to physical pedestrian access.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
+pub struct StationTransferRule {
+    pub from: LocationIdx,
+    pub to: LocationIdx,
+    pub min_seconds: u32,
+    /// 1: prohibited (GTFS transfer_type=3), 0: permitted.
+    pub flags: u32,
+}
+impl StationTransferRule {
+    pub fn prohibited(self) -> bool { self.flags & 1 != 0 }
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct Range { pub from: u32, pub to: u32 }
@@ -264,6 +280,7 @@ columns! {
     location_parent: LocationIdx,
     location_type: u8,
     location_transfer_seconds: u32,
+    station_transfer_rules: StationTransferRule,
     location_routes_offsets: u32,
     location_routes: RouteIdx,
     footpaths_out_offsets: u32,
@@ -385,6 +402,17 @@ fn csr(o: &[u32], n: usize, rows: usize) -> Result<(), FormatError> {
     Ok(())
 }
 impl ZeroCopyTimetable<'_> {
+    /// Sparse, sorted stop-pair interchange constraints. Unlisted stop pairs
+    /// inherit the timetable's per-location minimum transfer times.
+    pub fn station_transfer_rule(&self, from: LocationIdx, to: LocationIdx)
+        -> Option<StationTransferRule>
+    {
+        let rules = self.station_transfer_rules();
+        rules.binary_search_by_key(&(from.0, to.0), |r| (r.from.0, r.to.0))
+            .ok().map(|idx| rules[idx])
+    }
+}
+impl ZeroCopyTimetable<'_> {
     fn validate(&self) -> Result<(), FormatError> {
         let n = self.coordinates().len();
         let r = self.route_transport_ranges().len();
@@ -400,6 +428,17 @@ impl ZeroCopyTimetable<'_> {
             self.location_name().len(), self.location_parent().len(),
             self.location_type().len(), self.location_transfer_seconds().len()
         ] { if len != n { return Err(FormatError::Layout); } }
+        let mut previous = None;
+        for rule in self.station_transfer_rules() {
+            if rule.from.idx() >= n || rule.to.idx() >= n || rule.flags > 1 {
+                return Err(FormatError::Index);
+            }
+            let key = (rule.from.0, rule.to.0);
+            if previous.is_some_and(|p| p >= key) {
+                return Err(FormatError::Layout);
+            }
+            previous = Some(key);
+        }
         csr(self.location_routes_offsets(),self.location_routes().len(),n)?;
         csr(self.footpaths_out_offsets(),self.footpaths_out().len(),n)?;
         csr(self.footpaths_in_offsets(),self.footpaths_in().len(),n)?;

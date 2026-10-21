@@ -67,15 +67,35 @@ enum Parent {
 struct Label {
     time: i64,
     parent: Option<Parent>,
+    // Last transit alighting event, retained across walking/carry labels.
+    // Absent for origin access so first boarding is not treated as a transfer.
+    last_alight: Option<(usize, i64)>,
 }
 
-fn improve(labels: &mut [Label], loc: usize, time: i64, parent: Parent) -> bool {
+fn improve(
+    labels: &mut [Label], loc: usize, time: i64,
+    parent: Parent, last_alight: Option<(usize, i64)>,
+) -> bool {
     if time < labels[loc].time {
-        labels[loc] = Label { time, parent: Some(parent) };
+        labels[loc] = Label { time, parent: Some(parent), last_alight };
         true
     } else {
         false
     }
+}
+
+/// Transfer rules affect boarding after a ride, not initial access or egress.
+/// Use max(walk arrival, source/destination change time after alighting),
+/// rather than adding a station penalty to the physical walking time.
+fn can_board(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, departure: i64) -> bool {
+    if label.time > departure { return false; }
+    let Some((from, alight_time)) = label.last_alight else { return true };
+    let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(stop as u32));
+    if rule.is_some_and(|r| r.prohibited()) { return false; }
+    let change_time = tt.location_transfer_seconds()[from]
+        .max(tt.location_transfer_seconds()[stop])
+        .max(rule.map_or(0, |r| r.min_seconds));
+    alight_time + i64::from(change_time) <= departure
 }
 
 fn relax_walks(
@@ -96,8 +116,9 @@ fn relax_walks(
             let seconds = u32::from(edge.seconds());
             if seconds == 0 { continue; }
             let next = time + i64::from(seconds);
+            let last_alight = labels[from].last_alight;
             if next <= max_time && improve(
-                labels, to, next, Parent::Walk { from, seconds },
+                labels, to, next, Parent::Walk { from, seconds }, last_alight,
             ) {
                 heap.push(Reverse((next, to)));
             }
@@ -146,7 +167,7 @@ fn traverse_routes(
                                         service_day: day as u16,
                                         departure: boarding_time,
                                         arrival,
-                                    });
+                                    }, Some((loc, arrival)));
                                 }
                             }
                         }
@@ -154,7 +175,9 @@ fn traverse_routes(
                     if onboard.is_none() && stop.outbound() && position + 1 < stops.len() {
                         if let Some(offset) = tt.event_time(route, transport, position, false) {
                             let board_time = absolute_first + i64::from(offset.seconds());
-                            if prev[loc].time <= board_time && board_time <= max_time {
+                            if board_time <= max_time &&
+                               can_board(tt, prev[loc], loc, board_time)
+                            {
                                 onboard = Some((loc, board_time));
                             }
                         }
@@ -233,13 +256,13 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
     }
     let departure = request.departure_unix_seconds;
     let max_time = departure + i64::from(request.max_duration_seconds);
-    let mut round0 = vec![Label {time:INF, parent:None};n];
+    let mut round0 = vec![Label {time:INF, parent:None, last_alight:None};n];
     for endpoint in &request.access {
         let time = departure + i64::from(endpoint.seconds);
         if time <= max_time {
             improve(&mut round0, endpoint.stop.idx(), time, Parent::Access {
                 seconds: endpoint.seconds,
-            });
+            }, None);
         }
     }
     relax_walks(tt, &mut round0, max_time);
@@ -251,6 +274,7 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             parent: if label.time == INF { None } else {
                 Some(Parent::Carry { previous_round: round - 1 })
             },
+            last_alight: label.last_alight,
         }).collect();
         traverse_routes(tt, prev, &mut curr, departure, max_time)?;
         relax_walks(tt, &mut curr, max_time);
@@ -337,6 +361,49 @@ mod tests {
         tt.section_flag_offsets.push(0);
         tt.transport_to_trip_section_offsets.push(0);
         tt
+    }
+
+    #[test]
+    fn station_change_time_applies_after_ride_but_not_first_access() {
+        let mut tt = fixture();
+        tt.location_transfer_seconds[1] = 120;
+        tt.location_transfer_seconds[2] = 150;
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let ride_arrival = Label {
+            time: 1000, parent: None, last_alight: Some((1, 1000)),
+        };
+        assert!(!can_board(&view, ride_arrival, 1, 1119));
+        assert!(can_board(&view, ride_arrival, 1, 1120));
+        assert!(!can_board(&view, ride_arrival, 2, 1149));
+        assert!(can_board(&view, ride_arrival, 2, 1150));
+        let first_access = Label {
+            time: 1000, parent: None, last_alight: None,
+        };
+        assert!(can_board(&view, first_access, 1, 1000));
+    }
+
+    #[test]
+    fn gtfs_stop_pair_override_and_prohibition_are_directional() {
+        use crate::routing_common::timetable::StationTransferRule;
+        let mut tt = fixture();
+        tt.station_transfer_rules.push(StationTransferRule {
+            from: LocationIdx(0), to: LocationIdx(1),
+            min_seconds: 0, flags: 1,
+        });
+        tt.station_transfer_rules.push(StationTransferRule {
+            from: LocationIdx(1), to: LocationIdx(2),
+            min_seconds: 240, flags: 0,
+        });
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let from_zero = Label { time: 1000, parent: None, last_alight: Some((0, 1000)) };
+        assert!(!can_board(&view, from_zero, 1, 2000));
+        let from_one = Label { time: 1000, parent: None, last_alight: Some((1, 1000)) };
+        assert!(!can_board(&view, from_one, 2, 1239));
+        assert!(can_board(&view, from_one, 2, 1240));
+        let from_two = Label { time: 1000, parent: None, last_alight: Some((2, 1000)) };
+        assert!(can_board(&view, from_two, 1, 1120));
     }
 
     #[test]
