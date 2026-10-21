@@ -108,9 +108,12 @@ impl ScheduleRuns {
         ensure!(size <= self.limit / RECORD_DIVISOR,
             "single schedule requires {size} bytes, exceeding the per-record cap of {} bytes (increase --schedule-memory-mib)",
             self.limit / RECORD_DIVISOR);
-        if self.bytes > self.limit - size { self.spill()?; }
+        // Charge only half the configured budget to record payloads: Vec
+        // capacity grows geometrically, and each retained schedule owns
+        // strings/event buffers in addition to its shallow struct.
+        if self.bytes > self.limit / 2 - size { self.spill()?; }
         self.bytes += size;
-        self.count += 1;
+        self.count = self.count.checked_add(1).context("schedule count overflow")?;
         self.records.push(record);
         Ok(())
     }
@@ -165,7 +168,7 @@ impl ScheduleRuns {
             let size = charge(&schedule);
             ensure!(size <= self.limit / RECORD_DIVISOR, "schedule over per-record cap during merge");
             let boundary = batch.first().is_some_and(|a| !same_pattern(a, &schedule))
-                || batch_bytes > self.limit - size
+                || batch_bytes > self.limit / 2 - size
                 || batch.len() >= MAX_BATCH_RECORDS;
             if boundary {
                 on_batch(std::mem::take(&mut batch))?;
