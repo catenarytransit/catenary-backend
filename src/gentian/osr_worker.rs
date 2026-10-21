@@ -155,7 +155,7 @@ fn open_graphs(
 fn main() -> Result<()> {
     let args = Args::parse();
     ensure!((1..=16).contains(&args.workers), "--workers must be in 1..=16");
-    let cfg: Config = toml::from_str(&fs::read(&args.config)?)?;
+    let cfg: Config = toml::from_str(&fs::read_to_string(&args.config)?)?;
     let paths = Arc::new(region_paths(&cfg.osm_manager.data_dir)?);
     let listener = TcpListener::bind(&args.listen)?;
 
