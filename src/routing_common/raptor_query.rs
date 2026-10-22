@@ -144,9 +144,10 @@ fn relax_walks_from(
             let to = edge.target().idx();
             let seconds = edge.seconds();
             let next = time + i64::from(seconds);
+            let last_alight = labels[from].last_alight;
             if next <= max_time && improve(
                 labels, to, next, Parent::Walk {from, seconds},
-                labels[from].last_alight,
+                last_alight,
             ) {
                 stats.labels_improved += 1;
                 stats.walking_heap_pushes += 1;
