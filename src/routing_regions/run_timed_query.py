@@ -57,6 +57,12 @@ def run_query(args: argparse.Namespace) -> dict:
             raise ValueError(f"{args.label}: missing or invalid query timing {key}")
     if timings["query_total_ms"] + 1 < timings["raptor_ms"]:
         raise ValueError(f"{args.label}: RAPTOR phase exceeds measured query time")
+    if args.max_raptor_ms is not None and timings["raptor_ms"] > args.max_raptor_ms:
+        raise ValueError(
+            f"{args.label}: RAPTOR latency regression: "
+            f"{timings['raptor_ms']:.3f} ms exceeds "
+            f"{args.max_raptor_ms:.3f} ms"
+        )
 
     journeys = response["routing"]["journeys"]
     region = response["routing"]["selection"]["transit_region"]
@@ -103,6 +109,7 @@ def run_query(args: argparse.Namespace) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--label", required=True)
+    p.add_argument("--max-raptor-ms", type=float, default=None)
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--regions-config", type=Path, required=True)
     p.add_argument("--catenary-config", type=Path, required=True)
