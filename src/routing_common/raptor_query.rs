@@ -531,6 +531,46 @@ mod tests {
     }
 
     #[test]
+    fn active_day_window_skips_outside_service_days() {
+        let mut tt = fixture();
+        // A three-day calendar with service only on day zero. Starting a
+        // search on day two must not traverse stale day-zero transports.
+        tt.day_count = 3;
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_002_i64 * 86_400 + 8 * 3_600;
+        let (_journeys, stats) = route_with_stats(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![WalkingEndpoint {stop: LocationIdx(0), seconds: 0}],
+            egress: vec![WalkingEndpoint {stop: LocationIdx(2), seconds: 0}],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(stats.active_transport_days, 0);
+        assert_eq!(stats.stop_events_scanned, 0);
+    }
+
+    #[test]
+    fn day_window_keeps_exact_second_departures() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let scheduled = 20_000_i64 * 86_400 + 480 * 60 + 20;
+        let (journeys, stats) = route_with_stats(&view, &Query {
+            departure_unix_seconds: scheduled,
+            access: vec![WalkingEndpoint {stop: LocationIdx(0), seconds: 0}],
+            egress: vec![WalkingEndpoint {stop: LocationIdx(2), seconds: 0}],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(stats.active_transport_days, 1);
+        assert_eq!(stats.stop_events_scanned, 3);
+    }
+
+    #[test]
     fn marked_routes_select_only_incident_routes_without_duplicates() {
         let tt = multi_route_fixture();
         let bytes = tt.encode().unwrap();
