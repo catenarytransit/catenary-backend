@@ -300,10 +300,13 @@ fn expand_frequency_departures(
             window.headway_secs != 0,
             "trip {trip_id} frequency window {index} has zero headway"
         );
-        ensure!(
-            window.start_time < window.end_time,
-            "trip {trip_id} frequency window {index} has invalid time range"
-        );
+        if window.start_time >= window.end_time {
+            eprintln!(
+                "Gentian: skipping trip {trip_id} frequency window {index} with invalid time range (start_time={}, end_time={})",
+                window.start_time, window.end_time
+            );
+            continue;
+        }
         let mut departure = window.start_time;
         while departure < window.end_time {
             emit(departure)?;
@@ -1306,6 +1309,75 @@ mod tests {
                 25 * 3600 + 107,
             ]
         );
+    }
+
+    #[test]
+    fn frequency_windows_skip_invalid_time_ranges_and_keep_valid_departures() {
+        use catenary::gtfs_schedule_protobuf::GtfsFrequencyProto;
+        let windows = GtfsFrequenciesProto {
+            frequencies: vec![
+                GtfsFrequencyProto {
+                    start_time: 8 * 3600,
+                    end_time: 8 * 3600 + 180,
+                    headway_secs: 60,
+                    exact_times: Some(1),
+                },
+                GtfsFrequencyProto {
+                    start_time: 9 * 3600,
+                    end_time: 9 * 3600,
+                    headway_secs: 60,
+                    exact_times: Some(0),
+                },
+                GtfsFrequencyProto {
+                    start_time: 10 * 3600 + 60,
+                    end_time: 10 * 3600,
+                    headway_secs: 60,
+                    exact_times: Some(1),
+                },
+                GtfsFrequencyProto {
+                    start_time: 25 * 3600,
+                    end_time: 25 * 3600 + 60,
+                    headway_secs: 30,
+                    exact_times: Some(0),
+                },
+            ],
+        };
+        let mut departures = Vec::new();
+        expand_frequency_departures("TL-1532", &windows.encode_to_vec(), |time| {
+            departures.push(time);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(
+            departures,
+            vec![
+                8 * 3600,
+                8 * 3600 + 60,
+                8 * 3600 + 120,
+                25 * 3600,
+                25 * 3600 + 30,
+            ]
+        );
+    }
+
+    #[test]
+    fn frequency_windows_with_no_valid_ranges_emit_no_departures() {
+        use catenary::gtfs_schedule_protobuf::GtfsFrequencyProto;
+        let windows = GtfsFrequenciesProto {
+            frequencies: vec![GtfsFrequencyProto {
+                start_time: 3600,
+                end_time: 3600,
+                headway_secs: 600,
+                exact_times: None,
+            }],
+        };
+        let mut departures = Vec::new();
+        expand_frequency_departures("TL-1532", &windows.encode_to_vec(), |time| {
+            departures.push(time);
+            Ok(())
+        })
+        .unwrap();
+        assert!(departures.is_empty());
     }
 
     #[test]
