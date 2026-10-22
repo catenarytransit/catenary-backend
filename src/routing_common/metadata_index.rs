@@ -53,17 +53,26 @@ impl MetadataIndex {
             }
         }
 
-        Ok(Self { transport_to_trip, trip_to_id_record })
+        Ok(Self {
+            transport_to_trip,
+            trip_to_id_record,
+        })
     }
 
     pub fn trip_for_transport(&self, transport: u32) -> Option<usize> {
-        self.transport_to_trip.get(transport as usize)
-            .copied().filter(|&idx| idx != MISSING).map(|idx| idx as usize)
+        self.transport_to_trip
+            .get(transport as usize)
+            .copied()
+            .filter(|&idx| idx != MISSING)
+            .map(|idx| idx as usize)
     }
 
     pub fn id_record_for_trip(&self, trip: usize) -> Option<usize> {
-        self.trip_to_id_record.get(trip)
-            .copied().filter(|&idx| idx != MISSING).map(|idx| idx as usize)
+        self.trip_to_id_record
+            .get(trip)
+            .copied()
+            .filter(|&idx| idx != MISSING)
+            .map(|idx| idx as usize)
     }
 }
 
@@ -73,13 +82,19 @@ mod tests {
     use crate::routing_common::timetable::{SourceIdx, StringRef, TransportIdx, TripIdx};
 
     fn range(transport: u32) -> TripTransportRange {
-        TripTransportRange { transport: TransportIdx(transport), stop_from: 0, stop_to: 2 }
+        TripTransportRange {
+            transport: TransportIdx(transport),
+            stop_from: 0,
+            stop_to: 2,
+        }
     }
 
     fn id(trip: u32) -> TripIdRecord {
         TripIdRecord {
-            trip: TripIdx(trip), id: StringRef::default(),
-            source: SourceIdx(0), reserved: 0,
+            trip: TripIdx(trip),
+            id: StringRef::default(),
+            source: SourceIdx(0),
+            reserved: 0,
         }
     }
 
@@ -88,9 +103,13 @@ mod tests {
         // Trip zero and trip one both reference transport 1. The old linear
         // search selected trip zero, regardless of which ID was requested.
         let index = MetadataIndex::from_columns(
-            3, &[0, 2, 4], &[range(0), range(1), range(1), range(2)],
-            2, &[id(1), id(0), id(0)],
-        ).unwrap();
+            3,
+            &[0, 2, 4],
+            &[range(0), range(1), range(1), range(2)],
+            2,
+            &[id(1), id(0), id(0)],
+        )
+        .unwrap();
         assert_eq!(index.trip_for_transport(0), Some(0));
         assert_eq!(index.trip_for_transport(1), Some(0));
         assert_eq!(index.trip_for_transport(2), Some(1));
@@ -102,9 +121,7 @@ mod tests {
 
     #[test]
     fn missing_transport_and_missing_id_remain_unmapped() {
-        let index = MetadataIndex::from_columns(
-            3, &[0, 1, 1], &[range(1)], 2, &[id(1)],
-        ).unwrap();
+        let index = MetadataIndex::from_columns(3, &[0, 1, 1], &[range(1)], 2, &[id(1)]).unwrap();
         assert_eq!(index.trip_for_transport(0), None);
         assert_eq!(index.trip_for_transport(1), Some(0));
         assert_eq!(index.trip_for_transport(2), None);

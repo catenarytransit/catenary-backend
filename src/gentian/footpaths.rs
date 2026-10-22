@@ -26,21 +26,36 @@ pub fn compute(
     max_seconds: u32,
     candidate_meters: f64,
 ) -> Result<Vec<Vec<(u32, u32)>>> {
-    ensure!((1..=30_660).contains(&max_seconds), "invalid OSR transfer duration");
-    ensure!(candidate_meters.is_finite() && candidate_meters > 0.0,
-        "candidate radius must be positive and finite");
-    ensure!(u32::try_from(stops.len()).is_ok(), "too many locations for packed indexes");
+    ensure!(
+        (1..=30_660).contains(&max_seconds),
+        "invalid OSR transfer duration"
+    );
+    ensure!(
+        candidate_meters.is_finite() && candidate_meters > 0.0,
+        "candidate radius must be positive and finite"
+    );
+    ensure!(
+        u32::try_from(stops.len()).is_ok(),
+        "too many locations for packed indexes"
+    );
     const CELL: f64 = 0.02;
     let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (idx, stop) in stops.iter().enumerate() {
-        ensure!(stop.lat.is_finite() && stop.lon.is_finite(),
-            "non-finite timetable stop coordinate");
-        ensure!((-90.0..=90.0).contains(&stop.lat)
-                && (-180.0..=180.0).contains(&stop.lon),
-            "timetable stop coordinate outside WGS84");
-        tiles.entry(((f64::from(stop.lat) / CELL).floor() as i32,
-                     (f64::from(stop.lon) / CELL).floor() as i32))
-            .or_default().push(idx);
+        ensure!(
+            stop.lat.is_finite() && stop.lon.is_finite(),
+            "non-finite timetable stop coordinate"
+        );
+        ensure!(
+            (-90.0..=90.0).contains(&stop.lat) && (-180.0..=180.0).contains(&stop.lon),
+            "timetable stop coordinate outside WGS84"
+        );
+        tiles
+            .entry((
+                (f64::from(stop.lat) / CELL).floor() as i32,
+                (f64::from(stop.lon) / CELL).floor() as i32,
+            ))
+            .or_default()
+            .push(idx);
     }
     let graph = ffi::open_router(osr_dir.to_str().context("non-UTF8 OSR directory")?)
         .with_context(|| format!("opening OSR graph {}", osr_dir.display()))?;
@@ -59,7 +74,10 @@ pub fn compute(
         let x = (f64::from(origin.lon) / CELL).floor() as i32;
         let lat_cells = (candidate_meters / (111_000.0 * CELL)).ceil() as i32 + 1;
         let lon_meters = 111_000.0 * f64::from(origin.lat).to_radians().cos().abs();
-        ensure!(lon_meters > 1.0, "near-polar routing needs a different spatial index");
+        ensure!(
+            lon_meters > 1.0,
+            "near-polar routing needs a different spatial index"
+        );
         let lon_cells = (candidate_meters / (lon_meters * CELL)).ceil() as i32 + 1;
         let mut targets = Vec::new();
         let mut indices = Vec::new();
@@ -71,7 +89,8 @@ pub fn compute(
                         if i != j && meters(origin, target) <= candidate_meters {
                             indices.push(j);
                             targets.push(ffi::Coordinate::outdoor(
-                                f64::from(target.lat), f64::from(target.lon),
+                                f64::from(target.lat),
+                                f64::from(target.lon),
                             ));
                         }
                     }
@@ -82,9 +101,14 @@ pub fn compute(
         if !targets.is_empty() {
             let routes = router.one_to_many(
                 &ffi::Coordinate::outdoor(f64::from(origin.lat), f64::from(origin.lon)),
-                &targets, &options, &[],
+                &targets,
+                &options,
+                &[],
             )?;
-            ensure!(routes.len() == indices.len(), "OSR one-to-many result count mismatch");
+            ensure!(
+                routes.len() == indices.len(),
+                "OSR one-to-many result count mismatch"
+            );
             for (target, path) in indices.into_iter().zip(routes) {
                 if path.found && path.duration_seconds <= max_seconds {
                     // The native router reports seconds. Preserve them in the
@@ -112,13 +136,16 @@ pub fn add_station_links(
     edges: &mut [Vec<(u32, u32)>],
 ) -> Result<()> {
     use catenary::routing_common::timetable::LocationIdx;
-    ensure!(edges.len() == tt.coordinates.len(), "station transfer count mismatch");
+    ensure!(
+        edges.len() == tt.coordinates.len(),
+        "station transfer count mismatch"
+    );
     let mut children: HashMap<u32, Vec<usize>> = HashMap::new();
     for (child, &parent) in tt.location_parent.iter().enumerate() {
         if parent != LocationIdx::INVALID {
             ensure!(parent.idx() < edges.len(), "invalid parent station");
-            if tt.location_type[parent.idx()] == 2 &&
-                tt.location_source[child] == tt.location_source[parent.idx()]
+            if tt.location_type[parent.idx()] == 2
+                && tt.location_source[child] == tt.location_source[parent.idx()]
             {
                 children.entry(parent.0).or_default().push(child);
             }
@@ -130,16 +157,21 @@ pub fn add_station_links(
         members.extend(child_stops);
         for &from in &members {
             for &to in &members {
-                if from == to ||
-                   edges[from].iter().any(|&(existing, _)| existing as usize == to)
+                if from == to
+                    || edges[from]
+                        .iter()
+                        .any(|&(existing, _)| existing as usize == to)
                 {
                     continue;
                 }
                 let distance = meters(tt.coordinates[from], tt.coordinates[to]);
-                if distance > 100.0 { continue; }
+                if distance > 100.0 {
+                    continue;
+                }
                 // Nigiri uses a conservative 0.7m/s for missing links.
                 let seconds = (distance / 0.7).ceil() as u32;
-                let seconds = seconds.max(1)
+                let seconds = seconds
+                    .max(1)
                     .max(tt.location_transfer_seconds[from])
                     .max(tt.location_transfer_seconds[to]);
                 edges[from].push((u32::try_from(to)?, seconds));
@@ -162,7 +194,7 @@ mod tests {
             (33.0002, -117.0, LocationIdx(0), 1),
             (34.0, -118.0, LocationIdx::INVALID, 2),
         ] {
-            tt.coordinates.push(Coordinate {lat, lon});
+            tt.coordinates.push(Coordinate { lat, lon });
             tt.location_parent.push(parent);
             tt.location_type.push(kind);
             tt.location_transfer_seconds.push(120);
@@ -178,9 +210,18 @@ mod tests {
 
     #[test]
     fn geographic_candidate_filter_excludes_distant_stops() {
-        let a = Coordinate { lat: 33.646, lon: -117.843 };
-        let b = Coordinate { lat: 33.647, lon: -117.843 };
-        let c = Coordinate { lat: 34.054, lon: -118.243 };
+        let a = Coordinate {
+            lat: 33.646,
+            lon: -117.843,
+        };
+        let b = Coordinate {
+            lat: 33.647,
+            lon: -117.843,
+        };
+        let c = Coordinate {
+            lat: 34.054,
+            lon: -118.243,
+        };
         assert!(meters(a, b) < 1200.0);
         assert!(meters(a, c) > 1200.0);
         assert_eq!(meters(a, a), 0.0);

@@ -5,9 +5,7 @@
 //! pedestrian journeys are never charged a station change-time penalty.
 use anyhow::{Result, ensure};
 use catenary::routing_common::routing_regions::ChateauSource;
-use catenary::routing_common::timetable::{
-    LocationIdx, StationTransferRule, TimetableOwned,
-};
+use catenary::routing_common::timetable::{LocationIdx, StationTransferRule, TimetableOwned};
 use fallible_iterator::FallibleIterator;
 use postgres::{Client, types::ToSql};
 use std::collections::{BTreeMap, HashMap};
@@ -18,19 +16,33 @@ pub struct TransferRules {
 }
 
 impl TransferRules {
-    pub fn insert(&mut self, from: LocationIdx, to: LocationIdx,
-                  kind: i16, min_seconds: Option<u32>) {
+    pub fn insert(
+        &mut self,
+        from: LocationIdx,
+        to: LocationIdx,
+        kind: i16,
+        min_seconds: Option<u32>,
+    ) {
         let key = (from.0, to.0);
         if kind == 3 {
-            self.rules.insert(key, StationTransferRule {
-                from, to, min_seconds: 0, flags: 1,
-            });
+            self.rules.insert(
+                key,
+                StationTransferRule {
+                    from,
+                    to,
+                    min_seconds: 0,
+                    flags: 1,
+                },
+            );
             return;
         }
         // A prohibition dominates any recommendation for the same stop pair.
         let Some(minimum) = min_seconds else { return };
         let rule = self.rules.entry(key).or_insert(StationTransferRule {
-            from, to, min_seconds: 0, flags: 0,
+            from,
+            to,
+            min_seconds: 0,
+            flags: 0,
         });
         if !rule.prohibited() {
             rule.min_seconds = rule.min_seconds.max(minimum);
@@ -97,9 +109,7 @@ pub fn load(
         let to_route: Option<String> = row.get(5);
         let from_trip: Option<String> = row.get(6);
         let to_trip: Option<String> = row.get(7);
-        if from_route.is_some() || to_route.is_some() ||
-           from_trip.is_some() || to_trip.is_some()
-        {
+        if from_route.is_some() || to_route.is_some() || from_trip.is_some() || to_trip.is_some() {
             // Trip/route-scoped constraints need a provenance-aware multi-label
             // RAPTOR extension. Never reinterpret them as global stop rules.
             scoped += 1;
@@ -108,11 +118,14 @@ pub fn load(
         ensure!((0..=3).contains(&kind), "invalid GTFS transfer_type");
         let from_id: String = row.get(0);
         let to_id: String = row.get(1);
-        let (Some(&from), Some(&to)) = (lookup.get(&from_id), lookup.get(&to_id))
-            else { continue };
+        let (Some(&from), Some(&to)) = (lookup.get(&from_id), lookup.get(&to_id)) else {
+            continue;
+        };
         let min: Option<i32> = row.get(3);
-        ensure!(min.is_none_or(|seconds| seconds >= 0),
-            "negative GTFS transfer time");
+        ensure!(
+            min.is_none_or(|seconds| seconds >= 0),
+            "negative GTFS transfer time"
+        );
         let min = min.map(u32::try_from).transpose()?;
         for a in locations_for(from, tt, &children) {
             for b in locations_for(to, tt, &children) {
@@ -134,7 +147,10 @@ pub fn load(
             source.onestop_feed_id, scoped, seated,
         );
     }
-    eprintln!("Gentian: loaded {imported} source-scoped stop-pair constraints from {}", source.onestop_feed_id);
+    eprintln!(
+        "Gentian: loaded {imported} source-scoped stop-pair constraints from {}",
+        source.onestop_feed_id
+    );
     Ok(())
 }
 

@@ -10,7 +10,9 @@
 //! approach must be shared by those turning routes. The two fitted axes must
 //! also be near-orthogonal, and the fitted center must be near the existing
 //! graph junction. Otherwise this pass is deliberately a no-op.
-use crate::loom_graph::{Graph, LineId, Point, lerp, metric_distance_m, web_mercator, from_web_mercator};
+use crate::loom_graph::{
+    Graph, LineId, Point, from_web_mercator, lerp, metric_distance_m, web_mercator,
+};
 use log::info;
 use std::collections::{BTreeSet, HashMap};
 
@@ -38,13 +40,22 @@ impl XY {
         from_web_mercator((self.x, self.y))
     }
     fn minus(self, b: Self) -> Self {
-        Self { x: self.x - b.x, y: self.y - b.y }
+        Self {
+            x: self.x - b.x,
+            y: self.y - b.y,
+        }
     }
     fn plus(self, b: Self) -> Self {
-        Self { x: self.x + b.x, y: self.y + b.y }
+        Self {
+            x: self.x + b.x,
+            y: self.y + b.y,
+        }
     }
     fn times(self, scale: f64) -> Self {
-        Self { x: self.x * scale, y: self.y * scale }
+        Self {
+            x: self.x * scale,
+            y: self.y * scale,
+        }
     }
     fn dot(self, b: Self) -> f64 {
         self.x * b.x + self.y * b.y
@@ -102,7 +113,10 @@ fn arm_at(graph: &Graph, node_id: usize, edge_id: usize) -> Option<Arm> {
     if outward.len() < 2 {
         return None;
     }
-    let length: f64 = outward.windows(2).map(|p| metric_distance_m(p[0], p[1])).sum();
+    let length: f64 = outward
+        .windows(2)
+        .map(|p| metric_distance_m(p[0], p[1]))
+        .sum();
     if length < MIN_ARM_LENGTH_M {
         return None;
     }
@@ -130,11 +144,7 @@ struct Axes {
 }
 
 fn fit_axes(arms: &[Arm; 4], old_center: XY) -> Option<Axes> {
-    let matchings = [
-        [(0, 1), (2, 3)],
-        [(0, 2), (1, 3)],
-        [(0, 3), (1, 2)],
-    ];
+    let matchings = [[(0, 1), (2, 3)], [(0, 2), (1, 3)], [(0, 3), (1, 2)]];
     let mut best: Option<(f64, Axes)> = None;
     for pairs in matchings {
         let (a, b) = pairs[0];
@@ -162,7 +172,8 @@ fn fit_axes(arms: &[Arm; 4], old_center: XY) -> Option<Axes> {
         }
         let t = arms[c].far.minus(arms[a].far).cross(v2) / denominator;
         let center = arms[a].far.plus(v1.times(t));
-        if !center.x.is_finite() || !center.y.is_finite()
+        if !center.x.is_finite()
+            || !center.y.is_finite()
             || center.minus(old_center).length() > MAX_ANCHOR_SHIFT_M
         {
             continue;
@@ -185,7 +196,9 @@ fn turning_witnesses(
     original_routes: &HashMap<usize, BTreeSet<LineId>>,
 ) -> bool {
     let opposite = |a: usize, b: usize| {
-        axes.pairs.iter().any(|&(i, j)| (i == a && j == b) || (i == b && j == a))
+        axes.pairs
+            .iter()
+            .any(|&(i, j)| (i == a && j == b) || (i == b && j == a))
     };
     let mut witnessed_routes = BTreeSet::new();
     for a in 0..4 {
@@ -218,7 +231,9 @@ fn turning_witnesses(
     // Independent redundant turning routes must also share an approach arm.
     // This excludes an incidental X and unrelated single-service curves.
     witnessed_routes.len() >= MIN_TURNING_ROUTES
-        && arms.iter().any(|arm| arm.lines.intersection(&witnessed_routes).take(2).count() >= 2)
+        && arms
+            .iter()
+            .any(|arm| arm.lines.intersection(&witnessed_routes).take(2).count() >= 2)
 }
 
 fn valid_join_geometry(arms: &[Arm; 4], axes: &Axes) -> bool {
@@ -277,7 +292,9 @@ pub fn normalize(graph: &mut Graph, reference: &Graph) -> usize {
     let mut original_routes: HashMap<usize, BTreeSet<LineId>> = HashMap::new();
     for edge in reference.edges.iter().flatten() {
         for &original in &edge.originals {
-            original_routes.entry(original).or_default()
+            original_routes
+                .entry(original)
+                .or_default()
                 .extend(edge.lines.iter().map(|occ| occ.line));
         }
     }
@@ -288,9 +305,13 @@ pub fn normalize(graph: &mut Graph, reference: &Graph) -> usize {
     // overlapping edits could produce a new bend or an unstable result.
     let mut modified_edges = BTreeSet::new();
     // Snapshot node IDs; no graph nodes/edges are added or deleted by this pass.
-    let candidates: Vec<_> = graph.nodes.iter().flatten()
+    let candidates: Vec<_> = graph
+        .nodes
+        .iter()
+        .flatten()
         .filter(|n| n.adj.len() == 4 && n.stops.is_empty())
-        .map(|n| n.id).collect();
+        .map(|n| n.id)
+        .collect();
     for node_id in candidates {
         let Some(node) = graph.nodes[node_id].as_ref() else {
             continue;
@@ -308,8 +329,7 @@ pub fn normalize(graph: &mut Graph, reference: &Graph) -> usize {
         let Some(axes) = fit_axes(&arms, old_center) else {
             continue;
         };
-        if !turning_witnesses(&arms, &axes, &original_routes)
-            || !valid_join_geometry(&arms, &axes)
+        if !turning_witnesses(&arms, &axes, &original_routes) || !valid_join_geometry(&arms, &axes)
         {
             continue;
         }
@@ -322,7 +342,8 @@ pub fn normalize(graph: &mut Graph, reference: &Graph) -> usize {
         fixed += 1;
         info!(
             "[topo/junction] normalized four-arm junction {} by {:.1} projected metres",
-            node_id, old_center.minus(axes.center).length()
+            node_id,
+            old_center.minus(axes.center).length()
         );
     }
     fixed
@@ -343,25 +364,51 @@ mod tests {
         let mut result = Graph::default();
         let hub = result.add_node(p(-35.0, -9.0));
         let directions = [
-            (p(0.0, 120.0), p(-9.0, 53.0), &[0usize, 1, 2][..], &[101usize, 102, 103][..]),
+            (
+                p(0.0, 120.0),
+                p(-9.0, 53.0),
+                &[0usize, 1, 2][..],
+                &[101usize, 102, 103][..],
+            ),
             (p(120.0, 0.0), p(52.0, -4.0), &[0][..], &[101][..]),
             (p(0.0, -120.0), p(-7.0, -54.0), &[2][..], &[103][..]),
             (p(-120.0, 0.0), p(-68.0, -5.0), &[1][..], &[102][..]),
         ];
         for (far, middle, routes, originals) in directions {
             let endpoint = result.add_node(far);
-            let id = result.add_edge(hub, endpoint, vec![result.nodes[hub].as_ref().unwrap().pos, middle, far]);
+            let id = result.add_edge(
+                hub,
+                endpoint,
+                vec![result.nodes[hub].as_ref().unwrap().pos, middle, far],
+            );
             let edge = result.edges[id].as_mut().unwrap();
             edge.originals.extend(originals.iter().copied());
-            edge.lines.extend(routes.iter().map(|&line| LineOcc { line, direction: None }));
+            edge.lines.extend(routes.iter().map(|&line| LineOcc {
+                line,
+                direction: None,
+            }));
         }
         let mut reference = Graph::default();
         for (original, route) in [(101usize, 0usize), (102, 1), (103, 2)] {
             let a = reference.add_node(p(-140.0, original as f64));
             let b = reference.add_node(p(140.0, original as f64));
-            let id = reference.add_edge(a, b, vec![reference.nodes[a].as_ref().unwrap().pos, reference.nodes[b].as_ref().unwrap().pos]);
-            reference.edges[id].as_mut().unwrap().originals.insert(original);
-            reference.edges[id].as_mut().unwrap().lines.insert(LineOcc { line: route, direction: None });
+            let id = reference.add_edge(
+                a,
+                b,
+                vec![
+                    reference.nodes[a].as_ref().unwrap().pos,
+                    reference.nodes[b].as_ref().unwrap().pos,
+                ],
+            );
+            reference.edges[id]
+                .as_mut()
+                .unwrap()
+                .originals
+                .insert(original);
+            reference.edges[id].as_mut().unwrap().lines.insert(LineOcc {
+                line: route,
+                direction: None,
+            });
         }
         (result, reference, hub)
     }
@@ -371,7 +418,10 @@ mod tests {
         let (mut output, reference, hub) = fixture();
         assert_eq!(normalize(&mut output, &reference), 1);
         let pos = output.nodes[hub].as_ref().unwrap().pos;
-        assert!(metric_distance_m(pos, p(0.0, 0.0)) < 12.0, "fitted junction did not recover axes");
+        assert!(
+            metric_distance_m(pos, p(0.0, 0.0)) < 12.0,
+            "fitted junction did not recover axes"
+        );
         for &edge_id in &output.nodes[hub].as_ref().unwrap().adj {
             let edge = output.edges[edge_id].as_ref().unwrap();
             assert_eq!(edge.geom.first().copied(), Some(pos));
@@ -384,7 +434,11 @@ mod tests {
     #[test]
     fn apparent_crossing_without_turn_provenance_is_unchanged() {
         let (mut output, mut reference, hub) = fixture();
-        reference.edges.iter_mut().flatten().for_each(|e| e.originals.clear());
+        reference
+            .edges
+            .iter_mut()
+            .flatten()
+            .for_each(|e| e.originals.clear());
         let original = output.nodes[hub].as_ref().unwrap().pos;
         assert_eq!(normalize(&mut output, &reference), 0);
         assert_eq!(output.nodes[hub].as_ref().unwrap().pos, original);

@@ -6,7 +6,6 @@ use sqlx::Row;
 use std::f64::consts::PI;
 use std::sync::Arc;
 
-
 #[derive(Debug, Deserialize)]
 pub struct RouteHitQuery {
     latitude: f64,
@@ -30,8 +29,8 @@ struct RouteHit {
 fn hit_radius_m(latitude: f64, zoom: f64) -> f64 {
     // MapLibre's zoom level is based on 512 CSS pixels per world tile.
     // Match the 5dp tap target plus a small allowance for line width.
-    let meters_per_px = (2.0 * PI * 6_378_137.0 * latitude.to_radians().cos().abs())
-        / (512.0 * 2.0_f64.powf(zoom));
+    let meters_per_px =
+        (2.0 * PI * 6_378_137.0 * latitude.to_radians().cos().abs()) / (512.0 * 2.0_f64.powf(zoom));
     (meters_per_px * 10.0).clamp(4.0, 1_200.0)
 }
 

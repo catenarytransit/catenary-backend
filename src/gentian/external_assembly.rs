@@ -34,21 +34,35 @@ pub(super) fn charge(s: &Schedule) -> usize {
     size_of::<Schedule>()
         .saturating_add(s.trip_id.capacity())
         .saturating_add(s.route_id.capacity())
-        .saturating_add(s.locations.capacity().saturating_mul(size_of::<LocationIdx>()))
+        .saturating_add(
+            s.locations
+                .capacity()
+                .saturating_mul(size_of::<LocationIdx>()),
+        )
         .saturating_add(s.events.capacity().saturating_mul(size_of::<Event>()))
         .saturating_add(128)
 }
 
 fn compare(a: &Schedule, b: &Schedule) -> Ordering {
-    a.source.cmp(&b.source)
+    a.source
+        .cmp(&b.source)
         .then_with(|| a.route_id.cmp(&b.route_id))
-        .then_with(|| a.locations.iter().map(|x| x.0).cmp(b.locations.iter().map(|x| x.0)))
+        .then_with(|| {
+            a.locations
+                .iter()
+                .map(|x| x.0)
+                .cmp(b.locations.iter().map(|x| x.0))
+        })
         .then_with(|| a.first_second.cmp(&b.first_second))
         .then_with(|| a.trip_id.cmp(&b.trip_id))
         // Stable, deterministic ordering for repeated trips with different
         // timezone-dependent relative events on distinct service days.
-        .then_with(|| a.events.iter().map(|e| (e.arrival, e.departure))
-            .cmp(b.events.iter().map(|e| (e.arrival, e.departure))))
+        .then_with(|| {
+            a.events
+                .iter()
+                .map(|e| (e.arrival, e.departure))
+                .cmp(b.events.iter().map(|e| (e.arrival, e.departure)))
+        })
         .then_with(|| a.days.words.cmp(&b.days.words))
 }
 
@@ -63,7 +77,8 @@ struct Scratch {
 
 impl Scratch {
     fn new(root: &Path) -> Result<Self> {
-        fs::create_dir_all(root).with_context(|| format!("creating scratch root {}", root.display()))?;
+        fs::create_dir_all(root)
+            .with_context(|| format!("creating scratch root {}", root.display()))?;
         let dir = root.join(format!("gentian-sort-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).with_context(|| format!("creating {}", dir.display()))?;
         Ok(Self { dir, serial: 0 })
@@ -79,7 +94,10 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         if let Err(error) = fs::remove_dir_all(&self.dir) {
-            eprintln!("Gentian: unable to remove scratch directory {}: {error}", self.dir.display());
+            eprintln!(
+                "Gentian: unable to remove scratch directory {}: {error}",
+                self.dir.display()
+            );
         }
     }
 }
@@ -95,38 +113,61 @@ pub(super) struct ScheduleRuns {
 
 impl ScheduleRuns {
     pub fn new(scratch_root: &Path, memory_mib: usize) -> Result<Self> {
-        ensure!((1..=4096).contains(&memory_mib), "schedule buffer must be 1..=4096 MiB");
-        let limit = memory_mib.checked_mul(1024 * 1024).context("schedule buffer overflow")?;
+        ensure!(
+            (1..=4096).contains(&memory_mib),
+            "schedule buffer must be 1..=4096 MiB"
+        );
+        let limit = memory_mib
+            .checked_mul(1024 * 1024)
+            .context("schedule buffer overflow")?;
         Ok(Self {
-            scratch: Scratch::new(scratch_root)?, records: Vec::new(),
-            bytes: 0, limit, runs: Vec::new(), count: 0,
+            scratch: Scratch::new(scratch_root)?,
+            records: Vec::new(),
+            bytes: 0,
+            limit,
+            runs: Vec::new(),
+            count: 0,
         })
     }
 
     pub fn push(&mut self, record: Schedule) -> Result<()> {
         let size = charge(&record);
-        ensure!(size <= self.limit / RECORD_DIVISOR,
+        ensure!(
+            size <= self.limit / RECORD_DIVISOR,
             "single schedule requires {size} bytes, exceeding the per-record cap of {} bytes (increase --schedule-memory-mib)",
-            self.limit / RECORD_DIVISOR);
+            self.limit / RECORD_DIVISOR
+        );
         // Charge only half the configured budget to record payloads: Vec
         // capacity grows geometrically, and each retained schedule owns
         // strings/event buffers in addition to its shallow struct.
-        if self.bytes > self.limit / 2 - size { self.spill()?; }
+        if self.bytes > self.limit / 2 - size {
+            self.spill()?;
+        }
         self.bytes += size;
-        self.count = self.count.checked_add(1).context("schedule count overflow")?;
+        self.count = self
+            .count
+            .checked_add(1)
+            .context("schedule count overflow")?;
         self.records.push(record);
         Ok(())
     }
 
-    pub fn is_empty(&self) -> bool { self.count == 0 }
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
+    }
 
     fn spill(&mut self) -> Result<()> {
-        if self.records.is_empty() { return Ok(()); }
+        if self.records.is_empty() {
+            return Ok(());
+        }
         // Total comparator order makes unstable sorting safe and avoids the
         // O(batch-size) scratch allocation used by stable slice sorting.
         self.records.sort_unstable_by(compare);
         let path = self.scratch.next();
-        let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
         let mut out = BufWriter::with_capacity(IO_BUFFER, file);
         // Drop the backing allocation after spilling: retaining a 64 MiB
         // Vec during multiway merge would undermine the configured cap.
@@ -154,19 +195,29 @@ impl ScheduleRuns {
                 self.runs.push(target);
                 // Free each merge group's inputs immediately, so the whole
                 // previous generation is not duplicated on scratch storage.
-                for file in files { fs::remove_file(file)?; }
+                for file in files {
+                    fs::remove_file(file)?;
+                }
             }
             pass += 1;
-            eprintln!("Gentian external sort: merge pass {pass}, {} runs", self.runs.len());
+            eprintln!(
+                "Gentian external sort: merge pass {pass}, {} runs",
+                self.runs.len()
+            );
         }
-        let Some(path) = self.runs.first() else { return Ok(()) };
+        let Some(path) = self.runs.first() else {
+            return Ok(());
+        };
         let mut input = BufReader::with_capacity(IO_BUFFER, File::open(path)?);
         let mut batch = Vec::new();
         let mut batch_bytes = 0usize;
         let mut processed = 0u64;
         while let Some(schedule) = read_record(&mut input, self.limit)? {
             let size = charge(&schedule);
-            ensure!(size <= self.limit / RECORD_DIVISOR, "schedule over per-record cap during merge");
+            ensure!(
+                size <= self.limit / RECORD_DIVISOR,
+                "schedule over per-record cap during merge"
+            );
             let boundary = batch.first().is_some_and(|a| !same_pattern(a, &schedule))
                 || batch_bytes > self.limit / 2 - size
                 || batch.len() >= MAX_BATCH_RECORDS;
@@ -178,8 +229,13 @@ impl ScheduleRuns {
             batch.push(schedule);
             processed += 1;
         }
-        ensure!(processed == self.count, "external sort lost or duplicated schedules");
-        if !batch.is_empty() { on_batch(batch)?; }
+        ensure!(
+            processed == self.count,
+            "external sort lost or duplicated schedules"
+        );
+        if !batch.is_empty() {
+            on_batch(batch)?;
+        }
         Ok(())
     }
 }
@@ -189,11 +245,15 @@ struct Entry {
     schedule: Schedule,
 }
 impl PartialEq for Entry {
-    fn eq(&self, other: &Self) -> bool { self.cmp(other) == Ordering::Equal }
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
 }
 impl Eq for Entry {}
 impl PartialOrd for Entry {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> { Some(self.cmp(other)) }
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 impl Ord for Entry {
     fn cmp(&self, other: &Self) -> Ordering {
@@ -202,21 +262,28 @@ impl Ord for Entry {
 }
 
 fn merge_files(paths: &[PathBuf], target: &Path, limit: usize) -> Result<()> {
-    let mut inputs = paths.iter().map(|p| {
-        File::open(p).map(|f| BufReader::with_capacity(IO_BUFFER, f))
-    }).collect::<std::io::Result<Vec<_>>>()?;
+    let mut inputs = paths
+        .iter()
+        .map(|p| File::open(p).map(|f| BufReader::with_capacity(IO_BUFFER, f)))
+        .collect::<std::io::Result<Vec<_>>>()?;
     let mut heap = BinaryHeap::<Reverse<Entry>>::new();
     for (run, input) in inputs.iter_mut().enumerate() {
         if let Some(schedule) = read_record(input, limit)? {
             heap.push(Reverse(Entry { run, schedule }));
         }
     }
-    let file = OpenOptions::new().write(true).create_new(true).open(target)?;
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)?;
     let mut output = BufWriter::with_capacity(IO_BUFFER, file);
     while let Some(Reverse(Entry { run, schedule })) = heap.pop() {
         write_record(&mut output, &schedule)?;
         if let Some(next) = read_record(&mut inputs[run], limit)? {
-            heap.push(Reverse(Entry { run, schedule: next }));
+            heap.push(Reverse(Entry {
+                run,
+                schedule: next,
+            }));
         }
     }
     output.flush()?;
@@ -224,9 +291,13 @@ fn merge_files(paths: &[PathBuf], target: &Path, limit: usize) -> Result<()> {
 }
 
 fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
-    ensure!(s.locations.len() == s.events.len(), "schedule stop count mismatch");
+    ensure!(
+        s.locations.len() == s.events.len(),
+        "schedule stop count mismatch"
+    );
     let len = 84usize
-        .checked_add(s.route_id.len()).and_then(|v| v.checked_add(s.trip_id.len()))
+        .checked_add(s.route_id.len())
+        .and_then(|v| v.checked_add(s.trip_id.len()))
         .and_then(|v| v.checked_add(s.events.len().checked_mul(20)?))
         .context("schedule record exceeds addressable memory")?;
     let len = u32::try_from(len).context("schedule record exceeds 4 GiB")?;
@@ -237,7 +308,9 @@ fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
     w.write_all(&u32::try_from(s.route_id.len())?.to_le_bytes())?;
     w.write_all(&u32::try_from(s.trip_id.len())?.to_le_bytes())?;
     w.write_all(&u32::try_from(s.events.len())?.to_le_bytes())?;
-    for word in s.days.words { w.write_all(&word.to_le_bytes())?; }
+    for word in s.days.words {
+        w.write_all(&word.to_le_bytes())?;
+    }
     w.write_all(s.route_id.as_bytes())?;
     w.write_all(s.trip_id.as_bytes())?;
     for (location, event) in s.locations.iter().zip(&s.events) {
@@ -251,30 +324,57 @@ fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
 
 fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     let mut size = [0u8; 4];
-    if r.read(&mut size[..1])? == 0 { return Ok(None); }
+    if r.read(&mut size[..1])? == 0 {
+        return Ok(None);
+    }
     r.read_exact(&mut size[1..])?;
     let payload = u32::from_le_bytes(size) as usize;
-    ensure!(payload >= 84 && payload <= limit / RECORD_DIVISOR,
-        "invalid or oversized sort-run record");
+    ensure!(
+        payload >= 84 && payload <= limit / RECORD_DIVISOR,
+        "invalid or oversized sort-run record"
+    );
     let mut reader = r.take(payload as u64);
-    fn u16le(r: &mut impl Read) -> Result<u16> { let mut b = [0; 2]; r.read_exact(&mut b)?; Ok(u16::from_le_bytes(b)) }
-    fn i16le(r: &mut impl Read) -> Result<i16> { let mut b = [0; 2]; r.read_exact(&mut b)?; Ok(i16::from_le_bytes(b)) }
-    fn u32le(r: &mut impl Read) -> Result<u32> { let mut b = [0; 4]; r.read_exact(&mut b)?; Ok(u32::from_le_bytes(b)) }
-    fn u64le(r: &mut impl Read) -> Result<u64> { let mut b = [0; 8]; r.read_exact(&mut b)?; Ok(u64::from_le_bytes(b)) }
-    fn i64le(r: &mut impl Read) -> Result<i64> { let mut b = [0; 8]; r.read_exact(&mut b)?; Ok(i64::from_le_bytes(b)) }
+    fn u16le(r: &mut impl Read) -> Result<u16> {
+        let mut b = [0; 2];
+        r.read_exact(&mut b)?;
+        Ok(u16::from_le_bytes(b))
+    }
+    fn i16le(r: &mut impl Read) -> Result<i16> {
+        let mut b = [0; 2];
+        r.read_exact(&mut b)?;
+        Ok(i16::from_le_bytes(b))
+    }
+    fn u32le(r: &mut impl Read) -> Result<u32> {
+        let mut b = [0; 4];
+        r.read_exact(&mut b)?;
+        Ok(u32::from_le_bytes(b))
+    }
+    fn u64le(r: &mut impl Read) -> Result<u64> {
+        let mut b = [0; 8];
+        r.read_exact(&mut b)?;
+        Ok(u64::from_le_bytes(b))
+    }
+    fn i64le(r: &mut impl Read) -> Result<i64> {
+        let mut b = [0; 8];
+        r.read_exact(&mut b)?;
+        Ok(i64::from_le_bytes(b))
+    }
     let source = u16le(&mut reader)?;
     let route_type = i16le(&mut reader)?;
     let first_second = u32le(&mut reader)?;
     let route_len = u32le(&mut reader)? as usize;
     let trip_len = u32le(&mut reader)? as usize;
     let stops = u32le(&mut reader)? as usize;
-    let expected = 84usize.checked_add(route_len)
+    let expected = 84usize
+        .checked_add(route_len)
         .and_then(|n| n.checked_add(trip_len))
         .and_then(|n| n.checked_add(stops.checked_mul(20)?))
         .context("invalid sort-run record lengths")?;
     ensure!(expected == payload, "malformed sort-run record length");
     let mut words = [0u64; 8];
-    for word in &mut words { *word = u64le(&mut reader)?; }
+    for word in &mut words {
+        *word = u64le(&mut reader)?;
+    }
     let mut route = vec![0u8; route_len];
     reader.read_exact(&mut route)?;
     let route_id = String::from_utf8(route).context("invalid route ID in run")?;
@@ -286,12 +386,22 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     for _ in 0..stops {
         let stop = LocationIdx(u32le(&mut reader)?);
         locations.push(stop);
-        events.push(Event { stop, arrival: i64le(&mut reader)?, departure: i64le(&mut reader)? });
+        events.push(Event {
+            stop,
+            arrival: i64le(&mut reader)?,
+            departure: i64le(&mut reader)?,
+        });
     }
     ensure!(reader.limit() == 0, "trailing bytes in schedule record");
     Ok(Some(Schedule {
-        trip_id, source, route_id, route_type, locations, events,
-        first_second, days: TrafficDays { words },
+        trip_id,
+        source,
+        route_id,
+        route_type,
+        locations,
+        events,
+        first_second,
+        days: TrafficDays { words },
     }))
 }
 
@@ -300,13 +410,22 @@ mod tests {
     use super::*;
     fn sample(id: &str, second: u32, stops: &[u32]) -> Schedule {
         Schedule {
-            trip_id: id.into(), source: 0, route_id: "R".into(), route_type: 3,
+            trip_id: id.into(),
+            source: 0,
+            route_id: "R".into(),
+            route_type: 3,
             locations: stops.iter().copied().map(LocationIdx).collect(),
-            events: stops.iter().enumerate().map(|(i, &stop)| Event {
-                stop: LocationIdx(stop), arrival: (i as i64) * 120,
-                departure: (i as i64) * 120,
-            }).collect(),
-            first_second: second, days: TrafficDays::default(),
+            events: stops
+                .iter()
+                .enumerate()
+                .map(|(i, &stop)| Event {
+                    stop: LocationIdx(stop),
+                    arrival: (i as i64) * 120,
+                    departure: (i as i64) * 120,
+                })
+                .collect(),
+            first_second: second,
+            days: TrafficDays::default(),
         }
     }
 
@@ -325,7 +444,12 @@ mod tests {
         sorter.push(extra).unwrap();
         original.sort_by(compare);
         let mut actual = Vec::new();
-        sorter.consume(|batch| { actual.extend(batch); Ok(()) }).unwrap();
+        sorter
+            .consume(|batch| {
+                actual.extend(batch);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(actual.len(), original.len());
         for (a, b) in actual.iter().zip(&original) {
             assert_eq!(compare(a, b), Ordering::Equal);
@@ -340,19 +464,26 @@ mod tests {
         let root = std::env::temp_dir().join(format!("gentian-sort-test-{}", uuid::Uuid::new_v4()));
         let mut sorter = ScheduleRuns::new(&root, 1).unwrap();
         for i in (0..8_000).rev() {
-            sorter.push(sample(&format!("trip-{i:05}"), i * 10, &[0, 1])).unwrap();
+            sorter
+                .push(sample(&format!("trip-{i:05}"), i * 10, &[0, 1]))
+                .unwrap();
         }
         let mut batches = 0;
         let mut departures = Vec::new();
-        sorter.consume(|batch| {
-            assert!(!batch.is_empty());
-            batches += 1;
-            for schedule in batch {
-                departures.push(schedule.first_second);
-            }
-            Ok(())
-        }).unwrap();
-        assert!(batches >= 2, "an oversized pattern must be assembled in multiple batches");
+        sorter
+            .consume(|batch| {
+                assert!(!batch.is_empty());
+                batches += 1;
+                for schedule in batch {
+                    departures.push(schedule.first_second);
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert!(
+            batches >= 2,
+            "an oversized pattern must be assembled in multiple batches"
+        );
         assert_eq!(departures, (0..8_000).map(|i| i * 10).collect::<Vec<_>>());
         fs::remove_dir(root).unwrap();
     }

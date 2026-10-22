@@ -10,60 +10,83 @@ pub struct MappedTimetable {
 
 impl MappedTimetable {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = File::open(path)
-            .with_context(|| format!("opening timetable {}", path.display()))?;
+        let file =
+            File::open(path).with_context(|| format!("opening timetable {}", path.display()))?;
         let bytes = unsafe { MmapOptions::new().map(&file) }
             .with_context(|| format!("mapping timetable {}", path.display()))?;
         let validated_header = ZeroCopyTimetable::new(&bytes)
             .with_context(|| format!("validating timetable {}", path.display()))?
             .validated_header();
-        Ok(Self { bytes, validated_header })
+        Ok(Self {
+            bytes,
+            validated_header,
+        })
     }
 
     pub fn view(&self) -> std::result::Result<ZeroCopyTimetable<'_>, FormatError> {
-        Ok(ZeroCopyTimetable::from_validated_header(&self.bytes, self.validated_header))
+        Ok(ZeroCopyTimetable::from_validated_header(
+            &self.bytes,
+            self.validated_header,
+        ))
     }
 }
 
 /// Publish a timetable only after its streamed representation has been
 /// flushed, synced and validated through the same mmap reader as Edelweiss.
 /// A unique sibling avoids collisions between concurrent Gentian compilers.
-pub fn publish(tt: &crate::routing_common::timetable::TimetableOwned, output: &Path) -> Result<u64> {
+pub fn publish(
+    tt: &crate::routing_common::timetable::TimetableOwned,
+    output: &Path,
+) -> Result<u64> {
     use std::fs::{self, OpenOptions};
     use std::io::BufWriter;
 
-    let dir = output.parent().filter(|p| !p.as_os_str().is_empty())
+    let dir = output
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    fs::create_dir_all(dir)
-        .with_context(|| format!("creating {}", dir.display()))?;
-    let name = output.file_name().context("timetable output has no file name")?;
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let name = output
+        .file_name()
+        .context("timetable output has no file name")?;
     let name = name.to_string_lossy();
 
     let mut last_error = None;
     for _ in 0..8 {
         let temporary = dir.join(format!(".{name}.{}.building", uuid::Uuid::new_v4()));
-        let file = match OpenOptions::new().write(true).create_new(true).open(&temporary) {
+        let file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 last_error = Some(error);
                 continue;
             }
-            Err(error) => return Err(error).with_context(|| format!("creating {}", temporary.display())),
+            Err(error) => {
+                return Err(error).with_context(|| format!("creating {}", temporary.display()));
+            }
         };
 
         // Cleanup on every early return, including validation and rename failure.
         struct Cleanup(std::path::PathBuf);
         impl Drop for Cleanup {
-            fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
         }
         let cleanup = Cleanup(temporary.clone());
 
         let mut writer = BufWriter::new(file);
-        let bytes = tt.write_to(&mut writer)
+        let bytes = tt
+            .write_to(&mut writer)
             .with_context(|| format!("serializing {}", temporary.display()))?;
-        let file = writer.into_inner()
+        let file = writer
+            .into_inner()
             .map_err(|e| anyhow::anyhow!("flushing {}: {}", temporary.display(), e))?;
-        file.sync_all().with_context(|| format!("syncing {}", temporary.display()))?;
+        file.sync_all()
+            .with_context(|| format!("syncing {}", temporary.display()))?;
         drop(file);
 
         let mapped = MappedTimetable::open(&temporary)?;
@@ -71,11 +94,15 @@ pub fn publish(tt: &crate::routing_common::timetable::TimetableOwned, output: &P
         fs::rename(&temporary, output)
             .with_context(|| format!("publishing {}", output.display()))?;
         #[cfg(unix)]
-        File::open(dir)?.sync_all().with_context(|| format!("syncing {}", dir.display()))?;
+        File::open(dir)?
+            .sync_all()
+            .with_context(|| format!("syncing {}", dir.display()))?;
         drop(cleanup);
         return Ok(bytes);
     }
-    Err(last_error.context("could not allocate a unique temporary timetable path")?.into())
+    Err(last_error
+        .context("could not allocate a unique temporary timetable path")?
+        .into())
 }
 
 #[cfg(test)]
@@ -83,9 +110,8 @@ mod tests {
     use super::*;
     #[test]
     fn publishing_keeps_existing_file_on_serialization_failure() {
-        let directory = std::env::temp_dir().join(format!(
-            "gentian-publish-test-{}", uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("gentian-publish-test-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let path = directory.join("routing.bin");
         let old = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10);
@@ -99,7 +125,15 @@ mod tests {
 
         let next = crate::routing_common::timetable::TimetableOwned::empty(20_010, 35);
         publish(&next, &path).unwrap();
-        assert_eq!(MappedTimetable::open(&path).unwrap().view().unwrap().header().day_count, 35);
+        assert_eq!(
+            MappedTimetable::open(&path)
+                .unwrap()
+                .view()
+                .unwrap()
+                .header()
+                .day_count,
+            35
+        );
         let leftovers: Vec<_> = std::fs::read_dir(&directory).unwrap().collect();
         assert_eq!(leftovers.len(), 1, "scratch files must be removed");
         std::fs::remove_dir_all(directory).unwrap();
@@ -118,7 +152,10 @@ mod tests {
             assert_eq!(view.header().version, expected.header().version);
             assert_eq!(view.header().day_count, expected.header().day_count);
             assert_eq!(view.coordinates().len(), expected.coordinates().len());
-            assert_eq!(view.route_transport_ranges().len(), expected.route_transport_ranges().len());
+            assert_eq!(
+                view.route_transport_ranges().len(),
+                expected.route_transport_ranges().len()
+            );
         }
         drop(mapped);
         std::fs::remove_file(path).unwrap();
@@ -128,7 +165,8 @@ mod tests {
     fn rejects_invalid_timetable_before_caching_header() {
         let path = std::env::temp_dir().join(format!("gentian-mmap-{}", uuid::Uuid::new_v4()));
         let mut encoded = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10)
-            .encode().unwrap();
+            .encode()
+            .unwrap();
         encoded[0] ^= 0xff;
         std::fs::write(&path, encoded).unwrap();
         assert!(MappedTimetable::open(&path).is_err());

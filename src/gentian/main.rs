@@ -6,9 +6,9 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use clap::Parser;
 use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
+use clap::Parser;
 use postgres::{Client, NoTls};
 mod compile;
 mod external_assembly;
@@ -17,7 +17,11 @@ mod footpaths;
 mod transfer_rules;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about = "Compile regional RAPTOR timetables with native OSR footpaths")]
+#[command(
+    author,
+    version,
+    about = "Compile regional RAPTOR timetables with native OSR footpaths"
+)]
 struct Args {
     /// Output V4 seconds-precision binary. Optional when only listing selected chateaux.
     #[arg(short, long)]
@@ -31,7 +35,11 @@ struct Args {
     day_count: u32,
 
     /// Register sources as CHATEAU,ONESTOP_FEED_ID,ATTEMPT_ID; repeatable.
-    #[arg(long = "source", value_name = "CHATEAU,FEED,ATTEMPT", conflicts_with = "region")]
+    #[arg(
+        long = "source",
+        value_name = "CHATEAU,FEED,ATTEMPT",
+        conflicts_with = "region"
+    )]
     sources: Vec<String>,
 
     /// Resolve this configured region through PostGIS, including whole chateaux.
@@ -93,7 +101,9 @@ fn main() -> Result<()> {
     }
     let selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
-        let url = args.database_url.as_deref()
+        let url = args
+            .database_url
+            .as_deref()
             .context("--database-url or DATABASE_URL is required with --region")?;
         let mut client = Client::connect(url, NoTls)
             .context("connecting to Postgres to resolve routing region")?;
@@ -110,33 +120,56 @@ fn main() -> Result<()> {
 
     if args.build {
         let selection = selection.as_ref().context("--region is required")?;
-        let url = args.database_url.as_deref().context("DATABASE_URL is required")?;
+        let url = args
+            .database_url
+            .as_deref()
+            .context("DATABASE_URL is required")?;
         let mut client = Client::connect(url, NoTls)?;
-        let output = args.output.as_ref().context("--output is required with --build")?;
-        let osr_dir = args.osr_dir.as_deref()
+        let output = args
+            .output
+            .as_ref()
+            .context("--output is required with --build")?;
+        let osr_dir = args
+            .osr_dir
+            .as_deref()
             .context("--osr-dir is required for native OSR transfer compilation")?;
         compile::build(
-            &mut client, &selection.sources, args.first_utc_day, args.day_count,
-            osr_dir, args.max_seconds, args.candidate_meters, output,
-            args.scratch_dir.as_deref(), args.schedule_memory_mib,
+            &mut client,
+            &selection.sources,
+            args.first_utc_day,
+            args.day_count,
+            osr_dir,
+            args.max_seconds,
+            args.candidate_meters,
+            output,
+            args.scratch_dir.as_deref(),
+            args.schedule_memory_mib,
         )?;
         return file_sizes::print_published(&selection.id, output);
     }
     let output = args.output.as_ref().context("--output is required")?;
     let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
     if let Some(selection) = &selection {
-        ensure!(!selection.chateaux.is_empty(),
-            "routing region {} intersects no chateaux", selection.id);
-        ensure!(!selection.sources.is_empty(),
-            "routing region {} has no completed production GTFS imports", selection.id);
+        ensure!(
+            !selection.chateaux.is_empty(),
+            "routing region {} intersects no chateaux",
+            selection.id
+        );
+        ensure!(
+            !selection.sources.is_empty(),
+            "routing region {} has no completed production GTFS imports",
+            selection.id
+        );
         for source in &selection.sources {
             tt.add_source(&source.chateau, &source.onestop_feed_id, &source.attempt_id)?;
         }
     } else {
         for value in &args.sources {
             let components: Vec<_> = value.splitn(3, ',').collect();
-            ensure!(components.len() == 3 && components.iter().all(|x| !x.is_empty()),
-                "invalid --source: expected CHATEAU,FEED,ATTEMPT");
+            ensure!(
+                components.len() == 3 && components.iter().all(|x| !x.is_empty()),
+                "invalid --source: expected CHATEAU,FEED,ATTEMPT"
+            );
             tt.add_source(components[0], components[1], components[2])?;
         }
     }
@@ -144,7 +177,8 @@ fn main() -> Result<()> {
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!(
         "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
-        bytes, tt.sources.len()
+        bytes,
+        tt.sources.len()
     );
     if let Some(selection) = &selection {
         file_sizes::print_published(&selection.id, output)?;

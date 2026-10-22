@@ -35,29 +35,43 @@ strong_idx! {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
-pub struct TrafficDays { pub words: [u64; 8] }
+pub struct TrafficDays {
+    pub words: [u64; 8],
+}
 impl TrafficDays {
     pub fn test(&self, d: usize) -> bool {
         d < MAX_DAYS && self.words[d / 64] & (1 << (d % 64)) != 0
     }
     pub fn set(&mut self, d: usize, active: bool) -> Result<(), FormatError> {
-        if d >= MAX_DAYS { return Err(FormatError::Index); }
+        if d >= MAX_DAYS {
+            return Err(FormatError::Index);
+        }
         let bit = 1_u64 << (d % 64);
-        if active { self.words[d / 64] |= bit; } else { self.words[d / 64] &= !bit; }
+        if active {
+            self.words[d / 64] |= bit;
+        } else {
+            self.words[d / 64] &= !bit;
+        }
         Ok(())
     }
     pub fn or_assign(&mut self, rhs: &Self) {
-        for (a,b) in self.words.iter_mut().zip(rhs.words) { *a |= b; }
+        for (a, b) in self.words.iter_mut().zip(rhs.words) {
+            *a |= b;
+        }
     }
     pub fn shift_left(&self, days: usize) -> Self {
         let mut out = Self::default();
-        if days >= MAX_DAYS { return out; }
+        if days >= MAX_DAYS {
+            return out;
+        }
         let word = days / 64;
         let rem = days % 64;
         for i in 0..8 {
-            if i + word < 8 { out.words[i+word] |= self.words[i] << rem; }
+            if i + word < 8 {
+                out.words[i + word] |= self.words[i] << rem;
+            }
             if rem > 0 && i + word + 1 < 8 {
-                out.words[i+word+1] |= self.words[i] >> (64-rem);
+                out.words[i + word + 1] |= self.words[i] >> (64 - rem);
             }
         }
         out
@@ -69,17 +83,39 @@ impl TrafficDays {
 pub struct PackedStop(pub u32);
 impl PackedStop {
     pub const LOCATION_MASK: u32 = (1 << 28) - 1;
-    pub fn new(loc: LocationIdx, inbound: bool, outbound: bool,
-               wheelchair_in: bool, wheelchair_out: bool) -> Result<Self, FormatError> {
-        if loc.0 > Self::LOCATION_MASK { return Err(FormatError::Index); }
-        Ok(Self(loc.0 | (u32::from(inbound) << 28) | (u32::from(outbound) << 29)
-            | (u32::from(wheelchair_in) << 30) | (u32::from(wheelchair_out) << 31)))
+    pub fn new(
+        loc: LocationIdx,
+        inbound: bool,
+        outbound: bool,
+        wheelchair_in: bool,
+        wheelchair_out: bool,
+    ) -> Result<Self, FormatError> {
+        if loc.0 > Self::LOCATION_MASK {
+            return Err(FormatError::Index);
+        }
+        Ok(Self(
+            loc.0
+                | (u32::from(inbound) << 28)
+                | (u32::from(outbound) << 29)
+                | (u32::from(wheelchair_in) << 30)
+                | (u32::from(wheelchair_out) << 31),
+        ))
     }
-    pub fn location(self) -> LocationIdx { LocationIdx(self.0 & Self::LOCATION_MASK) }
-    pub fn inbound(self) -> bool { self.0 & (1 << 28) != 0 }
-    pub fn outbound(self) -> bool { self.0 & (1 << 29) != 0 }
-    pub fn wheelchair_in(self) -> bool { self.0 & (1 << 30) != 0 }
-    pub fn wheelchair_out(self) -> bool { self.0 & (1 << 31) != 0 }
+    pub fn location(self) -> LocationIdx {
+        LocationIdx(self.0 & Self::LOCATION_MASK)
+    }
+    pub fn inbound(self) -> bool {
+        self.0 & (1 << 28) != 0
+    }
+    pub fn outbound(self) -> bool {
+        self.0 & (1 << 29) != 0
+    }
+    pub fn wheelchair_in(self) -> bool {
+        self.0 & (1 << 30) != 0
+    }
+    pub fn wheelchair_out(self) -> bool {
+        self.0 & (1 << 31) != 0
+    }
 }
 /// Catenary v3: 32-bit location index + 32-bit walking duration in seconds.
 /// Using a u64 instead of Nigiri's 23+9 packed u32 prevents truncating transfers
@@ -94,8 +130,12 @@ impl PackedFootpath {
         }
         Ok(Self(u64::from(target.0) | (u64::from(seconds) << 32)))
     }
-    pub fn target(self) -> LocationIdx { LocationIdx(self.0 as u32) }
-    pub fn seconds(self) -> u32 { (self.0 >> 32) as u32 }
+    pub fn target(self) -> LocationIdx {
+        LocationIdx(self.0 as u32)
+    }
+    pub fn seconds(self) -> u32 {
+        (self.0 >> 32) as u32
+    }
 }
 /// Catenary v3: 5-bit day offset plus second-of-day in the upper bits.
 /// Supports up to 31 days and 23:59:59, preserving exact GTFS seconds.
@@ -113,28 +153,59 @@ impl Delta {
         Ok(Self((seconds_after_midnight << 5) | u32::from(days)))
     }
     pub fn from_seconds(seconds: u32) -> Result<Self, FormatError> {
-        if seconds > Self::MAX_SECONDS { return Err(FormatError::Index); }
-        Self::new((seconds / Self::SECONDS_PER_DAY) as u16,
-                  seconds % Self::SECONDS_PER_DAY)
+        if seconds > Self::MAX_SECONDS {
+            return Err(FormatError::Index);
+        }
+        Self::new(
+            (seconds / Self::SECONDS_PER_DAY) as u16,
+            seconds % Self::SECONDS_PER_DAY,
+        )
     }
-    pub fn days(self) -> u16 { (self.0 & 31) as u16 }
-    pub fn seconds_after_midnight(self) -> u32 { self.0 >> 5 }
+    pub fn days(self) -> u16 {
+        (self.0 & 31) as u16
+    }
+    pub fn seconds_after_midnight(self) -> u32 {
+        self.0 >> 5
+    }
     pub fn seconds(self) -> u32 {
         u32::from(self.days()) * Self::SECONDS_PER_DAY + self.seconds_after_midnight()
     }
 }
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RouteFlag { BikesAllowed, CarsAllowed, WheelchairAccessible, ReservationNotRequired }
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Clasz {
-    Air, HighSpeed, LongDistance, Coach, Night, RideSharing, Regional,
-    Suburban, Subway, Tram, Bus, Ship, Odm, Funicular, AerialLift, Other
+pub enum RouteFlag {
+    BikesAllowed,
+    CarsAllowed,
+    WheelchairAccessible,
+    ReservationNotRequired,
 }
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum LocationType { GeneratedTrack, Track, Station }
+pub enum Clasz {
+    Air,
+    HighSpeed,
+    LongDistance,
+    Coach,
+    Night,
+    RideSharing,
+    Regional,
+    Suburban,
+    Subway,
+    Tram,
+    Bus,
+    Ship,
+    Odm,
+    Funicular,
+    AerialLift,
+    Other,
+}
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocationType {
+    GeneratedTrack,
+    Track,
+    Station,
+}
 /// A source-scoped GTFS stop-pair transfer constraint (v4).
 /// Identifiers use compiled LocationIdx, never unqualified GTFS stop IDs.
 /// A blocked rule applies to vehicle changes, not to physical pedestrian access.
@@ -148,11 +219,16 @@ pub struct StationTransferRule {
     pub flags: u32,
 }
 impl StationTransferRule {
-    pub fn prohibited(self) -> bool { self.flags & 1 != 0 }
+    pub fn prohibited(self) -> bool {
+        self.flags & 1 != 0
+    }
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-pub struct Range { pub from: u32, pub to: u32 }
+pub struct Range {
+    pub from: u32,
+    pub to: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct TripTransportRange {
@@ -162,10 +238,16 @@ pub struct TripTransportRange {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Pod, Zeroable)]
-pub struct Coordinate { pub lat: f32, pub lon: f32 }
+pub struct Coordinate {
+    pub lat: f32,
+    pub lon: f32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Pod, Zeroable)]
-pub struct StringRef { pub offset: u32, pub len: u32 }
+pub struct StringRef {
+    pub offset: u32,
+    pub len: u32,
+}
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
 pub struct SourceRecord {
@@ -192,13 +274,26 @@ pub struct RouteIdRecord {
 }
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Pod, Zeroable)]
-pub struct Section { pub offset: u64, pub count: u64 }
+pub struct Section {
+    pub offset: u64,
+    pub count: u64,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormatError {
-    Magic, Version, Truncated, Alignment, Overflow, Index, Layout, Utf8, SourceOverflow,
+    Magic,
+    Version,
+    Truncated,
+    Alignment,
+    Overflow,
+    Index,
+    Layout,
+    Utf8,
+    SourceOverflow,
 }
 impl fmt::Display for FormatError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self:?}") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 impl std::error::Error for FormatError {}
 
@@ -297,7 +392,9 @@ macro_rules! columns {
     }
 }
 fn push<T: Pod>(b: &mut Vec<u8>, a: &[T]) -> Result<Section, FormatError> {
-    while b.len() % 8 != 0 { b.push(0); }
+    while b.len() % 8 != 0 {
+        b.push(0);
+    }
     let offset = u64::try_from(b.len()).map_err(|_| FormatError::Overflow)?;
     let count = u64::try_from(a.len()).map_err(|_| FormatError::Overflow)?;
     b.extend_from_slice(bytemuck::cast_slice(a));
@@ -312,7 +409,9 @@ fn write_section<W: std::io::Write + std::io::Seek, T: Pod>(
     let at = output.stream_position()?;
     let padding = ((8 - at % 8) % 8) as usize;
     output.write_all(&[0u8; 8][..padding])?;
-    let offset = at.checked_add(padding as u64).ok_or(FormatError::Overflow)?;
+    let offset = at
+        .checked_add(padding as u64)
+        .ok_or(FormatError::Overflow)?;
     let count = u64::try_from(values.len()).map_err(|_| FormatError::Overflow)?;
     output.write_all(bytemuck::cast_slice(values))?;
     Ok(Section { offset, count })
@@ -320,11 +419,17 @@ fn write_section<W: std::io::Write + std::io::Seek, T: Pod>(
 
 fn view<'a, T: Pod>(b: &'a [u8], sec: Section) -> Result<&'a [T], FormatError> {
     let at = usize::try_from(sec.offset).map_err(|_| FormatError::Overflow)?;
-    let n = usize::try_from(sec.count).map_err(|_| FormatError::Overflow)?
-        .checked_mul(std::mem::size_of::<T>()).ok_or(FormatError::Overflow)?;
+    let n = usize::try_from(sec.count)
+        .map_err(|_| FormatError::Overflow)?
+        .checked_mul(std::mem::size_of::<T>())
+        .ok_or(FormatError::Overflow)?;
     let end = at.checked_add(n).ok_or(FormatError::Overflow)?;
-    if at < std::mem::size_of::<TimetableHeader>() { return Err(FormatError::Layout); }
-    if end > b.len() { return Err(FormatError::Truncated); }
+    if at < std::mem::size_of::<TimetableHeader>() {
+        return Err(FormatError::Layout);
+    }
+    if end > b.len() {
+        return Err(FormatError::Truncated);
+    }
     bytemuck::try_cast_slice(&b[at..end]).map_err(|_| FormatError::Alignment)
 }
 
@@ -387,7 +492,11 @@ columns! {
 
 impl TimetableOwned {
     pub fn empty(first_utc_day: i32, day_count: u32) -> Self {
-        let mut tt = Self { first_utc_day, day_count, ..Self::default() };
+        let mut tt = Self {
+            first_utc_day,
+            day_count,
+            ..Self::default()
+        };
         tt.bitfields.push(TrafficDays::default()); // Nigiri empty bitfield #0
         tt.location_routes_offsets.push(0);
         tt.footpaths_out_offsets.push(0);
@@ -413,41 +522,69 @@ impl TimetableOwned {
     /// SourceIdx is intentionally a feed/import index, not an agency index.
     /// A château containing two feeds registers two distinct sources.
     /// Source ordering is determined by the future compiler's registration order.
-    pub fn add_source(&mut self, chateau: &str, feed: &str, attempt: &str)
-        -> Result<SourceIdx, FormatError>
-    {
+    pub fn add_source(
+        &mut self,
+        chateau: &str,
+        feed: &str,
+        attempt: &str,
+    ) -> Result<SourceIdx, FormatError> {
         for (i, s) in self.sources.iter().enumerate() {
             if self.string(s.chateau) == Some(chateau)
                 && self.string(s.onestop_feed_id) == Some(feed)
-                && self.string(s.attempt_id) == Some(attempt) {
+                && self.string(s.attempt_id) == Some(attempt)
+            {
                 return Ok(SourceIdx(i as u16));
             }
         }
         let idx = u16::try_from(self.sources.len()).map_err(|_| FormatError::SourceOverflow)?;
-        if idx == u16::MAX { return Err(FormatError::SourceOverflow); }
+        if idx == u16::MAX {
+            return Err(FormatError::SourceOverflow);
+        }
         let chateau = self.add_string(chateau)?;
         let onestop_feed_id = self.add_string(feed)?;
         let attempt_id = self.add_string(attempt)?;
-        self.sources.push(SourceRecord { chateau, onestop_feed_id, attempt_id });
+        self.sources.push(SourceRecord {
+            chateau,
+            onestop_feed_id,
+            attempt_id,
+        });
         self.source_end_days.push(0);
         Ok(SourceIdx(idx))
     }
-    pub fn add_trip_id(&mut self, source: SourceIdx, trip: TripIdx, raw_id: &str)
-        -> Result<TripIdIdx, FormatError>
-    {
-        if source.idx() >= self.sources.len() { return Err(FormatError::Index); }
+    pub fn add_trip_id(
+        &mut self,
+        source: SourceIdx,
+        trip: TripIdx,
+        raw_id: &str,
+    ) -> Result<TripIdIdx, FormatError> {
+        if source.idx() >= self.sources.len() {
+            return Err(FormatError::Index);
+        }
         let idx = u32::try_from(self.trip_ids.len()).map_err(|_| FormatError::Overflow)?;
         let id = self.add_string(raw_id)?;
-        self.trip_ids.push(TripIdRecord { trip, id, source, reserved: 0 });
+        self.trip_ids.push(TripIdRecord {
+            trip,
+            id,
+            source,
+            reserved: 0,
+        });
         Ok(TripIdIdx(idx))
     }
-    pub fn add_route_id(&mut self, source: SourceIdx, raw_id: &str)
-        -> Result<RouteIdIdx, FormatError>
-    {
-        if source.idx() >= self.sources.len() { return Err(FormatError::Index); }
+    pub fn add_route_id(
+        &mut self,
+        source: SourceIdx,
+        raw_id: &str,
+    ) -> Result<RouteIdIdx, FormatError> {
+        if source.idx() >= self.sources.len() {
+            return Err(FormatError::Index);
+        }
         let idx = u32::try_from(self.route_ids.len()).map_err(|_| FormatError::Overflow)?;
         let id = self.add_string(raw_id)?;
-        self.route_ids.push(RouteIdRecord { id, source, reserved: 0 });
+        self.route_ids.push(RouteIdRecord {
+            id,
+            source,
+            reserved: 0,
+        });
         Ok(RouteIdIdx(idx))
     }
 }
@@ -458,20 +595,27 @@ fn get_string(pool: &[u8], r: StringRef) -> Option<&str> {
 }
 fn csr(o: &[u32], n: usize, rows: usize) -> Result<(), FormatError> {
     if o.len() != rows.checked_add(1).ok_or(FormatError::Overflow)?
-        || o.first() != Some(&0) || o.last().copied().map(|x| x as usize) != Some(n)
+        || o.first() != Some(&0)
+        || o.last().copied().map(|x| x as usize) != Some(n)
         || o.windows(2).any(|w| w[0] > w[1])
-    { return Err(FormatError::Layout); }
+    {
+        return Err(FormatError::Layout);
+    }
     Ok(())
 }
 impl ZeroCopyTimetable<'_> {
     /// Sparse, sorted stop-pair interchange constraints. Unlisted stop pairs
     /// inherit the timetable's per-location minimum transfer times.
-    pub fn station_transfer_rule(&self, from: LocationIdx, to: LocationIdx)
-        -> Option<StationTransferRule>
-    {
+    pub fn station_transfer_rule(
+        &self,
+        from: LocationIdx,
+        to: LocationIdx,
+    ) -> Option<StationTransferRule> {
         let rules = self.station_transfer_rules();
-        rules.binary_search_by_key(&(from.0, to.0), |r| (r.from.0, r.to.0))
-            .ok().map(|idx| rules[idx])
+        rules
+            .binary_search_by_key(&(from.0, to.0), |r| (r.from.0, r.to.0))
+            .ok()
+            .map(|idx| rules[idx])
     }
 }
 impl ZeroCopyTimetable<'_> {
@@ -479,17 +623,30 @@ impl ZeroCopyTimetable<'_> {
         let n = self.coordinates().len();
         let r = self.route_transport_ranges().len();
         let t = self.transport_route().len();
-        let trips = self.trip_transport_offsets().len().checked_sub(1)
+        let trips = self
+            .trip_transport_offsets()
+            .len()
+            .checked_sub(1)
             .ok_or(FormatError::Layout)?;
         let src = self.sources().len();
-        if src >= u16::MAX as usize || self.source_end_days().len() != src
+        if src >= u16::MAX as usize
+            || self.source_end_days().len() != src
             || self.bitfields().first() != Some(&TrafficDays::default())
-        { return Err(FormatError::Layout); }
+        {
+            return Err(FormatError::Layout);
+        }
         for len in [
-            self.location_id().len(), self.location_source().len(),
-            self.location_name().len(), self.location_parent().len(),
-            self.location_type().len(), self.location_transfer_seconds().len()
-        ] { if len != n { return Err(FormatError::Layout); } }
+            self.location_id().len(),
+            self.location_source().len(),
+            self.location_name().len(),
+            self.location_parent().len(),
+            self.location_type().len(),
+            self.location_transfer_seconds().len(),
+        ] {
+            if len != n {
+                return Err(FormatError::Layout);
+            }
+        }
         let mut previous = None;
         for rule in self.station_transfer_rules() {
             if rule.from.idx() >= n || rule.to.idx() >= n || rule.flags > 1 {
@@ -501,76 +658,152 @@ impl ZeroCopyTimetable<'_> {
             }
             previous = Some(key);
         }
-        csr(self.location_routes_offsets(),self.location_routes().len(),n)?;
-        csr(self.footpaths_out_offsets(),self.footpaths_out().len(),n)?;
-        csr(self.footpaths_in_offsets(),self.footpaths_in().len(),n)?;
-        csr(self.route_stop_offsets(),self.route_stops().len(),r)?;
-        csr(self.route_section_clasz_offsets(),self.route_section_clasz().len(),r)?;
-        csr(self.section_flag_offsets(),self.route_section_clasz().len(),r)?;
-        for len in [self.route_clasz().len(),
-                    self.route_traffic_days().len()] {
-            if len != r { return Err(FormatError::Layout); }
-        }
-        for len in [self.transport_traffic_days().len(),
-                    self.transport_timing_profile().len(),
-                    self.transport_first_dep_offset().len(),
-                    self.transport_initial_day_offset().len()] {
-            if len != t { return Err(FormatError::Layout); }
-        }
-        csr(self.trip_transport_offsets(),self.trip_transport_ranges().len(),trips)?;
-        csr(self.transport_to_trip_section_offsets(),self.transport_to_trip_section().len(),t)?;
-        if self.merged_trip_offsets().first() != Some(&0)
-            || self.merged_trip_offsets().last().copied().map(|x| x as usize)
-                != Some(self.merged_trips().len())
-            || self.merged_trip_offsets().windows(2).any(|w| w[0] > w[1])
-        { return Err(FormatError::Layout); }
-        if self.trip_public_route_ids().len() != trips { return Err(FormatError::Layout); }
-        let pool = self.string_pool();
-        for entry in self.sources() {
-            for strref in [entry.chateau,entry.onestop_feed_id,entry.attempt_id] {
-                if get_string(pool,strref).is_none() { return Err(FormatError::Utf8); }
+        csr(
+            self.location_routes_offsets(),
+            self.location_routes().len(),
+            n,
+        )?;
+        csr(self.footpaths_out_offsets(), self.footpaths_out().len(), n)?;
+        csr(self.footpaths_in_offsets(), self.footpaths_in().len(), n)?;
+        csr(self.route_stop_offsets(), self.route_stops().len(), r)?;
+        csr(
+            self.route_section_clasz_offsets(),
+            self.route_section_clasz().len(),
+            r,
+        )?;
+        csr(
+            self.section_flag_offsets(),
+            self.route_section_clasz().len(),
+            r,
+        )?;
+        for len in [self.route_clasz().len(), self.route_traffic_days().len()] {
+            if len != r {
+                return Err(FormatError::Layout);
             }
         }
-        for strref in self.location_id().iter().chain(self.location_name())
-            .chain(self.timezone_names()) {
-            if get_string(pool,*strref).is_none() { return Err(FormatError::Utf8); }
+        for len in [
+            self.transport_traffic_days().len(),
+            self.transport_timing_profile().len(),
+            self.transport_first_dep_offset().len(),
+            self.transport_initial_day_offset().len(),
+        ] {
+            if len != t {
+                return Err(FormatError::Layout);
+            }
+        }
+        csr(
+            self.trip_transport_offsets(),
+            self.trip_transport_ranges().len(),
+            trips,
+        )?;
+        csr(
+            self.transport_to_trip_section_offsets(),
+            self.transport_to_trip_section().len(),
+            t,
+        )?;
+        if self.merged_trip_offsets().first() != Some(&0)
+            || self
+                .merged_trip_offsets()
+                .last()
+                .copied()
+                .map(|x| x as usize)
+                != Some(self.merged_trips().len())
+            || self.merged_trip_offsets().windows(2).any(|w| w[0] > w[1])
+        {
+            return Err(FormatError::Layout);
+        }
+        if self.trip_public_route_ids().len() != trips {
+            return Err(FormatError::Layout);
+        }
+        let pool = self.string_pool();
+        for entry in self.sources() {
+            for strref in [entry.chateau, entry.onestop_feed_id, entry.attempt_id] {
+                if get_string(pool, strref).is_none() {
+                    return Err(FormatError::Utf8);
+                }
+            }
+        }
+        for strref in self
+            .location_id()
+            .iter()
+            .chain(self.location_name())
+            .chain(self.timezone_names())
+        {
+            if get_string(pool, *strref).is_none() {
+                return Err(FormatError::Utf8);
+            }
         }
         for s in self.location_source() {
-            if s.idx() >= src { return Err(FormatError::Index); }
+            if s.idx() >= src {
+                return Err(FormatError::Index);
+            }
         }
         for x in self.trip_ids() {
-            if x.source.idx() >= src || x.trip.idx() >= trips || x.reserved != 0
-                || get_string(pool,x.id).is_none() { return Err(FormatError::Index); }
+            if x.source.idx() >= src
+                || x.trip.idx() >= trips
+                || x.reserved != 0
+                || get_string(pool, x.id).is_none()
+            {
+                return Err(FormatError::Index);
+            }
         }
         for x in self.route_ids() {
-            if x.source.idx() >= src || x.reserved != 0
-                || get_string(pool,x.id).is_none() { return Err(FormatError::Index); }
+            if x.source.idx() >= src || x.reserved != 0 || get_string(pool, x.id).is_none() {
+                return Err(FormatError::Index);
+            }
         }
         for id in self.trip_public_route_ids() {
-            if id.idx() >= self.route_ids().len() { return Err(FormatError::Index); }
+            if id.idx() >= self.route_ids().len() {
+                return Err(FormatError::Index);
+            }
         }
-        for id in self.transport_traffic_days().iter().chain(self.route_traffic_days()) {
-            if id.idx() >= self.bitfields().len() { return Err(FormatError::Index); }
+        for id in self
+            .transport_traffic_days()
+            .iter()
+            .chain(self.route_traffic_days())
+        {
+            if id.idx() >= self.bitfields().len() {
+                return Err(FormatError::Index);
+            }
         }
         for id in self.transport_route().iter().chain(self.location_routes()) {
-            if id.idx() >= r { return Err(FormatError::Index); }
+            if id.idx() >= r {
+                return Err(FormatError::Index);
+            }
         }
         for p in self.location_parent() {
-            if *p != LocationIdx::INVALID && p.idx() >= n { return Err(FormatError::Index); }
+            if *p != LocationIdx::INVALID && p.idx() >= n {
+                return Err(FormatError::Index);
+            }
         }
         for p in self.footpaths_out().iter().chain(self.footpaths_in()) {
-            if p.target().idx() >= n || p.seconds() == 0 { return Err(FormatError::Index); }
+            if p.target().idx() >= n || p.seconds() == 0 {
+                return Err(FormatError::Index);
+            }
         }
-        let profiles = self.timing_profile_offsets().len().checked_sub(1)
+        let profiles = self
+            .timing_profile_offsets()
+            .len()
+            .checked_sub(1)
             .ok_or(FormatError::Layout)?;
-        csr(self.timing_profile_offsets(), self.timing_profile_events().len(), profiles)?;
-        for time in self.timing_profile_events().iter().chain(self.transport_first_dep_offset()) {
+        csr(
+            self.timing_profile_offsets(),
+            self.timing_profile_events().len(),
+            profiles,
+        )?;
+        for time in self
+            .timing_profile_events()
+            .iter()
+            .chain(self.transport_first_dep_offset())
+        {
             if time.seconds_after_midnight() >= Delta::SECONDS_PER_DAY {
                 return Err(FormatError::Index);
             }
         }
         for p in self.route_stops() {
-            if p.location().idx() >= n { return Err(FormatError::Index); }
+            if p.location().idx() >= n {
+                return Err(FormatError::Index);
+            }
         }
         for pair in self.trip_transport_ranges() {
             if pair.transport.idx() >= t || pair.stop_from > pair.stop_to {
@@ -578,17 +811,23 @@ impl ZeroCopyTimetable<'_> {
             }
         }
         for trip in self.merged_trips() {
-            if trip.idx() >= trips { return Err(FormatError::Index); }
+            if trip.idx() >= trips {
+                return Err(FormatError::Index);
+            }
         }
         for group in self.transport_to_trip_section() {
-            if group.idx() >= self.merged_trip_offsets().len()-1 { return Err(FormatError::Index); }
+            if group.idx() >= self.merged_trip_offsets().len() - 1 {
+                return Err(FormatError::Index);
+            }
         }
         for (i, rr) in self.route_transport_ranges().iter().enumerate() {
             if rr.from > rr.to || rr.to as usize > t {
                 return Err(FormatError::Index);
             }
-            let stops = (self.route_stop_offsets()[i+1]-self.route_stop_offsets()[i]) as usize;
-            let events = stops.checked_sub(1).and_then(|n| n.checked_mul(2))
+            let stops = (self.route_stop_offsets()[i + 1] - self.route_stop_offsets()[i]) as usize;
+            let events = stops
+                .checked_sub(1)
+                .and_then(|n| n.checked_mul(2))
                 .ok_or(FormatError::Overflow)?;
             for j in rr.from..rr.to {
                 let transport = j as usize;
@@ -596,7 +835,9 @@ impl ZeroCopyTimetable<'_> {
                     return Err(FormatError::Layout);
                 }
                 let profile = self.transport_timing_profile()[transport].idx();
-                if profile >= profiles { return Err(FormatError::Index); }
+                if profile >= profiles {
+                    return Err(FormatError::Index);
+                }
                 let offsets = self.timing_profile_offsets();
                 if (offsets[profile + 1] - offsets[profile]) as usize != events {
                     return Err(FormatError::Layout);
@@ -605,45 +846,65 @@ impl ZeroCopyTimetable<'_> {
         }
         Ok(())
     }
-    pub fn source(&self, s: SourceIdx) -> Option<(&str,&str,&str)> {
+    pub fn source(&self, s: SourceIdx) -> Option<(&str, &str, &str)> {
         let r = self.sources().get(s.idx())?;
-        Some((self.get_string(r.chateau)?, self.get_string(r.onestop_feed_id)?,
-              self.get_string(r.attempt_id)?))
+        Some((
+            self.get_string(r.chateau)?,
+            self.get_string(r.onestop_feed_id)?,
+            self.get_string(r.attempt_id)?,
+        ))
     }
     pub fn get_string(&self, r: StringRef) -> Option<&str> {
-        get_string(self.string_pool(),r)
+        get_string(self.string_pool(), r)
     }
     pub fn trip_by_source_id(&self, src: SourceIdx, id: &str) -> Option<TripIdx> {
-        self.trip_ids().iter().find(|r| r.source == src && self.get_string(r.id) == Some(id))
+        self.trip_ids()
+            .iter()
+            .find(|r| r.source == src && self.get_string(r.id) == Some(id))
             .map(|r| r.trip)
     }
     pub fn route_by_source_id(&self, src: SourceIdx, id: &str) -> Option<RouteIdIdx> {
-        self.route_ids().iter().position(|r| r.source == src
-            && self.get_string(r.id) == Some(id))
-            .and_then(|x| u32::try_from(x).ok()).map(RouteIdIdx)
+        self.route_ids()
+            .iter()
+            .position(|r| r.source == src && self.get_string(r.id) == Some(id))
+            .and_then(|x| u32::try_from(x).ok())
+            .map(RouteIdIdx)
     }
     pub fn is_transport_active(&self, t: TransportIdx, day: DayIdx) -> bool {
-        self.transport_traffic_days().get(t.idx()).and_then(|x| self.bitfields().get(x.idx()))
+        self.transport_traffic_days()
+            .get(t.idx())
+            .and_then(|x| self.bitfields().get(x.idx()))
             .is_some_and(|x| x.test(day.idx()))
     }
     pub fn is_route_active(&self, r: RouteIdx, day: DayIdx) -> bool {
-        self.route_traffic_days().get(r.idx()).and_then(|x| self.bitfields().get(x.idx()))
+        self.route_traffic_days()
+            .get(r.idx())
+            .and_then(|x| self.bitfields().get(x.idx()))
             .is_some_and(|x| x.test(day.idx()))
     }
     pub fn routes_at(&self, loc: LocationIdx) -> &[RouteIdx] {
-        let i=loc.idx(); let o=self.location_routes_offsets();
-        if i+1 >= o.len() { return &[]; }
-        &self.location_routes()[o[i] as usize..o[i+1] as usize]
+        let i = loc.idx();
+        let o = self.location_routes_offsets();
+        if i + 1 >= o.len() {
+            return &[];
+        }
+        &self.location_routes()[o[i] as usize..o[i + 1] as usize]
     }
     pub fn stops_on(&self, r: RouteIdx) -> &[PackedStop] {
-        let i=r.idx(); let o=self.route_stop_offsets();
-        if i+1 >= o.len() { return &[]; }
-        &self.route_stops()[o[i] as usize..o[i+1] as usize]
+        let i = r.idx();
+        let o = self.route_stop_offsets();
+        if i + 1 >= o.len() {
+            return &[];
+        }
+        &self.route_stops()[o[i] as usize..o[i + 1] as usize]
     }
     pub fn footpaths_from(&self, loc: LocationIdx) -> &[PackedFootpath] {
-        let i=loc.idx(); let o=self.footpaths_out_offsets();
-        if i+1 >= o.len() { return &[]; }
-        &self.footpaths_out()[o[i] as usize..o[i+1] as usize]
+        let i = loc.idx();
+        let o = self.footpaths_out_offsets();
+        if i + 1 >= o.len() {
+            return &[];
+        }
+        &self.footpaths_out()[o[i] as usize..o[i + 1] as usize]
     }
     /// Shared, stop-order event offsets for one transport. Resolution is O(1)
     /// and the slice can be reused throughout an entire RAPTOR route scan.
@@ -654,13 +915,22 @@ impl ZeroCopyTimetable<'_> {
         self.timing_profile_events().get(from..to)
     }
 
-    pub fn event_time(&self, route: RouteIdx, transport: TransportIdx,
-                      stop: usize, arrival: bool) -> Option<Delta> {
+    pub fn event_time(
+        &self,
+        route: RouteIdx,
+        transport: TransportIdx,
+        stop: usize,
+        arrival: bool,
+    ) -> Option<Delta> {
         let rr = *self.route_transport_ranges().get(route.idx())?;
         let n = self.stops_on(route).len();
-        if transport.0 < rr.from || transport.0 >= rr.to ||
-            (arrival && (stop == 0 || stop >= n)) ||
-            (!arrival && stop.checked_add(1)? >= n) { return None; }
+        if transport.0 < rr.from
+            || transport.0 >= rr.to
+            || (arrival && (stop == 0 || stop >= n))
+            || (!arrival && stop.checked_add(1)? >= n)
+        {
+            return None;
+        }
         let slot = if arrival { stop * 2 - 1 } else { stop * 2 };
         self.events_for_transport(transport)?.get(slot).copied()
     }
@@ -684,7 +954,16 @@ mod tests {
             tt.location_routes_offsets.push(0);
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
-            tt.route_stops.push(PackedStop::new(LocationIdx(tt.route_stops.len() as u32), true, true, true, true).unwrap());
+            tt.route_stops.push(
+                PackedStop::new(
+                    LocationIdx(tt.route_stops.len() as u32),
+                    true,
+                    true,
+                    true,
+                    true,
+                )
+                .unwrap(),
+            );
         }
         tt.route_stop_offsets.push(3);
         tt.route_transport_ranges.push(Range { from: 0, to: 2 });
@@ -700,8 +979,10 @@ mod tests {
         ]);
         tt.timing_profile_offsets.push(4);
         tt.transport_route.extend([RouteIdx(0), RouteIdx(0)]);
-        tt.transport_timing_profile.extend([TimingProfileIdx(0), TimingProfileIdx(0)]);
-        tt.transport_traffic_days.extend([BitfieldIdx(0), BitfieldIdx(0)]);
+        tt.transport_timing_profile
+            .extend([TimingProfileIdx(0), TimingProfileIdx(0)]);
+        tt.transport_traffic_days
+            .extend([BitfieldIdx(0), BitfieldIdx(0)]);
         tt.transport_first_dep_offset.extend([
             Delta::from_seconds(28_800).unwrap(),
             Delta::from_seconds(29_700).unwrap(),
@@ -710,66 +991,113 @@ mod tests {
         tt.transport_to_trip_section_offsets.extend([0, 0]);
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
-        assert_eq!(view.events_for_transport(TransportIdx(0)), view.events_for_transport(TransportIdx(1)));
-        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(1), 1, true).unwrap().seconds(), 631);
-        assert_eq!(view.event_time(RouteIdx(0), TransportIdx(0), 2, true).unwrap().seconds(), 1409);
-        assert!(view.event_time(RouteIdx(0), TransportIdx(1), 2, false).is_none());
+        assert_eq!(
+            view.events_for_transport(TransportIdx(0)),
+            view.events_for_transport(TransportIdx(1))
+        );
+        assert_eq!(
+            view.event_time(RouteIdx(0), TransportIdx(1), 1, true)
+                .unwrap()
+                .seconds(),
+            631
+        );
+        assert_eq!(
+            view.event_time(RouteIdx(0), TransportIdx(0), 2, true)
+                .unwrap()
+                .seconds(),
+            1409
+        );
+        assert!(
+            view.event_time(RouteIdx(0), TransportIdx(1), 2, false)
+                .is_none()
+        );
         let mut invalid = bytes.clone();
         invalid[4..8].copy_from_slice(&4u32.to_ne_bytes());
-        assert!(matches!(ZeroCopyTimetable::new(&invalid), Err(FormatError::Version)));
+        assert!(matches!(
+            ZeroCopyTimetable::new(&invalid),
+            Err(FormatError::Version)
+        ));
     }
     #[test]
     fn second_precision_storage_layout() {
-        assert_eq!(std::mem::size_of::<SourceIdx>(),2);
-        assert_eq!(std::mem::size_of::<TrafficDays>(),64);
-        assert_eq!(std::mem::size_of::<PackedStop>(),4);
-        assert_eq!(std::mem::size_of::<PackedFootpath>(),8);
-        assert_eq!(std::mem::size_of::<Delta>(),4);
-        let p=PackedStop::new(LocationIdx(42),true,false,true,false).unwrap();
-        assert_eq!(p.0,42|(1<<28)|(1<<30));
-        assert_eq!(PackedFootpath::new(LocationIdx(7),9).unwrap().0,7|(9_u64<<32));
-        assert_eq!(Delta::from_seconds(86_400 + 55).unwrap().seconds(),86_455);
+        assert_eq!(std::mem::size_of::<SourceIdx>(), 2);
+        assert_eq!(std::mem::size_of::<TrafficDays>(), 64);
+        assert_eq!(std::mem::size_of::<PackedStop>(), 4);
+        assert_eq!(std::mem::size_of::<PackedFootpath>(), 8);
+        assert_eq!(std::mem::size_of::<Delta>(), 4);
+        let p = PackedStop::new(LocationIdx(42), true, false, true, false).unwrap();
+        assert_eq!(p.0, 42 | (1 << 28) | (1 << 30));
+        assert_eq!(
+            PackedFootpath::new(LocationIdx(7), 9).unwrap().0,
+            7 | (9_u64 << 32)
+        );
+        assert_eq!(Delta::from_seconds(86_400 + 55).unwrap().seconds(), 86_455);
         assert_eq!(Delta::from_seconds(86_400 + 55).unwrap().days(), 1);
-        let mut b=TrafficDays::default();
-        for n in [0,63,64,511] {b.set(n,true).unwrap();}
-        for n in [1,64,65] {assert!(b.shift_left(1).test(n));}
+        let mut b = TrafficDays::default();
+        for n in [0, 63, 64, 511] {
+            b.set(n, true).unwrap();
+        }
+        for n in [1, 64, 65] {
+            assert!(b.shift_left(1).test(n));
+        }
         assert!(!b.shift_left(1).test(511));
     }
     #[test]
     fn distinct_chateaux_feeds_and_attempts_never_collide() {
-        let mut tt=TimetableOwned::empty(20000,400);
-        let a=tt.add_source("C1","F1","A1").unwrap();
-        let b=tt.add_source("C2","F1","A1").unwrap();
-        let c=tt.add_source("C1","F1","A2").unwrap();
-        assert_eq!(tt.add_source("C1","F1","A1").unwrap(),a);
-        assert_ne!(a,b);assert_ne!(a,c);
-        tt.add_trip_id(a,TripIdx(0),"T1").unwrap();
-        tt.add_trip_id(b,TripIdx(1),"T1").unwrap();
-        tt.add_trip_id(c,TripIdx(2),"T1").unwrap();
-        let a_route=tt.add_route_id(a,"R1").unwrap();
-        let b_route=tt.add_route_id(b,"R1").unwrap();
-        tt.trip_public_route_ids=vec![a_route,b_route,a_route];
-        tt.trip_transport_offsets=vec![0,0,0,0];
-        let binary=tt.encode().unwrap();
-        let decoded=ZeroCopyTimetable::new(&binary).unwrap();
-        assert_eq!(decoded.source(a),Some(("C1","F1","A1")));
-        assert_eq!(decoded.trip_by_source_id(a,"T1"),Some(TripIdx(0)));
-        assert_eq!(decoded.trip_by_source_id(b,"T1"),Some(TripIdx(1)));
-        assert_eq!(decoded.trip_by_source_id(c,"T1"),Some(TripIdx(2)));
-        assert_ne!(decoded.route_by_source_id(a,"R1"),decoded.route_by_source_id(b,"R1"));
+        let mut tt = TimetableOwned::empty(20000, 400);
+        let a = tt.add_source("C1", "F1", "A1").unwrap();
+        let b = tt.add_source("C2", "F1", "A1").unwrap();
+        let c = tt.add_source("C1", "F1", "A2").unwrap();
+        assert_eq!(tt.add_source("C1", "F1", "A1").unwrap(), a);
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+        tt.add_trip_id(a, TripIdx(0), "T1").unwrap();
+        tt.add_trip_id(b, TripIdx(1), "T1").unwrap();
+        tt.add_trip_id(c, TripIdx(2), "T1").unwrap();
+        let a_route = tt.add_route_id(a, "R1").unwrap();
+        let b_route = tt.add_route_id(b, "R1").unwrap();
+        tt.trip_public_route_ids = vec![a_route, b_route, a_route];
+        tt.trip_transport_offsets = vec![0, 0, 0, 0];
+        let binary = tt.encode().unwrap();
+        let decoded = ZeroCopyTimetable::new(&binary).unwrap();
+        assert_eq!(decoded.source(a), Some(("C1", "F1", "A1")));
+        assert_eq!(decoded.trip_by_source_id(a, "T1"), Some(TripIdx(0)));
+        assert_eq!(decoded.trip_by_source_id(b, "T1"), Some(TripIdx(1)));
+        assert_eq!(decoded.trip_by_source_id(c, "T1"), Some(TripIdx(2)));
+        assert_ne!(
+            decoded.route_by_source_id(a, "R1"),
+            decoded.route_by_source_id(b, "R1")
+        );
     }
 
     #[test]
     fn packed_values_reject_out_of_range_indices_and_durations() {
-        assert_eq!(TrafficDays::default().set(MAX_DAYS, true), Err(FormatError::Index));
+        assert_eq!(
+            TrafficDays::default().set(MAX_DAYS, true),
+            Err(FormatError::Index)
+        );
         assert_eq!(
             PackedStop::new(LocationIdx(1 << 28), true, true, false, false),
             Err(FormatError::Index)
         );
-        assert_eq!(PackedFootpath::new(LocationIdx(u32::MAX), 1), Err(FormatError::Index));
-        assert_eq!(PackedFootpath::new(LocationIdx(1), 0), Err(FormatError::Index));
-        assert_eq!(PackedFootpath::new(LocationIdx(1), 512).unwrap().seconds(), 512);
-        assert_eq!(PackedFootpath::new(LocationIdx(1), 9_001).unwrap().seconds(), 9_001);
+        assert_eq!(
+            PackedFootpath::new(LocationIdx(u32::MAX), 1),
+            Err(FormatError::Index)
+        );
+        assert_eq!(
+            PackedFootpath::new(LocationIdx(1), 0),
+            Err(FormatError::Index)
+        );
+        assert_eq!(
+            PackedFootpath::new(LocationIdx(1), 512).unwrap().seconds(),
+            512
+        );
+        assert_eq!(
+            PackedFootpath::new(LocationIdx(1), 9_001)
+                .unwrap()
+                .seconds(),
+            9_001
+        );
         assert_eq!(Delta::new(32, 0), Err(FormatError::Index));
         assert_eq!(Delta::from_seconds(32 * 86_400), Err(FormatError::Index));
         assert_eq!(Delta::new(0, 86_400), Err(FormatError::Index));
@@ -806,15 +1134,31 @@ mod tests {
 
     #[test]
     fn rejects_old_version_and_truncation() {
-        let b=TimetableOwned::empty(20000,400).encode().unwrap();
-        assert_eq!(ZeroCopyTimetable::new(&b).unwrap().header().version,VERSION);
-        let mut older=b.clone();older[4..8].copy_from_slice(&1u32.to_ne_bytes());
-        assert!(matches!(ZeroCopyTimetable::new(&older),Err(FormatError::Version)));
-        let mut v2=b.clone(); v2[4..8].copy_from_slice(&2u32.to_ne_bytes());
-        assert!(matches!(ZeroCopyTimetable::new(&v2),Err(FormatError::Version)));
-        let mut v3=b.clone(); v3[4..8].copy_from_slice(&3u32.to_ne_bytes());
-        assert!(matches!(ZeroCopyTimetable::new(&v3),Err(FormatError::Version)));
-        let mut cut=b;cut.pop();
+        let b = TimetableOwned::empty(20000, 400).encode().unwrap();
+        assert_eq!(
+            ZeroCopyTimetable::new(&b).unwrap().header().version,
+            VERSION
+        );
+        let mut older = b.clone();
+        older[4..8].copy_from_slice(&1u32.to_ne_bytes());
+        assert!(matches!(
+            ZeroCopyTimetable::new(&older),
+            Err(FormatError::Version)
+        ));
+        let mut v2 = b.clone();
+        v2[4..8].copy_from_slice(&2u32.to_ne_bytes());
+        assert!(matches!(
+            ZeroCopyTimetable::new(&v2),
+            Err(FormatError::Version)
+        ));
+        let mut v3 = b.clone();
+        v3[4..8].copy_from_slice(&3u32.to_ne_bytes());
+        assert!(matches!(
+            ZeroCopyTimetable::new(&v3),
+            Err(FormatError::Version)
+        ));
+        let mut cut = b;
+        cut.pop();
         assert!(ZeroCopyTimetable::new(&cut).is_err());
     }
 }

@@ -18,7 +18,11 @@ struct RegionSize {
 fn file_size(path: &Path) -> Result<Option<u64>> {
     match fs::metadata(path) {
         Ok(meta) => {
-            ensure!(meta.is_file(), "timetable path is not a file: {}", path.display());
+            ensure!(
+                meta.is_file(),
+                "timetable path is not a file: {}",
+                path.display()
+            );
             Ok(Some(meta.len()))
         }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -27,14 +31,18 @@ fn file_size(path: &Path) -> Result<Option<u64>> {
 }
 
 fn configured_sizes(config: &RoutingRegionsConfig, dir: &Path) -> Result<Vec<RegionSize>> {
-    config.regions.iter().map(|region| {
-        let path = dir.join(format!("{}.bin", region.id));
-        Ok(RegionSize {
-            id: region.id.clone(),
-            bytes: file_size(&path)?,
-            path,
+    config
+        .regions
+        .iter()
+        .map(|region| {
+            let path = dir.join(format!("{}.bin", region.id));
+            Ok(RegionSize {
+                id: region.id.clone(),
+                bytes: file_size(&path)?,
+                path,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn human_bytes(bytes: u64) -> String {
@@ -58,7 +66,10 @@ pub(super) fn print_published(region_id: &str, output: &Path) -> Result<()> {
         .with_context(|| format!("published timetable does not exist: {}", output.display()))?;
     println!(
         "Gentian timetable size — region {}: {} bytes ({}) [{}]",
-        region_id, bytes, human_bytes(bytes), output.display(),
+        region_id,
+        bytes,
+        human_bytes(bytes),
+        output.display(),
     );
     Ok(())
 }
@@ -67,13 +78,18 @@ pub(super) fn print_published(region_id: &str, output: &Path) -> Result<()> {
 /// Does not silently count absent region files as zero-byte timetables.
 pub(super) fn print_configured(config: &RoutingRegionsConfig, dir: &Path) -> Result<()> {
     let sizes = configured_sizes(config, dir)?;
-    println!("Timetable file sizes for configured regions ({}):", dir.display());
+    println!(
+        "Timetable file sizes for configured regions ({}):",
+        dir.display()
+    );
     let mut available = 0usize;
     let mut total = 0u64;
     for item in &sizes {
         match item.bytes {
             Some(bytes) => {
-                total = total.checked_add(bytes).context("timetable size total overflow")?;
+                total = total
+                    .checked_add(bytes)
+                    .context("timetable size total overflow")?;
                 available += 1;
                 println!("  {}: {} bytes ({})", item.id, bytes, human_bytes(bytes));
             }
@@ -82,7 +98,10 @@ pub(super) fn print_configured(config: &RoutingRegionsConfig, dir: &Path) -> Res
     }
     println!(
         "Total published timetables: {} bytes ({}) across {}/{} configured regions",
-        total, human_bytes(total), available, sizes.len(),
+        total,
+        human_bytes(total),
+        available,
+        sizes.len(),
     );
     Ok(())
 }
@@ -97,12 +116,15 @@ mod tests {
             schema_version: 1,
             country_boundaries: None,
             data_dir: PathBuf::from("compiled/routing"),
-            regions: ["alpha", "beta", "gamma"].into_iter().map(|id| RoutingRegion {
-                id: id.to_owned(),
-                name: id.to_owned(),
-                geojson: vec![],
-                countries: vec!["US".to_owned()],
-            }).collect(),
+            regions: ["alpha", "beta", "gamma"]
+                .into_iter()
+                .map(|id| RoutingRegion {
+                    id: id.to_owned(),
+                    name: id.to_owned(),
+                    geojson: vec![],
+                    countries: vec!["US".to_owned()],
+                })
+                .collect(),
         }
     }
 
@@ -122,10 +144,14 @@ mod tests {
         fs::write(dir.join("alpha.bin"), vec![0u8; 1234]).unwrap();
         fs::write(dir.join("gamma.bin"), vec![0u8; 789]).unwrap();
         let sizes = configured_sizes(&config(), &dir).unwrap();
-        assert_eq!(sizes.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
-            vec!["alpha", "beta", "gamma"]);
-        assert_eq!(sizes.iter().map(|s| s.bytes).collect::<Vec<_>>(),
-            vec![Some(1234), None, Some(789)]);
+        assert_eq!(
+            sizes.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["alpha", "beta", "gamma"]
+        );
+        assert_eq!(
+            sizes.iter().map(|s| s.bytes).collect::<Vec<_>>(),
+            vec![Some(1234), None, Some(789)]
+        );
         assert_eq!(sizes.iter().filter_map(|s| s.bytes).sum::<u64>(), 2023);
         print_configured(&config(), &dir).unwrap();
         fs::remove_dir_all(dir).unwrap();

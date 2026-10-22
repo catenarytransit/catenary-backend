@@ -13,10 +13,8 @@ pub(super) struct OceanExclusions {
 }
 
 static OPEN_OCEAN: LazyLock<OceanExclusions> = LazyLock::new(|| {
-    OceanExclusions::from_geojson(include_str!(
-        "../../../chateau_exclude_open_oceans.geojson"
-    ))
-    .expect("invalid chateau_exclude_open_oceans.geojson")
+    OceanExclusions::from_geojson(include_str!("../../../chateau_exclude_open_oceans.geojson"))
+        .expect("invalid chateau_exclude_open_oceans.geojson")
 });
 
 pub(super) fn open_ocean_exclusions() -> &'static OceanExclusions {
@@ -65,9 +63,14 @@ impl OceanExclusions {
             .bounding_rect()
             .context("exclusion polygon has no bounds")?;
         ensure!(
-            [bounds.min().x, bounds.min().y, bounds.max().x, bounds.max().y]
-                .iter()
-                .all(|value| value.is_finite()),
+            [
+                bounds.min().x,
+                bounds.min().y,
+                bounds.max().x,
+                bounds.max().y
+            ]
+            .iter()
+            .all(|value| value.is_finite()),
             "exclusion polygon has non-finite coordinates"
         );
 
@@ -161,10 +164,9 @@ mod tests {
 
     #[test]
     fn malformed_exclusions_fail_instead_of_being_ignored() {
-        assert!(OceanExclusions::from_geojson(
-            r#"{"type":"FeatureCollection","features":[]}"#
-        )
-        .is_err());
+        assert!(
+            OceanExclusions::from_geojson(r#"{"type":"FeatureCollection","features":[]}"#).is_err()
+        );
         assert!(OceanExclusions::from_geojson(
             r#"{"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[1,2]}}]}"#
         )

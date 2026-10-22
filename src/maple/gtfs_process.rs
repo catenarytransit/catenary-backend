@@ -2296,9 +2296,12 @@ pub async fn gtfs_process_feed(
     // Preserve GTFS stop-, route-, and trip-scoped interchange declarations
     // before compiling the regional timetable.
     transfers_into_postgres(
-        std::path::Path::new(&path), feed_id, attempt_id,
+        std::path::Path::new(&path),
+        feed_id,
+        attempt_id,
         Arc::clone(&arc_conn_pool),
-    ).await?;
+    )
+    .await?;
 
     // insert trip and itineraries
 

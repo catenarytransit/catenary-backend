@@ -69,19 +69,19 @@ pub async fn transfers_into_postgres(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut conn = pool.get().await?;
     // Preserve idempotency for an attempted feed import.
-    diesel::sql_query(
-        "DELETE FROM gtfs.transfers WHERE onestop_feed_id=$1 AND attempt_id=$2",
-    )
-    .bind::<Text, _>(feed_id)
-    .bind::<Text, _>(attempt_id)
-    .execute(&mut conn)
-    .await?;
+    diesel::sql_query("DELETE FROM gtfs.transfers WHERE onestop_feed_id=$1 AND attempt_id=$2")
+        .bind::<Text, _>(feed_id)
+        .bind::<Text, _>(attempt_id)
+        .execute(&mut conn)
+        .await?;
 
     let filename = gtfs_dir.join("transfers.txt");
     if !filename.exists() {
         return Ok(());
     }
-    let mut rdr = csv::ReaderBuilder::new().flexible(true).from_path(&filename)?;
+    let mut rdr = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&filename)?;
     let mut chunk = Vec::<serde_json::Value>::with_capacity(1000);
     let mut inserted = 0usize;
     for row in rdr.deserialize::<RawTransfer>() {
@@ -94,7 +94,11 @@ pub async fn transfers_into_postgres(
             return Err(format!("{}: negative min_transfer_time", filename.display()).into());
         }
         if kind == 2 && rule.min_transfer_time.is_none() {
-            return Err(format!("{}: transfer_type=2 requires min_transfer_time", filename.display()).into());
+            return Err(format!(
+                "{}: transfer_type=2 requires min_transfer_time",
+                filename.display()
+            )
+            .into());
         }
         chunk.push(serde_json::json!({
             "from_stop_id": rule.from_stop_id.trim(),
@@ -116,7 +120,10 @@ pub async fn transfers_into_postgres(
         insert_batch(&mut conn, feed_id, attempt_id, &chunk).await?;
         inserted += chunk.len();
     }
-    println!("Persisted {inserted} GTFS transfer rules from {}", filename.display());
+    println!(
+        "Persisted {inserted} GTFS transfer rules from {}",
+        filename.display()
+    );
     Ok(())
 }
 

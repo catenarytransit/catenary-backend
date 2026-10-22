@@ -125,7 +125,10 @@ pub fn run(mut input: Graph, cfg: &TopoConfig) -> Graph {
     // Exploit redundant GTFS route turns to restore a geometrically clean
     // four-arm cartographic junction, without modifying its track connectivity.
     let normalized = crate::junction_normalizer::normalize(&mut output, &restriction_reference);
-    info!("[topo/junction] normalized {} certified four-arm intersections", normalized);
+    info!(
+        "[topo/junction] normalized {} certified four-arm intersections",
+        normalized
+    );
     #[cfg(debug_assertions)]
     output.assert_consistent();
     info!("[topo] inserted stations in {:.2?}", stage.elapsed());

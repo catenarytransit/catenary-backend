@@ -304,7 +304,13 @@ pub async fn shapes_intercity_rail(
 
     let sqlx_pool_ref = sqlx_pool.as_ref().as_ref();
 
-    let query_str = build_shapes_query(z, x, y, simplification_threshold, "route_type = 2 AND chateau != 'nationalrailuk'");
+    let query_str = build_shapes_query(
+        z,
+        x,
+        y,
+        simplification_threshold,
+        "route_type = 2 AND chateau != 'nationalrailuk'",
+    );
 
     // println!("Performing query \n {}", query_str);
 

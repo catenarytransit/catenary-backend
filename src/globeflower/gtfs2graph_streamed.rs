@@ -6,9 +6,9 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::loom_graph::{Graph, Line, Point, Stop as LoomStop};
-use crate::progress::LoadProgress;
 use crate::loom_shape_alignment::AlignedShape;
 use crate::loom_trip_segments::{EdgeRegistry, SegmentKey};
+use crate::progress::LoadProgress;
 
 // SQL for the current run uses bound smallint[] values throughout the active pipeline.
 
@@ -114,7 +114,6 @@ struct PatternStopRow {
     #[diesel(sql_type = Nullable<Text>)]
     shape_id: Option<String>,
 }
-
 
 #[derive(QueryableByName, Debug)]
 struct DirectionMetaSeedRow {
@@ -412,7 +411,8 @@ pub fn discover_components(
             .bind::<Array<Text>, _>(ids.to_vec())
             .load(conn),
         None => diesel::sql_query(route_sql)
-            .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec()).load(conn),
+            .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
+            .load(conn),
     }
     .context("load production selected-MOT routes")?;
 
@@ -425,7 +425,13 @@ pub fn discover_components(
     // feed/attempt at a time, avoiding the route_workset/dpm/dp/stops join.
     let selected_routes: std::collections::HashSet<(String, String, String)> = route_rows
         .iter()
-        .map(|r| (r.onestop_feed_id.clone(), r.attempt_id.clone(), r.route_id.clone()))
+        .map(|r| {
+            (
+                r.onestop_feed_id.clone(),
+                r.attempt_id.clone(),
+                r.route_id.clone(),
+            )
+        })
         .collect();
     let feed_attempts: std::collections::BTreeSet<(String, String)> = route_rows
         .iter()
@@ -542,7 +548,8 @@ pub fn discover_components(
             // count the same station twice for component membership.
             let mut seen_memberships = std::collections::HashSet::new();
             for row in dp {
-                if !seen_memberships.insert((row.direction_pattern_id.clone(), row.stop_id.clone())) {
+                if !seen_memberships.insert((row.direction_pattern_id.clone(), row.stop_id.clone()))
+                {
                     continue;
                 }
                 let Some(station) = stations.get(&row.stop_id) else {
@@ -568,7 +575,14 @@ pub fn discover_components(
                     dsu.union(first, idx);
                 } else {
                     seen_positions.insert(coordinate, idx);
-                    geographic.add(&mut dsu, idx, Point { lon: station.lon, lat: station.lat });
+                    geographic.add(
+                        &mut dsu,
+                        idx,
+                        Point {
+                            lon: station.lon,
+                            lat: station.lat,
+                        },
+                    );
                 }
             }
             progress.advance(batch.len());
@@ -811,7 +825,7 @@ pub fn build_component(
     for batch in component.patterns.chunks(COMPONENT_BATCH_SIZE) {
         let workset_json = serde_json::to_string(batch)?;
         let mut batch_rows: Vec<PatternStopRow> = diesel::sql_query(format!(
-        r#"
+            r#"
         WITH workset AS (
             SELECT *
             FROM jsonb_to_recordset($1::jsonb) AS w(
@@ -860,17 +874,20 @@ pub fn build_component(
           AND s.point IS NOT NULL
         ORDER BY dp.onestop_feed_id, dp.attempt_id, dp.direction_pattern_id, dp.stop_sequence
         "#
-    ))
-    .bind::<Text, _>(&workset_json)
-    .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
-    .load(conn)
-    .context("load a bounded direction-pattern stop batch")?;
+        ))
+        .bind::<Text, _>(&workset_json)
+        .bind::<Array<diesel::sql_types::SmallInt>, _>(route_types.to_vec())
+        .load(conn)
+        .context("load a bounded direction-pattern stop batch")?;
         stop_rows.append(&mut batch_rows);
         stop_progress.advance(batch.len());
     }
     stop_progress.finish();
-    info!("[gtfs2graph] loaded {} stop occurrences for {} direction patterns",
-        stop_rows.len(), total_patterns);
+    info!(
+        "[gtfs2graph] loaded {} stop occurrences for {} direction patterns",
+        stop_rows.len(),
+        total_patterns
+    );
 
     if stop_rows.is_empty() {
         return Ok(Graph::default());
@@ -885,16 +902,16 @@ pub fn build_component(
     // stop rows. The shape ID is identical for all stops in a pattern.
     let mut fallback_shapes = HashMap::<PatternKey, Option<String>>::new();
     for row in &stop_rows {
-        fallback_shapes.entry(PatternKey {
-            onestop_feed_id: row.onestop_feed_id.clone(),
-            attempt_id: row.attempt_id.clone(),
-            direction_pattern_id: row.direction_pattern_id.clone(),
-        })
-        .or_insert_with(|| row.shape_id.clone());
+        fallback_shapes
+            .entry(PatternKey {
+                onestop_feed_id: row.onestop_feed_id.clone(),
+                attempt_id: row.attempt_id.clone(),
+                direction_pattern_id: row.direction_pattern_id.clone(),
+            })
+            .or_insert_with(|| row.shape_id.clone());
     }
 
-    let mut variants_by_pattern =
-        HashMap::<PatternKey, BTreeMap<Option<String>, i64>>::new();
+    let mut variants_by_pattern = HashMap::<PatternKey, BTreeMap<Option<String>, i64>>::new();
     let mut weight_progress =
         LoadProgress::for_stage("gtfs2graph", "Loading itinerary weights", total_patterns);
 
@@ -952,9 +969,9 @@ pub fn build_component(
     // one shape variant (possibly unshaped), with at least one trip of weight.
     let mut pattern_weights = HashMap::<PatternKey, Vec<(Option<String>, usize)>>::new();
     for (key, fallback_shape_id) in fallback_shapes {
-        let variants = variants_by_pattern.remove(&key).unwrap_or_else(|| {
-            BTreeMap::from([(fallback_shape_id, 1)])
-        });
+        let variants = variants_by_pattern
+            .remove(&key)
+            .unwrap_or_else(|| BTreeMap::from([(fallback_shape_id, 1)]));
         pattern_weights.insert(
             key,
             variants
@@ -1025,7 +1042,10 @@ pub fn build_component(
         }
     }
     shape_progress.finish();
-    info!("[gtfs2graph] loaded {} unique valid shapes", shape_map.len());
+    info!(
+        "[gtfs2graph] loaded {} unique valid shapes",
+        shape_map.len()
+    );
 
     let mut graph = Graph::default();
     let mut line_by_key = HashMap::<(String, String, String), usize>::new();
@@ -1211,7 +1231,10 @@ pub fn build_component(
     }
 
     alignment_progress.finish();
-    info!("[gtfs2graph] simplifying graph after aligning {} direction patterns", patterns.len());
+    info!(
+        "[gtfs2graph] simplifying graph after aligning {} direction patterns",
+        patterns.len()
+    );
     crate::loom_builder_simplify::simplify(
         &mut graph,
         &registry.weights,

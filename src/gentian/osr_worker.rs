@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, ensure};
 use clap::Parser;
-use osr_ffi::{ffi, Profile};
+use osr_ffi::{Profile, ffi};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -8,15 +8,15 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream},
     path::PathBuf,
-    sync::{mpsc, Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
     thread,
 };
 
 #[derive(Parser)]
 struct Args {
-    #[arg(long,default_value="catenaryconfig.toml")]
+    #[arg(long, default_value = "catenaryconfig.toml")]
     config: PathBuf,
-    #[arg(long,default_value="127.0.0.1:40501")]
+    #[arg(long, default_value = "127.0.0.1:40501")]
     listen: String,
     /// Concurrent native OSR search contexts. Each worker owns its router
     /// handles: CXX UniquePtr/router state is never shared across threads.
@@ -25,9 +25,13 @@ struct Args {
 }
 
 #[derive(Deserialize)]
-struct Config { osm_manager: Manager }
+struct Config {
+    osm_manager: Manager,
+}
 #[derive(Deserialize)]
-struct Manager { data_dir: PathBuf }
+struct Manager {
+    data_dir: PathBuf,
+}
 
 #[derive(Deserialize)]
 struct Request {
@@ -37,21 +41,40 @@ struct Request {
     max_seconds: u32,
     stops: Vec<Stop>,
 }
-#[derive(Clone,Deserialize)]
-struct Stop { stop: u32, latitude:f64, longitude:f64 }
+#[derive(Clone, Deserialize)]
+struct Stop {
+    stop: u32,
+    latitude: f64,
+    longitude: f64,
+}
 #[derive(Serialize)]
-struct Access {stop:u32,seconds:u32}
+struct Access {
+    stop: u32,
+    seconds: u32,
+}
 #[derive(Serialize)]
-struct Response {reachable:Vec<Access>,error:Option<String>}
+struct Response {
+    reachable: Vec<Access>,
+    error: Option<String>,
+}
 
 fn run_request(
-    graphs: &mut BTreeMap<String,cxx::UniquePtr<ffi::Router>>,
+    graphs: &mut BTreeMap<String, cxx::UniquePtr<ffi::Router>>,
     paths: &BTreeMap<String, PathBuf>,
     query: Request,
 ) -> Result<Vec<Access>> {
-    ensure!(query.latitude.is_finite() && query.longitude.is_finite(),"invalid origin");
-    ensure!((1..=3600).contains(&query.max_seconds),"invalid OSR duration budget");
-    ensure!(query.stops.len()<=4096,"too many stops for one OSR query");
+    ensure!(
+        query.latitude.is_finite() && query.longitude.is_finite(),
+        "invalid origin"
+    );
+    ensure!(
+        (1..=3600).contains(&query.max_seconds),
+        "invalid OSR duration budget"
+    );
+    ensure!(
+        query.stops.len() <= 4096,
+        "too many stops for one OSR query"
+    );
     if !graphs.contains_key(&query.region) {
         let dir = paths.get(&query.region).context("unknown OSR region")?;
         let router = ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
@@ -59,31 +82,39 @@ fn run_request(
         eprintln!("Opened native OSR mmap: {}", query.region);
         graphs.insert(query.region.clone(), router);
     }
-    let graph=graphs.get(&query.region).context("OSR region is not loaded")?;
-    let router=graph.as_ref().context("OSR graph is null")?;
-    let options=ffi::RoutingOptions {
-        max_cost:query.max_seconds,include_segments:false,
+    let graph = graphs
+        .get(&query.region)
+        .context("OSR region is not loaded")?;
+    let router = graph.as_ref().context("OSR graph is null")?;
+    let options = ffi::RoutingOptions {
+        max_cost: query.max_seconds,
+        include_segments: false,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };
-    let mut targets=Vec::with_capacity(query.stops.len());
+    let mut targets = Vec::with_capacity(query.stops.len());
     for x in &query.stops {
-        ensure!(x.latitude.is_finite()&&x.longitude.is_finite(),"invalid target");
-        targets.push(ffi::Coordinate::outdoor(x.latitude,x.longitude));
+        ensure!(
+            x.latitude.is_finite() && x.longitude.is_finite(),
+            "invalid target"
+        );
+        targets.push(ffi::Coordinate::outdoor(x.latitude, x.longitude));
     }
-    let paths=router.one_to_many(
-        &ffi::Coordinate::outdoor(query.latitude,query.longitude),
-        &targets,&options,&[]
+    let paths = router.one_to_many(
+        &ffi::Coordinate::outdoor(query.latitude, query.longitude),
+        &targets,
+        &options,
+        &[],
     )?;
-    let mut results=Vec::new();
-    for (stop,path) in query.stops.into_iter().zip(paths) {
-        if path.found&&path.duration_seconds<=query.max_seconds{
-            results.push(Access{
-                stop:stop.stop,
-                seconds:path.duration_seconds,
+    let mut results = Vec::new();
+    for (stop, path) in query.stops.into_iter().zip(paths) {
+        if path.found && path.duration_seconds <= query.max_seconds {
+            results.push(Access {
+                stop: stop.stop,
+                seconds: path.duration_seconds,
             });
         }
     }
-    results.sort_by_key(|x|(x.seconds,x.stop));
+    results.sort_by_key(|x| (x.seconds, x.stop));
     Ok(results)
 }
 
@@ -100,17 +131,28 @@ fn handle(
     let mut limited = reader.take(524_289);
     let mut input = Vec::new();
     let received = limited.read_until(b'\n', &mut input)?;
-    ensure!(received > 0 && received <= 524_288 && input.last() == Some(&b'\n'),
-        "OSR request exceeds 512KiB or is not newline terminated");
-    let response=match serde_json::from_slice::<Request>(&input){
-        Ok(req)=>match run_request(graphs,paths,req){
-            Ok(reachable)=>Response{reachable,error:None},
-            Err(e)=>Response{reachable:Vec::new(),error:Some(e.to_string())},
+    ensure!(
+        received > 0 && received <= 524_288 && input.last() == Some(&b'\n'),
+        "OSR request exceeds 512KiB or is not newline terminated"
+    );
+    let response = match serde_json::from_slice::<Request>(&input) {
+        Ok(req) => match run_request(graphs, paths, req) {
+            Ok(reachable) => Response {
+                reachable,
+                error: None,
+            },
+            Err(e) => Response {
+                reachable: Vec::new(),
+                error: Some(e.to_string()),
+            },
         },
-        Err(e)=>Response{reachable:Vec::new(),error:Some(e.to_string())},
+        Err(e) => Response {
+            reachable: Vec::new(),
+            error: Some(e.to_string()),
+        },
     };
-    let mut writer=BufWriter::new(stream);
-    serde_json::to_writer(&mut writer,&response)?;
+    let mut writer = BufWriter::new(stream);
+    serde_json::to_writer(&mut writer, &response)?;
     writer.write_all(b"\n")?;
     writer.flush()?;
     Ok(())
@@ -121,16 +163,27 @@ fn handle(
 fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>> {
     let registry = data_dir.join("regions.geojson");
     let document: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
-    let features = document.get("features").and_then(|x| x.as_array())
+    let features = document
+        .get("features")
+        .and_then(|x| x.as_array())
         .context("OSR regions registry missing features")?;
     let mut paths = BTreeMap::new();
     for feature in features {
-        let id = feature.get("properties").and_then(|x| x.get("id"))
-            .and_then(|x| x.as_str()).context("OSR registry entry missing id")?;
-        ensure!(!id.split('/').any(|p| p == ".." || p == "." || p.is_empty()),
-            "invalid OSR id");
-        ensure!(paths.insert(id.to_owned(), data_dir.join("regions").join(id)).is_none(),
-            "duplicate OSR region ID: {id}");
+        let id = feature
+            .get("properties")
+            .and_then(|x| x.get("id"))
+            .and_then(|x| x.as_str())
+            .context("OSR registry entry missing id")?;
+        ensure!(
+            !id.split('/').any(|p| p == ".." || p == "." || p.is_empty()),
+            "invalid OSR id"
+        );
+        ensure!(
+            paths
+                .insert(id.to_owned(), data_dir.join("regions").join(id))
+                .is_none(),
+            "duplicate OSR region ID: {id}"
+        );
     }
     ensure!(!paths.is_empty(), "no OSR regions configured");
     Ok(paths)
@@ -154,7 +207,10 @@ fn open_graphs(
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    ensure!((1..=16).contains(&args.workers), "--workers must be in 1..=16");
+    ensure!(
+        (1..=16).contains(&args.workers),
+        "--workers must be in 1..=16"
+    );
     let cfg: Config = toml::from_str(&fs::read_to_string(&args.config)?)?;
     let paths = Arc::new(region_paths(&cfg.osm_manager.data_dir)?);
     let listener = TcpListener::bind(&args.listen)?;
@@ -168,41 +224,48 @@ fn main() -> Result<()> {
         let recv = Arc::clone(&recv);
         let paths = Arc::clone(&paths);
         let ready = ready_tx.clone();
-        thread::Builder::new().name(format!("osr-query-{worker}")).spawn(move || {
-            // One eagerly initialized context retains the previous startup
-            // validation behavior. Additional contexts initialize lazily,
-            // avoiding duplicate native memory for OSR regions never queried.
-            let mut graphs = if worker == 0 {
-                match open_graphs(&paths) {
-                    Ok(g) => g,
-                    Err(error) => {
-                        let _ = ready.send(Err(error));
-                        return;
+        thread::Builder::new()
+            .name(format!("osr-query-{worker}"))
+            .spawn(move || {
+                // One eagerly initialized context retains the previous startup
+                // validation behavior. Additional contexts initialize lazily,
+                // avoiding duplicate native memory for OSR regions never queried.
+                let mut graphs = if worker == 0 {
+                    match open_graphs(&paths) {
+                        Ok(g) => g,
+                        Err(error) => {
+                            let _ = ready.send(Err(error));
+                            return;
+                        }
+                    }
+                } else {
+                    BTreeMap::new()
+                };
+                let _ = ready.send(Ok(()));
+                loop {
+                    // Do not hold the receiver mutex while running native OSR.
+                    let stream = match recv.lock().expect("OSR queue poisoned").recv() {
+                        Ok(stream) => stream,
+                        Err(_) => break,
+                    };
+                    if let Err(error) = handle(stream, &mut graphs, &paths) {
+                        eprintln!("OSR client: {error}");
                     }
                 }
-            } else {
-                BTreeMap::new()
-            };
-            let _ = ready.send(Ok(()));
-            loop {
-                // Do not hold the receiver mutex while running native OSR.
-                let stream = match recv.lock().expect("OSR queue poisoned").recv() {
-                    Ok(stream) => stream,
-                    Err(_) => break,
-                };
-                if let Err(error) = handle(stream, &mut graphs, &paths) {
-                    eprintln!("OSR client: {error}");
-                }
-            }
-        }).context("spawning OSR worker")?;
+            })
+            .context("spawning OSR worker")?;
     }
     drop(ready_tx);
     // Do not advertise a listening worker until all routers have opened.
     for _ in 0..args.workers {
-        ready_rx.recv().context("OSR worker failed to initialize")??;
+        ready_rx
+            .recv()
+            .context("OSR worker failed to initialize")??;
     }
-    eprintln!("OSR worker listening at {} ({} concurrent queries)",
-        args.listen, args.workers);
+    eprintln!(
+        "OSR worker listening at {} ({} concurrent queries)",
+        args.listen, args.workers
+    );
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => send.send(stream).context("OSR worker queue closed")?,

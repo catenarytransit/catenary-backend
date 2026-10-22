@@ -14,12 +14,12 @@ mod loom_builder_simplify;
 mod loom_cpp_topo;
 mod loom_graph;
 mod loom_map_constructor;
-mod modes;
-mod progress;
 mod loom_polyline;
 mod loom_restr_inferrer;
 mod loom_shape_alignment;
 mod loom_trip_segments;
+mod modes;
+mod progress;
 mod topo;
 
 #[derive(Parser, Debug)]
@@ -147,7 +147,8 @@ fn main() -> Result<()> {
         );
 
         // Only this component's stops, route metadata and shapes are materialized.
-        let raw = gtfs2graph::build_component(&mut conn, component, args.prune_threshold, &route_types)?;
+        let raw =
+            gtfs2graph::build_component(&mut conn, component, args.prune_threshold, &route_types)?;
         info!(
             "[component {}/{}][gtfs2graph] {} nodes, {} edges, {} lines",
             index + 1,
@@ -233,9 +234,15 @@ mod cli_tests {
     #[test]
     fn select_rail_and_subway_modes_with_existing_chateau_filter() {
         let args = Args::try_parse_from([
-            "globeflower", "--chateau", "amtrak", "--mots", "rail,metro",
-            "--max-component-patterns", "5000",
-        ]).unwrap();
+            "globeflower",
+            "--chateau",
+            "amtrak",
+            "--mots",
+            "rail,metro",
+            "--max-component-patterns",
+            "5000",
+        ])
+        .unwrap();
         let types = modes::parse_mots(args.mots.as_deref()).unwrap();
         assert!(types.contains(&2));
         assert!(types.contains(&100));

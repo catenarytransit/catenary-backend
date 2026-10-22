@@ -92,7 +92,13 @@ impl LoadProgress {
     }
 
     fn draw(&self) {
-        let rendered = format_bar(self.stage, self.label, self.done, self.total, self.started.elapsed());
+        let rendered = format_bar(
+            self.stage,
+            self.label,
+            self.done,
+            self.total,
+            self.started.elapsed(),
+        );
         let mut output = io::stderr().lock();
         let _ = write!(output, "\r\x1b[2K{rendered}");
         let _ = output.flush();
@@ -126,7 +132,12 @@ fn format_bar(stage: &str, label: &str, done: usize, total: usize, elapsed: Dura
         let rate = done as f64 / elapsed.as_secs_f64();
         let remaining = ((total - done) as f64 / rate).ceil() as u64;
         if remaining >= 3600 {
-            format!("{:02}:{:02}:{:02}", remaining / 3600, (remaining / 60) % 60, remaining % 60)
+            format!(
+                "{:02}:{:02}:{:02}",
+                remaining / 3600,
+                (remaining / 60) % 60,
+                remaining % 60
+            )
         } else {
             format!("{:02}:{:02}", remaining / 60, remaining % 60)
         }
@@ -153,7 +164,13 @@ mod tests {
 
     #[test]
     fn display_includes_counts_bar_and_percentage() {
-        let text = format_bar("planner", "Loading direction patterns", 50, 200, Duration::from_secs(10));
+        let text = format_bar(
+            "planner",
+            "Loading direction patterns",
+            50,
+            200,
+            Duration::from_secs(10),
+        );
         assert!(text.contains("Loading direction patterns"));
         assert!(text.contains("50/200 (25%)"));
         assert!(text.contains("########------------------------"));
@@ -162,14 +179,20 @@ mod tests {
 
     #[test]
     fn stage_is_accurate() {
-        assert!(format_bar("gtfs2graph", "Stops", 2, 4, Duration::from_secs(2))
-            .starts_with("[gtfs2graph] Stops "));
+        assert!(
+            format_bar("gtfs2graph", "Stops", 2, 4, Duration::from_secs(2))
+                .starts_with("[gtfs2graph] Stops ")
+        );
     }
 
     #[test]
     fn unknown_eta_until_there_is_a_reliable_rate() {
-        assert!(format_bar("planner", "Loading", 0, 100, Duration::from_secs(5)).contains("ETA --:--"));
-        assert!(format_bar("planner", "Loading", 100, 100, Duration::from_secs(5)).contains("100%"));
+        assert!(
+            format_bar("planner", "Loading", 0, 100, Duration::from_secs(5)).contains("ETA --:--")
+        );
+        assert!(
+            format_bar("planner", "Loading", 100, 100, Duration::from_secs(5)).contains("100%")
+        );
         assert!(format_bar("planner", "Loading", 0, 0, Duration::ZERO).contains("0/0 (100%)"));
     }
 }

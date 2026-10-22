@@ -592,9 +592,9 @@ impl From<gtfs_realtime::trip_descriptor::ModifiedTripSelector> for ModifiedTrip
             modifications_id: modified_trip_selector.modifications_id,
             affected_trip_id: modified_trip_selector.affected_trip_id,
             start_time: modified_trip_selector.start_time,
-            start_date: modified_trip_selector.start_date.and_then(|date| {
-                chrono::NaiveDate::parse_from_str(&date, "%Y%m%d").ok()
-            }),
+            start_date: modified_trip_selector
+                .start_date
+                .and_then(|date| chrono::NaiveDate::parse_from_str(&date, "%Y%m%d").ok()),
         }
     }
 }
@@ -648,7 +648,10 @@ mod modified_trip_service_date_tests {
         assert_eq!(stored.effective_start_date(), Some(october_13));
         assert_ne!(stored.effective_start_date(), Some(october_12));
         assert_eq!(stored.effective_start_time(), Some("11:09:00"));
-        assert_eq!(stored.modified_trip.unwrap().affected_trip_id.as_deref(), Some("12905165"));
+        assert_eq!(
+            stored.modified_trip.unwrap().affected_trip_id.as_deref(),
+            Some("12905165")
+        );
     }
 
     #[test]
@@ -660,7 +663,10 @@ mod modified_trip_service_date_tests {
             ..Default::default()
         };
         let stored: AspenRawTripInfo = descriptor.into();
-        assert_eq!(stored.effective_start_date(), chrono::NaiveDate::from_ymd_opt(2026, 10, 13));
+        assert_eq!(
+            stored.effective_start_date(),
+            chrono::NaiveDate::from_ymd_opt(2026, 10, 13)
+        );
         assert_eq!(stored.effective_start_time(), Some("11:09:00"));
     }
 

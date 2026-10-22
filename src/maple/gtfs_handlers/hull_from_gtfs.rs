@@ -9,8 +9,8 @@ use geo::{
 use gtfs_structures::RouteType;
 use std::f64::consts::PI;
 
-use catenary::hull::chi_shape;
 use super::ocean_exclusions::open_ocean_exclusions;
+use catenary::hull::chi_shape;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Polygon> {
     let exclusions = open_ocean_exclusions();
@@ -52,9 +52,7 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
         .filter(|(_, stop)| {
             stop.longitude.unwrap().is_finite() && stop.latitude.unwrap().is_finite()
         })
-        .filter(|(_, stop)| {
-            !exclusions.excludes(stop.longitude.unwrap(), stop.latitude.unwrap())
-        })
+        .filter(|(_, stop)| !exclusions.excludes(stop.longitude.unwrap(), stop.latitude.unwrap()))
         .map(|(_, stop)| Point::new(stop.longitude.unwrap(), stop.latitude.unwrap()))
         .collect::<Vec<Point>>();
 

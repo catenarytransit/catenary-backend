@@ -255,11 +255,13 @@ pub async fn delete_stale_attempts_for_feed(
         let mut conn = conn_pool.get().await?;
         let count = diesel::delete(
             transfer::transfers.filter(
-                transfer::onestop_feed_id.eq(feed_id)
+                transfer::onestop_feed_id
+                    .eq(feed_id)
                     .and(transfer::attempt_id.ne_all(valid_attempt_ids)),
             ),
         )
-        .execute(&mut conn).await?;
+        .execute(&mut conn)
+        .await?;
         println!("Deleted {} stale transfer rules", count);
     }
 
@@ -493,11 +495,13 @@ pub async fn delete_attempt_objects(
         let mut conn = conn_pool.get().await?;
         diesel::delete(
             transfer::transfers.filter(
-                transfer::onestop_feed_id.eq(&feed_id)
+                transfer::onestop_feed_id
+                    .eq(&feed_id)
                     .and(transfer::attempt_id.eq(&attempt_id)),
             ),
         )
-        .execute(&mut conn).await?;
+        .execute(&mut conn)
+        .await?;
     }
 
     use catenary::schema::gtfs::feed_info;
@@ -693,9 +697,9 @@ pub async fn wipe_whole_feed(
     {
         use catenary::schema::gtfs::transfers::dsl as transfer;
         let mut conn = conn_pool.get().await?;
-        diesel::delete(transfer::transfers.filter(
-            transfer::onestop_feed_id.eq(&feed_id),
-        )).execute(&mut conn).await?;
+        diesel::delete(transfer::transfers.filter(transfer::onestop_feed_id.eq(&feed_id)))
+            .execute(&mut conn)
+            .await?;
     }
 
     use catenary::schema::gtfs::feed_info;

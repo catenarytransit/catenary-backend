@@ -523,7 +523,10 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
 // Returns a checked offset, retaining GTFS's service-day representation
 // (24:10:00 is later than 23:50:00, without any modulo-24-hour conversion).
-fn time_since_start(absolute_time: Option<u32>, start_time: u32) -> Result<Option<i32>, &'static str> {
+fn time_since_start(
+    absolute_time: Option<u32>,
+    start_time: u32,
+) -> Result<Option<i32>, &'static str> {
     absolute_time
         .map(|time| {
             time.checked_sub(start_time)
@@ -565,16 +568,16 @@ where
         if matches!((arrival, departure), (Some(a), Some(d)) if a > d) {
             return Err("arrival is later than departure at a stop");
         }
-        keys.push(arrival.or(departure).map(|first| {
-            (first, departure.or(arrival).unwrap())
-        }));
+        keys.push(
+            arrival
+                .or(departure)
+                .map(|first| (first, departure.or(arrival).unwrap())),
+        );
     }
 
     // GTFS requires times at terminal stops. Without them, an untimed end
     // cannot be reliably located in the chronological sequence.
-    if keys.first().and_then(|key| *key).is_none()
-        || keys.last().and_then(|key| *key).is_none()
-    {
+    if keys.first().and_then(|key| *key).is_none() || keys.last().and_then(|key| *key).is_none() {
         return Err("first or last GTFS stop has no scheduled time");
     }
 
@@ -599,8 +602,7 @@ where
         let count = i - missing_begin;
         for (index, key) in keys[missing_begin..i].iter_mut().enumerate() {
             // u64 avoids multiplication overflow for large GTFS time values.
-            let fraction = (u64::from(after - before) * (index as u64 + 1))
-                / (count as u64 + 1);
+            let fraction = (u64::from(after - before) * (index as u64 + 1)) / (count as u64 + 1);
             let interpolated = before + fraction as u32;
             *key = Some((interpolated, interpolated));
         }
@@ -611,9 +613,8 @@ where
         .zip(keys)
         .map(|(stop, key)| (stop, key.unwrap()))
         .collect::<Vec<_>>();
-    stops_with_keys.sort_by_key(|(stop, (arrival, departure))| {
-        (*arrival, *departure, stop_sequence(stop))
-    });
+    stops_with_keys
+        .sort_by_key(|(stop, (arrival, departure))| (*arrival, *departure, stop_sequence(stop)));
 
     Ok(stops_with_keys.into_iter().map(|(stop, _)| stop).collect())
 }
@@ -633,7 +634,6 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactStri
 
     seahash::hash(&convert_to_bytes)
 }
-
 
 #[cfg(test)]
 mod chronological_compression_tests {
@@ -657,12 +657,27 @@ mod chronological_compression_tests {
     #[test]
     fn uses_arrival_departure_chronology_even_when_gtfs_sequence_disagrees() {
         let rows = [
-            Stop { sequence: 3, arrival: Some(11_400), departure: Some(11_460) },
-            Stop { sequence: 1, arrival: Some(12_000), departure: Some(12_000) },
-            Stop { sequence: 2, arrival: Some(11_700), departure: Some(11_760) },
+            Stop {
+                sequence: 3,
+                arrival: Some(11_400),
+                departure: Some(11_460),
+            },
+            Stop {
+                sequence: 1,
+                arrival: Some(12_000),
+                departure: Some(12_000),
+            },
+            Stop {
+                sequence: 2,
+                arrival: Some(11_700),
+                departure: Some(11_760),
+            },
         ];
         let sorted = order(&rows).unwrap();
-        assert_eq!(sorted.iter().map(|stop| stop.sequence).collect::<Vec<_>>(), vec![3, 2, 1]);
+        assert_eq!(
+            sorted.iter().map(|stop| stop.sequence).collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
         let origin = sorted[0].arrival.unwrap();
         assert_eq!(time_since_start(sorted[1].arrival, origin), Ok(Some(300)));
     }
@@ -670,51 +685,124 @@ mod chronological_compression_tests {
     #[test]
     fn uses_departure_and_then_stop_sequence_as_tie_breakers() {
         let rows = [
-            Stop { sequence: 2, arrival: Some(100), departure: Some(110) },
-            Stop { sequence: 1, arrival: Some(100), departure: Some(105) },
-            Stop { sequence: 3, arrival: Some(110), departure: Some(110) },
+            Stop {
+                sequence: 2,
+                arrival: Some(100),
+                departure: Some(110),
+            },
+            Stop {
+                sequence: 1,
+                arrival: Some(100),
+                departure: Some(105),
+            },
+            Stop {
+                sequence: 3,
+                arrival: Some(110),
+                departure: Some(110),
+            },
         ];
-        assert_eq!(order(&rows).unwrap().iter().map(|s| s.sequence).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            order(&rows)
+                .unwrap()
+                .iter()
+                .map(|s| s.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
     fn fills_untimed_stops_between_timed_neighbours() {
         let rows = [
-            Stop { sequence: 3, arrival: Some(3_600), departure: Some(3_600) },
-            Stop { sequence: 2, arrival: None, departure: None },
-            Stop { sequence: 1, arrival: Some(0), departure: Some(0) },
+            Stop {
+                sequence: 3,
+                arrival: Some(3_600),
+                departure: Some(3_600),
+            },
+            Stop {
+                sequence: 2,
+                arrival: None,
+                departure: None,
+            },
+            Stop {
+                sequence: 1,
+                arrival: Some(0),
+                departure: Some(0),
+            },
         ];
-        assert_eq!(order(&rows).unwrap().iter().map(|s| s.sequence).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            order(&rows)
+                .unwrap()
+                .iter()
+                .map(|s| s.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
     }
 
     #[test]
     fn keeps_times_after_midnight_as_service_day_seconds() {
         let rows = [
-            Stop { sequence: 2, arrival: Some(24 * 3600 + 10 * 60), departure: Some(24 * 3600 + 15 * 60) },
-            Stop { sequence: 1, arrival: Some(23 * 3600 + 50 * 60), departure: Some(23 * 3600 + 50 * 60) },
+            Stop {
+                sequence: 2,
+                arrival: Some(24 * 3600 + 10 * 60),
+                departure: Some(24 * 3600 + 15 * 60),
+            },
+            Stop {
+                sequence: 1,
+                arrival: Some(23 * 3600 + 50 * 60),
+                departure: Some(23 * 3600 + 50 * 60),
+            },
         ];
         let sorted = order(&rows).unwrap();
         assert_eq!(sorted[0].sequence, 1);
-        assert_eq!(time_since_start(sorted[1].arrival, sorted[0].arrival.unwrap()), Ok(Some(1200)));
+        assert_eq!(
+            time_since_start(sorted[1].arrival, sorted[0].arrival.unwrap()),
+            Ok(Some(1200))
+        );
     }
 
     #[test]
     fn rejects_ambiguous_or_invalid_sequences() {
         let missing_terminal = [
-            Stop { sequence: 1, arrival: None, departure: None },
-            Stop { sequence: 2, arrival: Some(100), departure: Some(100) },
+            Stop {
+                sequence: 1,
+                arrival: None,
+                departure: None,
+            },
+            Stop {
+                sequence: 2,
+                arrival: Some(100),
+                departure: Some(100),
+            },
         ];
         assert!(order(&missing_terminal).is_err());
 
         let backwards_stop = [
-            Stop { sequence: 1, arrival: Some(200), departure: Some(100) },
-            Stop { sequence: 2, arrival: Some(300), departure: Some(300) },
+            Stop {
+                sequence: 1,
+                arrival: Some(200),
+                departure: Some(100),
+            },
+            Stop {
+                sequence: 2,
+                arrival: Some(300),
+                departure: Some(300),
+            },
         ];
         assert!(order(&backwards_stop).is_err());
 
         let duplicates = [
-            Stop { sequence: 1, arrival: Some(100), departure: Some(100) },
-            Stop { sequence: 1, arrival: Some(200), departure: Some(200) },
+            Stop {
+                sequence: 1,
+                arrival: Some(100),
+                departure: Some(100),
+            },
+            Stop {
+                sequence: 1,
+                arrival: Some(200),
+                departure: Some(200),
+            },
         ];
         assert!(order(&duplicates).is_err());
         assert!(time_since_start(Some(10), 20).is_err());
