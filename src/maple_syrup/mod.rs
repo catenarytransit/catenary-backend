@@ -94,37 +94,73 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     let mut direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>> = AHashMap::new();
 
     for (trip_id, trip) in &gtfs.trips {
-        let mut stop_diffs: Vec<StopDifference> = Vec::new();
-
         if trip.stop_times.len() < 2 {
             println!("Trip {} doesn't contain enough times", trip);
             continue;
         }
 
-        //according to the gtfs spec
-        //Arrival times are "Required for the first and last stop in a trip (defined by stop_times.stop_sequence)"
-        if trip.stop_times[0].arrival_time.is_none()
-            || trip.stop_times[trip.stop_times.len() - 1]
-                .departure_time
-                .is_none()
-        {
-            println!("Invalid trip {} with no start or end time", trip_id);
-            continue;
-        }
+        // Use the scheduled events, not CSV order or stop_sequence, to determine
+        // the itinerary order and trip origin. For untimed stops, use their GTFS
+        // sequence only to interpolate a position between timed neighbours.
+        let ordered_stop_times = match order_stops_by_schedule(
+            &trip.stop_times,
+            |stop| stop.stop_sequence,
+            |stop| stop.arrival_time,
+            |stop| stop.departure_time,
+        ) {
+            Ok(stops) => stops,
+            Err(reason) => {
+                eprintln!("Invalid trip {}: {}", trip_id, reason);
+                continue;
+            }
+        };
 
-        let start_time: u32 = trip.stop_times[0].arrival_time.unwrap();
+        let start_time = ordered_stop_times[0]
+            .arrival_time
+            .or(ordered_stop_times[0].departure_time)
+            .expect("chronological ordering requires a timed first stop");
 
-        //this trip "starts at 09:00" local time or something
-        for stop_time in trip.stop_times.iter() {
-            let arrival_time_since_start: Option<i32> = stop_time
-                .arrival_time
-                .map(|arrival_time| arrival_time as i32 - start_time as i32);
+        let mut stop_diffs = Vec::with_capacity(ordered_stop_times.len());
+        let mut last_scheduled_time = start_time;
+        let mut invalid_schedule = false;
 
-            let departure_time_since_start: Option<i32> = stop_time
-                .departure_time
-                .map(|departure_time| departure_time as i32 - start_time as i32);
+        for stop_time in &ordered_stop_times {
+            let (arrival_time_since_start, departure_time_since_start) = match (
+                time_since_start(stop_time.arrival_time, start_time),
+                time_since_start(stop_time.departure_time, start_time),
+            ) {
+                (Ok(arrival), Ok(departure)) => (arrival, departure),
+                _ => {
+                    eprintln!(
+                        "Invalid trip {} at stop_sequence {}: negative or overflowing time offset",
+                        trip_id, stop_time.stop_sequence
+                    );
+                    invalid_schedule = true;
+                    break;
+                }
+            };
 
-            let stop_diff = StopDifference {
+            // A stop's departure must precede the next stop's arrival. GTFS
+            // service-day times >= 24:00:00 are already in the correct order.
+            for event in [stop_time.arrival_time, stop_time.departure_time]
+                .into_iter()
+                .flatten()
+            {
+                if event < last_scheduled_time {
+                    eprintln!(
+                        "Invalid trip {} at stop_sequence {}: overlapping or decreasing stop times",
+                        trip_id, stop_time.stop_sequence
+                    );
+                    invalid_schedule = true;
+                    break;
+                }
+                last_scheduled_time = event;
+            }
+            if invalid_schedule {
+                break;
+            }
+
+            stop_diffs.push(StopDifference {
                 stop_id: (&stop_time.stop.id).into(),
                 arrival_time_since_start,
                 departure_time_since_start,
@@ -139,14 +175,12 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                 pickup_type: pickup_dropoff_to_i16(&stop_time.pickup_type),
                 timepoint: timepoint_to_bool(&stop_time.timepoint),
                 gtfs_stop_sequence: stop_time.stop_sequence,
-            };
-
-            stop_diffs.push(stop_diff);
+            });
         }
 
-        stop_diffs.sort_by(|a, b| a.gtfs_stop_sequence.cmp(&b.gtfs_stop_sequence));
-
-        stop_diffs.dedup();
+        if invalid_schedule {
+            continue;
+        }
 
         let stated_timezone = match gtfs.agencies.len() {
             0 => None,
@@ -171,7 +205,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         let timezone = match stated_timezone {
             Some(timezone) => timezone,
             None => {
-                let first_stop = &gtfs.stops[&trip.stop_times[0].stop.id];
+                let first_stop = &ordered_stop_times[0].stop;
 
                 match (first_stop.longitude, first_stop.latitude) {
                     (Some(long), Some(lat)) => String::from(FINDER.get_tz_name(long, lat)),
@@ -487,6 +521,103 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
     }
 }
 
+// Returns a checked offset, retaining GTFS's service-day representation
+// (24:10:00 is later than 23:50:00, without any modulo-24-hour conversion).
+fn time_since_start(absolute_time: Option<u32>, start_time: u32) -> Result<Option<i32>, &'static str> {
+    absolute_time
+        .map(|time| {
+            time.checked_sub(start_time)
+                .and_then(|delta| i32::try_from(delta).ok())
+                .ok_or("negative or overflowing GTFS time offset")
+        })
+        .transpose()
+}
+
+// Sort by arrival, then departure, then GTFS sequence only for ties.
+// Untimed stops have no chronological ordering information of their own.
+// Interpolate their sorting keys between the adjacent timed stops in GTFS
+// sequence order, rather than pushing all of them to the end of the trip.
+fn order_stops_by_schedule<'a, T, S, A, D>(
+    stops: &'a [T],
+    stop_sequence: S,
+    arrival_time: A,
+    departure_time: D,
+) -> Result<Vec<&'a T>, &'static str>
+where
+    S: Fn(&T) -> u32,
+    A: Fn(&T) -> Option<u32>,
+    D: Fn(&T) -> Option<u32>,
+{
+    let mut by_sequence: Vec<&T> = stops.iter().collect();
+    by_sequence.sort_by_key(|stop| stop_sequence(stop));
+
+    if by_sequence
+        .windows(2)
+        .any(|pair| stop_sequence(pair[0]) == stop_sequence(pair[1]))
+    {
+        return Err("duplicate GTFS stop_sequence");
+    }
+
+    let mut keys = Vec::with_capacity(by_sequence.len());
+    for stop in &by_sequence {
+        let arrival = arrival_time(stop);
+        let departure = departure_time(stop);
+        if matches!((arrival, departure), (Some(a), Some(d)) if a > d) {
+            return Err("arrival is later than departure at a stop");
+        }
+        keys.push(arrival.or(departure).map(|first| {
+            (first, departure.or(arrival).unwrap())
+        }));
+    }
+
+    // GTFS requires times at terminal stops. Without them, an untimed end
+    // cannot be reliably located in the chronological sequence.
+    if keys.first().and_then(|key| *key).is_none()
+        || keys.last().and_then(|key| *key).is_none()
+    {
+        return Err("first or last GTFS stop has no scheduled time");
+    }
+
+    let mut i = 0;
+    while i < keys.len() {
+        if keys[i].is_some() {
+            i += 1;
+            continue;
+        }
+
+        let missing_begin = i;
+        while i < keys.len() && keys[i].is_none() {
+            i += 1;
+        }
+
+        let before = keys[missing_begin - 1].unwrap().1;
+        let after = keys[i].unwrap().0;
+        if after < before {
+            return Err("untimed stops lie between conflicting scheduled timepoints");
+        }
+
+        let count = i - missing_begin;
+        for (index, key) in keys[missing_begin..i].iter_mut().enumerate() {
+            // u64 avoids multiplication overflow for large GTFS time values.
+            let fraction = (u64::from(after - before) * (index as u64 + 1))
+                / (count as u64 + 1);
+            let interpolated = before + fraction as u32;
+            *key = Some((interpolated, interpolated));
+        }
+    }
+
+    let mut stops_with_keys = by_sequence
+        .into_iter()
+        .zip(keys)
+        .map(|(stop, key)| (stop, key.unwrap()))
+        .collect::<Vec<_>>();
+    stops_with_keys.sort_by_key(|(stop, (arrival, departure))| {
+        (*arrival, *departure, stop_sequence(stop))
+    });
+
+    Ok(stops_with_keys.into_iter().map(|(stop, _)| stop).collect())
+}
+
 fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactString>) -> u64 {
     let mut hash_of_direction_pattern_temp: Vec<String> = Vec::new();
 
@@ -501,4 +632,92 @@ fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactStri
             .unwrap();
 
     seahash::hash(&convert_to_bytes)
+}
+
+
+#[cfg(test)]
+mod chronological_compression_tests {
+    use super::{order_stops_by_schedule, time_since_start};
+
+    struct Stop {
+        sequence: u32,
+        arrival: Option<u32>,
+        departure: Option<u32>,
+    }
+
+    fn order(stops: &[Stop]) -> Result<Vec<&Stop>, &'static str> {
+        order_stops_by_schedule(
+            stops,
+            |stop| stop.sequence,
+            |stop| stop.arrival,
+            |stop| stop.departure,
+        )
+    }
+
+    #[test]
+    fn uses_arrival_departure_chronology_even_when_gtfs_sequence_disagrees() {
+        let rows = [
+            Stop { sequence: 3, arrival: Some(11_400), departure: Some(11_460) },
+            Stop { sequence: 1, arrival: Some(12_000), departure: Some(12_000) },
+            Stop { sequence: 2, arrival: Some(11_700), departure: Some(11_760) },
+        ];
+        let sorted = order(&rows).unwrap();
+        assert_eq!(sorted.iter().map(|stop| stop.sequence).collect::<Vec<_>>(), vec![3, 2, 1]);
+        let origin = sorted[0].arrival.unwrap();
+        assert_eq!(time_since_start(sorted[1].arrival, origin), Ok(Some(300)));
+    }
+
+    #[test]
+    fn uses_departure_and_then_stop_sequence_as_tie_breakers() {
+        let rows = [
+            Stop { sequence: 2, arrival: Some(100), departure: Some(110) },
+            Stop { sequence: 1, arrival: Some(100), departure: Some(105) },
+            Stop { sequence: 3, arrival: Some(110), departure: Some(110) },
+        ];
+        assert_eq!(order(&rows).unwrap().iter().map(|s| s.sequence).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn fills_untimed_stops_between_timed_neighbours() {
+        let rows = [
+            Stop { sequence: 3, arrival: Some(3_600), departure: Some(3_600) },
+            Stop { sequence: 2, arrival: None, departure: None },
+            Stop { sequence: 1, arrival: Some(0), departure: Some(0) },
+        ];
+        assert_eq!(order(&rows).unwrap().iter().map(|s| s.sequence).collect::<Vec<_>>(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn keeps_times_after_midnight_as_service_day_seconds() {
+        let rows = [
+            Stop { sequence: 2, arrival: Some(24 * 3600 + 10 * 60), departure: Some(24 * 3600 + 15 * 60) },
+            Stop { sequence: 1, arrival: Some(23 * 3600 + 50 * 60), departure: Some(23 * 3600 + 50 * 60) },
+        ];
+        let sorted = order(&rows).unwrap();
+        assert_eq!(sorted[0].sequence, 1);
+        assert_eq!(time_since_start(sorted[1].arrival, sorted[0].arrival.unwrap()), Ok(Some(1200)));
+    }
+
+    #[test]
+    fn rejects_ambiguous_or_invalid_sequences() {
+        let missing_terminal = [
+            Stop { sequence: 1, arrival: None, departure: None },
+            Stop { sequence: 2, arrival: Some(100), departure: Some(100) },
+        ];
+        assert!(order(&missing_terminal).is_err());
+
+        let backwards_stop = [
+            Stop { sequence: 1, arrival: Some(200), departure: Some(100) },
+            Stop { sequence: 2, arrival: Some(300), departure: Some(300) },
+        ];
+        assert!(order(&backwards_stop).is_err());
+
+        let duplicates = [
+            Stop { sequence: 1, arrival: Some(100), departure: Some(100) },
+            Stop { sequence: 1, arrival: Some(200), departure: Some(200) },
+        ];
+        assert!(order(&duplicates).is_err());
+        assert!(time_since_start(Some(10), 20).is_err());
+        assert!(time_since_start(Some(u32::MAX), 0).is_err());
+    }
 }
