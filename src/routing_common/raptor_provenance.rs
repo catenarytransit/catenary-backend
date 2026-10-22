@@ -191,6 +191,115 @@ fn marked_routes(tt: &ZeroCopyTimetable<'_>, round: &Round, seen: &mut [u8], epo
     routes
 }
 
+#[derive(Clone, Copy)]
+struct ActiveTrip<'a> {
+    transport: u32,
+    service_day: u16,
+    start: i64,
+    events: &'a [crate::routing_common::timetable::Delta],
+}
+
+fn active_route_trips<'a>(
+    tt: &'a ZeroCopyTimetable<'a>,
+    route: RouteIdx,
+    departure: i64,
+    max_time: i64,
+    stats: &mut RaptorStats,
+) -> Vec<ActiveTrip<'a>> {
+    let base = i64::from(tt.header().first_utc_day);
+    let horizon = i64::from(tt.header().day_count);
+    let mut result = Vec::new();
+    if horizon == 0 { return result; }
+    let range = tt.route_transport_ranges()[route.idx()];
+    for index in range.from..range.to {
+        let transport = TransportIdx(index);
+        let days = &tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
+        let first = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
+        let Some(events) = tt.events_for_transport(transport) else { continue };
+        if events.is_empty() { continue; }
+        let first_event = first + i64::from(events[0].seconds());
+        let last_event = first + i64::from(events[events.len() - 1].seconds());
+        let earliest = ((departure - last_event).div_euclid(86_400) - base).max(0);
+        let latest = ((max_time - first_event).div_euclid(86_400) - base).min(horizon - 1);
+        if earliest > latest { continue; }
+
+        for word in (earliest as usize / 64)..=(latest as usize / 64) {
+            let lo = if word == earliest as usize / 64 {earliest as usize % 64} else {0};
+            let hi = if word == latest as usize / 64 {latest as usize % 64} else {63};
+            let mut active = days.words[word] & (u64::MAX << lo) & (u64::MAX >> (63 - hi));
+            stats.transport_days_tested += (hi - lo + 1) as u64;
+            while active != 0 {
+                let bit = active.trailing_zeros() as usize;
+                active &= active - 1;
+                let day = word * 64 + bit;
+                stats.active_transport_days += 1;
+                result.push(ActiveTrip {
+                    transport: index,
+                    service_day: day as u16,
+                    start: (base + day as i64) * 86_400 + first,
+                    events,
+                });
+            }
+        }
+    }
+    result.sort_unstable_by_key(|trip| trip.start + i64::from(trip.events[0].seconds()));
+    result
+}
+
+fn boarding_candidate(
+    tt: &ZeroCopyTimetable<'_>,
+    prev: &Round,
+    nodes: &[Node],
+    stop: usize,
+) -> Option<(NodeId, i64)> {
+    let mut best: Option<(NodeId, i64)> = None;
+    for &id in &prev.states[stop] {
+        if !nodes[id].live { continue; }
+        let label = nodes[id];
+        let ready = match label.last_alight {
+            None => label.time,
+            Some((from, alight)) => {
+                let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(stop as u32));
+                if rule.is_some_and(|r| r.prohibited()) { continue; }
+                let seconds = tt.location_transfer_seconds()[from]
+                    .max(tt.location_transfer_seconds()[stop])
+                    .max(rule.map_or(0, |r| r.min_seconds));
+                label.time.max(alight + i64::from(seconds))
+            }
+        };
+        if best.is_none_or(|(_, time)| ready < time) {
+            best = Some((id, ready));
+        }
+    }
+    best
+}
+
+fn write_arrival(
+    tt: &ZeroCopyTimetable<'_>, special: &[bool],
+    global: &mut [Vec<NodeId>], curr: &mut Round, nodes: &mut Vec<Node>,
+    route: RouteIdx, trip: ActiveTrip<'_>,
+    parent: NodeId, boarded_at: i64, position: usize, stop: usize,
+    max_time: i64, stats: &mut RaptorStats,
+) {
+    let arrival = trip.start + i64::from(trip.events[2 * position - 1].seconds());
+    if arrival > max_time { return; }
+    let node = Node {
+        stop, time: arrival,
+        last_alight: Some((stop, arrival)),
+        boardings: nodes[parent].boardings + 1,
+        predecessor: Predecessor::Ride {
+            previous: parent, route: route.0, transport: trip.transport,
+            service_day: trip.service_day, departure: boarded_at, arrival,
+        },
+        live: true,
+    };
+    curr.insert(tt, special, global, nodes, node, stats);
+}
+
+/// Stop-by-stop scan with earliest feasible transport selection, as in
+/// Nigiri's update_route()/get_earliest_transport(). A chain is non-overtaking
+/// on the same service day. Trips from different days that overlap can violate
+/// that property, so conservatively fall back to the exact transport scan.
 fn traverse(
     tt: &ZeroCopyTimetable<'_>,
     special: &[bool],
@@ -203,84 +312,83 @@ fn traverse(
     max_time: i64,
     stats: &mut RaptorStats,
 ) {
-    let start = Instant::now();
-    let base = i64::from(tt.header().first_utc_day);
-    let horizon = i64::from(tt.header().day_count);
-    if horizon == 0 { return; }
+    let started = Instant::now();
     for &route in marked {
         stats.routes_scanned += 1;
-        let range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
         if stops.len() < 2 { continue; }
-        for index in range.from..range.to {
-            let transport = TransportIdx(index);
-            let active = &tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
-            let Some(events) = tt.events_for_transport(transport) else { continue; };
-            let earliest = first + i64::from(events.first().map_or(0, |e| e.seconds()));
-            let latest = first + i64::from(events.last().map_or(0, |e| e.seconds()));
-            let first_day = ((departure - latest).div_euclid(86_400) - base).max(0);
-            let last_day = ((max_time - earliest).div_euclid(86_400) - base).min(horizon - 1);
-            if first_day > last_day { continue; }
-
-            // Exact service-day range pruning, as in the merged predecessor PR.
-            for word in (first_day as usize / 64)..=(last_day as usize / 64) {
-                let lo = if word == first_day as usize / 64 {first_day as usize % 64} else {0};
-                let hi = if word == last_day as usize / 64 {last_day as usize % 64} else {63};
-                let mut bits = active.words[word] & (u64::MAX << lo) & (u64::MAX >> (63 - hi));
-                stats.transport_days_tested += (hi - lo + 1) as u64;
-                while bits != 0 {
-                    let bit = bits.trailing_zeros() as usize;
-                    bits &= bits - 1;
-                    stats.active_transport_days += 1;
-                    let day = word * 64 + bit;
-                    let origin = (base + day as i64) * 86_400 + first;
-                    // The first feasible boarding position suffices on this
-                    // fixed transport: subsequent alight times and interchange
-                    // provenance are independent of the prior boarding history.
-                    let mut boarded: Option<(NodeId, i64)> = None;
-                    for (pos, stop) in stops.iter().enumerate() {
-                        stats.stop_events_scanned += 1;
-                        let loc = stop.location().idx();
-                        if let Some((boarding, board_time)) = boarded {
-                            if stop.inbound() && pos > 0 {
-                                let offset = i64::from(events[2 * pos - 1].seconds());
-                                let arrival = origin + offset;
-                                if arrival <= max_time {
-                                    let node = Node {
-                                        stop: loc,
-                                        time: arrival,
-                                        last_alight: Some((loc, arrival)),
-                                        boardings: nodes[boarding].boardings + 1,
-                                        predecessor: Predecessor::Ride {
-                                            previous: boarding,
-                                            route: route.0,
-                                            transport: transport.0,
-                                            service_day: day as u16,
-                                            departure: board_time,
-                                            arrival,
-                                        },
-                                        live: true,
-                                    };
-                                    curr.insert(tt, special, global, nodes, node, stats);
-                                }
-                            }
+        let trips = active_route_trips(tt, route, departure, max_time, stats);
+        if trips.is_empty() { continue; }
+        let overlaps_days = trips.windows(2).any(|two| {
+            two[0].service_day != two[1].service_day &&
+                two[0].start + i64::from(two[0].events[two[0].events.len()-1].seconds()) >
+                two[1].start + i64::from(two[1].events[0].seconds())
+        });
+        if overlaps_days {
+            // Overlapping GTFS service-day instances are not globally ordered.
+            for &trip in &trips {
+                let mut onboard = None;
+                for (position, stop) in stops.iter().enumerate() {
+                    stats.stop_events_scanned += 1;
+                    let location = stop.location().idx();
+                    if let Some((parent, boarded)) = onboard {
+                        if stop.inbound() && position > 0 {
+                            write_arrival(tt, special, global, curr, nodes,
+                                route, trip, parent, boarded, position,
+                                location, max_time, stats);
                         }
-                        if boarded.is_none() && stop.outbound() && pos + 1 < stops.len() {
-                            let board_time = origin + i64::from(events[2 * pos].seconds());
-                            if board_time > max_time { continue; }
-                            if let Some(&id) = prev.states[loc].iter()
-                                .find(|&&id| nodes[id].live && can_board(tt, nodes[id], loc, board_time))
-                            {
-                                boarded = Some((id, board_time));
-                            }
+                    }
+                    if onboard.is_none() && stop.outbound() && position+1 < stops.len() {
+                        let at = trip.start + i64::from(trip.events[2*position].seconds());
+                        if let Some((parent, ready)) = boarding_candidate(tt,prev,nodes,location) {
+                            if ready <= at && at <= max_time { onboard = Some((parent,at)); }
                         }
                     }
                 }
             }
+            continue;
+        }
+
+        // Sorting by first departure is sufficient inside a non-overtaking
+        // Gentian chain, provided distinct active service days cannot overlap.
+        let mut onboard: Option<(usize, NodeId, i64)> = None;
+        for (position, stop) in stops.iter().enumerate() {
+            stats.stop_events_scanned += 1;
+            let location = stop.location().idx();
+            if let Some((index, parent, boarded)) = onboard {
+                if stop.inbound() && position > 0 {
+                    write_arrival(tt,special,global,curr,nodes,route,
+                        trips[index],parent,boarded,position,location,max_time,stats);
+                }
+            }
+            if position+1 == stops.len() || !stop.outbound() || !prev.has(location) {
+                continue;
+            }
+            let Some((parent, ready)) = boarding_candidate(tt,prev,nodes,location) else {
+                continue;
+            };
+            if ready > max_time { continue; }
+            // Each stop's departure events are monotonic within the
+            // non-overtaking chain. Use a lower bound instead of a trip scan.
+            let candidate = trips.partition_point(|trip| {
+                trip.start + i64::from(trip.events[2*position].seconds()) < ready
+            });
+            let Some(trip) = trips.get(candidate) else { continue; };
+            let board_time = trip.start + i64::from(trip.events[2*position].seconds());
+            if board_time > max_time { continue; }
+            let replace = match onboard {
+                None => true,
+                Some((previous, _, _)) => {
+                    let current_trip = &trips[previous];
+                    let current_departure = current_trip.start +
+                        i64::from(current_trip.events[2*position].seconds());
+                    board_time < current_departure
+                }
+            };
+            if replace { onboard = Some((candidate,parent,board_time)); }
         }
     }
-    stats.route_scan_ms += start.elapsed().as_secs_f64() * 1000.0;
+    stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
 }
 
 fn reconstruct(nodes: &[Node], id: NodeId, egress: u32, departure: i64) -> Option<Journey> {
