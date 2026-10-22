@@ -6,6 +6,25 @@ use std::collections::BinaryHeap;
 
 const INF: i64 = i64::MAX / 4;
 
+/// Work counters describe the search, not allocations in OSR or metadata hydration.
+/// Keep the fields additive so production logs remain comparable across revisions.
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct RaptorStats {
+    pub rounds: u64,
+    pub marked_stops: u64,
+    pub routes_scanned: u64,
+    pub transport_days_tested: u64,
+    pub active_transport_days: u64,
+    pub stop_events_scanned: u64,
+    pub footpath_edges_examined: u64,
+    pub walking_heap_pushes: u64,
+    pub labels_improved: u64,
+    pub round_copy_bytes: u64,
+    pub route_scan_ms: f64,
+    pub walking_ms: f64,
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WalkingEndpoint {
     pub stop: LocationIdx,
@@ -98,20 +117,24 @@ fn can_board(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, departure: i
     alight_time + i64::from(change_time) <= departure
 }
 
-fn relax_walks(
+fn relax_walks_profiled(
     tt: &ZeroCopyTimetable<'_>,
     labels: &mut [Label],
     max_time: i64,
+    stats: &mut RaptorStats,
 ) {
+    let started = std::time::Instant::now();
     let mut heap = BinaryHeap::new();
     for (idx, label) in labels.iter().enumerate() {
         if label.time < INF && label.time <= max_time {
             heap.push(Reverse((label.time, idx)));
+            stats.walking_heap_pushes += 1;
         }
     }
     while let Some(Reverse((time, from))) = heap.pop() {
         if labels[from].time != time { continue; }
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
+            stats.footpath_edges_examined += 1;
             let to = edge.target().idx();
             let seconds = u32::from(edge.seconds());
             if seconds == 0 { continue; }
@@ -120,10 +143,18 @@ fn relax_walks(
             if next <= max_time && improve(
                 labels, to, next, Parent::Walk { from, seconds }, last_alight,
             ) {
+                stats.labels_improved += 1;
+                stats.walking_heap_pushes += 1;
                 heap.push(Reverse((next, to)));
             }
         }
     }
+    stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
+}
+
+#[cfg(test)]
+fn relax_walks(tt: &ZeroCopyTimetable<'_>, labels: &mut [Label], max_time: i64) {
+    relax_walks_profiled(tt, labels, max_time, &mut RaptorStats::default());
 }
 
 /// RAPTOR's route marking: only routes incident to a newly improved
@@ -153,14 +184,16 @@ fn routes_from_marked(
     routes
 }
 
-fn traverse_routes(
+fn traverse_routes_profiled(
     tt: &ZeroCopyTimetable<'_>,
     prev: &[Label],
     curr: &mut [Label],
     marked_routes: &[RouteIdx],
     departure: i64,
     max_time: i64,
+    stats: &mut RaptorStats,
 ) -> Result<()> {
+    let started = std::time::Instant::now();
     let base = i64::from(tt.header().first_utc_day);
     let horizon = i64::from(tt.header().day_count);
     let first_day = (departure.div_euclid(86_400) - base - 31).max(0);
@@ -168,6 +201,7 @@ fn traverse_routes(
     if first_day > last_day { return Ok(()); }
 
     for &route in marked_routes {
+        stats.routes_scanned += 1;
         let transport_range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
         if stops.len() < 2 {
@@ -180,24 +214,29 @@ fn traverse_routes(
             // Resolve a shared profile once per transport, not once per stop.
             let Some(events) = tt.events_for_transport(transport) else { continue };
             for day in first_day..=last_day {
+                stats.transport_days_tested += 1;
                 if !active_days.test(day as usize) { continue; }
+                stats.active_transport_days += 1;
                 let absolute_first = (base + day) * 86_400 + first_departure;
                 let mut onboard: Option<(usize, i64)> = None;
                 for (position, stop) in stops.iter().enumerate() {
+                    stats.stop_events_scanned += 1;
                     let loc = stop.location().idx();
                     if let Some((boarding_loc, boarding_time)) = onboard {
                         if stop.inbound() {
                             if let Some(offset) = position.checked_mul(2).and_then(|i| i.checked_sub(1)).and_then(|i| events.get(i)) {
                                 let arrival = absolute_first + i64::from(offset.seconds());
                                 if arrival <= max_time {
-                                    improve(curr, loc, arrival, Parent::Ride {
+                                    if improve(curr, loc, arrival, Parent::Ride {
                                         from: boarding_loc,
                                         route: route.0,
                                         transport: transport.0,
                                         service_day: day as u16,
                                         departure: boarding_time,
                                         arrival,
-                                    }, Some((loc, arrival)));
+                                    }, Some((loc, arrival))) {
+                                        stats.labels_improved += 1;
+                                    }
                                 }
                             }
                         }
@@ -216,7 +255,23 @@ fn traverse_routes(
             }
         }
     }
+    stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
     Ok(())
+}
+
+#[cfg(test)]
+fn traverse_routes(
+    tt: &ZeroCopyTimetable<'_>,
+    prev: &[Label],
+    curr: &mut [Label],
+    marked_routes: &[RouteIdx],
+    departure: i64,
+    max_time: i64,
+) -> Result<()> {
+    traverse_routes_profiled(
+        tt, prev, curr, marked_routes, departure, max_time,
+        &mut RaptorStats::default(),
+    )
 }
 
 fn reconstruct(
@@ -277,6 +332,14 @@ fn reconstruct(
 }
 
 pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>> {
+    route_with_stats(tt, request).map(|(journeys, _)| journeys)
+}
+
+pub fn route_with_stats(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    let mut stats = RaptorStats::default();
     ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
     ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
         "max_duration_seconds must be between 1 second and 7 days");
@@ -295,7 +358,7 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             }, None);
         }
     }
-    relax_walks(tt, &mut round0, max_time);
+    relax_walks_profiled(tt, &mut round0, max_time, &mut stats);
     let mut marked_stops = round0.iter().enumerate()
         .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
         .collect::<Vec<_>>();
@@ -304,6 +367,8 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
     // Rounds are limited to 16, so a u8 epoch never wraps.
     let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
+        stats.rounds += 1;
+        stats.marked_stops += marked_stops.len() as u64;
         let prev = &labels[round - 1];
         let mut curr: Vec<Label> = prev.iter().map(|label| Label {
             time: label.time,
@@ -312,10 +377,11 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             },
             last_alight: label.last_alight,
         }).collect();
+        stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
         let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
         if routes.is_empty() { break; }
-        traverse_routes(tt, prev, &mut curr, &routes, departure, max_time)?;
-        relax_walks(tt, &mut curr, max_time);
+        traverse_routes_profiled(tt, prev, &mut curr, &routes, departure, max_time, &mut stats)?;
+        relax_walks_profiled(tt, &mut curr, max_time, &mut stats);
         marked_stops = curr.iter().zip(prev).enumerate()
             .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
             .collect();
@@ -354,7 +420,7 @@ pub fn route(tt: &ZeroCopyTimetable<'_>, request: &Query) -> Result<Vec<Journey>
             frontier.push(journey);
         }
     }
-    Ok(frontier)
+    Ok((frontier, stats))
 }
 
 #[cfg(test)]
