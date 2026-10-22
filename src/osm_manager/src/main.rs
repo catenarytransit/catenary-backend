@@ -159,14 +159,14 @@ fn client() -> Result<Client> {
 }
 
 /// Prefer Geofabrik's checksum file; HEAD validators are a fallback.
-fn remote_revision(client: &Client, region: &Region) -> Result<(String, Option<String>)> {
+fn remote_revision(client: &Client, region: &Region) -> Result<(String, Option<String>, Option<u64>)> {
     if let Ok(response) = client.get(format!("{}.md5", region.pbf_url)).send() {
         if response.status().is_success() {
             let text = response.text()?;
             if let Some(md5) = text.split_whitespace().next() {
                 if md5.len() == 32 && md5.bytes().all(|c| c.is_ascii_hexdigit()) {
                     let md5 = md5.to_ascii_lowercase();
-                    return Ok((format!("md5:{md5}"), Some(md5)));
+                    return Ok((format!("md5:{md5}"), Some(md5), None));
                 }
             }
         }
@@ -178,7 +178,12 @@ fn remote_revision(client: &Client, region: &Region) -> Result<(String, Option<S
     let size = headers.get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()).unwrap_or("");
     ensure!(!etag.is_empty() || (!modified.is_empty() && !size.is_empty()),
         "Geofabrik did not provide an MD5 or usable HTTP validators for {}", region.id);
-    Ok((format!("http:{etag}|{modified}|{size}"), None))
+    // Without a checksum, the expected length is essential to reject short files.
+    let expected_len: u64 = size.parse().with_context(|| format!(
+        "Geofabrik provided no usable Content-Length for {} (and no MD5)", region.id
+    ))?;
+    ensure!(expected_len > 0, "empty Geofabrik extract for {}", region.id);
+    Ok((format!("http:{etag}|{modified}|{size}"), None, Some(expected_len)))
 }
 
 /// Detect a changed OSR serializer even when the upstream PBF is unchanged.
@@ -205,29 +210,74 @@ fn extractor_fingerprint(extractor: &Path) -> Result<String> {
     Ok(format!("md5:{:x}", digest.compute()))
 }
 
-fn download_pbf(client: &Client, url: &str, destination: &Path, expected_md5: Option<&str>) -> Result<()> {
-    let mut response = client.get(url).send()?.error_for_status()
-        .with_context(|| format!("downloading {url}"))?;
-    let expected_len = response.content_length();
-    let mut file = File::create(destination)?;
-    let mut digest = md5::Context::new();
-    let mut count = 0u64;
-    let mut buf = [0u8; 128 * 1024];
-    loop {
-        let n = response.read(&mut buf)?;
-        if n == 0 { break; }
-        file.write_all(&buf[..n])?;
-        digest.consume(&buf[..n]);
-        count += n as u64;
+/// Keep one resumable PBF per source URL, invalidating it when Geofabrik
+/// publishes a different checksum or HTTP revision.
+fn prepare_download(temp_dir: &Path, url: &str, revision: &str) -> Result<PathBuf> {
+    let dir = temp_dir.join("osm-downloads");
+    fs::create_dir_all(&dir)?;
+    let key = format!("{:x}", md5::compute(url.as_bytes()));
+    let destination = dir.join(format!("{key}.osm.pbf"));
+    let stamp = dir.join(format!("{key}.revision"));
+    if fs::read_to_string(&stamp).ok().as_deref() != Some(revision) {
+        // Do not append bytes belonging to an earlier upstream revision.
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        fs::write(&stamp, revision)?;
     }
-    file.sync_all()?;
-    ensure!(count > 0, "empty Geofabrik download: {url}");
+    Ok(destination)
+}
+
+fn verify_pbf(path: &Path, expected_md5: Option<&str>, expected_len: Option<u64>) -> Result<()> {
+    let count = fs::metadata(path)
+        .with_context(|| format!("reading downloaded PBF {}", path.display()))?.len();
+    ensure!(count > 0, "empty Geofabrik PBF: {}", path.display());
     if let Some(len) = expected_len {
-        ensure!(count == len, "truncated PBF: expected {len} bytes, received {count}");
+        ensure!(count == len,
+            "truncated PBF: expected {len} bytes, received {count}");
     }
     if let Some(expected) = expected_md5 {
+        let mut digest = md5::Context::new();
+        let mut file = File::open(path)?;
+        let mut buf = [0u8; 128 * 1024];
+        loop {
+            let n = file.read(&mut buf)?;
+            if n == 0 { break; }
+            digest.consume(&buf[..n]);
+        }
         let actual = format!("{:x}", digest.compute());
         ensure!(actual == expected, "PBF MD5 mismatch: expected {expected}, got {actual}");
+    }
+    Ok(())
+}
+
+/// GNU wget retries transient TLS and HTTP failures and resumes partial files
+/// via Range requests. Failed transfers remain available for the next run.
+fn download_pbf(url: &str, destination: &Path,
+                expected_md5: Option<&str>, expected_len: Option<u64>) -> Result<()> {
+    println!("Downloading PBF with resumable wget into {}", destination.display());
+    let status = Command::new("wget")
+        .arg("--https-only")
+        .arg("--continue")
+        .arg("--tries=20")
+        .arg("--waitretry=10")
+        .arg("--connect-timeout=30")
+        .arg("--read-timeout=120")
+        .arg("--retry-connrefused")
+        .arg("--retry-on-http-error=429,500,502,503,504")
+        .arg("--no-verbose")
+        .arg("--output-document").arg(destination)
+        .arg(url)
+        .status()
+        .context("launching wget; install GNU wget to download Geofabrik extracts")?;
+    ensure!(status.success(),
+        "wget failed for {url}: {status}; partial PBF retained at {}", destination.display());
+    // A successful wget exit does not replace an end-to-end integrity check.
+    if let Err(error) = verify_pbf(destination, expected_md5, expected_len) {
+        // Invalid completed files must not be resumed or sent to OSR.
+        fs::remove_file(destination)
+            .with_context(|| format!("discarding invalid PBF {}", destination.display()))?;
+        return Err(error).context("validating Geofabrik PBF after wget");
     }
     Ok(())
 }
@@ -398,7 +448,7 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
     let output = cfg.data_dir.join("regions").join(&region.id);
     let parent = output.parent().context("no output parent")?;
     fs::create_dir_all(parent)?;
-    let (revision, md5) = remote_revision(client, region)?;
+    let (revision, md5, expected_len) = remote_revision(client, region)?;
     let manifest_path = output.join("manifest.json");
     if !force && good_output(&output) {
         if let Ok(bytes) = fs::read(&manifest_path) {
@@ -416,18 +466,20 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
 
     println!("{}: changed or absent ({revision}), downloading and extracting", region.id);
     let suffix = nonce()?;
-    let temp = cfg.temp_dir.join(format!("osm-manager-{suffix}"));
+    let download = prepare_download(&cfg.temp_dir, &region.pbf_url, &revision)?;
     let staging = parent.join(format!(
         ".{}.staging-{suffix}", output.file_name().unwrap().to_string_lossy()
     ));
-    fs::create_dir_all(&temp)?;
     // OSR's -o recreates the output directory, so pass a nonexistent staging path.
     let result = (|| -> Result<()> {
-        let pbf = temp.join("region.osm.pbf");
-        download_pbf(client, &region.pbf_url, &pbf, md5.as_deref())?;
+        download_pbf(&region.pbf_url, &download, md5.as_deref(), expected_len)?;
+        // An update during a long transfer must never be published as one revision.
+        let (after_revision, _, _) = remote_revision(client, region)?;
+        ensure!(revision == after_revision,
+            "Geofabrik revision changed during download for {}; retry the manager", region.id);
         let (geometry, boundary_url) = fetch_boundary(client, region)?;
         let status = Command::new(&cfg.osr_extract)
-            .arg("-i").arg(&pbf).arg("-o").arg(&staging)
+            .arg("-i").arg(&download).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
         // Verify expected files. Actual serializer compatibility is checked
@@ -449,8 +501,13 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
         publish(&staging, &output)?;
         Ok(())
     })();
-    let _ = fs::remove_dir_all(&temp);
-    if result.is_err() { let _ = fs::remove_dir_all(&staging); }
+    if result.is_ok() {
+        // Keep the verified PBF for retries until the new dataset is published.
+        let _ = fs::remove_file(&download);
+        let _ = fs::remove_file(download.with_extension("revision"));
+    } else {
+        let _ = fs::remove_dir_all(&staging);
+    }
     result
 }
 
@@ -651,6 +708,32 @@ mod tests {
         let old: Manifest = serde_json::from_str(source).unwrap();
         assert_eq!(old.extractor_md5, None);
         assert_ne!(old.extractor_md5.as_deref(), Some("md5:new"));
+    }
+
+    #[test]
+    fn partial_download_is_reused_only_for_same_revision() {
+        let root = std::env::temp_dir().join(format!("osm-download-cache-{}", nonce().unwrap()));
+        let url = "https://download.geofabrik.de/europe-latest.osm.pbf";
+        let partial = prepare_download(&root, url, "http:first").unwrap();
+        fs::write(&partial, b"incomplete download").unwrap();
+        assert_eq!(prepare_download(&root, url, "http:first").unwrap(), partial);
+        assert_eq!(fs::read(&partial).unwrap(), b"incomplete download");
+        assert_eq!(prepare_download(&root, url, "http:second").unwrap(), partial);
+        assert!(!partial.exists(), "new upstream revision must discard old bytes");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn downloaded_pbf_must_match_checksum_or_size() {
+        let root = std::env::temp_dir().join(format!("osm-download-validation-{}", nonce().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("region.osm.pbf");
+        fs::write(&file, b"pbf fixture").unwrap();
+        let correct_md5 = format!("{:x}", md5::compute(b"pbf fixture"));
+        assert!(verify_pbf(&file, Some(&correct_md5), Some(11)).is_ok());
+        assert!(verify_pbf(&file, Some(&correct_md5), Some(12)).is_err());
+        assert!(verify_pbf(&file, Some("00000000000000000000000000000000"), None).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
