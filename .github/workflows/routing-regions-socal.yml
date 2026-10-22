@@ -82,9 +82,11 @@ jobs:
       - name: Compile release routing executables and tests
         run: |
           set -euo pipefail
-          cargo build --release --locked --bin gentian --bin osr_worker --bin maple --bin edelweiss
-          cargo test --release --locked --no-run --lib
-          cargo test --release --locked --no-run --bin gentian
+          # Cargo.lock is intentionally ignored in this repository. Cargo
+          # generates it for this checkout; --locked would fail before building.
+          cargo build --release --bin gentian --bin osr_worker --bin maple --bin edelweiss
+          cargo test --release --no-run --lib
+          cargo test --release --no-run --bin gentian
           cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
           # Keep the extractor coupled to the same CMake tree and OSR ABI.
           bash src/osm_manager/build_matched_extractor.sh
@@ -204,8 +206,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Cargo.lock is untracked here; allow Cargo to generate it once.
           # Build the release executables once, including later pipeline uses.
-          cargo build --release --locked --bin gentian --bin osr_worker --bin maple --bin edelweiss
+          cargo build --release --bin gentian --bin osr_worker --bin maple --bin edelweiss
           cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
           bridge="$(ldd ./target/release/gentian | awk '$1 == "libcatenary_osr_bridge.so" && $2 == "=>" && $3 != "not" { print $3; exit }')"
           test -f "$bridge"
@@ -259,10 +262,10 @@ jobs:
           set -euo pipefail
           # Cargo builds debug and release dependencies separately.
           # Use the same release profile as native OSR and Gentian binaries.
-          cargo test --release --locked --lib routing_common::routing_regions
-          cargo test --release --locked --lib routing_common::raptor_query
-          cargo test --release --locked --lib routing_common::timetable
-          cargo test --release --locked --bin gentian
+          cargo test --release --lib routing_common::routing_regions
+          cargo test --release --lib routing_common::raptor_query
+          cargo test --release --lib routing_common::timetable
+          cargo test --release --bin gentian
           ./target/release/gentian \
             --region southern-california \
             --regions-config routing_regions.toml \
