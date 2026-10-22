@@ -653,6 +653,57 @@ mod tests {
     }
 
     #[test]
+    fn global_best_skips_redundant_later_round_state() {
+        let tt = fixture(false);
+        let binary = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&binary).unwrap();
+        let mut nodes = Vec::new();
+        let mut global = vec![Vec::<NodeId>::new(); 5];
+        let special = vec![false; 5];
+        let mut round0 = Round::new(5);
+        let mut round1 = Round::new(5);
+        let mut stats = RaptorStats::default();
+        let early = Node {
+            stop: 3, time: 1_000, last_alight: None, boardings: 0,
+            predecessor: Predecessor::Access { seconds: 0 }, live: true,
+        };
+        let late = Node {
+            stop: 3, time: 1_100, last_alight: Some((1, 1_080)), boardings: 1,
+            predecessor: Predecessor::Access { seconds: 0 }, live: true,
+        };
+        assert!(round0.insert(&view, &special, &mut global, &mut nodes, early, &mut stats).is_some());
+        assert!(round1.insert(&view, &special, &mut global, &mut nodes, late, &mut stats).is_none());
+        assert!(round1.touched.is_empty());
+        assert_eq!(global[3].len(), 1);
+        assert_eq!(stats.labels_dominated, 1);
+    }
+
+    #[test]
+    fn first_useful_transport_scan_preserves_permitted_later_interchange() {
+        let tt = fixture(true);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 59 * 60;
+        let (journeys, stats) = route_with_stats(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![super::super::WalkingEndpoint {
+                stop: LocationIdx(0), seconds: 0,
+            }],
+            egress: vec![super::super::WalkingEndpoint {
+                stop: LocationIdx(4), seconds: 0,
+            }],
+            direct_walk_seconds: None, max_boardings: 2, max_duration_seconds: 3600,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(journeys[0].boardings, 2);
+        assert_eq!(journeys[0].arrival_unix_seconds,
+            20_000_i64 * 86_400 + 8 * 3_600 + 15 * 60);
+        // Repeatedly reopening a dominated walking history is the previous
+        // regression; this small fixture needs only a bounded frontier.
+        assert!(stats.walking_heap_pushes < 100);
+    }
+
+    #[test]
     fn no_rule_fixture_still_returns_fastest_connection() {
         let tt=fixture(false);
         let bytes=tt.encode().unwrap();
