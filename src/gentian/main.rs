@@ -1,248 +1,153 @@
-use clap::Parser;
-use diesel::prelude::*;
-use diesel_async::RunQueryDsl;
-use rstar::{AABB, RTree};
-use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+//! Gentian's regional timetable and OSR footpath compiler.
 
-use catenary::models::Stop;
-use catenary::postgres_tools::make_async_pool;
-use catenary::routing_common::api::{Place, RoutingRequest, TravelMode};
-use catenary::routing_common::graph_loader::GraphManager;
-use catenary::routing_common::osm_router::OsmRouter;
-use catenary::routing_common::timetable::{
-    Coordinate, Footpath, LocationIdx, PointObj, RouteData, StopFootpaths, StringOffset,
-    TimetableHeader, ZeroCopyTimetable,
-};
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+use std::path::PathBuf;
+
+use anyhow::{Context, Result, ensure};
+use clap::Parser;
+use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
+use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
+use postgres::{Client, NoTls};
+mod compile;
+mod external_assembly;
+mod file_sizes;
+mod footpaths;
+mod transfer_rules;
 
 #[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "Compile regional RAPTOR timetables with native OSR footpaths")]
 struct Args {
-    /// Path to export the compiled routing binary data.
+    /// Output V4 seconds-precision binary. Optional when only listing selected chateaux.
     #[arg(short, long)]
-    output: PathBuf,
+    output: Option<PathBuf>,
 
-    /// Path to the Avens graph directories (import paths) for dynamic loading.
-    #[arg(short, long)]
-    avens_graphs: PathBuf,
+    /// First UTC traffic day in Unix days, including Nigiri's lookback offset.
+    #[arg(long, default_value_t = 0)]
+    first_utc_day: i32,
+
+    #[arg(long, default_value_t = MAX_DAYS as u32)]
+    day_count: u32,
+
+    /// Register sources as CHATEAU,ONESTOP_FEED_ID,ATTEMPT_ID; repeatable.
+    #[arg(long = "source", value_name = "CHATEAU,FEED,ATTEMPT", conflicts_with = "region")]
+    sources: Vec<String>,
+
+    /// Resolve this configured region through PostGIS, including whole chateaux.
+    #[arg(long, value_name = "REGION_ID", conflicts_with = "sources")]
+    region: Option<String>,
+
+    /// TOML definition of routable regions.
+    #[arg(long, default_value = "routing_regions.toml")]
+    regions_config: PathBuf,
+
+    /// PostgreSQL connection string. Defaults to DATABASE_URL.
+    #[arg(long, env = "DATABASE_URL")]
+    database_url: Option<String>,
+
+    #[arg(long, requires = "region", conflicts_with = "list_chateaux")]
+    build: bool,
+
+    /// Directory containing an extracted native OSR graph. Transfers are computed
+    /// in-process against the exact location indexes being compiled.
+    #[arg(long, requires = "build")]
+    osr_dir: Option<PathBuf>,
+
+    #[arg(long, default_value_t = 900)]
+    max_seconds: u32,
+
+    #[arg(long, default_value_t = 1200.0)]
+    candidate_meters: f64,
+
+    /// Maximum in-memory schedule buffer for sorting and route assembly.
+    /// This does not cap stop indexes, final timetable columns or OSR memory.
+    #[arg(long, default_value_t = 64)]
+    schedule_memory_mib: usize,
+
+    /// Scratch filesystem for external schedule runs. Defaults to the output
+    /// directory so /tmp tmpfs does not consume the compiler's memory budget.
+    #[arg(long, value_name = "DIRECTORY", requires = "build")]
+    scratch_dir: Option<PathBuf>,
+
+    /// Print resolved chateaux and active feed sources as JSON without writing a timetable.
+    #[arg(long, requires = "region")]
+    list_chateaux: bool,
+
+    /// Print the actual file size of every configured region timetable.
+    /// Does not require a database connection.
+    #[arg(long, conflicts_with_all = ["region", "sources", "build", "list_chateaux"])]
+    list_timetable_sizes: bool,
+
+    /// Override the configured timetable directory when listing file sizes.
+    #[arg(long, requires = "list_timetable_sizes")]
+    data_dir: Option<PathBuf>,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    dotenvy::dotenv().ok();
-    tracing_subscriber::fmt().init();
-
+fn main() -> Result<()> {
     let args = Args::parse();
-
-    println!("Initializing Gentian Timetable Compiler");
-    println!("Output Path: {:?}", args.output);
-    println!("Avens Graphs Directory: {:?}", args.avens_graphs);
-
-    let graph_manager = Arc::new(GraphManager::new(&args.avens_graphs));
-    let mut pool = make_async_pool().await.map_err(|e| anyhow::anyhow!(e))?;
-    let mut conn = pool.get().await?;
-
-    println!("Loading transit stops from PostgreSQL...");
-    use catenary::schema::gtfs::stops::dsl::*;
-    let all_stops: Vec<Stop> = stops
-        .filter(hidden.eq(false))
-        .select(Stop::as_select())
-        .load(&mut conn)
-        .await?;
-
-    println!(
-        "Loaded {} stops. Computing transfer footpaths via Avens/OsmRouter...",
-        all_stops.len()
-    );
-
-    let mut footpaths_out: Vec<Footpath> = Vec::new();
-    let mut coordinates: Vec<Coordinate> = Vec::with_capacity(all_stops.len());
-    let mut original_chateau_ids: Vec<String> = Vec::with_capacity(all_stops.len());
-    let mut original_stop_ids: Vec<String> = Vec::with_capacity(all_stops.len());
-
-    // In a real topology extraction step, these IDs would map to exact offsets
-    for (idx, stop_row) in all_stops.iter().enumerate() {
-        if let Some(pt) = &stop_row.point {
-            coordinates.push(Coordinate {
-                lat: pt.y as f32, // Note: Postgis point uses (x=lon, y=lat)
-                lon: pt.x as f32,
-            });
-        } else {
-            coordinates.push(Coordinate { lat: 0.0, lon: 0.0 });
-        }
-        original_chateau_ids.push(stop_row.chateau.clone());
-        original_stop_ids.push(stop_row.gtfs_id.clone());
+    if args.list_timetable_sizes {
+        let config = RoutingRegionsConfig::load(&args.regions_config)?;
+        let dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
+        return file_sizes::print_configured(&config, dir);
     }
-
-    // R-Tree for finding nearby bounds
-    let mut rtree = RTree::new();
-    for (i, coord) in coordinates.iter().enumerate() {
-        if coord.lat != 0.0 {
-            // Using small array as rstar point
-            rtree.insert(catenary::routing_common::timetable::PointObj {
-                idx: i as u32,
-                point: [coord.lat as f64, coord.lon as f64],
-            });
-        }
-    }
-
-    for (from_idx, from_coord) in coordinates.iter().enumerate() {
-        if from_coord.lat == 0.0 {
-            continue;
-        }
-
-        let nearby_stops =
-            rtree.locate_within_distance([from_coord.lat as f64, from_coord.lon as f64], 0.01);
-
-        let region_opt =
-            graph_manager.get_region_for_point(from_coord.lat as f64, from_coord.lon as f64);
-        if region_opt.is_none() {
-            continue;
-        }
-
-        let loaded_graph = graph_manager.get_or_load_region(&region_opt.unwrap());
-        if loaded_graph.is_err() {
-            continue;
-        }
-        let router = OsmRouter::new(loaded_graph.unwrap());
-
-        for nearby_stop in nearby_stops {
-            let to_idx = nearby_stop.idx as usize;
-            if to_idx == from_idx {
-                continue;
-            }
-            let to_coord = &coordinates[to_idx];
-
-            let req = RoutingRequest {
-                origin: Place::Coordinate {
-                    lat: from_coord.lat as f64,
-                    lon: from_coord.lon as f64,
-                },
-                destination: Place::Coordinate {
-                    lat: to_coord.lat as f64,
-                    lon: to_coord.lon as f64,
-                },
-                time: 0,
-                is_departure_time: true,
-                max_travel_time: Some(15 * 60), // Motis max 15m transfer
-                mode: TravelMode::Walk,
-                wheelchair_accessible: false,
-                speed_mps: 1.2,
-                max_transfers: None,
-                min_transfer_time: None,
-                additional_transfer_time: None,
-                transit_modes: None,
-                pedestrian_profile: None,
-                elevation_costs: None,
-                direct_modes: None,
-                pre_transit_modes: None,
-                post_transit_modes: None,
-                num_itineraries: None,
-                max_itineraries: None,
-                search_windows: None,
-                timetable_view: None,
-            };
-
-            // OSM Request
-            if let Ok(mut result) = router.route(&req) {
-                if let Some(itin) = result.itineraries.pop() {
-                    footpaths_out.push(Footpath {
-                        target: catenary::routing_common::timetable::LocationIdx(to_idx as u32),
-                        duration_seconds: itin.duration_seconds as u16,
-                        padding: 0,
-                    });
-                }
-            }
-        }
-    }
-
-    println!("Computed {} transfer edges.", footpaths_out.len());
-
-    println!("Constructing RAPTOR sequence arrays...");
-    // Memory arrays for zero-copy mapping (scaffolded layout per Motis)
-    let mut raptor_routes: Vec<RouteData> = Vec::new();
-    let mut route_stops: Vec<LocationIdx> = Vec::new();
-    let mut route_stop_times: Vec<u32> = Vec::new();
-    let mut stop_footpaths: Vec<StopFootpaths> = Vec::new();
-    let mut route_id_offsets: Vec<StringOffset> = Vec::new();
-    let mut trip_id_offsets: Vec<StringOffset> = Vec::new();
-
-    // Map `footpaths_out` into `stop_footpaths` (flattened representation)
-    // Note: The Motis implementation uses a pre-calculated conflict graph and route-stop maps.
-    // We mock/scaffold this with empty arrays, but they are fully integrated into memory mapping.
-
-    // Build the sequential zero-copy raw buffer
-    let mut buffer: Vec<u8> = Vec::new();
-
-    // We reserve space for the header, then copy arrays
-
-    buffer.extend(vec![0u8; std::mem::size_of::<TimetableHeader>()]);
-
-    let mut header = TimetableHeader {
-        magic: 0xC0DE_0001,
-        version: 1,
-        ..Default::default()
+    let selection = if let Some(id) = &args.region {
+        let config = RoutingRegionsConfig::load(&args.regions_config)?;
+        let url = args.database_url.as_deref()
+            .context("--database-url or DATABASE_URL is required with --region")?;
+        let mut client = Client::connect(url, NoTls)
+            .context("connecting to Postgres to resolve routing region")?;
+        Some(resolve(&config, &args.regions_config, id, &mut client)?)
+    } else {
+        None
     };
 
-    header.location_coords_offset = buffer.len() as u32;
-    header.location_coords_count = coordinates.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&coordinates));
+    if args.list_chateaux {
+        let selection = selection.as_ref().context("--region is required")?;
+        println!("{}", serde_json::to_string_pretty(selection)?);
+        return Ok(());
+    }
 
-    header.footpath_out_offset = buffer.len() as u32;
-    header.footpath_out_count = footpaths_out.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&footpaths_out));
+    if args.build {
+        let selection = selection.as_ref().context("--region is required")?;
+        let url = args.database_url.as_deref().context("DATABASE_URL is required")?;
+        let mut client = Client::connect(url, NoTls)?;
+        let output = args.output.as_ref().context("--output is required with --build")?;
+        let osr_dir = args.osr_dir.as_deref()
+            .context("--osr-dir is required for native OSR transfer compilation")?;
+        compile::build(
+            &mut client, &selection.sources, args.first_utc_day, args.day_count,
+            osr_dir, args.max_seconds, args.candidate_meters, output,
+            args.scratch_dir.as_deref(), args.schedule_memory_mib,
+        )?;
+        return file_sizes::print_published(&selection.id, output);
+    }
+    let output = args.output.as_ref().context("--output is required")?;
+    let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
+    if let Some(selection) = &selection {
+        ensure!(!selection.chateaux.is_empty(),
+            "routing region {} intersects no chateaux", selection.id);
+        ensure!(!selection.sources.is_empty(),
+            "routing region {} has no completed production GTFS imports", selection.id);
+        for source in &selection.sources {
+            tt.add_source(&source.chateau, &source.onestop_feed_id, &source.attempt_id)?;
+        }
+    } else {
+        for value in &args.sources {
+            let components: Vec<_> = value.splitn(3, ',').collect();
+            ensure!(components.len() == 3 && components.iter().all(|x| !x.is_empty()),
+                "invalid --source: expected CHATEAU,FEED,ATTEMPT");
+            tt.add_source(components[0], components[1], components[2])?;
+        }
+    }
 
-    header.routes_offset = buffer.len() as u32;
-    header.routes_count = raptor_routes.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&raptor_routes));
-
-    header.route_stops_offset = buffer.len() as u32;
-    header.route_stops_count = route_stops.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&route_stops));
-
-    header.route_stop_times_offset = buffer.len() as u32;
-    header.route_stop_times_count = route_stop_times.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&route_stop_times));
-
-    header.stop_footpaths_offset = buffer.len() as u32;
-    header.stop_footpaths_count = stop_footpaths.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&stop_footpaths));
-
-    header.route_id_pool_offset = buffer.len() as u32;
-    header.route_id_pool_count = route_id_offsets.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&route_id_offsets));
-
-    header.trip_id_pool_offset = buffer.len() as u32;
-    header.trip_id_pool_count = trip_id_offsets.len() as u32;
-    buffer.extend_from_slice(bytemuck::cast_slice(&trip_id_offsets));
-
-    // String pool writing
-    let mut string_pool = Vec::new();
-    // Implementation of string pooling logic for CHATEAU / IDS mapping goes here
-    // ...
-
-    header.string_pool_offset = buffer.len() as u32;
-    header.string_pool_length = string_pool.len() as u32;
-    buffer.extend_from_slice(&string_pool);
-
-    // Overwrite the header at origin byte 0
-    let header_bytes = bytemuck::bytes_of(&header);
-    buffer[0..std::mem::size_of::<TimetableHeader>()].copy_from_slice(header_bytes);
-
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     println!(
-        "Constructed raw mapping ({} bytes). Writing uncompressed raw memory page...",
-        buffer.len()
+        "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
+        bytes, tt.sources.len()
     );
-
-    let mut out_file = File::create(&args.output).await?;
-    out_file.write_all(&buffer).await?;
-
-    println!(
-        "Successfully compiled and wrote zero-copy timetable to {:?}",
-        args.output
-    );
-
+    if let Some(selection) = &selection {
+        file_sizes::print_published(&selection.id, output)?;
+    }
     Ok(())
 }

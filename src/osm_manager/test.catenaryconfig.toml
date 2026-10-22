@@ -1,0 +1,6 @@
+# Used by the isolated GitHub Actions OSR integration test.
+[osm_manager]
+data_dir = "./test-osr-output"
+temp_dir = "./test-osr-temp"
+osr_extract = "./osr-extract"
+regions = ["https://download.geofabrik.de/europe/andorra-latest.osm.pbf"]

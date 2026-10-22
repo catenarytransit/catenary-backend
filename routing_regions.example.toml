@@ -1,0 +1,13 @@
+# Copy to routing_regions.toml at the repository root.
+# Geometry files are local and their paths are relative to this TOML.
+# The SoCal integration test downloads routing_regions/socal.geojson.
+schema_version = 1
+data_dir = "compiled/routing"
+
+[[regions]]
+id = "southern-california"
+name = "Southern California"
+geojson = ["routing_regions/socal.geojson"]
+
+# For countries instead, set country_boundaries above to a locally available
+# ISO 3166-1 Alpha-2 GeoJSON collection and use countries = ["US"].

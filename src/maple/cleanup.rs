@@ -250,6 +250,19 @@ pub async fn delete_stale_attempts_for_feed(
         println!("Deleted {} stops", count);
     }
 
+    {
+        use catenary::schema::gtfs::transfers::dsl as transfer;
+        let mut conn = conn_pool.get().await?;
+        let count = diesel::delete(
+            transfer::transfers.filter(
+                transfer::onestop_feed_id.eq(feed_id)
+                    .and(transfer::attempt_id.ne_all(valid_attempt_ids)),
+            ),
+        )
+        .execute(&mut conn).await?;
+        println!("Deleted {} stale transfer rules", count);
+    }
+
     use catenary::schema::gtfs::feed_info;
     use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_info_table;
 
@@ -475,6 +488,18 @@ pub async fn delete_attempt_objects(
         .await?;
     }
 
+    {
+        use catenary::schema::gtfs::transfers::dsl as transfer;
+        let mut conn = conn_pool.get().await?;
+        diesel::delete(
+            transfer::transfers.filter(
+                transfer::onestop_feed_id.eq(&feed_id)
+                    .and(transfer::attempt_id.eq(&attempt_id)),
+            ),
+        )
+        .execute(&mut conn).await?;
+    }
+
     use catenary::schema::gtfs::feed_info;
     use catenary::schema::gtfs::feed_info::dsl::feed_info as feed_info_table;
 
@@ -663,6 +688,14 @@ pub async fn wipe_whole_feed(
         let _ = diesel::delete(stops_table.filter(stops::dsl::onestop_feed_id.eq(&feed_id)))
             .execute(&mut conn)
             .await?;
+    }
+
+    {
+        use catenary::schema::gtfs::transfers::dsl as transfer;
+        let mut conn = conn_pool.get().await?;
+        diesel::delete(transfer::transfers.filter(
+            transfer::onestop_feed_id.eq(&feed_id),
+        )).execute(&mut conn).await?;
     }
 
     use catenary::schema::gtfs::feed_info;

@@ -1,0 +1,122 @@
+name: OSR Geofabrik Manager
+
+on:
+  push:
+    branches: [routing-dev]
+    paths:
+      - 'src/osm_manager/**'
+      - '.github/workflows/osm-manager.yml'
+  pull_request:
+    branches: [routing-dev]
+    paths:
+      - 'src/osm_manager/**'
+      - '.github/workflows/osm-manager.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  andorra:
+    name: Build osm_manager and extract Andorra
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/osm_manager
+
+      - name: Unit tests (osm_manager only)
+        run: cargo test --manifest-path src/osm_manager/Cargo.toml
+
+      - name: Build osm_manager only
+        run: cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+
+      - name: Download upstream OSR extractor
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            https://github.com/motis-project/osr/releases/download/v0.0.4/osr-linux-amd64.tar.bz2 \
+            -o /tmp/osr-linux-amd64.tar.bz2
+          mkdir -p /tmp/osr-release
+          tar -xjf /tmp/osr-linux-amd64.tar.bz2 -C /tmp/osr-release
+          find /tmp/osr-release -type f -name osr-extract -exec cp '{}' ./osr-extract \;
+          test -s ./osr-extract
+          chmod +x ./osr-extract
+          ./osr-extract --help || true
+
+      - name: Extract Andorra via test TOML
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          set -euo pipefail
+          ./src/osm_manager/target/release/osm_manager \
+            --config src/osm_manager/test.catenaryconfig.toml run
+
+      - name: Inspect generated native OSR output
+        if: always()
+        run: |
+          if test -d test-osr-output/regions; then
+            find test-osr-output/regions -type f -printf '%p %s bytes\n' | sort | head -100
+          fi
+
+      - name: Verify OSR native output and boundaries
+        run: |
+          set -euo pipefail
+          d=test-osr-output/regions/europe/andorra
+          # OSR v0.0.4 stores node/way properties inside routing.bin.
+          # Check the native files actually opened by ways::ways().
+          for f in routing.bin node_to_osm.bin way_osm_idx.bin \
+            way_polylines_data.bin way_polylines_index.bin \
+            way_osm_nodes_data.bin way_osm_nodes_index.bin \
+            strings_idx.bin way_names.bin; do
+            test -s "$d/$f" || { echo "::error::Missing or empty $d/$f"; exit 1; }
+          done
+          test -s "$d/manifest.json"
+          test -s "$d/boundary.geojson"
+          test -s test-osr-output/regions.geojson
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('test-osr-output')
+          manifest = json.loads((root/'regions/europe/andorra/manifest.json').read_text())
+          assert manifest['id'] == 'europe/andorra'
+          registry = json.loads((root/'regions.geojson').read_text())
+          assert registry['type'] == 'FeatureCollection'
+          assert len(registry['features']) == 1
+          feature = registry['features'][0]
+          assert feature['properties']['id'] == 'europe/andorra'
+          assert feature['geometry']['type'] in ('Polygon', 'MultiPolygon')
+          assert feature['bbox'][0] < feature['bbox'][2]
+          print('OSR binaries and boundary registry verified')
+          PY
+
+      - name: Verify coordinate lookup
+        run: |
+          set -euo pipefail
+          ./src/osm_manager/target/release/osm_manager \
+            --config src/osm_manager/test.catenaryconfig.toml \
+            locate --lat 42.5063 --lon 1.5218 | grep -q 'europe/andorra'
+
+      - name: Verify second run skips unchanged dataset
+        run: |
+          set -euo pipefail
+          before=$(stat -c %Y test-osr-output/regions/europe/andorra/manifest.json)
+          ./src/osm_manager/target/release/osm_manager \
+            --config src/osm_manager/test.catenaryconfig.toml run
+          after=$(stat -c %Y test-osr-output/regions/europe/andorra/manifest.json)
+          test "$before" = "$after"
+
+      - name: Upload verification data
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: osm-manager-andorra-metadata
+          path: |
+            test-osr-output/regions.geojson
+            test-osr-output/regions/europe/andorra/manifest.json
+            test-osr-output/regions/europe/andorra/boundary.geojson
+          if-no-files-found: ignore
