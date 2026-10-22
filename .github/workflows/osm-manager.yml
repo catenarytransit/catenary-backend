@@ -2,12 +2,12 @@ name: OSR Geofabrik Manager
 
 on:
   push:
-    branches: [routing-dev]
+    branches: [routing-dev, main]
     paths:
       - 'src/osm_manager/**'
       - '.github/workflows/osm-manager.yml'
   pull_request:
-    branches: [routing-dev]
+    branches: [routing-dev, main]
     paths:
       - 'src/osm_manager/**'
       - '.github/workflows/osm-manager.yml'
@@ -28,6 +28,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src/osm_manager
+
+      - name: Check GNU wget availability
+        run: wget --version | head -n 1
 
       - name: Unit tests (osm_manager only)
         run: cargo test --manifest-path src/osm_manager/Cargo.toml

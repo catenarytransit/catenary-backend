@@ -65,8 +65,16 @@ It additionally fingerprints the extractor executable and records
 re-extract even when the OSM download has not changed. Previously written
 manifests without that field are rebuilt automatically. The checksum is a
 local cache key, not an authentication mechanism.
-It streams each download to `temp_dir`, checks the MD5 when available,
-extracts to an isolated staging directory on the output filesystem,
+It uses GNU `wget` to transfer large PBFs with retries and HTTP Range resume.
+Install it on the host (for example, `sudo apt-get install wget`).
+Interrupted PBFs remain under `temp_dir/osm-downloads/` across manager runs,
+and resume only when the upstream checksum or HTTP revision is unchanged.
+A changed revision discards the stale partial download.
+Completed downloads are checked against the upstream MD5 when available, or
+the HTTP Content-Length otherwise; the revision is checked again before
+extraction. The PBF cache is deleted after successful publication, while
+failed extractions retain a verified PBF for a subsequent run.
+The manager extracts to an isolated staging directory on the output filesystem,
 validates core files, and renames the staged dataset into place. On
 extraction or checksum failure, the old published dataset remains intact.
 Previously completed regions can remain updated if a later region fails.
