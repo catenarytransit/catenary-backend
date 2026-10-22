@@ -11,7 +11,7 @@ use prost::Message;
 use catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto;
 use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use super::external_assembly::ScheduleRuns;
 use std::path::Path;
 
@@ -38,6 +38,29 @@ struct Pattern {
     route_type: i16,
     timezone: Tz,
     stops: Vec<(String, i32, i32)>,
+}
+
+/// A negative value in any stored GTFS offset invalidates the entire pattern.
+/// Dropping only one stop would silently change the route's stop sequence.
+fn append_pattern_stop(
+    pattern: &mut Pattern,
+    stop_id: String,
+    arrival: Option<i32>,
+    departure: Option<i32>,
+    interpolated: Option<i32>,
+) -> Result<bool> {
+    if [arrival, departure, interpolated]
+        .into_iter().flatten().any(|offset| offset < 0)
+    {
+        pattern.stops.clear();
+        return Ok(false);
+    }
+    let arrival = arrival.or(interpolated)
+        .context("itinerary pattern has no arrival/interpolated time")?;
+    let departure = departure.or(interpolated)
+        .context("itinerary pattern has no departure/interpolated time")?;
+    pattern.stops.push((stop_id, arrival, departure));
+    Ok(true)
 }
 
 #[derive(Clone)]
@@ -531,6 +554,7 @@ fn compile_source(
         });
         Ok(())
     })?;
+    let mut negative_patterns = HashSet::<String>::new();
     query_source(client, "
         SELECT itinerary_pattern_id, stop_id,
             arrival_time_since_start, departure_time_since_start,
@@ -540,16 +564,19 @@ fn compile_source(
         ORDER BY itinerary_pattern_id, stop_sequence
     ", source, |r| {
         let id: String = r.get(0);
+        if negative_patterns.contains(&id) {
+            return Ok(());
+        }
         let pattern = patterns.get_mut(&id)
             .with_context(|| format!("itinerary_pattern row missing metadata: {id}"))?;
-        let fallback: Option<i32> = r.get(4);
-        let arrival = r.get::<_, Option<i32>>(2).or(fallback)
-            .context("itinerary pattern has no arrival/interpolated time")?;
-        let departure = r.get::<_, Option<i32>>(3).or(fallback)
-            .context("itinerary pattern has no departure/interpolated time")?;
-        pattern.stops.push((r.get(1), arrival, departure));
+        if !append_pattern_stop(
+            pattern, r.get(1), r.get(2), r.get(3), r.get(4),
+        )? {
+            negative_patterns.insert(id);
+        }
         Ok(())
     })?;
+    let mut skipped_trips = 0usize;
     query_source(client, "
         SELECT trip_id, itinerary_pattern_id, service_id, start_time::bigint,
                has_frequencies, frequencies
@@ -563,6 +590,10 @@ fn compile_source(
         let start: i64 = r.get(3);
         let has_frequencies: bool = r.get(4);
         let frequency_blob: Option<Vec<u8>> = r.get(5);
+        if negative_patterns.contains(&itinerary) {
+            skipped_trips += 1;
+            return Ok(());
+        }
         ensure!((0..u32::MAX as i64).contains(&start), "trip {trip_id} invalid start_time");
         let pattern = patterns.get(&itinerary)
             .with_context(|| format!("trip {trip_id} has unknown itinerary pattern {itinerary}"))?;
@@ -598,6 +629,15 @@ fn compile_source(
         }
         Ok(())
     })?;
+    if !negative_patterns.is_empty() {
+        let mut examples = negative_patterns.iter().take(5).cloned().collect::<Vec<_>>();
+        examples.sort_unstable();
+        eprintln!(
+            "Gentian: skipped {} trips from {} itinerary patterns with negative stop-time offsets in feed {} (attempt {}); example patterns: {}",
+            skipped_trips, negative_patterns.len(), source.onestop_feed_id,
+            source.attempt_id, examples.join(", "),
+        );
+    }
     Ok(())
 }
 
@@ -690,6 +730,52 @@ mod tests {
         let lookup = add_locations(&mut tt, 0, &stops).unwrap();
         assert_eq!(tt.location_transfer_seconds, vec![120, 120]);
         assert_eq!(tt.location_parent[lookup["platform"].idx()], lookup["station"]);
+    }
+
+    #[test]
+    fn negative_stop_offsets_quarantine_entire_pattern() {
+        let make_pattern = || Pattern {
+            route_id: "R".into(),
+            route_type: 3,
+            timezone: "America/Toronto".parse().unwrap(),
+            stops: vec![("first".into(), 0, 0)],
+        };
+        for (arrival, departure, interpolated) in [
+            (Some(-5520), Some(-5520), None),
+            (Some(100), Some(-1), None),
+            (None, None, Some(-1)),
+            (Some(100), Some(110), Some(-5)),
+        ] {
+            let mut pattern = make_pattern();
+            assert!(!append_pattern_stop(
+                &mut pattern, "bad".into(), arrival, departure, interpolated,
+            ).unwrap());
+            assert!(pattern.stops.is_empty());
+        }
+    }
+
+    #[test]
+    fn nonnegative_offsets_keep_stop_order_and_interpolation() {
+        let mut pattern = Pattern {
+            route_id: "R".into(),
+            route_type: 3,
+            timezone: "America/Toronto".parse().unwrap(),
+            stops: Vec::new(),
+        };
+        assert!(append_pattern_stop(
+            &mut pattern, "a".into(), Some(0), Some(30), None,
+        ).unwrap());
+        assert!(append_pattern_stop(
+            &mut pattern, "b".into(), None, None, Some(90),
+        ).unwrap());
+        assert!(append_pattern_stop(
+            &mut pattern, "c".into(), Some(120), Some(150), None,
+        ).unwrap());
+        assert_eq!(pattern.stops, vec![
+            ("a".into(), 0, 30),
+            ("b".into(), 90, 90),
+            ("c".into(), 120, 150),
+        ]);
     }
 
     #[test]
