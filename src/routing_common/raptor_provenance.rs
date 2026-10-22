@@ -624,14 +624,15 @@ mod tests {
         let bytes=tt.encode().unwrap();
         let view=ZeroCopyTimetable::new(&bytes).unwrap();
         let mut nodes=Vec::new();
+        let mut global=vec![Vec::<NodeId>::new();5];
         let mut round=Round::new(5);
         let mut stats=RaptorStats::default();
         let make = |time, alight, origin| Node {
             stop: 3, time, last_alight: Some((origin,alight)),
             boardings: 1, predecessor: Predecessor::Access{seconds:0}, live:true,
         };
-        assert!(round.insert(&view,&[false;5],&mut nodes,make(1020,1000,1),&mut stats).is_some());
-        assert!(round.insert(&view,&[false;5],&mut nodes,make(1030,1010,2),&mut stats).is_none());
+        assert!(round.insert(&view,&[false;5],&mut global,&mut nodes,make(1020,1000,1),&mut stats).is_some());
+        assert!(round.insert(&view,&[false;5],&mut global,&mut nodes,make(1030,1010,2),&mut stats).is_none());
         assert_eq!(round.states[3].len(),1);
     }
 
@@ -641,14 +642,15 @@ mod tests {
         let bytes=tt.encode().unwrap();
         let view=ZeroCopyTimetable::new(&bytes).unwrap();
         let mut nodes=Vec::new();
+        let mut global=vec![Vec::<NodeId>::new();5];
         let mut round=Round::new(5);
         let mut stats=RaptorStats::default();
         let make = |time, alight| Node {
             stop:3, time, last_alight:Some((1,alight)),
             boardings:1, predecessor:Predecessor::Access{seconds:0}, live:true,
         };
-        round.insert(&view,&[false;5],&mut nodes,make(1010,1000),&mut stats);
-        round.insert(&view,&[false;5],&mut nodes,make(1020,950),&mut stats);
+        round.insert(&view,&[false;5],&mut global,&mut nodes,make(1010,1000),&mut stats);
+        round.insert(&view,&[false;5],&mut global,&mut nodes,make(1020,950),&mut stats);
         assert_eq!(round.states[3].len(),2);
     }
 
