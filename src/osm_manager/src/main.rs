@@ -504,7 +504,8 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
     if result.is_ok() {
         // Keep the verified PBF for retries until the new dataset is published.
         let _ = fs::remove_file(&download);
-        let _ = fs::remove_file(download.with_extension("revision"));
+        let cache_key = format!("{:x}", md5::compute(region.pbf_url.as_bytes()));
+        let _ = fs::remove_file(cfg.temp_dir.join("osm-downloads").join(format!("{cache_key}.revision")));
     } else {
         let _ = fs::remove_dir_all(&staging);
     }
