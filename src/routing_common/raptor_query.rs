@@ -234,8 +234,8 @@ fn traverse_routes_profiled(
                     let day = (word_idx * 64 + bit) as i64;
                     stats.active_transport_days += 1;
                     let absolute_first = (base + day) * 86_400 + first_departure;
-                let mut onboard: Option<(usize, i64)> = None;
-                for (position, stop) in stops.iter().enumerate() {
+                    let mut onboard: Option<(usize, i64)> = None;
+                    for (position, stop) in stops.iter().enumerate() {
                     stats.stop_events_scanned += 1;
                     let loc = stop.location().idx();
                     if let Some((boarding_loc, boarding_time)) = onboard {
@@ -267,6 +267,7 @@ fn traverse_routes_profiled(
                             }
                         }
                     }
+                }
                 }
             }
         }
