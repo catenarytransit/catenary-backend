@@ -8,6 +8,7 @@ use catenary::routing_common::route_manager::{
     Coordinates, Router, RouterSettings, RoutingResponse,
 };
 use catenary::routing_common::raptor_query::WalkingEndpoint;
+use catenary::routing_common::metadata_index::MetadataIndex;
 use catenary::routing_common::timetable::LocationIdx;
 use catenary::routing_common::raptor_query::Leg;
 use clap::Parser;
@@ -88,47 +89,93 @@ fn milliseconds(start: Instant) -> f64 {
 
 struct State {router:Arc<Router>,database_url:Option<String>,osr_worker:String}
 
-fn hydrate(
-    tt:&catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
-    journeys:&[catenary::routing_common::raptor_query::Journey],
-    url:Option<&str>,
-) -> Result<Vec<RouteStyle>> {
-    let Some(url)=url else {return Ok(Vec::new())};
-    let mut client=Client::connect(url,NoTls)?;
-    let mut requested=BTreeSet::new();
-    for j in journeys {
-        for leg in &j.legs {
-            if let Leg::Ride{route,transport,..}=leg { requested.insert((*route,*transport)); }
+/// Collect one metadata association per RAPTOR route, matching the existing
+/// BTreeMap overwrite order when several transports of one route are returned.
+fn requested_route_metadata(
+    tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+    index: &MetadataIndex,
+    journeys: &[catenary::routing_common::raptor_query::Journey],
+) -> BTreeMap<u32, (String, String, String, String)> {
+    let mut requested = BTreeSet::new();
+    for journey in journeys {
+        for leg in &journey.legs {
+            if let Leg::Ride {route, transport, ..} = leg {
+                requested.insert((*route, *transport));
+            }
         }
     }
-    let mut styles=BTreeMap::new();
-    for (route,transport) in requested {
-        let trip=tt.trip_transport_offsets().windows(2).enumerate().find_map(|(idx,r)|{
-            tt.trip_transport_ranges()[r[0] as usize..r[1] as usize]
-                .iter().any(|x|x.transport.0==transport).then_some(idx)
-        });
-        let Some(trip)=trip else {continue};
-        let Some(route_id_idx)=tt.trip_public_route_ids().get(trip) else {continue};
-        let Some(public)=tt.route_ids().get(route_id_idx.idx()) else {continue};
-        let Some(raw_route)=tt.get_string(public.id) else {continue};
-        let Some((_,feed,attempt))=tt.source(public.source) else {continue};
-        let gtfs_trip=tt.trip_ids().iter().find(|x|x.trip.idx()==trip)
-            .and_then(|x|tt.get_string(x.id)).unwrap_or("");
-        let rows=client.query(
-            "SELECT short_name,long_name,color,text_color FROM gtfs.routes
-             WHERE onestop_feed_id=$1 AND attempt_id=$2 AND route_id=$3 LIMIT 1",
-            &[&feed,&attempt,&raw_route])?;
-        let (short_name,long_name,color,text_color)=if let Some(row)=rows.first(){
-            (row.get(0),row.get(1),row.get(2),row.get(3))
-        } else {(None,None,None,None)};
-        styles.insert(route,RouteStyle{
-            route,trip_id:gtfs_trip.to_owned(),feed_id:feed.to_owned(),
-            route_id:raw_route.to_owned(),short_name,long_name,color,text_color,
-        });
+
+    let mut metadata = BTreeMap::new();
+    for (route, transport) in requested {
+        let Some(trip) = index.trip_for_transport(transport) else { continue };
+        let Some(public_id) = tt.trip_public_route_ids().get(trip) else { continue };
+        let Some(public) = tt.route_ids().get(public_id.idx()) else { continue };
+        let Some(raw_route) = tt.get_string(public.id) else { continue };
+        let Some((_, feed, attempt)) = tt.source(public.source) else { continue };
+        let trip_id = index.id_record_for_trip(trip)
+            .and_then(|idx| tt.trip_ids().get(idx))
+            .and_then(|id| tt.get_string(id.id))
+            .unwrap_or("");
+        metadata.insert(route, (
+            trip_id.to_owned(), feed.to_owned(),
+            attempt.to_owned(), raw_route.to_owned(),
+        ));
     }
-    Ok(styles.into_values().collect())
+    metadata
 }
 
+fn hydrate(
+    tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+    index: &MetadataIndex,
+    journeys: &[catenary::routing_common::raptor_query::Journey],
+    url: Option<&str>,
+) -> Result<Vec<RouteStyle>> {
+    let Some(url) = url else { return Ok(Vec::new()) };
+    let requested = requested_route_metadata(tt, index, journeys);
+    if requested.is_empty() { return Ok(Vec::new()) };
+
+    // A single round trip for all route style keys. Keep source identities
+    // (feed and attempt) together; raw route IDs can repeat across GTFS feeds.
+    let mut feeds = Vec::with_capacity(requested.len());
+    let mut attempts = Vec::with_capacity(requested.len());
+    let mut routes = Vec::with_capacity(requested.len());
+    for (_, feed, attempt, route) in requested.values() {
+        feeds.push(feed.clone());
+        attempts.push(attempt.clone());
+        routes.push(route.clone());
+    }
+    let mut client = Client::connect(url, NoTls)?;
+    let rows = client.query(
+        "SELECT DISTINCT ON (r.onestop_feed_id, r.attempt_id, r.route_id) \
+                r.onestop_feed_id, r.attempt_id, r.route_id, \
+                r.short_name, r.long_name, r.color, r.text_color \
+         FROM gtfs.routes AS r \
+         JOIN unnest($1::text[], $2::text[], $3::text[]) \
+              AS requested(feed, attempt, route_id) \
+           ON r.onestop_feed_id = requested.feed \
+          AND r.attempt_id = requested.attempt \
+          AND r.route_id = requested.route_id \
+         ORDER BY r.onestop_feed_id, r.attempt_id, r.route_id",
+        &[&feeds, &attempts, &routes],
+    )?;
+    let mut style_by_key = BTreeMap::new();
+    for row in rows {
+        let feed: String = row.get(0);
+        let attempt: String = row.get(1);
+        let route: String = row.get(2);
+        let fields: (Option<String>, Option<String>, Option<String>, Option<String>) =
+            (row.get(3), row.get(4), row.get(5), row.get(6));
+        style_by_key.insert((feed, attempt, route), fields);
+    }
+
+    Ok(requested.into_iter().map(|(route, (trip_id, feed_id, attempt, route_id))| {
+        let (short_name, long_name, color, text_color) = style_by_key
+            .get(&(feed_id.clone(), attempt, route_id.clone()))
+            .cloned().unwrap_or((None, None, None, None));
+        RouteStyle {route, trip_id, feed_id, route_id,
+            short_name, long_name, color, text_color}
+    }).collect())
+}
 
 #[derive(Serialize)]
 struct OsrStop {stop:u32,latitude:f64,longitude:f64}
@@ -268,7 +315,8 @@ fn run_query(
 
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
-    let route_styles = hydrate(&timetable, &routing.journeys, url)?;
+    let index = router.metadata_for(&routing.selection.transit_region)?;
+    let route_styles = hydrate(&timetable, index, &routing.journeys, url)?;
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
 
