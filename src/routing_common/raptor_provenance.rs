@@ -69,30 +69,35 @@ struct Round {
     // Dense stop addressing but heap-allocated lists only for reached stops.
     states: Vec<Vec<NodeId>>,
     touched: Vec<usize>,
+    marked: Vec<u64>,
 }
 
 impl Round {
     fn new(stops: usize) -> Self {
-        Self { states: vec![Vec::new(); stops], touched: Vec::new() }
+        Self { states: vec![Vec::new(); stops], touched: Vec::new(), marked: vec![0; stops.div_ceil(64)] }
     }
 
-    fn clear(&mut self, nodes: &mut [Node]) {
-        for stop in self.touched.drain(..) {
-            for id in self.states[stop].drain(..) {
-                nodes[id].live = false;
-            }
-        }
+    fn clear(&mut self) {
+        for stop in self.touched.drain(..) { self.states[stop].clear(); }
+        self.marked.fill(0);
+    }
+
+    fn has(&self, stop: usize) -> bool {
+        self.marked[stop / 64] & (1u64 << (stop % 64)) != 0
     }
 
     fn insert(
         &mut self,
         tt: &ZeroCopyTimetable<'_>,
         special: &[bool],
+        global: &mut [Vec<NodeId>],
         nodes: &mut Vec<Node>,
         candidate: Node,
         stats: &mut RaptorStats,
     ) -> Option<NodeId> {
-        let bucket = &mut self.states[candidate.stop];
+        // Nigiri-style best_: every new candidate must improve on every
+        // previous boarding round, not merely this round's labels.
+        let bucket = &mut global[candidate.stop];
         if bucket.iter().any(|&id| dominates(tt, special, &nodes[id], &candidate)) {
             stats.labels_dominated += 1;
             return None;
@@ -106,12 +111,14 @@ impl Round {
                 true
             }
         });
-        if bucket.is_empty() && !self.touched.contains(&candidate.stop) {
+        if !self.has(candidate.stop) {
+            self.marked[candidate.stop / 64] |= 1u64 << (candidate.stop % 64);
             self.touched.push(candidate.stop);
         }
         let id = nodes.len();
         nodes.push(candidate);
         bucket.push(id);
+        self.states[candidate.stop].push(id);
         stats.labels_improved += 1;
         Some(id)
     }
@@ -132,6 +139,7 @@ fn walk_closure(
     tt: &ZeroCopyTimetable<'_>,
     special: &[bool],
     round: &mut Round,
+    global: &mut [Vec<NodeId>],
     nodes: &mut Vec<Node>,
     max_time: i64,
     stats: &mut RaptorStats,
@@ -160,7 +168,7 @@ fn walk_closure(
                 predecessor: Predecessor::Walk {previous: id, seconds},
                 live: true,
             };
-            if let Some(next_id) = round.insert(tt, special, nodes, candidate, stats) {
+            if let Some(next_id) = round.insert(tt, special, global, nodes, candidate, stats) {
                 heap.push(Reverse((next, next_id)));
                 stats.walking_heap_pushes += 1;
             }
@@ -188,6 +196,7 @@ fn traverse(
     special: &[bool],
     prev: &Round,
     curr: &mut Round,
+    global: &mut [Vec<NodeId>],
     nodes: &mut Vec<Node>,
     marked: &[RouteIdx],
     departure: i64,
@@ -253,7 +262,7 @@ fn traverse(
                                         },
                                         live: true,
                                     };
-                                    curr.insert(tt, special, nodes, node, stats);
+                                    curr.insert(tt, special, global, nodes, node, stats);
                                 }
                             }
                         }
@@ -261,7 +270,7 @@ fn traverse(
                             let board_time = origin + i64::from(events[2 * pos].seconds());
                             if board_time > max_time { continue; }
                             if let Some(&id) = prev.states[loc].iter()
-                                .find(|&&id| can_board(tt, nodes[id], loc, board_time))
+                                .find(|&&id| nodes[id].live && can_board(tt, nodes[id], loc, board_time))
                             {
                                 boarded = Some((id, board_time));
                             }
@@ -336,6 +345,9 @@ pub(super) fn route_with_stats(
     let mut stats = RaptorStats::default();
     let mut special = vec![false; n];
     for rule in tt.station_transfer_rules() { special[rule.from.idx()] = true; }
+    // Global nondominated state skyline, indexed by stop. Unlike the old
+    // implementation this is never reset at the next boarding round.
+    let mut global = vec![Vec::<NodeId>::new(); n];
 
     let mut nodes = Vec::new();
     let mut prev = Round::new(n);
@@ -343,14 +355,14 @@ pub(super) fn route_with_stats(
     for ep in &request.access {
         let time = departure + i64::from(ep.seconds);
         if time > max_time { continue; }
-        prev.insert(tt, &special, &mut nodes, Node {
+        prev.insert(tt, &special, &mut global, &mut nodes, Node {
             stop: ep.stop.idx(), time, last_alight: None,
             boardings: 0,
             predecessor: Predecessor::Access {seconds: ep.seconds},
             live: true,
         }, &mut stats);
     }
-    walk_closure(tt, &special, &mut prev, &mut nodes, max_time, &mut stats);
+    walk_closure(tt, &special, &mut prev, &mut global, &mut nodes, max_time, &mut stats);
     let mut journeys = Vec::new();
     if let Some(seconds) = request.direct_walk_seconds {
         if seconds <= request.max_duration_seconds {
@@ -368,7 +380,7 @@ pub(super) fn route_with_stats(
         if let Some((id, seconds)) = request.egress.iter()
             .flat_map(|ep| prev.states[ep.stop.idx()].iter()
                 .map(move |&id| (id, ep.seconds)))
-            .filter(|(id, seconds)| nodes[*id].time + i64::from(*seconds) <= max_time)
+            .filter(|(id, seconds)| nodes[*id].live && nodes[*id].time + i64::from(*seconds) <= max_time)
             .min_by_key(|(id, seconds)| nodes[*id].time + i64::from(*seconds))
         {
             if let Some(journey) = reconstruct(&nodes, id, seconds, departure) {
@@ -378,12 +390,12 @@ pub(super) fn route_with_stats(
         if round == request.max_boardings || prev.touched.is_empty() { break; }
         stats.rounds += 1;
         stats.marked_stops += prev.touched.len() as u64;
-        curr.clear(&mut nodes);
+        curr.clear();
         let marked = marked_routes(tt, &prev, &mut seen, (round + 1) as u8);
         if marked.is_empty() { break; }
-        traverse(tt, &special, &prev, &mut curr, &mut nodes, &marked,
+        traverse(tt, &special, &prev, &mut curr, &mut global, &mut nodes, &marked,
             departure, max_time, &mut stats);
-        walk_closure(tt, &special, &mut curr, &mut nodes, max_time, &mut stats);
+        walk_closure(tt, &special, &mut curr, &mut global, &mut nodes, max_time, &mut stats);
         std::mem::swap(&mut prev, &mut curr);
     }
     journeys.sort_by_key(|j| (j.boardings, j.arrival_unix_seconds));
