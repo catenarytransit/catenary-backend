@@ -227,7 +227,7 @@ fn traverse_routes_profiled(
                 let lower_mask = u64::MAX << lower;
                 let upper_mask = u64::MAX >> (63 - upper);
                 let mut remaining = active_days.words[word_idx] & lower_mask & upper_mask;
-                stats.transport_days_tested += u64::from(upper - lower + 1);
+                stats.transport_days_tested += (upper - lower + 1) as u64;
                 while remaining != 0 {
                     let bit = remaining.trailing_zeros() as usize;
                     remaining &= remaining - 1;
