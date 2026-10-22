@@ -7,6 +7,8 @@ use catenary::routing_common::timetable::{
 };
 use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use chrono_tz::Tz;
+use prost::Message;
+use catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto;
 use fallible_iterator::FallibleIterator;
 use postgres::{types::ToSql, Client, Row};
 use std::collections::{BTreeMap, HashMap};
@@ -175,6 +177,55 @@ fn utc_anchor(date: NaiveDate, tz: Tz) -> Result<i64> {
     Ok(utc.timestamp() - 12 * 3600)
 }
 
+/// GTFS times are elapsed seconds after the service day's "noon minus 12h".
+/// Resolve the noon offset once per active service date. A departure at 25:00
+/// remains attached to its original service date, even after a DST transition.
+fn service_utc_anchors(
+    calendar: &Calendar,
+    tz: Tz,
+    first_utc_day: i32,
+    day_count: u32,
+) -> Result<Vec<i64>> {
+    let first_day = start_date(first_utc_day)?;
+    let mut anchors = Vec::new();
+    for offset in -5_i64..i64::from(day_count) + 5 {
+        let service_date = first_day.checked_add_signed(Duration::days(offset))
+            .context("service date out of range")?;
+        if active(calendar, service_date) {
+            anchors.push(utc_anchor(service_date, tz)?);
+        }
+    }
+    Ok(anchors)
+}
+
+/// Like Nigiri's expand_frequencies, enumerate the departure times defined by
+/// each GTFS frequency window. Keep seconds precision (Nigiri rounds to minutes)
+/// and treat the end of the window as exclusive. For exact_times=0 these are
+/// discretized headway-based departures, not guaranteed scheduled runs.
+fn expand_frequency_departures(
+    trip_id: &str,
+    blob: &[u8],
+    mut emit: impl FnMut(u32) -> Result<()>,
+) -> Result<()> {
+    let data = GtfsFrequenciesProto::decode(blob)
+        .with_context(|| format!("decoding GTFS frequencies for trip {trip_id}"))?;
+    ensure!(!data.frequencies.is_empty(),
+        "trip {trip_id} is marked as frequency-based but has no frequency windows");
+    for (index, window) in data.frequencies.into_iter().enumerate() {
+        ensure!(window.headway_secs != 0,
+            "trip {trip_id} frequency window {index} has zero headway");
+        ensure!(window.start_time < window.end_time,
+            "trip {trip_id} frequency window {index} has invalid time range");
+        let mut departure = window.start_time;
+        while departure < window.end_time {
+            emit(departure)?;
+            departure = departure.checked_add(window.headway_secs)
+                .with_context(|| format!("trip {trip_id} frequency departure overflow"))?;
+        }
+    }
+    Ok(())
+}
+
 fn start_date(first_utc_day: i32) -> Result<NaiveDate> {
     NaiveDate::from_ymd_opt(1970, 1, 1)
         .context("invalid Unix epoch")?
@@ -187,51 +238,62 @@ fn make_schedules(
     source_idx: u16,
     pattern: &Pattern,
     stop_lookup: &HashMap<String, LocationIdx>,
-    trip_start_secs: u32,
+    first_departure_secs: u32,
     calendar: &Calendar,
     first_utc_day: i32,
     day_count: u32,
 ) -> Result<Vec<Schedule>> {
+    let anchors = service_utc_anchors(
+        calendar, pattern.timezone, first_utc_day, day_count,
+    )?;
+    make_schedules_from_anchors(
+        trip_id, source_idx, pattern, stop_lookup, first_departure_secs,
+        &anchors, first_utc_day, day_count,
+    )
+}
+
+fn make_schedules_from_anchors(
+    trip_id: &str,
+    source_idx: u16,
+    pattern: &Pattern,
+    stop_lookup: &HashMap<String, LocationIdx>,
+    first_departure_secs: u32,
+    anchors: &[i64],
+    first_utc_day: i32,
+    day_count: u32,
+) -> Result<Vec<Schedule>> {
+    // The stored pattern is relative to the first stop's arrival time.
+    // Normalize its events to the first departure so a frequency window's
+    // start_time always refers to the departure from the first stop.
+    ensure!(pattern.stops.len() >= 2, "trip {trip_id} needs at least two stops");
+    ensure!(pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
+        && pattern.stops.iter().all(|(stop, arr, dep)| {
+            stop_lookup.contains_key(stop) && arr <= dep
+        }), "invalid/nonmonotonic pattern for trip {trip_id}");
+    let first_departure_offset = i64::from(pattern.stops[0].2);
+    let events = pattern.stops.iter().map(|(id, arrival, departure)| {
+        Ok(Event {
+            stop: *stop_lookup.get(id).context("missing pattern stop")?,
+            arrival: i64::from(*arrival) - first_departure_offset,
+            departure: i64::from(*departure) - first_departure_offset,
+        })
+    }).collect::<Result<Vec<_>>>()?;
+    let locations = events.iter().map(|event| event.stop).collect::<Vec<_>>();
     let mut result = BTreeMap::<u32, TrafficDays>::new();
-    let first_day = start_date(first_utc_day)?;
-    for offset in -5_i64..i64::from(day_count) + 5 {
-        let service_date = first_day.checked_add_signed(Duration::days(offset))
-            .context("service date out of range")?;
-        if !active(calendar, service_date) { continue; }
-        let anchor = utc_anchor(service_date, pattern.timezone)?;
-        // The PostgreSQL itinerary pattern is already relative to trip start.
-        // Validate it once per service date, without constructing an expanded
-        // timestamp vector for every trip and every active day.
-        ensure!(pattern.stops.len() >= 2, "trip {trip_id} needs at least two stops");
-        ensure!(pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
-            && pattern.stops.iter().all(|(stop, arr, dep)| {
-                stop_lookup.contains_key(stop) && arr <= dep
-            }), "invalid/nonmonotonic pattern for trip {trip_id}");
-        let departure = anchor + i64::from(trip_start_secs)
-            + i64::from(pattern.stops[0].2);
+    for &anchor in anchors {
+        let departure = anchor.checked_add(i64::from(first_departure_secs))
+            .context("GTFS departure timestamp overflow")?;
         let day = departure.div_euclid(86_400) - i64::from(first_utc_day);
         if !(0..i64::from(day_count)).contains(&day) { continue; }
         let second = u32::try_from(departure.rem_euclid(86_400))?;
         result.entry(second).or_default().set(day as usize, true)?;
     }
-    let mut schedules = Vec::with_capacity(result.len());
-    for (first_second, days) in result {
-        let first_departure = i64::from(pattern.stops[0].2);
-        let events = pattern.stops.iter().map(|(id, arrival, departure)| {
-            Ok(Event {
-                stop: *stop_lookup.get(id).context("missing pattern stop")?,
-                arrival: i64::from(*arrival) - first_departure,
-                departure: i64::from(*departure) - first_departure,
-            })
-        }).collect::<Result<Vec<_>>>()?;
-        schedules.push(Schedule {
-            trip_id: trip_id.to_owned(), source: source_idx,
-            route_id: pattern.route_id.clone(), route_type: pattern.route_type,
-            locations: events.iter().map(|e| e.stop).collect(), events,
-            first_second, days,
-        });
-    }
-    Ok(schedules)
+    Ok(result.into_iter().map(|(first_second, days)| Schedule {
+        trip_id: trip_id.to_owned(), source: source_idx,
+        route_id: pattern.route_id.clone(), route_type: pattern.route_type,
+        locations: locations.clone(), events: events.clone(),
+        first_second, days,
+    }).collect())
 }
 
 fn clasz(gtfs_route_type: i16) -> u8 {
@@ -490,7 +552,7 @@ fn compile_source(
     })?;
     query_source(client, "
         SELECT trip_id, itinerary_pattern_id, service_id, start_time::bigint,
-               has_frequencies
+               has_frequencies, frequencies
         FROM gtfs.trips_compressed
         WHERE onestop_feed_id = $1 AND attempt_id = $2
         ORDER BY itinerary_pattern_id, trip_id
@@ -500,15 +562,39 @@ fn compile_source(
         let service: String = r.get(2);
         let start: i64 = r.get(3);
         let has_frequencies: bool = r.get(4);
-        ensure!(!has_frequencies, "GTFS frequency trip {trip_id} requires frequency expansion");
+        let frequency_blob: Option<Vec<u8>> = r.get(5);
         ensure!((0..u32::MAX as i64).contains(&start), "trip {trip_id} invalid start_time");
         let pattern = patterns.get(&itinerary)
             .with_context(|| format!("trip {trip_id} has unknown itinerary pattern {itinerary}"))?;
         let calendar = calendars.get(&service)
             .with_context(|| format!("trip {trip_id} has unknown service {service}"))?;
-        for schedule in make_schedules(&trip_id, source_idx, pattern, &lookup,
-            start as u32, calendar, tt.first_utc_day, tt.day_count)? {
-            schedules.push(schedule)?;
+        let anchors = service_utc_anchors(
+            calendar, pattern.timezone, tt.first_utc_day, tt.day_count,
+        )?;
+        let mut add_departure = |first_departure: u32| -> Result<()> {
+            for schedule in make_schedules_from_anchors(
+                &trip_id, source_idx, pattern, &lookup, first_departure,
+                &anchors, tt.first_utc_day, tt.day_count,
+            )? {
+                schedules.push(schedule)?;
+            }
+            Ok(())
+        };
+        if has_frequencies {
+            let blob = frequency_blob.as_deref().with_context(|| {
+                format!("trip {trip_id} is marked as frequency-based without frequency data")
+            })?;
+            expand_frequency_departures(&trip_id, blob, &mut add_departure)?;
+        } else {
+            // Maple's compressed start_time is the first stop arrival, whereas
+            // frequencies.txt start_time is the first stop *departure*.
+            let first_stop_departure = pattern.stops.first()
+                .with_context(|| format!("trip {trip_id} has no stops"))?.2;
+            let first_stop_departure = u32::try_from(first_stop_departure)
+                .with_context(|| format!("trip {trip_id} has negative first departure offset"))?;
+            let first_departure = (start as u32).checked_add(first_stop_departure)
+                .with_context(|| format!("trip {trip_id} first departure overflow"))?;
+            add_departure(first_departure)?;
         }
         Ok(())
     })?;
@@ -743,6 +829,139 @@ mod tests {
             .unwrap().seconds(), 601);
         assert!(view.transport_timing_profile().iter().all(|p| p.0 == 0));
         std::fs::remove_dir(root).unwrap();
+    }
+
+    fn sample_frequency_pattern(timezone: &str, first_stop_dwell: i32) -> Pattern {
+        Pattern {
+            route_id: "R".into(), route_type: 3, timezone: timezone.parse().unwrap(),
+            stops: vec![
+                ("a".into(), 0, first_stop_dwell),
+                ("b".into(), 1800 + first_stop_dwell, 1800 + first_stop_dwell),
+            ],
+        }
+    }
+
+    fn sample_stop_lookup() -> HashMap<String, LocationIdx> {
+        HashMap::from([
+            ("a".into(), LocationIdx(0)),
+            ("b".into(), LocationIdx(1)),
+        ])
+    }
+
+    fn single_date_calendar(date: NaiveDate) -> Calendar {
+        Calendar {
+            weekdays: [true; 7],
+            range: Some((date, date)),
+            ..Default::default()
+        }
+    }
+
+    fn unix_day(date: NaiveDate) -> i32 {
+        date.signed_duration_since(NaiveDate::from_ymd_opt(1970, 1, 1).unwrap())
+            .num_days() as i32
+    }
+
+    #[test]
+    fn frequency_windows_decode_with_seconds_precision_and_exclusive_end() {
+        use catenary::gtfs_schedule_protobuf::GtfsFrequencyProto;
+        let windows = GtfsFrequenciesProto {
+            frequencies: vec![
+                GtfsFrequencyProto {
+                    start_time: 8 * 3600 + 7, end_time: 8 * 3600 + 1807,
+                    headway_secs: 600, exact_times: Some(1),
+                },
+                GtfsFrequencyProto {
+                    start_time: 25 * 3600 + 17, end_time: 25 * 3600 + 137,
+                    headway_secs: 90, exact_times: Some(0),
+                },
+            ],
+        };
+        let bytes = windows.encode_to_vec();
+        let mut departures = Vec::new();
+        expand_frequency_departures("GIHB_IN", &bytes, |time| {
+            departures.push(time);
+            Ok(())
+        }).unwrap();
+        assert_eq!(departures, vec![
+            8 * 3600 + 7, 8 * 3600 + 607, 8 * 3600 + 1207,
+            25 * 3600 + 17, 25 * 3600 + 107,
+        ]);
+    }
+
+    #[test]
+    fn frequency_window_rejects_zero_headway_and_missing_data() {
+        use catenary::gtfs_schedule_protobuf::GtfsFrequencyProto;
+        let invalid = GtfsFrequenciesProto {
+            frequencies: vec![GtfsFrequencyProto {
+                start_time: 0, end_time: 100, headway_secs: 0, exact_times: None,
+            }],
+        }.encode_to_vec();
+        assert!(expand_frequency_departures("bad", &invalid, |_| Ok(())).is_err());
+        assert!(expand_frequency_departures("bad", &[], |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn frequency_first_departure_is_not_shifted_by_first_stop_dwell() {
+        let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let first_day = unix_day(date);
+        let departures = make_schedules(
+            "GIHB_IN", 0, &sample_frequency_pattern("America/Los_Angeles", 120),
+            &sample_stop_lookup(), 8 * 3600 + 7,
+            &single_date_calendar(date), first_day, 2,
+        ).unwrap();
+        assert_eq!(departures.len(), 1);
+        assert_eq!(departures[0].first_second, 15 * 3600 + 7);
+        assert_eq!(departures[0].events[0].departure, 0);
+        assert_eq!(departures[0].events[1].arrival, 1800);
+    }
+
+    #[test]
+    fn post_midnight_frequency_keeps_previous_service_day() {
+        let saturday = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let first_day = unix_day(saturday);
+        let schedules = make_schedules(
+            "late", 0, &sample_frequency_pattern("America/Los_Angeles", 0),
+            &sample_stop_lookup(), 25 * 3600 + 15,
+            &single_date_calendar(saturday), first_day, 3,
+        ).unwrap();
+        assert_eq!(schedules.len(), 1);
+        // The Saturday GTFS service day operates on Sunday UTC.
+        // GTFS uses the Saturday noon offset across the entire service day,
+        // even though Los Angeles changes from PDT to PST overnight.
+        assert_eq!(schedules[0].first_second, 8 * 3600 + 15);
+        assert!(schedules[0].days.test(1));
+        assert!(!schedules[0].days.test(0));
+    }
+
+    #[test]
+    fn frequency_departure_in_tokyo_can_fall_on_previous_utc_day() {
+        let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let first_day = unix_day(date) - 1;
+        let schedules = make_schedules(
+            "tokyo", 0, &sample_frequency_pattern("Asia/Tokyo", 0),
+            &sample_stop_lookup(), 30 * 60 + 45,
+            &single_date_calendar(date), first_day, 3,
+        ).unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].first_second, 15 * 3600 + 30 * 60 + 45);
+        assert!(schedules[0].days.test(0));
+    }
+
+    #[test]
+    fn frequency_uses_noon_offset_on_both_dst_transition_days() {
+        for (date, expected_utc_hour) in [
+            (NaiveDate::from_ymd_opt(2026, 3, 8).unwrap(), 8),
+            (NaiveDate::from_ymd_opt(2026, 11, 1).unwrap(), 9),
+        ] {
+            let schedules = make_schedules(
+                "dst", 0, &sample_frequency_pattern("America/Los_Angeles", 0),
+                &sample_stop_lookup(), 90 * 60,
+                &single_date_calendar(date), unix_day(date), 2,
+            ).unwrap();
+            assert_eq!(schedules.len(), 1);
+            assert_eq!(schedules[0].first_second, expected_utc_hour * 3600 + 30 * 60);
+            assert!(schedules[0].days.test(0));
+        }
     }
 
     #[test]
