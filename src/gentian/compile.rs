@@ -902,10 +902,11 @@ pub fn build(
             &mut transfer_rules,
         )?;
     }
-    ensure!(
-        !schedules.is_empty(),
-        "no scheduled trips in selected timetable horizon"
-    );
+    if schedules.is_empty() {
+        eprintln!(
+            "Gentian warning: no scheduled trips in selected timetable horizon; publishing a timetable with zero transports"
+        );
+    }
     assemble_routes(&mut tt, schedules)?;
     let mut transfers =
         super::footpaths::compute(osr_dir, &tt.coordinates, max_seconds, candidate_meters)?;
@@ -957,6 +958,47 @@ mod tests {
             tt.location_parent[lookup["platform"].idx()],
             lookup["station"]
         );
+    }
+
+    #[test]
+    fn empty_schedule_set_produces_valid_zero_trip_timetable() {
+        use catenary::routing_common::timetable::ZeroCopyTimetable;
+        let root = std::env::temp_dir()
+            .join(format!("gentian-empty-{}", uuid::Uuid::new_v4()));
+        let mut tt = TimetableOwned::empty(20_000, 2);
+        tt.add_source("chateau", "feed", "attempt").unwrap();
+        let stops = vec![
+            Stop {
+                id: "a".into(),
+                name: "A".into(),
+                lat: 33.6,
+                lon: -117.8,
+                parent: None,
+                kind: 0,
+            },
+            Stop {
+                id: "b".into(),
+                name: "B".into(),
+                lat: 33.61,
+                lon: -117.81,
+                parent: None,
+                kind: 0,
+            },
+        ];
+        add_locations(&mut tt, 0, &stops).unwrap();
+        let schedules = ScheduleRuns::new(&root, 1).unwrap();
+        assert!(schedules.is_empty());
+        assemble_routes(&mut tt, schedules).unwrap();
+        add_footpaths(&mut tt, vec![Vec::new(); stops.len()]).unwrap();
+
+        let bytes = tt.encode().unwrap();
+        let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
+        assert_eq!(timetable.sources().len(), 1);
+        assert_eq!(timetable.coordinates().len(), stops.len());
+        assert!(timetable.route_transport_ranges().is_empty());
+        assert!(timetable.transport_route().is_empty());
+        assert!(timetable.trip_ids().is_empty());
+        assert!(timetable.routes_at(LocationIdx(0)).is_empty());
     }
 
     #[test]
