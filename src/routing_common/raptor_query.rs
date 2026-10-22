@@ -196,28 +196,44 @@ fn traverse_routes_profiled(
     let started = std::time::Instant::now();
     let base = i64::from(tt.header().first_utc_day);
     let horizon = i64::from(tt.header().day_count);
-    let first_day = (departure.div_euclid(86_400) - base - 31).max(0);
-    let last_day = (max_time.div_euclid(86_400) - base).min(horizon - 1);
-    if first_day > last_day { return Ok(()); }
+    if horizon == 0 { return Ok(()); }
 
     for &route in marked_routes {
         stats.routes_scanned += 1;
         let transport_range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
-        if stops.len() < 2 {
-            continue;
-        }
+        if stops.len() < 2 { continue; }
+
+        // A service day contributes only when its actual event interval
+        // intersects the request interval. Do not use a fixed GTFS lookback.
         for index in transport_range.from..transport_range.to {
             let transport = TransportIdx(index);
             let active_days = tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
             let first_departure = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
-            // Resolve a shared profile once per transport, not once per stop.
             let Some(events) = tt.events_for_transport(transport) else { continue };
-            for day in first_day..=last_day {
-                stats.transport_days_tested += 1;
-                if !active_days.test(day as usize) { continue; }
-                stats.active_transport_days += 1;
-                let absolute_first = (base + day) * 86_400 + first_departure;
+            let earliest_event = first_departure + i64::from(events.first().map_or(0, |x| x.seconds()));
+            let latest_event = first_departure + i64::from(events.last().map_or(0, |x| x.seconds()));
+            let first_day = ((departure - latest_event).div_euclid(86_400) - base).max(0);
+            let last_day = ((max_time - earliest_event).div_euclid(86_400) - base).min(horizon - 1);
+            if first_day > last_day { continue; }
+
+            // Walk only active service days within the exact window, using
+            // bit operations rather than visiting each inactive calendar day.
+            let first_word = (first_day as usize) / 64;
+            let last_word = (last_day as usize) / 64;
+            for word_idx in first_word..=last_word {
+                let lower = if word_idx == first_word { (first_day as usize) % 64 } else { 0 };
+                let upper = if word_idx == last_word { (last_day as usize) % 64 } else { 63 };
+                let lower_mask = u64::MAX << lower;
+                let upper_mask = u64::MAX >> (63 - upper);
+                let mut remaining = active_days.words[word_idx] & lower_mask & upper_mask;
+                stats.transport_days_tested += u64::from(upper - lower + 1);
+                while remaining != 0 {
+                    let bit = remaining.trailing_zeros() as usize;
+                    remaining &= remaining - 1;
+                    let day = (word_idx * 64 + bit) as i64;
+                    stats.active_transport_days += 1;
+                    let absolute_first = (base + day) * 86_400 + first_departure;
                 let mut onboard: Option<(usize, i64)> = None;
                 for (position, stop) in stops.iter().enumerate() {
                     stats.stop_events_scanned += 1;
