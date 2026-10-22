@@ -140,8 +140,11 @@ undefined in the shared library alone.
 
 ## Current limitations
 
-GTFS frequency expansion, per-stop boarding/alighting restrictions, and
-cross-region route federation remain incomplete. Footpath candidates are
+GTFS frequency windows are discretized into seconds-precision departures at
+compile time (including headway-based `exact_times=0` windows); this does not
+yet model stochastic headway waiting or frequency-specific realtime instance
+matching. Per-stop boarding/alighting restrictions and cross-region route
+federation remain incomplete. Footpath candidates are
 limited by geographic distance, not proven complete for arbitrary cycling or
 walking networks. The native OSR worker listens on loopback by default; it
 does not provide authentication or TLS.
