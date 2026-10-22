@@ -345,6 +345,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           python3 src/routing_regions/run_timed_query.py \
             --label 'UCI to City Hall (Mon Oct 26 08:00 PDT)' \
+            --max-raptor-ms 500 \
             --binary target/release/edelweiss \
             --regions-config routing_regions.toml \
             --catenary-config catenaryconfig.toml \
@@ -357,6 +358,7 @@ jobs:
             temp/uci-cityhall-results.json | tee temp/uci-cityhall-journeys.txt
           python3 src/routing_regions/run_timed_query.py \
             --label 'Alhambra to Santa Monica Pier (Sat Oct 24 11:00 PDT)' \
+            --max-raptor-ms 500 \
             --binary target/release/edelweiss \
             --regions-config routing_regions.toml \
             --catenary-config catenaryconfig.toml \
