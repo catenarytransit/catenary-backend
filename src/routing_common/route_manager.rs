@@ -56,6 +56,7 @@ struct StreetRegion {
 pub struct RoutingResponse {
     pub selection: RoutingSelection,
     pub journeys: Vec<Journey>,
+    pub raptor_stats: raptor_query::RaptorStats,
 }
 
 pub struct Router {
@@ -177,7 +178,7 @@ impl Router {
         direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
-        let journeys = raptor_query::route(&tt, &Query {
+        let (journeys, raptor_stats) = raptor_query::route_with_stats(&tt, &Query {
             departure_unix_seconds,
             access,
             egress,
@@ -185,7 +186,7 @@ impl Router {
             max_boardings:self.settings.max_boardings,
             max_duration_seconds:self.settings.max_duration_seconds,
         })?;
-        Ok(RoutingResponse {selection,journeys})
+        Ok(RoutingResponse {selection,journeys,raptor_stats})
     }
 
     pub fn nearest_stops(&self, region: &str, point: Coordinates, limit: usize) -> Result<Vec<(LocationIdx, f64)>> {
