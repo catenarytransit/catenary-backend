@@ -106,7 +106,9 @@ impl Round {
                 true
             }
         });
-        if bucket.is_empty() { self.touched.push(candidate.stop); }
+        if bucket.is_empty() && !self.touched.contains(&candidate.stop) {
+            self.touched.push(candidate.stop);
+        }
         let id = nodes.len();
         nodes.push(candidate);
         bucket.push(id);
