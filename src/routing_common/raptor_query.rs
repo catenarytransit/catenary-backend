@@ -118,6 +118,45 @@ fn can_board(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, departure: i
     alight_time + i64::from(change_time) <= departure
 }
 
+// Only newly improved labels need to start a Dijkstra relaxation: the
+// previous round already contains the shortest walking closure for every
+// unchanged label. Footpath weights are positive and time-independent.
+fn relax_walks_from(
+    tt: &ZeroCopyTimetable<'_>,
+    labels: &mut [Label],
+    seeds: &[usize],
+    max_time: i64,
+    stats: &mut RaptorStats,
+) {
+    let started = std::time::Instant::now();
+    let mut heap = BinaryHeap::new();
+    for &idx in seeds {
+        let t = labels[idx].time;
+        if t < INF && t <= max_time {
+            heap.push(Reverse((t, idx)));
+            stats.walking_heap_pushes += 1;
+        }
+    }
+    while let Some(Reverse((time, from))) = heap.pop() {
+        if labels[from].time != time { continue; }
+        for edge in tt.footpaths_from(LocationIdx(from as u32)) {
+            stats.footpath_edges_examined += 1;
+            let to = edge.target().idx();
+            let seconds = edge.seconds();
+            let next = time + i64::from(seconds);
+            if next <= max_time && improve(
+                labels, to, next, Parent::Walk {from, seconds},
+                labels[from].last_alight,
+            ) {
+                stats.labels_improved += 1;
+                stats.walking_heap_pushes += 1;
+                heap.push(Reverse((next, to)));
+            }
+        }
+    }
+    stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
+}
+
 fn relax_walks_profiled(
     tt: &ZeroCopyTimetable<'_>,
     labels: &mut [Label],
@@ -376,7 +415,9 @@ pub fn route_with_stats(
             }, None);
         }
     }
-    relax_walks_profiled(tt, &mut round0, max_time, &mut stats);
+    let access_seeds: Vec<usize> = request.access.iter()
+        .map(|ep| ep.stop.idx()).collect();
+    relax_walks_from(tt, &mut round0, &access_seeds, max_time, &mut stats);
     let mut marked_stops = round0.iter().enumerate()
         .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
         .collect::<Vec<_>>();
@@ -399,7 +440,10 @@ pub fn route_with_stats(
         let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
         if routes.is_empty() { break; }
         traverse_routes_profiled(tt, prev, &mut curr, &routes, departure, max_time, &mut stats)?;
-        relax_walks_profiled(tt, &mut curr, max_time, &mut stats);
+        let transit_seeds: Vec<usize> = curr.iter().zip(prev).enumerate()
+            .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
+            .collect();
+        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats);
         marked_stops = curr.iter().zip(prev).enumerate()
             .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
             .collect();
