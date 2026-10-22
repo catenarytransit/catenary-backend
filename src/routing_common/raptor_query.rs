@@ -6,9 +6,6 @@ use std::collections::BinaryHeap;
 
 const INF: i64 = i64::MAX / 4;
 
-#[path = "raptor_provenance.rs"]
-mod provenance;
-
 /// Work counters describe the search, not allocations in OSR or metadata hydration.
 /// Keep the fields additive so production logs remain comparable across revisions.
 #[derive(Clone, Debug, Default, Serialize)]
@@ -360,7 +357,88 @@ pub fn route_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
-    provenance::route_with_stats(tt, request)
+    let mut stats = RaptorStats::default();
+    ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
+    ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
+        "max_duration_seconds must be between 1 second and 7 days");
+    let n = tt.coordinates().len();
+    for endpoint in request.access.iter().chain(&request.egress) {
+        ensure!(endpoint.stop.idx() < n, "access or egress stop out of range");
+    }
+    let departure = request.departure_unix_seconds;
+    let max_time = departure + i64::from(request.max_duration_seconds);
+    let mut round0 = vec![Label {time:INF, parent:None, last_alight:None};n];
+    for endpoint in &request.access {
+        let time = departure + i64::from(endpoint.seconds);
+        if time <= max_time {
+            improve(&mut round0, endpoint.stop.idx(), time, Parent::Access {
+                seconds: endpoint.seconds,
+            }, None);
+        }
+    }
+    relax_walks_profiled(tt, &mut round0, max_time, &mut stats);
+    let mut marked_stops = round0.iter().enumerate()
+        .filter_map(|(idx, label)| (label.time < INF).then_some(idx))
+        .collect::<Vec<_>>();
+    let mut labels = vec![round0];
+    // A single route-sized bitmap is sufficient for the whole search.
+    // Rounds are limited to 16, so a u8 epoch never wraps.
+    let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
+    for round in 1..=request.max_boardings {
+        stats.rounds += 1;
+        stats.marked_stops += marked_stops.len() as u64;
+        let prev = &labels[round - 1];
+        let mut curr: Vec<Label> = prev.iter().map(|label| Label {
+            time: label.time,
+            parent: if label.time == INF { None } else {
+                Some(Parent::Carry { previous_round: round - 1 })
+            },
+            last_alight: label.last_alight,
+        }).collect();
+        stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
+        let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
+        if routes.is_empty() { break; }
+        traverse_routes_profiled(tt, prev, &mut curr, &routes, departure, max_time, &mut stats)?;
+        relax_walks_profiled(tt, &mut curr, max_time, &mut stats);
+        marked_stops = curr.iter().zip(prev).enumerate()
+            .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
+            .collect();
+        labels.push(curr);
+        if marked_stops.is_empty() { break; }
+    }
+
+    let mut journeys = Vec::new();
+    if let Some(seconds) = request.direct_walk_seconds {
+        if seconds <= request.max_duration_seconds {
+            journeys.push(Journey {
+                boardings: 0,
+                departure_unix_seconds: request.departure_unix_seconds,
+                arrival_unix_seconds: request.departure_unix_seconds + i64::from(seconds),
+                legs: vec![Leg::DirectWalk {seconds}],
+            });
+        }
+    }
+    for (round, layer) in labels.iter().enumerate() {
+        let best = request.egress.iter()
+            .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
+            .min_by_key(|x| layer[x.stop.idx()].time + i64::from(x.seconds));
+        if let Some(dest) = best {
+            if let Some(journey) = reconstruct(&labels, round, dest.stop.idx(),
+                                               dest.seconds, departure) {
+                journeys.push(journey);
+            }
+        }
+    }
+    journeys.sort_by_key(|x| (x.boardings, x.arrival_unix_seconds));
+    let mut frontier = Vec::new();
+    let mut best_arrival = i64::MAX;
+    for journey in journeys {
+        if journey.arrival_unix_seconds < best_arrival {
+            best_arrival = journey.arrival_unix_seconds;
+            frontier.push(journey);
+        }
+    }
+    Ok((frontier, stats))
 }
 
 #[cfg(test)]
