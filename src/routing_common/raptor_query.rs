@@ -22,6 +22,7 @@ pub struct RaptorStats {
     pub footpath_edges_examined: u64,
     pub walking_heap_pushes: u64,
     pub labels_improved: u64,
+    pub labels_dominated: u64,
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
