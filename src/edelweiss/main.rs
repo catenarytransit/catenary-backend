@@ -530,6 +530,12 @@ async fn main() -> Result<()> {
     });
     HttpServer::new(move || {
         App::new()
+            .wrap(
+                actix_cors::Cors::default()
+                    .allow_any_origin()
+                    .allow_any_method()
+                    .allow_any_header(),
+            )
             .app_data(state.clone())
             .route("/v1/route", web::post().to(route))
     })
