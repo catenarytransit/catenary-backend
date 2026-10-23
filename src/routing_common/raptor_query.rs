@@ -59,6 +59,8 @@ pub enum Leg {
         route: u32,
         transport: u32,
         service_day: u16,
+        board_stop_index: usize,
+        alight_stop_index: usize,
         departure_unix_seconds: i64,
         arrival_unix_seconds: i64,
     },
@@ -96,6 +98,8 @@ enum Parent {
         route: u32,
         transport: u32,
         service_day: u16,
+        board_stop_index: usize,
+        alight_stop_index: usize,
         departure: i64,
         arrival: i64,
     },
@@ -342,11 +346,11 @@ fn traverse_routes_profiled(
                     let day = (word_idx * 64 + bit) as i64;
                     stats.active_transport_days += 1;
                     let absolute_first = (base + day) * 86_400 + first_departure;
-                    let mut onboard: Option<(usize, i64)> = None;
+                    let mut onboard: Option<(usize, i64, usize)> = None;
                     for (position, stop) in stops.iter().enumerate() {
                         stats.stop_events_scanned += 1;
                         let loc = stop.location().idx();
-                        if let Some((boarding_loc, boarding_time)) = onboard {
+                        if let Some((boarding_loc, boarding_time, board_stop_index)) = onboard {
                             if stop.inbound() {
                                 if let Some(offset) = position
                                     .checked_mul(2)
@@ -364,6 +368,8 @@ fn traverse_routes_profiled(
                                                 route: route.0,
                                                 transport: transport.0,
                                                 service_day: day as u16,
+                                                board_stop_index,
+                                                alight_stop_index: position,
                                                 departure: boarding_time,
                                                 arrival,
                                             },
@@ -383,7 +389,7 @@ fn traverse_routes_profiled(
                                 if board_time <= max_time
                                     && can_board(tt, prev[loc], loc, board_time)
                                 {
-                                    onboard = Some((loc, board_time));
+                                    onboard = Some((loc, board_time, position));
                                 }
                             }
                         }
@@ -460,6 +466,8 @@ fn reconstruct(
                 route,
                 transport,
                 service_day,
+                board_stop_index,
+                alight_stop_index,
                 departure,
                 arrival,
             } => {
@@ -469,6 +477,8 @@ fn reconstruct(
                     route,
                     transport,
                     service_day,
+                    board_stop_index,
+                    alight_stop_index,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
                 });
