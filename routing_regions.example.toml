@@ -7,6 +7,7 @@ data_dir = "compiled/routing"
 [[regions]]
 id = "southern-california"
 name = "Southern California"
+timetable_path = "compiled/routing/southern-california.bin"
 geojson = ["routing_regions/socal.geojson"]
 
 # For countries instead, set country_boundaries above to a locally available
