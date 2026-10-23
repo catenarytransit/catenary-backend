@@ -9,6 +9,7 @@ use anyhow::{Context, Result, ensure};
 use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use clap::Parser;
+use chrono::Utc;
 use postgres::{Client, NoTls};
 mod compile;
 mod external_assembly;
@@ -27,12 +28,14 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// First UTC traffic day in Unix days, including Nigiri's lookback offset.
-    #[arg(long, default_value_t = 0)]
-    first_utc_day: i32,
+    /// First UTC traffic day in Unix days. Defaults to yesterday (UTC).
+    #[arg(long)]
+    first_utc_day: Option<i32>,
 
-    #[arg(long, default_value_t = MAX_DAYS as u32)]
-    day_count: u32,
+    /// Number of UTC days to compile. Defaults to Nigiri's 365 days plus
+    /// one lookback week.
+    #[arg(long)]
+    day_count: Option<u32>,
 
     /// Register sources as CHATEAU,ONESTOP_FEED_ID,ATTEMPT_ID; repeatable.
     #[arg(
@@ -92,6 +95,34 @@ struct Args {
     data_dir: Option<PathBuf>,
 }
 
+/// MOTIS/Nigiri defaults to TODAY with 365 service days. Its import interval
+/// additionally starts one day earlier so previous-day overnight services
+/// remain available at the beginning of the requested timetable.
+const DEFAULT_SERVICE_DAYS: u32 = 365;
+const LOOKBACK_DAYS: i32 = 7;
+
+fn resolve_horizon(
+    first_day_override: Option<i32>,
+    day_count_override: Option<u32>,
+    today_utc_day: i32,
+) -> Result<(i32, u32)> {
+    let first_utc_day = match first_day_override {
+        Some(day) => day,
+        None => today_utc_day
+            .checked_sub(LOOKBACK_DAYS)
+            .context("UTC day underflow computing timetable lookback")?,
+    };
+    let day_count = day_count_override.unwrap_or(DEFAULT_SERVICE_DAYS + LOOKBACK_DAYS as u32);
+    ensure!(
+        (1..=MAX_DAYS as u32).contains(&day_count),
+        "day count must be between 1 and {MAX_DAYS}"
+    );
+    first_utc_day
+        .checked_add(i32::try_from(day_count)?)
+        .context("timetable horizon exceeds i32 UTC day range")?;
+    Ok((first_utc_day, day_count))
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     if args.list_timetable_sizes {
@@ -118,6 +149,24 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    let utc_day_today = i32::try_from(Utc::now().timestamp().div_euclid(86_400))
+        .context("current UTC day exceeds i32 range")?;
+    let (first_utc_day, day_count) =
+        resolve_horizon(args.first_utc_day, args.day_count, utc_day_today)?;
+    let start = chrono::DateTime::<Utc>::from_timestamp(i64::from(first_utc_day) * 86_400, 0)
+        .context("invalid start of timetable horizon")?;
+    let last = chrono::DateTime::<Utc>::from_timestamp(
+        (i64::from(first_utc_day) + i64::from(day_count) - 1) * 86_400,
+        0,
+    )
+    .context("invalid end of timetable horizon")?;
+    eprintln!(
+        "Gentian timetable horizon: {} through {} ({} UTC days)",
+        start.date_naive(),
+        last.date_naive(),
+        day_count
+    );
+
     if args.build {
         let selection = selection.as_ref().context("--region is required")?;
         let url = args
@@ -136,8 +185,8 @@ fn main() -> Result<()> {
         compile::build(
             &mut client,
             &selection.sources,
-            args.first_utc_day,
-            args.day_count,
+            first_utc_day,
+            day_count,
             osr_dir,
             args.max_seconds,
             args.candidate_meters,
@@ -148,7 +197,7 @@ fn main() -> Result<()> {
         return file_sizes::print_published(&selection.id, output);
     }
     let output = args.output.as_ref().context("--output is required")?;
-    let mut tt = TimetableOwned::empty(args.first_utc_day, args.day_count);
+    let mut tt = TimetableOwned::empty(first_utc_day, day_count);
     if let Some(selection) = &selection {
         ensure!(
             !selection.chateaux.is_empty(),
@@ -184,4 +233,40 @@ fn main() -> Result<()> {
         file_sizes::print_published(&selection.id, output)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_horizon_is_today_with_one_lookback_day_and_365_service_days() {
+        // 2026-10-22 is UTC day 20748.
+        assert_eq!(resolve_horizon(None, None, 20748).unwrap(), (20747, 366));
+    }
+
+    #[test]
+    fn explicit_horizon_overrides_are_independent() {
+        assert_eq!(resolve_horizon(Some(0), None, 20748).unwrap(), (0, 366));
+        assert_eq!(resolve_horizon(None, Some(35), 20748).unwrap(), (20747, 35));
+        assert_eq!(
+            resolve_horizon(Some(20745), Some(35), 20748).unwrap(),
+            (20745, 35)
+        );
+    }
+
+    #[test]
+    fn invalid_horizons_are_rejected() {
+        assert!(resolve_horizon(None, Some(0), 20748).is_err());
+        assert!(resolve_horizon(None, Some(MAX_DAYS as u32 + 1), 20748).is_err());
+        assert!(resolve_horizon(None, None, i32::MIN).is_err());
+        assert!(resolve_horizon(Some(i32::MAX), Some(2), 20748).is_err());
+    }
+
+    #[test]
+    fn date_flags_are_optional() {
+        let args = Args::try_parse_from(["gentian", "--output", "timetable.bin"]).unwrap();
+        assert!(args.first_utc_day.is_none());
+        assert!(args.day_count.is_none());
+    }
 }
