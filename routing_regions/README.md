@@ -2,8 +2,8 @@
 
 The runtime routing configuration lives at the **repository root** as
 `routing_regions.toml` (ignored by Git). Copy `routing_regions.example.toml`
-and adjust it for the regions you want to compile. Geometry paths are relative
-to the TOML file, and every intersecting château is included in full.
+and adjust it for the regions you want to compile. Geometry and explicit
+`timetable_path` paths are relative to the TOML file, and every intersecting château is included in full.
 The `routing_regions/` directory is for local geography files, not config.
 
 Run the Geofabrik OSR extractor manager using the independent crate at
@@ -17,11 +17,16 @@ cargo run --release --manifest-path src/osm_manager/Cargo.toml -- --config caten
 cargo run --release --bin gentian -- \
   --region southern-california \
   --regions-config routing_regions.toml \
-  --first-utc-day 20745 --day-count 35 \
   --osr-dir temp/osr-data/regions/north-america/us/california/socal \
   --max-seconds 900 --candidate-meters 1200 \
-  --build --output compiled/routing/southern-california.bin
+  --build --output ""
 ```
+
+By default Gentian compiles a rolling 365-day service window starting today,
+plus one preceding UTC day for overnight service (366 total UTC days).
+The resolved dates are logged before compilation. For reproducible test builds,
+pass both `--first-utc-day` (Unix days) and `--day-count` explicitly; the
+Southern California CI fixture continues to use its pinned dates.
 
 **OSR graph compatibility:** Before running Gentian, build the native OSR
 reader and its matching extractor from the same pinned source:
@@ -43,6 +48,12 @@ native OSR one-to-many searches, and directly writes forward and reverse
 footpath arrays into the memory-mappable RAPTOR timetable. There are no
 stop-export or footpath-import TSV intermediates. Native OSR is required for every
 Gentian timetable build; `--build` fails unless `--osr-dir` is supplied.
+If `--output` is omitted or passed as an empty string with `--region`, Gentian
+writes the region's `timetable_path` (or the legacy `data_dir/<id>.bin` fallback).
+A nonempty `--output` still overrides it. Edelweiss maps all region timetable
+paths on startup; coordinate matching chooses the smallest containing transit
+region, with region id as a deterministic tie-break. The separate OSR worker
+chooses the appropriate extracted street graph for each endpoint.
 
 ## Station transfers and footpath matching (wire format v4)
 

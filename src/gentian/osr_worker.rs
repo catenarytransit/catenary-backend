@@ -40,6 +40,8 @@ struct Request {
     longitude: f64,
     max_seconds: u32,
     stops: Vec<Stop>,
+    #[serde(default)]
+    include_geometry: bool,
 }
 #[derive(Clone, Deserialize)]
 struct Stop {
@@ -51,6 +53,8 @@ struct Stop {
 struct Access {
     stop: u32,
     seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    geometry: Option<Vec<[f64; 2]>>,
 }
 #[derive(Serialize)]
 struct Response {
@@ -88,7 +92,7 @@ fn run_request(
     let router = graph.as_ref().context("OSR graph is null")?;
     let options = ffi::RoutingOptions {
         max_cost: query.max_seconds,
-        include_segments: false,
+        include_segments: query.include_geometry,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };
     let mut targets = Vec::with_capacity(query.stops.len());
@@ -108,9 +112,25 @@ fn run_request(
     let mut results = Vec::new();
     for (stop, path) in query.stops.into_iter().zip(paths) {
         if path.found && path.duration_seconds <= query.max_seconds {
+            let geometry = query.include_geometry.then(|| {
+                let mut points = Vec::new();
+                points.push([query.longitude, query.latitude]);
+                for segment in &path.segments {
+                    for point in &segment.geometry {
+                        let coordinate = [point.lon, point.lat];
+                        if points.last() != Some(&coordinate) {
+                            points.push(coordinate);
+                        }
+                    }
+                }
+                let end = [stop.longitude, stop.latitude];
+                if points.last() != Some(&end) { points.push(end); }
+                points
+            });
             results.push(Access {
                 stop: stop.stop,
                 seconds: path.duration_seconds,
+                geometry,
             });
         }
     }

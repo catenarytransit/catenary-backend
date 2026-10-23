@@ -2,6 +2,8 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod motis_response;
+
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
 use catenary::routing_common::metadata_index::MetadataIndex;
@@ -61,7 +63,10 @@ struct Request {
     #[serde(default)]
     egress: Vec<Endpoint>,
     direct_walk_seconds: Option<u32>,
+    #[serde(default = "default_detailed_legs")]
+    detailed_legs: bool,
 }
+fn default_detailed_legs() -> bool { true }
 
 #[derive(Serialize)]
 struct RouteStyle {
@@ -344,8 +349,11 @@ fn run_query(
     request: Request,
     url: Option<&str>,
     osr_worker: &str,
-) -> Result<(Answer, QueryTimings)> {
+) -> Result<(serde_json::Value, QueryTimings)> {
     let query_start = Instant::now();
+    let origin = request.from;
+    let destination = request.to;
+    let detailed_legs = request.detailed_legs;
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -439,15 +447,18 @@ fn run_query(
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
     let index = router.metadata_for(&routing.selection.transit_region)?;
-    let route_styles = hydrate(&timetable, index, &routing.journeys, url)?;
+    let response = motis_response::build(
+        &timetable, index, &routing.journeys,
+        origin, destination,
+        &routing.selection.origin_osr_region,
+        &routing.selection.destination_osr_region,
+        osr_worker, url, detailed_legs,
+    )?;
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
 
     Ok((
-        Answer {
-            routing,
-            route_styles,
-        },
+        response,
         timings,
     ))
 }

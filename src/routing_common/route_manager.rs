@@ -170,7 +170,7 @@ impl Router {
             for piece in pieces {
                 geometries.extend(polygon_geometries(GeoJson::from_str(&piece.to_string())?)?);
             }
-            let path = settings.data_dir.join(format!("{}.bin", region.id));
+            let path = regions.timetable_path(routing_config, &region.id, None)?;
             let timetable = MappedTimetable::open(&path).with_context(|| {
                 format!(
                     "mapping transit region {} from {}",
@@ -222,7 +222,11 @@ impl Router {
         let region = self
             .transit
             .iter()
-            .find(|r| contains(&r.geometry, from) && contains(&r.geometry, to))
+            .filter(|r| contains(&r.geometry, from) && contains(&r.geometry, to))
+            .min_by(|a, b| {
+                let size = |r: &TransitRegion| r.geometry.iter().map(bbox_area).sum::<f64>();
+                size(a).total_cmp(&size(b)).then(a.id.cmp(&b.id))
+            })
             .context("no single compiled transit region contains both endpoints")?;
         Ok(RoutingSelection {
             transit_region: region.id.clone(),
