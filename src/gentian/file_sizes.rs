@@ -30,12 +30,12 @@ fn file_size(path: &Path) -> Result<Option<u64>> {
     }
 }
 
-fn configured_sizes(config: &RoutingRegionsConfig, dir: &Path) -> Result<Vec<RegionSize>> {
+fn configured_sizes(config: &RoutingRegionsConfig, config_path: &Path, dir: Option<&Path>) -> Result<Vec<RegionSize>> {
     config
         .regions
         .iter()
         .map(|region| {
-            let path = dir.join(format!("{}.bin", region.id));
+            let path = config.timetable_path(config_path, &region.id, dir)?;
             Ok(RegionSize {
                 id: region.id.clone(),
                 bytes: file_size(&path)?,
@@ -76,12 +76,9 @@ pub(super) fn print_published(region_id: &str, output: &Path) -> Result<()> {
 
 /// List every configured region without opening Postgres or mapping timetables.
 /// Does not silently count absent region files as zero-byte timetables.
-pub(super) fn print_configured(config: &RoutingRegionsConfig, dir: &Path) -> Result<()> {
-    let sizes = configured_sizes(config, dir)?;
-    println!(
-        "Timetable file sizes for configured regions ({}):",
-        dir.display()
-    );
+pub(super) fn print_configured(config: &RoutingRegionsConfig, config_path: &Path, dir: Option<&Path>) -> Result<()> {
+    let sizes = configured_sizes(config, config_path, dir)?;
+    println!("Timetable file sizes for configured regions:");
     let mut available = 0usize;
     let mut total = 0u64;
     for item in &sizes {
@@ -121,6 +118,7 @@ mod tests {
                 .map(|id| RoutingRegion {
                     id: id.to_owned(),
                     name: id.to_owned(),
+                    timetable_path: None,
                     geojson: vec![],
                     countries: vec!["US".to_owned()],
                 })
@@ -143,7 +141,7 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("alpha.bin"), vec![0u8; 1234]).unwrap();
         fs::write(dir.join("gamma.bin"), vec![0u8; 789]).unwrap();
-        let sizes = configured_sizes(&config(), &dir).unwrap();
+        let sizes = configured_sizes(&config(), Path::new("routing_regions.toml"), Some(&dir)).unwrap();
         assert_eq!(
             sizes.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta", "gamma"]
@@ -153,7 +151,7 @@ mod tests {
             vec![Some(1234), None, Some(789)]
         );
         assert_eq!(sizes.iter().filter_map(|s| s.bytes).sum::<u64>(), 2023);
-        print_configured(&config(), &dir).unwrap();
+        print_configured(&config(), Path::new("routing_regions.toml"), Some(&dir)).unwrap();
         fs::remove_dir_all(dir).unwrap();
     }
 
