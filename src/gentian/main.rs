@@ -127,8 +127,7 @@ fn main() -> Result<()> {
     let args = Args::parse();
     if args.list_timetable_sizes {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
-        let dir = args.data_dir.as_deref().unwrap_or(&config.data_dir);
-        return file_sizes::print_configured(&config, dir);
+        return file_sizes::print_configured(&config, &args.regions_config, args.data_dir.as_deref());
     }
     let selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
@@ -174,10 +173,13 @@ fn main() -> Result<()> {
             .as_deref()
             .context("DATABASE_URL is required")?;
         let mut client = Client::connect(url, NoTls)?;
-        let output = args
-            .output
-            .as_ref()
-            .context("--output is required with --build")?;
+        let output = match args.output.as_deref().filter(|p| !p.as_os_str().is_empty()) {
+            Some(path) => path.to_path_buf(),
+            None => {
+                let config = RoutingRegionsConfig::load(&args.regions_config)?;
+                config.timetable_path(&args.regions_config, &selection.id, None)?
+            }
+        };
         let osr_dir = args
             .osr_dir
             .as_deref()
@@ -190,13 +192,20 @@ fn main() -> Result<()> {
             osr_dir,
             args.max_seconds,
             args.candidate_meters,
-            output,
+            &output,
             args.scratch_dir.as_deref(),
             args.schedule_memory_mib,
         )?;
-        return file_sizes::print_published(&selection.id, output);
+        return file_sizes::print_published(&selection.id, &output);
     }
-    let output = args.output.as_ref().context("--output is required")?;
+    let output = match args.output.as_deref().filter(|p| !p.as_os_str().is_empty()) {
+        Some(path) => path.to_path_buf(),
+        None => {
+            let selection = selection.as_ref().context("--output is required unless --region is set")?;
+            let config = RoutingRegionsConfig::load(&args.regions_config)?;
+            config.timetable_path(&args.regions_config, &selection.id, None)?
+        }
+    };
     let mut tt = TimetableOwned::empty(first_utc_day, day_count);
     if let Some(selection) = &selection {
         ensure!(
@@ -223,14 +232,14 @@ fn main() -> Result<()> {
         }
     }
 
-    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
+    let bytes = catenary::routing_common::timetable_mmap::publish(&tt, &output)?;
     println!(
         "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
         bytes,
         tt.sources.len()
     );
     if let Some(selection) = &selection {
-        file_sizes::print_published(&selection.id, output)?;
+        file_sizes::print_published(&selection.id, &output)?;
     }
     Ok(())
 }
