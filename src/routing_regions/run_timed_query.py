@@ -64,8 +64,8 @@ def run_query(args: argparse.Namespace) -> dict:
             f"{args.max_raptor_ms:.3f} ms"
         )
 
-    journeys = response["routing"]["journeys"]
-    region = response["routing"]["selection"]["transit_region"]
+    journeys = response["itineraries"]
+    region = args.label
     timings.update(
         command_wall_ms=command_wall_ms,
         journey_count=len(journeys),
