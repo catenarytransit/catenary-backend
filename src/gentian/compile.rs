@@ -348,6 +348,34 @@ fn make_schedules(
     )
 }
 
+/// Reject a whole itinerary when any stop time runs backwards or references
+/// a stop absent from the compiled timetable.
+fn pattern_stops_monotonic(
+    pattern: &Pattern,
+    stop_lookup: &HashMap<String, LocationIdx>,
+) -> bool {
+    pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
+        && pattern
+            .stops
+            .iter()
+            .all(|(stop, arr, dep)| stop_lookup.contains_key(stop) && arr <= dep)
+}
+
+fn invalid_itinerary_patterns(
+    patterns: &HashMap<String, Pattern>,
+    negative_patterns: &HashSet<String>,
+    stop_lookup: &HashMap<String, LocationIdx>,
+) -> HashSet<String> {
+    patterns
+        .iter()
+        .filter(|(id, pattern)| {
+            !negative_patterns.contains(*id)
+                && (pattern.stops.len() < 2 || !pattern_stops_monotonic(pattern, stop_lookup))
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
+}
+
 fn make_schedules_from_anchors(
     trip_id: &str,
     source_idx: u16,
@@ -366,11 +394,7 @@ fn make_schedules_from_anchors(
         "trip {trip_id} needs at least two stops"
     );
     ensure!(
-        pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
-            && pattern
-                .stops
-                .iter()
-                .all(|(stop, arr, dep)| { stop_lookup.contains_key(stop) && arr <= dep }),
+        pattern_stops_monotonic(pattern, stop_lookup),
         "invalid/nonmonotonic pattern for trip {trip_id}"
     );
     let first_departure_offset = i64::from(pattern.stops[0].2);
@@ -745,7 +769,10 @@ fn compile_source(
             Ok(())
         },
     )?;
+    let invalid_patterns = invalid_itinerary_patterns(&patterns, &negative_patterns, &lookup);
     let mut skipped_trips = 0usize;
+    let mut skipped_invalid_trips = 0usize;
+    let mut invalid_trip_examples = Vec::new();
     query_source(
         client,
         "
@@ -765,6 +792,13 @@ fn compile_source(
             let frequency_blob: Option<Vec<u8>> = r.get(5);
             if negative_patterns.contains(&itinerary) {
                 skipped_trips += 1;
+                return Ok(());
+            }
+            if invalid_patterns.contains(&itinerary) {
+                skipped_invalid_trips += 1;
+                if invalid_trip_examples.len() < 5 {
+                    invalid_trip_examples.push(trip_id);
+                }
                 return Ok(());
             }
             ensure!(
@@ -819,6 +853,16 @@ fn compile_source(
             Ok(())
         },
     )?;
+    if !invalid_patterns.is_empty() {
+        eprintln!(
+            "Gentian: skipped {} trips from {} invalid/nonmonotonic itinerary patterns in feed {} (attempt {}); example trips: {}",
+            skipped_invalid_trips,
+            invalid_patterns.len(),
+            source.onestop_feed_id,
+            source.attempt_id,
+            invalid_trip_examples.join(", "),
+        );
+    }
     if !negative_patterns.is_empty() {
         let mut examples = negative_patterns
             .iter()
@@ -1048,6 +1092,57 @@ mod tests {
                 ("c".into(), 120, 150),
             ]
         );
+    }
+
+    #[test]
+    fn invalid_patterns_are_quarantined_without_affecting_valid_trips() {
+        let lookup = sample_stop_lookup();
+        let valid = sample_frequency_pattern("America/Los_Angeles", 120);
+
+        let mut backwards_between_stops = valid.clone();
+        backwards_between_stops.stops[1].1 = 119;
+
+        let mut backwards_dwell = valid.clone();
+        backwards_dwell.stops[0].1 = 121;
+
+        let mut missing_stop = valid.clone();
+        missing_stop.stops[1].0 = "unknown".into();
+
+        let mut single_stop = valid.clone();
+        single_stop.stops.truncate(1);
+
+        let patterns = HashMap::from([
+            ("good".into(), valid),
+            ("TL-152-pattern".into(), backwards_between_stops),
+            ("backwards-dwell".into(), backwards_dwell),
+            ("missing-stop".into(), missing_stop),
+            ("single-stop".into(), single_stop),
+        ]);
+        let invalid = invalid_itinerary_patterns(&patterns, &HashSet::new(), &lookup);
+        assert_eq!(
+            invalid,
+            HashSet::from([
+                "TL-152-pattern".to_string(),
+                "backwards-dwell".to_string(),
+                "missing-stop".to_string(),
+                "single-stop".to_string(),
+            ])
+        );
+
+        let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let schedules = make_schedules(
+            "good-trip",
+            0,
+            &patterns["good"],
+            &lookup,
+            8 * 3600,
+            &single_date_calendar(date),
+            unix_day(date),
+            2,
+        )
+        .unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].trip_id, "good-trip");
     }
 
     #[test]
