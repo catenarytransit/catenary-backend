@@ -273,7 +273,7 @@ fn transit_leg(
     ride: &Leg,
     detailed: bool,
 ) -> Value {
-    let Leg::Ride {from_stop,to_stop,route,transport,board_stop_index,alight_stop_index,departure_unix_seconds,arrival_unix_seconds,..}=ride else {unreachable!()};
+    let Leg::Ride {from_stop,to_stop,route,transport,service_day,board_stop_index,alight_stop_index,departure_unix_seconds,arrival_unix_seconds,..}=ride else {unreachable!()};
     let meta = trip_info(tt,index,info,*transport);
     let all = tt.stops_on(RouteIdx(*route));
     let from = place(tt,*from_stop);
@@ -284,9 +284,26 @@ fn transit_leg(
             _ => Vec::new(),
         }
     } else {Vec::new()};
-    let intermediate_stops:Vec<Value> = if board_stop_index < alight_stop_index {
-        all.iter().take(*alight_stop_index).skip(board_stop_index+1)
-            .map(|s|place(tt,s.location().0)).collect()
+    let intermediate_stops: Vec<Value> = if board_stop_index < alight_stop_index {
+        let first = (i64::from(tt.header().first_utc_day) + i64::from(*service_day))
+            * 86_400
+            + i64::from(tt.transport_first_dep_offset()[*transport as usize].seconds());
+        all.iter().enumerate().take(*alight_stop_index)
+            .skip(*board_stop_index + 1)
+            .map(|(position, stop)| {
+                let mut p = place(tt, stop.location().0);
+                if let Some(arrival) = tt.event_time(RouteIdx(*route), TransportIdx(*transport), position, true) {
+                    let t = timestamp(first + i64::from(arrival.seconds()));
+                    p["arrival"] = json!(t);
+                    p["scheduledArrival"] = json!(t);
+                }
+                if let Some(departure) = tt.event_time(RouteIdx(*route), TransportIdx(*transport), position, false) {
+                    let t = timestamp(first + i64::from(departure.seconds()));
+                    p["departure"] = json!(t);
+                    p["scheduledDeparture"] = json!(t);
+                }
+                p
+            }).collect()
     } else { Vec::new() };
     let mode = match meta.route_type {
         Some(0) => "TRAM", Some(1) => "SUBWAY", Some(2) => "RAIL",
