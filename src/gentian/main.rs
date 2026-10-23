@@ -33,7 +33,7 @@ struct Args {
     first_utc_day: Option<i32>,
 
     /// Number of UTC days to compile. Defaults to Nigiri's 365 days plus
-    /// one lookback day for overnight services.
+    /// one lookback week.
     #[arg(long)]
     day_count: Option<u32>,
 
@@ -99,7 +99,7 @@ struct Args {
 /// additionally starts one day earlier so previous-day overnight services
 /// remain available at the beginning of the requested timetable.
 const DEFAULT_SERVICE_DAYS: u32 = 365;
-const LOOKBACK_DAYS: i32 = 1;
+const LOOKBACK_DAYS: i32 = 7;
 
 fn resolve_horizon(
     first_day_override: Option<i32>,
