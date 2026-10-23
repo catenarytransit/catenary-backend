@@ -29,6 +29,9 @@ pub struct RoutingRegionsConfig {
 pub struct RoutingRegion {
     pub id: String,
     pub name: String,
+    /// Explicit output timetable path; relative paths resolve from routing_regions.toml.
+    #[serde(default)]
+    pub timetable_path: Option<PathBuf>,
     #[serde(default)]
     pub geojson: Vec<PathBuf>,
     #[serde(default)]
@@ -97,6 +100,20 @@ impl RoutingRegionsConfig {
             }
         }
         Ok(config)
+    }
+
+    /// Resolve an explicit timetable file, falling back to the historical data_dir layout.
+    pub fn timetable_path(&self, config_path: &Path, id: &str, data_dir_override: Option<&Path>) -> Result<PathBuf> {
+        let region = self.region(id)?;
+        let root = config_path.parent().unwrap_or_else(|| Path::new("."));
+        if data_dir_override.is_none() {
+            if let Some(path) = &region.timetable_path {
+                ensure!(!path.as_os_str().is_empty(), "region {id} has an empty timetable_path");
+                return Ok(root.join(path));
+            }
+        }
+        let dir = data_dir_override.unwrap_or(&self.data_dir);
+        Ok(root.join(dir).join(format!("{id}.bin")))
     }
 
     pub fn region(&self, id: &str) -> Result<&RoutingRegion> {
