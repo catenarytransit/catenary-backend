@@ -185,7 +185,7 @@ fn polyline(points: &[[f64; 2]]) -> Value {
 }
 
 fn timestamp(seconds: i64) -> String {
-    chrono::DateTime::from_timestamp(seconds, 0)
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, 0)
         .map(|t| t.to_rfc3339())
         .unwrap_or_default()
 }
