@@ -284,22 +284,30 @@ fn service_utc_anchors(
 /// each GTFS frequency window. Keep seconds precision (Nigiri rounds to minutes)
 /// and treat the end of the window as exclusive. For exact_times=0 these are
 /// discretized headway-based departures, not guaranteed scheduled runs.
-fn expand_frequency_departures(
-    trip_id: &str,
-    blob: &[u8],
-    mut emit: impl FnMut(u32) -> Result<()>,
-) -> Result<()> {
+fn decode_frequency_data(trip_id: &str, blob: &[u8]) -> Result<GtfsFrequenciesProto> {
     let data = GtfsFrequenciesProto::decode(blob)
         .with_context(|| format!("decoding GTFS frequencies for trip {trip_id}"))?;
     ensure!(
         !data.frequencies.is_empty(),
         "trip {trip_id} is marked as frequency-based but has no frequency windows"
     );
-    for (index, window) in data.frequencies.into_iter().enumerate() {
+    // Validate all windows before emitting any departures. A malformed later
+    // window must not leave a partially compiled trip in ScheduleRuns.
+    for (index, window) in data.frequencies.iter().enumerate() {
         ensure!(
             window.headway_secs != 0,
             "trip {trip_id} frequency window {index} has zero headway"
         );
+    }
+    Ok(data)
+}
+
+fn emit_frequency_departures(
+    trip_id: &str,
+    data: &GtfsFrequenciesProto,
+    mut emit: impl FnMut(u32) -> Result<()>,
+) -> Result<()> {
+    for (index, window) in data.frequencies.iter().enumerate() {
         if window.start_time >= window.end_time {
             eprintln!(
                 "Gentian: skipping trip {trip_id} frequency window {index} with invalid time range (start_time={}, end_time={})",
@@ -307,15 +315,26 @@ fn expand_frequency_departures(
             );
             continue;
         }
-        let mut departure = window.start_time;
-        while departure < window.end_time {
-            emit(departure)?;
-            departure = departure
-                .checked_add(window.headway_secs)
-                .with_context(|| format!("trip {trip_id} frequency departure overflow"))?;
+        // The increment can pass u32::MAX after the last departure. Use a
+        // wider accumulator so this never rejects an otherwise valid window.
+        let mut departure = u64::from(window.start_time);
+        let end = u64::from(window.end_time);
+        while departure < end {
+            emit(departure as u32)?;
+            departure += u64::from(window.headway_secs);
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn expand_frequency_departures(
+    trip_id: &str,
+    blob: &[u8],
+    emit: impl FnMut(u32) -> Result<()>,
+) -> Result<()> {
+    let data = decode_frequency_data(trip_id, blob)?;
+    emit_frequency_departures(trip_id, &data, emit)
 }
 
 fn start_date(first_utc_day: i32) -> Result<NaiveDate> {
@@ -689,6 +708,66 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<(
     build_stop_routes_index(tt)
 }
 
+enum TripDepartures {
+    Scheduled(u32),
+    Frequencies(GtfsFrequenciesProto),
+}
+
+struct PreparedTrip<'a> {
+    pattern: &'a Pattern,
+    anchors: Vec<i64>,
+    departures: TripDepartures,
+}
+
+/// Validate trip-local GTFS data before writing any schedules. Only errors from
+/// this function are treated as bad input; PostgreSQL and ScheduleRuns errors
+/// must still stop the compilation rather than silently dropping output.
+fn prepare_trip<'a>(
+    trip_id: &str,
+    itinerary: &str,
+    service: &str,
+    start: i64,
+    has_frequencies: bool,
+    frequency_blob: Option<&[u8]>,
+    patterns: &'a HashMap<String, Pattern>,
+    calendars: &HashMap<String, Calendar>,
+    stop_lookup: &HashMap<String, LocationIdx>,
+    first_utc_day: i32,
+    day_count: u32,
+) -> Result<PreparedTrip<'a>> {
+    ensure!(
+        (0..u32::MAX as i64).contains(&start),
+        "trip {trip_id} invalid start_time {start}"
+    );
+    let pattern = patterns.get(itinerary).with_context(|| {
+        format!("trip {trip_id} has unknown itinerary pattern {itinerary}")
+    })?;
+    ensure!(
+        pattern.stops.len() >= 2 && pattern_stops_monotonic(pattern, stop_lookup),
+        "invalid/nonmonotonic pattern for trip {trip_id}"
+    );
+    let calendar = calendars
+        .get(service)
+        .with_context(|| format!("trip {trip_id} has unknown service {service}"))?;
+    let anchors = service_utc_anchors(calendar, pattern.timezone, first_utc_day, day_count)
+        .with_context(|| format!("trip {trip_id} has invalid service calendar {service}"))?;
+    let departures = if has_frequencies {
+        let blob = frequency_blob.with_context(|| {
+            format!("trip {trip_id} is marked as frequency-based without frequency data")
+        })?;
+        TripDepartures::Frequencies(decode_frequency_data(trip_id, blob)?)
+    } else {
+        // Maple stores the first arrival; schedules use the first departure.
+        let first_departure_offset = u32::try_from(pattern.stops[0].2)
+            .with_context(|| format!("trip {trip_id} has negative first departure offset"))?;
+        let first_departure = (start as u32)
+            .checked_add(first_departure_offset)
+            .with_context(|| format!("trip {trip_id} first departure overflow"))?;
+        TripDepartures::Scheduled(first_departure)
+    };
+    Ok(PreparedTrip { pattern, anchors, departures })
+}
+
 fn compile_source(
     client: &mut Client,
     tt: &mut TimetableOwned,
@@ -715,6 +794,7 @@ fn compile_source(
         },
     )?;
     let mut patterns = HashMap::<String, Pattern>::new();
+    let mut invalid_metadata_patterns = HashSet::<String>::new();
     query_source(
         client,
         "
@@ -727,16 +807,20 @@ fn compile_source(
             let itinerary: String = r.get(0);
             let route_id: String = r.get(1);
             let tz: String = r.get(2);
+            let Some(&route_type) = route_types.get(&route_id) else {
+                invalid_metadata_patterns.insert(itinerary);
+                return Ok(());
+            };
+            let Ok(timezone) = tz.parse::<Tz>() else {
+                invalid_metadata_patterns.insert(itinerary);
+                return Ok(());
+            };
             patterns.insert(
                 itinerary,
                 Pattern {
-                    route_type: *route_types
-                        .get(&route_id)
-                        .context("trip route has no GTFS route record")?,
+                    route_type,
                     route_id,
-                    timezone: tz
-                        .parse::<Tz>()
-                        .with_context(|| format!("invalid GTFS timezone {tz}"))?,
+                    timezone,
                     stops: Vec::new(),
                 },
             );
@@ -757,12 +841,13 @@ fn compile_source(
         source,
         |r| {
             let id: String = r.get(0);
-            if negative_patterns.contains(&id) {
+            if negative_patterns.contains(&id) || invalid_metadata_patterns.contains(&id) {
                 return Ok(());
             }
-            let pattern = patterns
-                .get_mut(&id)
-                .with_context(|| format!("itinerary_pattern row missing metadata: {id}"))?;
+            let Some(pattern) = patterns.get_mut(&id) else {
+                invalid_metadata_patterns.insert(id);
+                return Ok(());
+            };
             if !append_pattern_stop(pattern, r.get(1), r.get(2), r.get(3), r.get(4))? {
                 negative_patterns.insert(id);
             }
@@ -772,7 +857,10 @@ fn compile_source(
     let invalid_patterns = invalid_itinerary_patterns(&patterns, &negative_patterns, &lookup);
     let mut skipped_trips = 0usize;
     let mut skipped_invalid_trips = 0usize;
+    let mut skipped_metadata_trips = 0usize;
+    let mut skipped_bad_data_trips = 0usize;
     let mut invalid_trip_examples = Vec::new();
+    let mut bad_data_examples = Vec::new();
     query_source(
         client,
         "
@@ -801,18 +889,32 @@ fn compile_source(
                 }
                 return Ok(());
             }
-            ensure!(
-                (0..u32::MAX as i64).contains(&start),
-                "trip {trip_id} invalid start_time"
-            );
-            let pattern = patterns.get(&itinerary).with_context(|| {
-                format!("trip {trip_id} has unknown itinerary pattern {itinerary}")
-            })?;
-            let calendar = calendars
-                .get(&service)
-                .with_context(|| format!("trip {trip_id} has unknown service {service}"))?;
-            let anchors =
-                service_utc_anchors(calendar, pattern.timezone, tt.first_utc_day, tt.day_count)?;
+            if invalid_metadata_patterns.contains(&itinerary) {
+                skipped_metadata_trips += 1;
+                return Ok(());
+            }
+            let PreparedTrip { pattern, anchors, departures } = match prepare_trip(
+                &trip_id,
+                &itinerary,
+                &service,
+                start,
+                has_frequencies,
+                frequency_blob.as_deref(),
+                &patterns,
+                &calendars,
+                &lookup,
+                tt.first_utc_day,
+                tt.day_count,
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    skipped_bad_data_trips += 1;
+                    if bad_data_examples.len() < 5 {
+                        bad_data_examples.push(format!("{error:#}"));
+                    }
+                    return Ok(());
+                }
+            };
             let mut add_departure = |first_departure: u32| -> Result<()> {
                 for schedule in make_schedules_from_anchors(
                     &trip_id,
@@ -828,31 +930,33 @@ fn compile_source(
                 }
                 Ok(())
             };
-            if has_frequencies {
-                let blob = frequency_blob.as_deref().with_context(|| {
-                    format!("trip {trip_id} is marked as frequency-based without frequency data")
-                })?;
-                expand_frequency_departures(&trip_id, blob, &mut add_departure)?;
-            } else {
-                // Maple's compressed start_time is the first stop arrival, whereas
-                // frequencies.txt start_time is the first stop *departure*.
-                let first_stop_departure = pattern
-                    .stops
-                    .first()
-                    .with_context(|| format!("trip {trip_id} has no stops"))?
-                    .2;
-                let first_stop_departure =
-                    u32::try_from(first_stop_departure).with_context(|| {
-                        format!("trip {trip_id} has negative first departure offset")
-                    })?;
-                let first_departure = (start as u32)
-                    .checked_add(first_stop_departure)
-                    .with_context(|| format!("trip {trip_id} first departure overflow"))?;
-                add_departure(first_departure)?;
+            match departures {
+                TripDepartures::Scheduled(first_departure) => add_departure(first_departure)?,
+                TripDepartures::Frequencies(data) => {
+                    emit_frequency_departures(&trip_id, &data, &mut add_departure)?;
+                }
             }
             Ok(())
         },
     )?;
+    if skipped_bad_data_trips > 0 {
+        eprintln!(
+            "Gentian: skipped {} trips with invalid GTFS data in feed {} (attempt {}); examples: {}",
+            skipped_bad_data_trips,
+            source.onestop_feed_id,
+            source.attempt_id,
+            bad_data_examples.join("; "),
+        );
+    }
+    if !invalid_metadata_patterns.is_empty() {
+        eprintln!(
+            "Gentian: skipped {} trips referencing {} itinerary patterns with missing routes, invalid timezones, or missing metadata in feed {} (attempt {})",
+            skipped_metadata_trips,
+            invalid_metadata_patterns.len(),
+            source.onestop_feed_id,
+            source.attempt_id,
+        );
+    }
     if !invalid_patterns.is_empty() {
         eprintln!(
             "Gentian: skipped {} trips from {} invalid/nonmonotonic itinerary patterns in feed {} (attempt {}); example trips: {}",
@@ -1143,6 +1247,98 @@ mod tests {
         .unwrap();
         assert_eq!(schedules.len(), 1);
         assert_eq!(schedules[0].trip_id, "good-trip");
+    }
+
+    #[test]
+    fn malformed_trip_data_is_rejected_without_affecting_valid_trips() {
+        use catenary::gtfs_schedule_protobuf::GtfsFrequencyProto;
+
+        let date = NaiveDate::from_ymd_opt(2026, 10, 26).unwrap();
+        let patterns = HashMap::from([(
+            "pattern".to_owned(),
+            sample_frequency_pattern("America/Los_Angeles", 120),
+        )]);
+        let calendars = HashMap::from([(
+            "weekday".to_owned(),
+            single_date_calendar(date),
+        )]);
+        let lookup = sample_stop_lookup();
+        let zero_headway = GtfsFrequenciesProto {
+            frequencies: vec![
+                GtfsFrequencyProto {
+                    start_time: 8 * 3600,
+                    end_time: 9 * 3600,
+                    headway_secs: 600,
+                    exact_times: Some(1),
+                },
+                GtfsFrequencyProto {
+                    start_time: 9 * 3600,
+                    end_time: 10 * 3600,
+                    headway_secs: 0,
+                    exact_times: Some(1),
+                },
+            ],
+        }
+        .encode_to_vec();
+        for (itinerary, service, start, has_frequencies, blob, expected) in [
+            (
+                "pattern", "Walmart Non Summer Friday", 8 * 3600, false, None,
+                "unknown service Walmart Non Summer Friday",
+            ),
+            ("missing-pattern", "weekday", 8 * 3600, false, None, "unknown itinerary pattern"),
+            ("pattern", "weekday", -1, false, None, "invalid start_time"),
+            ("pattern", "weekday", 8 * 3600, true, None, "without frequency data"),
+            (
+                "pattern", "weekday", 8 * 3600, true, Some(zero_headway.as_slice()),
+                "frequency window 1 has zero headway",
+            ),
+            (
+                "pattern", "weekday", 8 * 3600, true, Some(&[0xff][..]),
+                "decoding GTFS frequencies",
+            ),
+        ] {
+            let error = match prepare_trip(
+                "74cfe7f5-d21d-4c35-9be0-bde24cdea38e",
+                itinerary,
+                service,
+                start,
+                has_frequencies,
+                blob,
+                &patterns,
+                &calendars,
+                &lookup,
+                unix_day(date),
+                2,
+            ) {
+                Ok(_) => panic!("accepted malformed trip: {expected}"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains(expected), "{error:#}");
+        }
+
+        let PreparedTrip { pattern, anchors, departures } = prepare_trip(
+            "valid-trip",
+            "pattern",
+            "weekday",
+            8 * 3600,
+            false,
+            None,
+            &patterns,
+            &calendars,
+            &lookup,
+            unix_day(date),
+            2,
+        )
+        .unwrap();
+        let TripDepartures::Scheduled(first_departure) = departures else {
+            panic!("expected scheduled trip");
+        };
+        let schedules = make_schedules_from_anchors(
+            "valid-trip", 0, pattern, &lookup, first_departure, &anchors, unix_day(date), 2,
+        )
+        .unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].trip_id, "valid-trip");
     }
 
     #[test]
