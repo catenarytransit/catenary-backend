@@ -17,11 +17,16 @@ cargo run --release --manifest-path src/osm_manager/Cargo.toml -- --config caten
 cargo run --release --bin gentian -- \
   --region southern-california \
   --regions-config routing_regions.toml \
-  --first-utc-day 20745 --day-count 35 \
   --osr-dir temp/osr-data/regions/north-america/us/california/socal \
   --max-seconds 900 --candidate-meters 1200 \
   --build --output compiled/routing/southern-california.bin
 ```
+
+By default Gentian compiles a rolling 365-day service window starting today,
+plus one preceding UTC day for overnight service (366 total UTC days).
+The resolved dates are logged before compilation. For reproducible test builds,
+pass both `--first-utc-day` (Unix days) and `--day-count` explicitly; the
+Southern California CI fixture continues to use its pinned dates.
 
 **OSR graph compatibility:** Before running Gentian, build the native OSR
 reader and its matching extractor from the same pinned source:
