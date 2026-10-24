@@ -13,6 +13,8 @@ use catenary::routing_common::route_manager::Coordinates;
 
 #[derive(Clone, Default)]
 struct TripInfo {
+    // Source provenance is always read from the compiled timetable, not the metadata DB.
+    chateau: Option<String>,
     id: String,
     route_id: String,
     short_name: Option<String>,
@@ -30,13 +32,14 @@ struct TripInfo {
 }
 
 #[derive(Clone)]
-struct TripKey { feed: String, attempt: String, trip: String }
+struct TripKey { chateau: String, feed: String, attempt: String, trip: String }
 
 fn ride_identity(tt: &ZeroCopyTimetable<'_>, index: &MetadataIndex, transport: u32) -> Option<TripKey> {
     let trip = index.trip_for_transport(transport)?;
     let record = tt.trip_ids().get(index.id_record_for_trip(trip)?)?;
-    let (_, feed, attempt) = tt.source(record.source)?;
+    let (chateau, feed, attempt) = tt.source(record.source)?;
     Some(TripKey {
+        chateau: chateau.to_owned(),
         feed: feed.to_owned(),
         attempt: attempt.to_owned(),
         trip: tt.get_string(record.id)?.to_owned(),
@@ -260,10 +263,16 @@ fn street_leg(
     }))
 }
 
+fn trip_info_for_key(info: &BTreeMap<(String,String,String),TripInfo>, key: Option<TripKey>) -> TripInfo {
+    let Some(key) = key else { return TripInfo::default() };
+    let mut result = info.get(&(key.feed,key.attempt,key.trip)).cloned().unwrap_or_default();
+    // The timetable remains authoritative even if PostgreSQL trip metadata is missing.
+    result.chateau = Some(key.chateau);
+    result
+}
+
 fn trip_info(tt: &ZeroCopyTimetable<'_>, index: &MetadataIndex, info: &BTreeMap<(String,String,String),TripInfo>, transport: u32) -> TripInfo {
-    ride_identity(tt,index,transport)
-        .and_then(|k|info.get(&(k.feed,k.attempt,k.trip)).cloned())
-        .unwrap_or_default()
+    trip_info_for_key(info, ride_identity(tt,index,transport))
 }
 
 fn transit_leg(
@@ -319,6 +328,7 @@ fn transit_leg(
         "scheduledStartTime":timestamp(start),"scheduledEndTime":timestamp(end),
         "realTime":false,"scheduled":true,"cancelled":false,
         "routeId":meta.route_id,"tripId":meta.id,
+        "chateau":meta.chateau,
         "routeShortName":meta.short_name,"routeLongName":meta.long_name,
         "tripShortName":meta.trip_short_name,"headsign":meta.headsign,
         "routeColor":meta.route_color,"routeTextColor":meta.route_text_color,
@@ -417,5 +427,35 @@ mod tests {
         let shape = [[0.0,0.0],[1.0,0.0],[1.0,1.0],[2.0,1.0]];
         let clipped = clipped_shape(&shape,[0.5,0.0],[1.5,1.0]);
         assert_eq!(clipped,vec![[0.5,0.0],[1.0,0.0],[1.0,1.0],[1.5,1.0]]);
+    }
+
+    #[test]
+    fn transit_chateau_comes_from_timetable_source_even_without_db_metadata() {
+        let key = TripKey {
+            chateau: "nationalrailuk".into(),
+            feed: "f-rail".into(),
+            attempt: "attempt-1".into(),
+            trip: "train-123".into(),
+        };
+        let missing = trip_info_for_key(&BTreeMap::new(), Some(key.clone()));
+        assert_eq!(missing.chateau.as_deref(), Some("nationalrailuk"));
+        assert_eq!(json!({"chateau":missing.chateau})["chateau"], "nationalrailuk");
+        assert!(missing.short_name.is_none());
+
+        let mut rows = BTreeMap::new();
+        rows.insert(
+            ("f-rail".into(), "attempt-1".into(), "train-123".into()),
+            TripInfo { short_name: Some("London".into()), ..TripInfo::default() },
+        );
+        let resolved = trip_info_for_key(&rows, Some(key));
+        assert_eq!(resolved.chateau.as_deref(), Some("nationalrailuk"));
+        assert_eq!(resolved.short_name.as_deref(), Some("London"));
+    }
+
+    #[test]
+    fn missing_source_identity_does_not_invent_chateau() {
+        let result = trip_info_for_key(&BTreeMap::new(), None);
+        assert_eq!(result.chateau, None);
+        assert!(json!({"chateau":result.chateau})["chateau"].is_null());
     }
 }
