@@ -103,6 +103,7 @@ fn metadata(
         let feed: String = row.get(0);
         let attempt: String = row.get(1);
         result.insert((feed, attempt, id.clone()), TripInfo {
+            chateau: None, // populated authoritatively from timetable trip source
             id,
             route_id: row.get(3),
             short_name: row.get(4),
