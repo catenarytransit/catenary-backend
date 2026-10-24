@@ -422,6 +422,219 @@ fn traverse_routes(
     )
 }
 
+/// Improve walking without changing the selected scheduled vehicle. RAPTOR's
+/// earliest-arrival label is intentionally one-dimensional: the first feasible
+/// boarding of a trip is kept even if a later stop has a shorter access walk.
+/// Nigiri solves this in journey reconstruction (optimize_initial_departure).
+///
+/// Only use direct OSR offsets supplied with this query; never estimate walking
+/// from straight-line distances or invent a footpath. The scheduled trip, route,
+/// service day, and downstream arrival remain unchanged.
+fn optimize_initial_walk_on_trip(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    journey: &mut Journey,
+) {
+    let Some(ride_idx) = journey
+        .legs
+        .iter()
+        .position(|leg| matches!(leg, Leg::Ride { .. }))
+    else {
+        return;
+    };
+    if ride_idx == 0 {
+        return;
+    }
+
+    // An initial walk may consist of one OSR access followed by compiled
+    // footpaths. Replacing this chain with a direct OSR access is only valid
+    // when everything before the first ride is pedestrian.
+    let mut old_walk_seconds = 0u32;
+    for (idx, leg) in journey.legs[..ride_idx].iter().enumerate() {
+        let seconds = match leg {
+            Leg::Access { seconds, .. } if idx == 0 => *seconds,
+            Leg::Transfer { seconds, .. } if idx != 0 => *seconds,
+            _ => return,
+        };
+        let Some(sum) = old_walk_seconds.checked_add(seconds) else {
+            return;
+        };
+        old_walk_seconds = sum;
+    }
+
+    let (route, transport, board_idx, alight_idx, ride_departure) = match &journey.legs[ride_idx] {
+        Leg::Ride {
+            route,
+            transport,
+            board_stop_index,
+            alight_stop_index,
+            departure_unix_seconds,
+            ..
+        } => (
+            *route,
+            *transport,
+            *board_stop_index,
+            *alight_stop_index,
+            *departure_unix_seconds,
+        ),
+        _ => return,
+    };
+    let stops = tt.stops_on(RouteIdx(route));
+    let Some(events) = tt.events_for_transport(TransportIdx(transport)) else {
+        return;
+    };
+    let Some(initial_offset) = board_idx.checked_mul(2).and_then(|i| events.get(i)) else {
+        return;
+    };
+    let trip_start = ride_departure - i64::from(initial_offset.seconds());
+
+    let mut best: Option<(usize, u32, u32, i64)> = None;
+    // Must still ride at least one segment of exactly the same vehicle.
+    for pos in board_idx.saturating_add(1)..alight_idx.min(stops.len()) {
+        let stop = stops[pos];
+        if !stop.outbound() {
+            continue;
+        }
+        let Some(event) = pos.checked_mul(2).and_then(|i| events.get(i)) else {
+            continue;
+        };
+        let boarding_time = trip_start + i64::from(event.seconds());
+        for access in request.access.iter().filter(|a| a.stop == stop.location()) {
+            let walk = access.seconds;
+            if walk >= old_walk_seconds
+                || request.departure_unix_seconds + i64::from(walk) > boarding_time
+                || best.is_some_and(|(_, _, best_walk, _)| walk >= best_walk)
+            {
+                continue;
+            }
+            best = Some((pos, stop.location().0, walk, boarding_time));
+        }
+    }
+    let Some((new_board_idx, new_board_stop, seconds, new_departure)) = best else {
+        return;
+    };
+
+    journey.legs.splice(
+        0..ride_idx,
+        [Leg::Access {
+            to_stop: new_board_stop,
+            seconds,
+        }],
+    );
+    if let Leg::Ride {
+        from_stop,
+        board_stop_index,
+        departure_unix_seconds,
+        ..
+    } = &mut journey.legs[1]
+    {
+        *from_stop = new_board_stop;
+        *board_stop_index = new_board_idx;
+        *departure_unix_seconds = new_departure;
+    }
+}
+
+/// As with the initial access, a later or earlier alighting stop on the *same*
+/// trip can reduce the final OSR walk. Only accept an alternative which does
+/// not worsen the final arrival time; do not cross a transit transfer.
+fn optimize_final_walk_on_trip(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    journey: &mut Journey,
+) {
+    if journey.legs.len() < 2 {
+        return;
+    }
+    let ride_idx = journey.legs.len() - 2;
+    let old_egress = match &journey.legs[ride_idx + 1] {
+        Leg::Egress { seconds, .. } => *seconds,
+        _ => return,
+    };
+    let (route, transport, board_idx, alight_idx, ride_arrival) = match &journey.legs[ride_idx] {
+        Leg::Ride {
+            route,
+            transport,
+            board_stop_index,
+            alight_stop_index,
+            arrival_unix_seconds,
+            ..
+        } => (
+            *route,
+            *transport,
+            *board_stop_index,
+            *alight_stop_index,
+            *arrival_unix_seconds,
+        ),
+        _ => return,
+    };
+    let stops = tt.stops_on(RouteIdx(route));
+    let Some(events) = tt.events_for_transport(TransportIdx(transport)) else {
+        return;
+    };
+    let Some(original_event) = alight_idx
+        .checked_mul(2)
+        .and_then(|n| n.checked_sub(1))
+        .and_then(|i| events.get(i))
+    else {
+        return;
+    };
+    let trip_start = ride_arrival - i64::from(original_event.seconds());
+    let mut best: Option<(usize, u32, u32, i64, i64)> = None;
+    for pos in board_idx.saturating_add(1)..stops.len() {
+        if pos == alight_idx || !stops[pos].inbound() {
+            continue;
+        }
+        let Some(event) = pos
+            .checked_mul(2)
+            .and_then(|n| n.checked_sub(1))
+            .and_then(|i| events.get(i))
+        else {
+            continue;
+        };
+        let stop = stops[pos].location();
+        let alight_time = trip_start + i64::from(event.seconds());
+        for egress in request.egress.iter().filter(|e| e.stop == stop) {
+            let walk = egress.seconds;
+            let arrival = alight_time + i64::from(walk);
+            if walk >= old_egress
+                || arrival > journey.arrival_unix_seconds
+                || best.is_some_and(|(_, _, best_walk, _, _)| walk >= best_walk)
+            {
+                continue;
+            }
+            best = Some((pos, stop.0, walk, alight_time, arrival));
+        }
+    }
+    let Some((new_alight_idx, new_stop, walk, alight_time, arrival)) = best else {
+        return;
+    };
+    if let Leg::Ride {
+        to_stop,
+        alight_stop_index,
+        arrival_unix_seconds,
+        ..
+    } = &mut journey.legs[ride_idx]
+    {
+        *to_stop = new_stop;
+        *alight_stop_index = new_alight_idx;
+        *arrival_unix_seconds = alight_time;
+    }
+    journey.legs[ride_idx + 1] = Leg::Egress {
+        from_stop: new_stop,
+        seconds: walk,
+    };
+    journey.arrival_unix_seconds = arrival;
+}
+
+fn optimize_same_trip_endpoint_walks(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    journey: &mut Journey,
+) {
+    optimize_initial_walk_on_trip(tt, request, journey);
+    optimize_final_walk_on_trip(tt, request, journey);
+}
+
 fn reconstruct(
     all: &[Vec<Label>],
     round: usize,
@@ -629,6 +842,11 @@ pub fn route_with_stats(
             }
         }
     }
+    // Prefer shorter OSR access/egress to the same scheduled trip before
+    // journey ordering/deduplication. No new trip or service day is introduced.
+    for journey in &mut journeys {
+        optimize_same_trip_endpoint_walks(tt, request, journey);
+    }
     journeys.sort_by_key(|x| (x.boardings, x.arrival_unix_seconds));
     let mut frontier = Vec::new();
     let mut best_arrival = i64::MAX;
@@ -647,6 +865,123 @@ mod tests {
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TrafficDays,
     };
+
+
+    #[test]
+    fn prefers_closer_downstream_boarding_on_identical_bus() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
+        let query = Query {
+            departure_unix_seconds: departure,
+            access: vec![
+                WalkingEndpoint { stop: LocationIdx(0), seconds: 600 },
+                WalkingEndpoint { stop: LocationIdx(1), seconds: 120 },
+            ],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        };
+        let shorter = route(&view, &query).unwrap();
+        let original = route(&view, &Query {
+            access: vec![query.access[0]],
+            ..query.clone()
+        }).unwrap();
+        assert_eq!(shorter.len(), 1);
+        assert_eq!(original.len(), 1);
+        assert_eq!(shorter[0].arrival_unix_seconds, original[0].arrival_unix_seconds);
+        assert!(matches!(shorter[0].legs[0], Leg::Access { to_stop: 1, seconds: 120 }));
+        assert!(matches!(
+            shorter[0].legs[1],
+            Leg::Ride {
+                from_stop: 1,
+                to_stop: 2,
+                board_stop_index: 1,
+                alight_stop_index: 2,
+                transport: 0,
+                service_day: 0,
+                ..
+            }
+        ));
+        assert!(matches!(original[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+    }
+
+    #[test]
+    fn does_not_board_at_downstream_stop_without_boarding_permission() {
+        let mut tt = fixture();
+        tt.route_stops[1] =
+            PackedStop::new(LocationIdx(1), true, false, true, true).unwrap();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
+        let journeys = route(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![
+                WalkingEndpoint { stop: LocationIdx(0), seconds: 600 },
+                WalkingEndpoint { stop: LocationIdx(1), seconds: 120 },
+            ],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert!(matches!(journeys[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+    }
+
+    #[test]
+    fn does_not_invent_osr_access_to_downstream_stop() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
+        let journeys = route(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 600 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert!(matches!(journeys[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+    }
+
+    #[test]
+    fn equal_destination_arrival_prefers_shorter_egress_on_same_trip() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 59 * 60;
+        let journeys = route(&view, &Query {
+            departure_unix_seconds: departure,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            // Stop 1: 08:10:50 + 14:15; stop 2: 08:23:05 + 02:00.
+            // Both reach the destination at exactly 08:25:05.
+            egress: vec![
+                WalkingEndpoint { stop: LocationIdx(1), seconds: 855 },
+                WalkingEndpoint { stop: LocationIdx(2), seconds: 120 },
+            ],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3_600,
+        }).unwrap();
+        assert_eq!(journeys.len(), 1);
+        assert!(matches!(
+            journeys[0].legs[1],
+            Leg::Ride { to_stop: 2, alight_stop_index: 2, .. }
+        ));
+        assert!(matches!(
+            journeys[0].legs[2],
+            Leg::Egress { from_stop: 2, seconds: 120 }
+        ));
+        assert_eq!(
+            journeys[0].arrival_unix_seconds,
+            20_000_i64 * 86_400 + 8 * 3_600 + 25 * 60 + 5
+        );
+    }
 
     fn fixture() -> TimetableOwned {
         let mut tt = TimetableOwned::empty(20_000, 2);
