@@ -93,6 +93,10 @@ struct Args {
     /// Override the configured timetable directory when listing file sizes.
     #[arg(long, requires = "list_timetable_sizes")]
     data_dir: Option<PathBuf>,
+
+    /// Run the process with a lower priority (nice value).
+    #[arg(long, default_value_t = false)]
+    low_priority: bool,
 }
 
 /// MOTIS/Nigiri defaults to TODAY with 365 service days. Its import interval
@@ -125,6 +129,16 @@ fn resolve_horizon(
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    #[cfg(not(windows))]
+    if args.low_priority {
+        if let Err(e) = rustix::process::nice(10) {
+            eprintln!("Failed to set priority: {}", e);
+        } else {
+            println!("Process priority set to low (nice +10).");
+        }
+    }
+
     if args.list_timetable_sizes {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
         return file_sizes::print_configured(&config, &args.regions_config, args.data_dir.as_deref());
