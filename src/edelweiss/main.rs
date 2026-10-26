@@ -66,7 +66,9 @@ struct Request {
     #[serde(default = "default_detailed_legs")]
     detailed_legs: bool,
 }
-fn default_detailed_legs() -> bool { true }
+fn default_detailed_legs() -> bool {
+    true
+}
 
 #[derive(Serialize)]
 struct RouteStyle {
@@ -454,19 +456,21 @@ fn run_query(
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
     let index = router.metadata_for(&routing.selection.transit_region)?;
     let response = motis_response::build(
-        &timetable, index, &routing.journeys,
-        origin, destination,
+        &timetable,
+        index,
+        &routing.journeys,
+        origin,
+        destination,
         &routing.selection.origin_osr_region,
         &routing.selection.destination_osr_region,
-        osr_worker, url, detailed_legs,
+        osr_worker,
+        url,
+        detailed_legs,
     )?;
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
 
-    Ok((
-        response,
-        timings,
-    ))
+    Ok((response, timings))
 }
 
 async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResponse {

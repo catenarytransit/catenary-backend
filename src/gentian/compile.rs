@@ -369,10 +369,7 @@ fn make_schedules(
 
 /// Reject a whole itinerary when any stop time runs backwards or references
 /// a stop absent from the compiled timetable.
-fn pattern_stops_monotonic(
-    pattern: &Pattern,
-    stop_lookup: &HashMap<String, LocationIdx>,
-) -> bool {
+fn pattern_stops_monotonic(pattern: &Pattern, stop_lookup: &HashMap<String, LocationIdx>) -> bool {
     pattern.stops.windows(2).all(|pair| pair[0].2 <= pair[1].1)
         && pattern
             .stops
@@ -739,9 +736,9 @@ fn prepare_trip<'a>(
         (0..u32::MAX as i64).contains(&start),
         "trip {trip_id} invalid start_time {start}"
     );
-    let pattern = patterns.get(itinerary).with_context(|| {
-        format!("trip {trip_id} has unknown itinerary pattern {itinerary}")
-    })?;
+    let pattern = patterns
+        .get(itinerary)
+        .with_context(|| format!("trip {trip_id} has unknown itinerary pattern {itinerary}"))?;
     ensure!(
         pattern.stops.len() >= 2 && pattern_stops_monotonic(pattern, stop_lookup),
         "invalid/nonmonotonic pattern for trip {trip_id}"
@@ -765,7 +762,11 @@ fn prepare_trip<'a>(
             .with_context(|| format!("trip {trip_id} first departure overflow"))?;
         TripDepartures::Scheduled(first_departure)
     };
-    Ok(PreparedTrip { pattern, anchors, departures })
+    Ok(PreparedTrip {
+        pattern,
+        anchors,
+        departures,
+    })
 }
 
 fn compile_source(
@@ -893,7 +894,11 @@ fn compile_source(
                 skipped_metadata_trips += 1;
                 return Ok(());
             }
-            let PreparedTrip { pattern, anchors, departures } = match prepare_trip(
+            let PreparedTrip {
+                pattern,
+                anchors,
+                departures,
+            } = match prepare_trip(
                 &trip_id,
                 &itinerary,
                 &service,
@@ -1114,8 +1119,7 @@ mod tests {
     #[test]
     fn empty_schedule_set_produces_valid_zero_trip_timetable() {
         use catenary::routing_common::timetable::ZeroCopyTimetable;
-        let root = std::env::temp_dir()
-            .join(format!("gentian-empty-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!("gentian-empty-{}", uuid::Uuid::new_v4()));
         let mut tt = TimetableOwned::empty(20_000, 2);
         tt.add_source("chateau", "feed", "attempt").unwrap();
         let stops = vec![
@@ -1258,10 +1262,7 @@ mod tests {
             "pattern".to_owned(),
             sample_frequency_pattern("America/Los_Angeles", 120),
         )]);
-        let calendars = HashMap::from([(
-            "weekday".to_owned(),
-            single_date_calendar(date),
-        )]);
+        let calendars = HashMap::from([("weekday".to_owned(), single_date_calendar(date))]);
         let lookup = sample_stop_lookup();
         let zero_headway = GtfsFrequenciesProto {
             frequencies: vec![
@@ -1282,18 +1283,44 @@ mod tests {
         .encode_to_vec();
         for (itinerary, service, start, has_frequencies, blob, expected) in [
             (
-                "pattern", "Walmart Non Summer Friday", 8 * 3600, false, None,
+                "pattern",
+                "Walmart Non Summer Friday",
+                8 * 3600,
+                false,
+                None,
                 "unknown service Walmart Non Summer Friday",
             ),
-            ("missing-pattern", "weekday", 8 * 3600, false, None, "unknown itinerary pattern"),
-            ("pattern", "weekday", -1, false, None, "invalid start_time"),
-            ("pattern", "weekday", 8 * 3600, true, None, "without frequency data"),
             (
-                "pattern", "weekday", 8 * 3600, true, Some(zero_headway.as_slice()),
+                "missing-pattern",
+                "weekday",
+                8 * 3600,
+                false,
+                None,
+                "unknown itinerary pattern",
+            ),
+            ("pattern", "weekday", -1, false, None, "invalid start_time"),
+            (
+                "pattern",
+                "weekday",
+                8 * 3600,
+                true,
+                None,
+                "without frequency data",
+            ),
+            (
+                "pattern",
+                "weekday",
+                8 * 3600,
+                true,
+                Some(zero_headway.as_slice()),
                 "frequency window 1 has zero headway",
             ),
             (
-                "pattern", "weekday", 8 * 3600, true, Some(&[0xff][..]),
+                "pattern",
+                "weekday",
+                8 * 3600,
+                true,
+                Some(&[0xff][..]),
                 "decoding GTFS frequencies",
             ),
         ] {
@@ -1316,7 +1343,11 @@ mod tests {
             assert!(error.to_string().contains(expected), "{error:#}");
         }
 
-        let PreparedTrip { pattern, anchors, departures } = prepare_trip(
+        let PreparedTrip {
+            pattern,
+            anchors,
+            departures,
+        } = prepare_trip(
             "valid-trip",
             "pattern",
             "weekday",
@@ -1334,7 +1365,14 @@ mod tests {
             panic!("expected scheduled trip");
         };
         let schedules = make_schedules_from_anchors(
-            "valid-trip", 0, pattern, &lookup, first_departure, &anchors, unix_day(date), 2,
+            "valid-trip",
+            0,
+            pattern,
+            &lookup,
+            first_departure,
+            &anchors,
+            unix_day(date),
+            2,
         )
         .unwrap();
         assert_eq!(schedules.len(), 1);

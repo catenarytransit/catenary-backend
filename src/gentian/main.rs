@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, ensure};
 use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
-use clap::Parser;
 use chrono::Utc;
+use clap::Parser;
 use postgres::{Client, NoTls};
 mod compile;
 mod external_assembly;
@@ -141,7 +141,11 @@ fn main() -> Result<()> {
 
     if args.list_timetable_sizes {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
-        return file_sizes::print_configured(&config, &args.regions_config, args.data_dir.as_deref());
+        return file_sizes::print_configured(
+            &config,
+            &args.regions_config,
+            args.data_dir.as_deref(),
+        );
     }
     let selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
@@ -215,7 +219,9 @@ fn main() -> Result<()> {
     let output = match args.output.as_deref().filter(|p| !p.as_os_str().is_empty()) {
         Some(path) => path.to_path_buf(),
         None => {
-            let selection = selection.as_ref().context("--output is required unless --region is set")?;
+            let selection = selection
+                .as_ref()
+                .context("--output is required unless --region is set")?;
             let config = RoutingRegionsConfig::load(&args.regions_config)?;
             config.timetable_path(&args.regions_config, &selection.id, None)?
         }

@@ -537,11 +537,7 @@ fn optimize_initial_walk_on_trip(
 /// As with the initial access, a later or earlier alighting stop on the *same*
 /// trip can reduce the final OSR walk. Only accept an alternative which does
 /// not worsen the final arrival time; do not cross a transit transfer.
-fn optimize_final_walk_on_trip(
-    tt: &ZeroCopyTimetable<'_>,
-    request: &Query,
-    journey: &mut Journey,
-) {
+fn optimize_final_walk_on_trip(tt: &ZeroCopyTimetable<'_>, request: &Query, journey: &mut Journey) {
     if journey.legs.len() < 2 {
         return;
     }
@@ -866,7 +862,6 @@ mod tests {
         BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TrafficDays,
     };
 
-
     #[test]
     fn prefers_closer_downstream_boarding_on_identical_bus() {
         let tt = fixture();
@@ -876,23 +871,45 @@ mod tests {
         let query = Query {
             departure_unix_seconds: departure,
             access: vec![
-                WalkingEndpoint { stop: LocationIdx(0), seconds: 600 },
-                WalkingEndpoint { stop: LocationIdx(1), seconds: 120 },
+                WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 600,
+                },
+                WalkingEndpoint {
+                    stop: LocationIdx(1),
+                    seconds: 120,
+                },
             ],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 0,
+            }],
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 3_600,
         };
         let shorter = route(&view, &query).unwrap();
-        let original = route(&view, &Query {
-            access: vec![query.access[0]],
-            ..query.clone()
-        }).unwrap();
+        let original = route(
+            &view,
+            &Query {
+                access: vec![query.access[0]],
+                ..query.clone()
+            },
+        )
+        .unwrap();
         assert_eq!(shorter.len(), 1);
         assert_eq!(original.len(), 1);
-        assert_eq!(shorter[0].arrival_unix_seconds, original[0].arrival_unix_seconds);
-        assert!(matches!(shorter[0].legs[0], Leg::Access { to_stop: 1, seconds: 120 }));
+        assert_eq!(
+            shorter[0].arrival_unix_seconds,
+            original[0].arrival_unix_seconds
+        );
+        assert!(matches!(
+            shorter[0].legs[0],
+            Leg::Access {
+                to_stop: 1,
+                seconds: 120
+            }
+        ));
         assert!(matches!(
             shorter[0].legs[1],
             Leg::Ride {
@@ -905,30 +922,48 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(original[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+        assert!(matches!(
+            original[0].legs[1],
+            Leg::Ride { from_stop: 0, .. }
+        ));
     }
 
     #[test]
     fn does_not_board_at_downstream_stop_without_boarding_permission() {
         let mut tt = fixture();
-        tt.route_stops[1] =
-            PackedStop::new(LocationIdx(1), true, false, true, true).unwrap();
+        tt.route_stops[1] = PackedStop::new(LocationIdx(1), true, false, true, true).unwrap();
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
-        let journeys = route(&view, &Query {
-            departure_unix_seconds: departure,
-            access: vec![
-                WalkingEndpoint { stop: LocationIdx(0), seconds: 600 },
-                WalkingEndpoint { stop: LocationIdx(1), seconds: 120 },
-            ],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-            direct_walk_seconds: None,
-            max_boardings: 1,
-            max_duration_seconds: 3_600,
-        }).unwrap();
+        let journeys = route(
+            &view,
+            &Query {
+                departure_unix_seconds: departure,
+                access: vec![
+                    WalkingEndpoint {
+                        stop: LocationIdx(0),
+                        seconds: 600,
+                    },
+                    WalkingEndpoint {
+                        stop: LocationIdx(1),
+                        seconds: 120,
+                    },
+                ],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 1,
+                max_duration_seconds: 3_600,
+            },
+        )
+        .unwrap();
         assert_eq!(journeys.len(), 1);
-        assert!(matches!(journeys[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+        assert!(matches!(
+            journeys[0].legs[1],
+            Leg::Ride { from_stop: 0, .. }
+        ));
     }
 
     #[test]
@@ -937,16 +972,29 @@ mod tests {
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
-        let journeys = route(&view, &Query {
-            departure_unix_seconds: departure,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 600 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-            direct_walk_seconds: None,
-            max_boardings: 1,
-            max_duration_seconds: 3_600,
-        }).unwrap();
+        let journeys = route(
+            &view,
+            &Query {
+                departure_unix_seconds: departure,
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 600,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 1,
+                max_duration_seconds: 3_600,
+            },
+        )
+        .unwrap();
         assert_eq!(journeys.len(), 1);
-        assert!(matches!(journeys[0].legs[1], Leg::Ride { from_stop: 0, .. }));
+        assert!(matches!(
+            journeys[0].legs[1],
+            Leg::Ride { from_stop: 0, .. }
+        ));
     }
 
     #[test]
@@ -955,27 +1003,47 @@ mod tests {
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 59 * 60;
-        let journeys = route(&view, &Query {
-            departure_unix_seconds: departure,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            // Stop 1: 08:10:50 + 14:15; stop 2: 08:23:05 + 02:00.
-            // Both reach the destination at exactly 08:25:05.
-            egress: vec![
-                WalkingEndpoint { stop: LocationIdx(1), seconds: 855 },
-                WalkingEndpoint { stop: LocationIdx(2), seconds: 120 },
-            ],
-            direct_walk_seconds: None,
-            max_boardings: 1,
-            max_duration_seconds: 3_600,
-        }).unwrap();
+        let journeys = route(
+            &view,
+            &Query {
+                departure_unix_seconds: departure,
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                // Stop 1: 08:10:50 + 14:15; stop 2: 08:23:05 + 02:00.
+                // Both reach the destination at exactly 08:25:05.
+                egress: vec![
+                    WalkingEndpoint {
+                        stop: LocationIdx(1),
+                        seconds: 855,
+                    },
+                    WalkingEndpoint {
+                        stop: LocationIdx(2),
+                        seconds: 120,
+                    },
+                ],
+                direct_walk_seconds: None,
+                max_boardings: 1,
+                max_duration_seconds: 3_600,
+            },
+        )
+        .unwrap();
         assert_eq!(journeys.len(), 1);
         assert!(matches!(
             journeys[0].legs[1],
-            Leg::Ride { to_stop: 2, alight_stop_index: 2, .. }
+            Leg::Ride {
+                to_stop: 2,
+                alight_stop_index: 2,
+                ..
+            }
         ));
         assert!(matches!(
             journeys[0].legs[2],
-            Leg::Egress { from_stop: 2, seconds: 120 }
+            Leg::Egress {
+                from_stop: 2,
+                seconds: 120
+            }
         ));
         assert_eq!(
             journeys[0].arrival_unix_seconds,

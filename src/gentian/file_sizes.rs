@@ -30,7 +30,11 @@ fn file_size(path: &Path) -> Result<Option<u64>> {
     }
 }
 
-fn configured_sizes(config: &RoutingRegionsConfig, config_path: &Path, dir: Option<&Path>) -> Result<Vec<RegionSize>> {
+fn configured_sizes(
+    config: &RoutingRegionsConfig,
+    config_path: &Path,
+    dir: Option<&Path>,
+) -> Result<Vec<RegionSize>> {
     config
         .regions
         .iter()
@@ -76,7 +80,11 @@ pub(super) fn print_published(region_id: &str, output: &Path) -> Result<()> {
 
 /// List every configured region without opening Postgres or mapping timetables.
 /// Does not silently count absent region files as zero-byte timetables.
-pub(super) fn print_configured(config: &RoutingRegionsConfig, config_path: &Path, dir: Option<&Path>) -> Result<()> {
+pub(super) fn print_configured(
+    config: &RoutingRegionsConfig,
+    config_path: &Path,
+    dir: Option<&Path>,
+) -> Result<()> {
     let sizes = configured_sizes(config, config_path, dir)?;
     println!("Timetable file sizes for configured regions:");
     let mut available = 0usize;
@@ -141,7 +149,8 @@ mod tests {
         fs::create_dir(&dir).unwrap();
         fs::write(dir.join("alpha.bin"), vec![0u8; 1234]).unwrap();
         fs::write(dir.join("gamma.bin"), vec![0u8; 789]).unwrap();
-        let sizes = configured_sizes(&config(), Path::new("routing_regions.toml"), Some(&dir)).unwrap();
+        let sizes =
+            configured_sizes(&config(), Path::new("routing_regions.toml"), Some(&dir)).unwrap();
         assert_eq!(
             sizes.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
             vec!["alpha", "beta", "gamma"]

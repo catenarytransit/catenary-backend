@@ -88,20 +88,26 @@ pub fn compute(
         let coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
         // Profile-independent candidates can be reused for both match roles.
         let raw = router.get_raw_match(&coordinate, 250.0)?;
-        let origin_idx = router.append_lookup_match(
-            origins.pin_mut(), &coordinate, &match_origin, &raw,
-        )?;
+        let origin_idx =
+            router.append_lookup_match(origins.pin_mut(), &coordinate, &match_origin, &raw)?;
         let dest_idx = router.append_lookup_match(
-            destinations.pin_mut(), &coordinate, &match_destination, &raw,
+            destinations.pin_mut(),
+            &coordinate,
+            &match_destination,
+            &raw,
         )?;
-        ensure!(origin_idx as usize == i && dest_idx as usize == i,
-                "OSR match-store index is not aligned with timetable stops");
+        ensure!(
+            origin_idx as usize == i && dest_idx as usize == i,
+            "OSR match-store index is not aligned with timetable stops"
+        );
         if i % 10_000 == 0 {
             eprintln!("Gentian OSR matching: {}/{} locations", i, stops.len());
         }
     }
     let origins = origins.as_ref().context("OSR origin match store missing")?;
-    let destinations = destinations.as_ref().context("OSR destination match store missing")?;
+    let destinations = destinations
+        .as_ref()
+        .context("OSR destination match store missing")?;
     let mut out = Vec::with_capacity(stops.len());
     for (i, &origin) in stops.iter().enumerate() {
         let y = (f64::from(origin.lat) / CELL).floor() as i32;
@@ -128,12 +134,16 @@ pub fn compute(
         }
         let mut edges = Vec::new();
         if !indices.is_empty() {
-            let destination_indices = indices.iter()
+            let destination_indices = indices
+                .iter()
                 .map(|&idx| u32::try_from(idx))
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             let routes = router.route_one_to_many_cached(
-                origins, u32::try_from(i)?, destinations,
-                &destination_indices, &options,
+                origins,
+                u32::try_from(i)?,
+                destinations,
+                &destination_indices,
+                &options,
             )?;
             ensure!(
                 routes.len() == indices.len(),

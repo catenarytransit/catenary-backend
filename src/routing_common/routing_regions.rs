@@ -103,12 +103,20 @@ impl RoutingRegionsConfig {
     }
 
     /// Resolve an explicit timetable file, falling back to the historical data_dir layout.
-    pub fn timetable_path(&self, config_path: &Path, id: &str, data_dir_override: Option<&Path>) -> Result<PathBuf> {
+    pub fn timetable_path(
+        &self,
+        config_path: &Path,
+        id: &str,
+        data_dir_override: Option<&Path>,
+    ) -> Result<PathBuf> {
         let region = self.region(id)?;
         let root = config_path.parent().unwrap_or_else(|| Path::new("."));
         if data_dir_override.is_none() {
             if let Some(path) = &region.timetable_path {
-                ensure!(!path.as_os_str().is_empty(), "region {id} has an empty timetable_path");
+                ensure!(
+                    !path.as_os_str().is_empty(),
+                    "region {id} has an empty timetable_path"
+                );
                 return Ok(root.join(path));
             }
         }

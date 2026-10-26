@@ -129,13 +129,19 @@ fn run_request(
     };
     let raw_origin = router.get_raw_match(&origin, 250.0)?;
     router.append_lookup_match(
-        source_matches.pin_mut(), &origin, &origin_options, &raw_origin,
+        source_matches.pin_mut(),
+        &origin,
+        &origin_options,
+        &raw_origin,
     )?;
     let mut target_indices = Vec::with_capacity(targets.len());
     for target in &targets {
         let raw = router.get_raw_match(target, 250.0)?;
         target_indices.push(router.append_lookup_match(
-            target_matches.pin_mut(), target, &destination_options, &raw,
+            target_matches.pin_mut(),
+            target,
+            &destination_options,
+            &raw,
         )?);
     }
     let options = ffi::RoutingOptions {
@@ -146,9 +152,13 @@ fn run_request(
         Vec::new()
     } else {
         router.route_one_to_many_cached(
-            source_matches.as_ref().context("null OSR source match store")?,
+            source_matches
+                .as_ref()
+                .context("null OSR source match store")?,
             0,
-            target_matches.as_ref().context("null OSR destination match store")?,
+            target_matches
+                .as_ref()
+                .context("null OSR destination match store")?,
             &target_indices,
             &options,
         )?
@@ -168,7 +178,9 @@ fn run_request(
                     }
                 }
                 let end = [stop.longitude, stop.latitude];
-                if points.last() != Some(&end) { points.push(end); }
+                if points.last() != Some(&end) {
+                    points.push(end);
+                }
                 points
             });
             results.push(Access {
