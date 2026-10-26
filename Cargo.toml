@@ -196,7 +196,7 @@ nictd-gtfs-rt = "0.4.0"
 geohash = "0.13"
 spade = "2.15.1"
 delaunator = "1.0.2"
-rustix = { version = "1.1.2", features = ["time"] }
+rustix = { version = "1.1.2", features = ["time", "process"] }
 i24 = { version = "2.3", features = [
     "alloc",
     "serde",
