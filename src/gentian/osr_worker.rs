@@ -39,6 +39,9 @@ struct Request {
     latitude: f64,
     longitude: f64,
     max_seconds: u32,
+    /// 0 = forward routing (access), 1 = backward routing (egress).
+    #[serde(default)]
+    direction: u8,
     stops: Vec<Stop>,
     #[serde(default)]
     include_geometry: bool,
@@ -103,12 +106,51 @@ fn run_request(
         );
         targets.push(ffi::Coordinate::outdoor(x.latitude, x.longitude));
     }
-    let paths = router.one_to_many(
-        &ffi::Coordinate::outdoor(query.latitude, query.longitude),
-        &targets,
-        &options,
-        &[],
+    ensure!(query.direction <= 1, "invalid OSR query direction");
+    // Use low-level native OSR matching. Access queries start at the user
+    // (forward); egress queries search backward from the destination to
+    // candidate stops. Destination candidates must be reverse-matched
+    // relative to the chosen OSR search direction.
+    let origin = ffi::Coordinate::outdoor(query.latitude, query.longitude);
+    let mut source_matches = router.create_match_store();
+    let mut target_matches = router.create_match_store();
+    let origin_options = ffi::MatchOptions {
+        profile: Profile::Foot as u8,
+        direction: query.direction,
+        reverse: false,
+        max_match_distance_meters: options.max_match_distance_meters,
+        foot_speed_meters_per_second: options.foot_speed_meters_per_second,
+    };
+    let destination_options = ffi::MatchOptions {
+        reverse: true,
+        ..origin_options.clone()
+    };
+    let raw_origin = router.get_raw_match(&origin, 250.0)?;
+    router.append_lookup_match(
+        source_matches.pin_mut(), &origin, &origin_options, &raw_origin,
     )?;
+    let mut target_indices = Vec::with_capacity(targets.len());
+    for target in &targets {
+        let raw = router.get_raw_match(target, 250.0)?;
+        target_indices.push(router.append_lookup_match(
+            target_matches.pin_mut(), target, &destination_options, &raw,
+        )?);
+    }
+    let options = ffi::RoutingOptions {
+        direction: query.direction,
+        ..options
+    };
+    let paths = if target_indices.is_empty() {
+        Vec::new()
+    } else {
+        router.route_one_to_many_cached(
+            source_matches.as_ref().context("null OSR source match store")?,
+            0,
+            target_matches.as_ref().context("null OSR destination match store")?,
+            &target_indices,
+            &options,
+        )?
+    };
     let mut results = Vec::new();
     for (stop, path) in query.stops.into_iter().zip(paths) {
         if path.found && path.duration_seconds <= query.max_seconds {
