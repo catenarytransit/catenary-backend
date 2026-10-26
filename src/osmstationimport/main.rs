@@ -54,7 +54,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs::File;
-use std::io::{BufReader, Read, Seek};
+use std::io::{BufReader, Read};
 use std::sync::Arc;
 
 #[derive(Parser, Debug)]
@@ -92,7 +92,7 @@ fn compute_file_hash(path: &str) -> Result<String, Box<dyn Error + Send + Sync>>
         hasher.update(&buffer[..bytes_read]);
     }
 
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 // Embed the exclusion polygons at compile time to avoid runtime paths issues.

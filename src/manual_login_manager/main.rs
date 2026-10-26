@@ -8,12 +8,8 @@ struct Flags {
     password: String,
 }
 
-use argon2::{
-    Argon2,
-    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
-};
+use argon2::{Argon2, password_hash::PasswordHasher};
 use catenary::postgres_tools::{CatenaryPostgresPool, make_async_pool};
-use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use std::error::Error;
 
@@ -29,16 +25,16 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let email = flags.email;
     let password = flags.password;
 
-    //generate a salted Password
-    let password_bytes = password.as_bytes();
-    let salt = SaltString::generate(&mut OsRng);
+    // Argon2 0.6 automatically generates a random salt and embeds it in the PHC hash.
+    let password_hash = Argon2::default().hash_password(password.as_bytes())?;
 
-    let argon2 = Argon2::default();
-
-    let password_hash = argon2.hash_password(password_bytes, &salt).unwrap();
-
+    // Retain the existing NOT NULL salt column for schema compatibility.
+    let serialised_salt = password_hash
+        .salt
+        .as_ref()
+        .expect("Argon2-generated password hash must include a salt")
+        .to_string();
     let serialised_hash = password_hash.to_string();
-    let serialised_salt = salt.to_string();
 
     /*
     CREATE TABLE gtfs.admin_credentials (
