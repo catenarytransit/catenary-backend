@@ -1,7 +1,7 @@
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use argon2::{
     Argon2,
-    password_hash::{PasswordHasher, SaltString},
+    password_hash::{PasswordVerifier, phc::PasswordHash},
 };
 use catenary::postgres_tools::CatenaryPostgresPool;
 use diesel::ExpressionMethods;
@@ -48,18 +48,16 @@ pub async fn login(
         _ => {
             let admin_credentials = admin_credentials[0].clone();
 
-            let db_hash = admin_credentials.hash.clone();
-            let db_salt = SaltString::from_b64(admin_credentials.salt.as_str()).unwrap();
+            // The stored PHC hash includes its salt and hashing parameters.
+            // Verify it directly rather than hashing again with the old API.
+            let db_hash = match PasswordHash::new(&admin_credentials.hash) {
+                Ok(hash) => hash,
+                Err(_) => return Ok(false),
+            };
 
-            let argon2 = Argon2::default();
-            let user_submitted_hash = argon2
-                .hash_password(password.as_bytes(), &db_salt)
-                .unwrap()
-                .to_string();
-
-            let is_authorised = user_submitted_hash == db_hash;
-
-            Ok(is_authorised)
+            Ok(Argon2::default()
+                .verify_password(password.as_bytes(), &db_hash)
+                .is_ok())
         }
     }
 }
