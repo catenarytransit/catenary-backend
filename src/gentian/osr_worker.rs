@@ -70,6 +70,7 @@ fn run_request(
     paths: &BTreeMap<String, PathBuf>,
     query: Request,
 ) -> Result<Vec<Access>> {
+    ensure!(query.direction <= 1, "invalid OSR query direction");
     ensure!(
         query.latitude.is_finite() && query.longitude.is_finite(),
         "invalid origin"
@@ -98,6 +99,8 @@ fn run_request(
         include_segments: query.include_geometry,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };
+    // A backward query is from the arrival point to the stops in OSR search
+    // order, yielding legal stop-to-destination egress costs.
     let mut targets = Vec::with_capacity(query.stops.len());
     for x in &query.stops {
         ensure!(
@@ -106,7 +109,6 @@ fn run_request(
         );
         targets.push(ffi::Coordinate::outdoor(x.latitude, x.longitude));
     }
-    ensure!(query.direction <= 1, "invalid OSR query direction");
     // Use low-level native OSR matching. Access queries start at the user
     // (forward); egress queries search backward from the destination to
     // candidate stops. Destination candidates must be reverse-matched
