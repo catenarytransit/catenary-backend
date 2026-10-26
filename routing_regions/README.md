@@ -10,6 +10,31 @@ Run the Geofabrik OSR extractor manager using the independent crate at
 `src/osm_manager/`. It writes OSR graphs under the `[osm_manager]`
 `data_dir` in `catenaryconfig.toml`.
 
+## Exclude OSR graphs from the query worker
+
+The OSR query worker normally opens every region listed in
+`[osm_manager].data_dir/regions.geojson`, regardless of the manager's
+`regions` download list. To leave extracted datasets on disk without loading
+their native memory-mapped routers, optionally add this to
+`catenaryconfig.toml`:
+
+```toml
+[osr_worker]
+excluded_regions = [
+  "asia/japan",
+  "asia/malaysia-singapore-brunei",
+]
+```
+
+Region IDs must match `properties.id` in `regions.geojson` exactly.
+The setting only affects `osr_worker` at startup: it does not delete
+extracted datasets, change `osm_manager` downloads, or modify Gentian's
+timetable compilation. Queries for excluded regions return
+`OSR region is not loaded`. Omitting this section preserves the previous
+behavior of opening all registered regions. The worker fails at startup if
+no enabled regions remain. Rebuild and restart `osr_worker` after changing
+the configuration.
+
 ## Compile a timetable and walking footpaths together
 
 ```sh
