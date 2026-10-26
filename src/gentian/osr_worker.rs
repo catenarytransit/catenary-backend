@@ -3,7 +3,7 @@ use clap::Parser;
 use osr_ffi::{Profile, ffi};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     net::{TcpListener, TcpStream},
@@ -33,10 +33,17 @@ struct Args {
 #[derive(Deserialize)]
 struct Config {
     osm_manager: Manager,
+    #[serde(default)]
+    osr_worker: WorkerConfig,
 }
 #[derive(Deserialize)]
 struct Manager {
     data_dir: PathBuf,
+}
+#[derive(Default, Deserialize)]
+struct WorkerConfig {
+    #[serde(default)]
+    excluded_regions: BTreeSet<String>,
 }
 
 #[derive(Deserialize)]
@@ -232,9 +239,20 @@ fn handle(
 }
 
 /// Resolve graph directories before opening the shared, read-only routers.
-fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>> {
+fn region_paths(
+    data_dir: &std::path::Path,
+    excluded_regions: &BTreeSet<String>,
+) -> Result<BTreeMap<String, PathBuf>> {
     let registry = data_dir.join("regions.geojson");
     let document: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
+    region_paths_from_registry(data_dir, &document, excluded_regions)
+}
+
+fn region_paths_from_registry(
+    data_dir: &std::path::Path,
+    document: &serde_json::Value,
+    excluded_regions: &BTreeSet<String>,
+) -> Result<BTreeMap<String, PathBuf>> {
     let features = document
         .get("features")
         .and_then(|x| x.as_array())
@@ -250,6 +268,10 @@ fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>>
             !id.split('/').any(|p| p == ".." || p == "." || p.is_empty()),
             "invalid OSR id"
         );
+        if excluded_regions.contains(id) {
+            eprintln!("Skipping excluded OSR region: {id}");
+            continue;
+        }
         ensure!(
             paths
                 .insert(id.to_owned(), data_dir.join("regions").join(id))
@@ -257,7 +279,10 @@ fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>>
             "duplicate OSR region ID: {id}"
         );
     }
-    ensure!(!paths.is_empty(), "no OSR regions configured");
+    ensure!(
+        !paths.is_empty(),
+        "no OSR regions enabled (check osr_worker.excluded_regions)"
+    );
     Ok(paths)
 }
 
@@ -283,7 +308,7 @@ fn main() -> Result<()> {
         "--workers must be in 1..=16"
     );
     let cfg: Config = toml::from_str(&fs::read_to_string(&args.config)?)?;
-    let paths = region_paths(&cfg.osm_manager.data_dir)?;
+    let paths = region_paths(&cfg.osm_manager.data_dir, &cfg.osr_worker.excluded_regions)?;
     // Open each graph once before accepting connections or spawning query threads.
     let graphs = Arc::new(open_graphs(&paths)?);
     let listener = TcpListener::bind(&args.listen)?;
@@ -327,6 +352,56 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exclusions_default_to_empty_for_existing_configs() -> Result<()> {
+        let config: Config = toml::from_str(
+            "[osm_manager]\ndata_dir = '/tmp/osr-data'\n",
+        )?;
+        assert!(config.osr_worker.excluded_regions.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn excluded_regions_are_not_selected_for_mmap() -> Result<()> {
+        let config: Config = toml::from_str(
+            "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker]\nexcluded_regions = ['asia/japan']\n",
+        )?;
+        let registry = serde_json::json!({
+            "features": [
+                {"properties": {"id": "asia/japan"}},
+                {"properties": {"id": "australia-oceania"}}
+            ]
+        });
+        let paths = region_paths_from_registry(
+            &config.osm_manager.data_dir,
+            &registry,
+            &config.osr_worker.excluded_regions,
+        )?;
+        assert_eq!(paths.len(), 1);
+        assert!(!paths.contains_key("asia/japan"));
+        assert_eq!(
+            paths["australia-oceania"],
+            PathBuf::from("/tmp/osr-data/regions/australia-oceania")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn excluding_every_region_fails_fast() {
+        let registry = serde_json::json!({
+            "features": [{"properties": {"id": "asia/japan"}}]
+        });
+        let excluded = BTreeSet::from(["asia/japan".to_owned()]);
+        let error = region_paths_from_registry(
+            std::path::Path::new("/tmp/osr-data"),
+            &registry,
+            &excluded,
+        )
+        .err()
+        .expect("no enabled regions must fail startup");
+        assert!(error.to_string().contains("no OSR regions enabled"));
+    }
 
     #[test]
     fn unknown_region_is_rejected_without_opening_another_graph() {
