@@ -12,6 +12,13 @@ use std::{
     thread,
 };
 
+#[cfg(not(target_env = "msvc"))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 #[derive(Parser)]
 struct Args {
     #[arg(long, default_value = "catenaryconfig.toml")]
