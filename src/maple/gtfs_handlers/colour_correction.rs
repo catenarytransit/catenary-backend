@@ -386,8 +386,30 @@ mod delfi_tests {
     use super::*;
 
     #[test]
-    fn all_transitous_entries_are_loaded() {
-        assert_eq!(delfi_colours().len(), 7296);
+    fn transitous_entries_and_supplemental_colours_are_loaded() {
+        assert_eq!(delfi_colours().len(), 7796);
+        // Added in upstream commit a3f392e (formerly SWEG Bahn Stuttgart).
+        assert_eq!(
+            delfi_colours().get(&("DB Regio Stuttgart", "MEX12")),
+            Some(&(RGB::new(0xf2, 0x73, 0x20), WHITE_RGB))
+        );
+        // Existing agency mappings from the newer extended table remain available.
+        assert_eq!(
+            delfi_colours().get(&("Albtal-Verkehrs-Gesellschaft mbH", "E")),
+            Some(&(WHITE_RGB, RGB::new(0, 0, 0)))
+        );
+    }
+
+    #[test]
+    fn transitous_background_and_foreground_updates_are_applied() {
+        assert_eq!(
+            delfi_colours().get(&("DB Regio AG Mitte", "RB54")),
+            Some(&(RGB::new(0x8b, 0xc6, 0x40), RGB::new(0, 0, 0)))
+        );
+        assert_eq!(
+            delfi_colours().get(&("Albtal-Verkehrs-Gesellschaft", "S7")),
+            Some(&(RGB::new(0xff, 0xf2, 0x00), RGB::new(0, 0, 0)))
+        );
     }
 
     #[test]
