@@ -68,6 +68,40 @@ pub fn compute(
         include_segments: false,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };
+    // MOTIS-style match preprocessing: the same stop appears in many searches.
+    // Cache its forward-origin and reverse-destination matches once, retaining
+    // the native osr::match_result buckets in C++ rather than re-snapping each
+    // stop on every one-to-many call.
+    let mut origins = router.create_match_store();
+    let mut destinations = router.create_match_store();
+    let match_origin = ffi::MatchOptions {
+        profile: Profile::Foot as u8,
+        reverse: false,
+        max_match_distance_meters: 25.0,
+        ..ffi::MatchOptions::default()
+    };
+    let match_destination = ffi::MatchOptions {
+        reverse: true,
+        ..match_origin.clone()
+    };
+    for (i, stop) in stops.iter().enumerate() {
+        let coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
+        // Profile-independent candidates can be reused for both match roles.
+        let raw = router.get_raw_match(&coordinate, 250.0)?;
+        let origin_idx = router.append_lookup_match(
+            origins.pin_mut(), &coordinate, &match_origin, &raw,
+        )?;
+        let dest_idx = router.append_lookup_match(
+            destinations.pin_mut(), &coordinate, &match_destination, &raw,
+        )?;
+        ensure!(origin_idx as usize == i && dest_idx as usize == i,
+                "OSR match-store index is not aligned with timetable stops");
+        if i % 10_000 == 0 {
+            eprintln!("Gentian OSR matching: {}/{} locations", i, stops.len());
+        }
+    }
+    let origins = origins.as_ref().context("OSR origin match store missing")?;
+    let destinations = destinations.as_ref().context("OSR destination match store missing")?;
     let mut out = Vec::with_capacity(stops.len());
     for (i, &origin) in stops.iter().enumerate() {
         let y = (f64::from(origin.lat) / CELL).floor() as i32;
@@ -79,7 +113,6 @@ pub fn compute(
             "near-polar routing needs a different spatial index"
         );
         let lon_cells = (candidate_meters / (lon_meters * CELL)).ceil() as i32 + 1;
-        let mut targets = Vec::new();
         let mut indices = Vec::new();
         for dy in -lat_cells..=lat_cells {
             for dx in -lon_cells..=lon_cells {
@@ -88,22 +121,19 @@ pub fn compute(
                         let target = stops[j];
                         if i != j && meters(origin, target) <= candidate_meters {
                             indices.push(j);
-                            targets.push(ffi::Coordinate::outdoor(
-                                f64::from(target.lat),
-                                f64::from(target.lon),
-                            ));
                         }
                     }
                 }
             }
         }
         let mut edges = Vec::new();
-        if !targets.is_empty() {
-            let routes = router.one_to_many(
-                &ffi::Coordinate::outdoor(f64::from(origin.lat), f64::from(origin.lon)),
-                &targets,
-                &options,
-                &[],
+        if !indices.is_empty() {
+            let destination_indices = indices.iter()
+                .map(|&idx| u32::try_from(idx))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            let routes = router.route_one_to_many_cached(
+                origins, u32::try_from(i)?, destinations,
+                &destination_indices, &options,
             )?;
             ensure!(
                 routes.len() == indices.len(),
