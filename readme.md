@@ -60,7 +60,7 @@ Good commit messages are required to contribute to this project.
 ```bash
 sudo apt install -y postgresql-common
 sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh
-sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config libssl-dev unzip wget cmake openssl libpq-dev
+sudo apt install libprotoc-dev protobuf-compiler build-essential gcc pkg-config libssl-dev unzip wget cmake openssl libtbb-dev libpq-dev
 ```
 
 #### install coin cbc integer linear programming solver.
