@@ -247,6 +247,7 @@ struct OsrStop {
 #[derive(Serialize)]
 struct OsrRequest<'a> {
     region: &'a str,
+    direction: u8,
     latitude: f64,
     longitude: f64,
     max_seconds: u32,
@@ -269,6 +270,7 @@ fn osr_access(
     transit_region: &str,
     osr_region: &str,
     point: Coordinates,
+    direction: u8,
 ) -> Result<Vec<WalkingEndpoint>> {
     let nearest = router.nearest_stops(transit_region, point, 4096)?;
     let table = router.timetable_for(transit_region)?;
@@ -285,6 +287,7 @@ fn osr_access(
         .collect();
     let request = OsrRequest {
         region: osr_region,
+        direction,
         latitude: point.lat,
         longitude: point.lon,
         max_seconds: 1800,
@@ -320,6 +323,7 @@ fn direct_osr_seconds(
 ) -> Result<Option<u32>> {
     let request = OsrRequest {
         region,
+        direction: 0,
         latitude: from.lat,
         longitude: from.lon,
         max_seconds: 3600,
@@ -375,6 +379,7 @@ fn run_query(
                     &selection.transit_region,
                     &selection.origin_osr_region,
                     request.from,
+                    0,
                 )
             } else {
                 Ok(request
@@ -399,6 +404,7 @@ fn run_query(
                             &selection.transit_region,
                             &selection.destination_osr_region,
                             request.to,
+                            1,
                         )
                     } else {
                         Ok(request
