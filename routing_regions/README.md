@@ -124,7 +124,13 @@ not the parent manager output directory. One OSR graph is used per Gentian
 invocation; regional OSR graph selection remains a future improvement.
 
 For coordinate access/egress requests, Edelweiss continues to use a separate
-long-running native OSR worker. This is **query-time** routing, not compilation:
+long-running native OSR worker. This is **query-time** routing, not compilation.
+At startup, `osr_worker` loads every configured regional OSR graph exactly
+once through `osr-ffi::open_shared_router` before accepting any requests.
+All `--workers` threads then concurrently read the same immutable routers,
+using their own native match stores and Dijkstra search state. Missing graph
+data is a startup error, not a request-time lazy-load. Linux may already share
+mmap file pages, so compare PSS and peak anonymous RSS when measuring savings:
 
 ```sh
 cargo run --release --bin osr_worker -- \

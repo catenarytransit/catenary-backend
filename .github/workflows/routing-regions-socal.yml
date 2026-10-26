@@ -266,6 +266,7 @@ jobs:
           cargo test --release --lib routing_common::raptor_query
           cargo test --release --lib routing_common::timetable
           cargo test --release --bin gentian
+          cargo test --release --bin osr_worker
           ./target/release/gentian \
             --region southern-california \
             --regions-config routing_regions.toml \
@@ -303,6 +304,13 @@ jobs:
           kill -0 "$(cat temp/osr-worker.pid)"
           python3 src/routing_regions/verify_concurrent_osr_worker.py \
             --region north-america/us/california/socal --workers 3
+          # All 3 worker threads share one native graph, even after requests.
+          opens="$(grep -Fc 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-worker.log || true)"
+          test "$opens" -eq 1 || {
+            echo "Expected one OSR router open, observed $opens" >&2
+            cat temp/osr-worker.log
+            exit 1
+          }
       - name: Prepare reproducible Monday and Saturday routing queries
         run: |
           set -euo pipefail

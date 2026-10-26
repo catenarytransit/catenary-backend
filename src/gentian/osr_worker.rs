@@ -18,8 +18,8 @@ struct Args {
     config: PathBuf,
     #[arg(long, default_value = "127.0.0.1:40501")]
     listen: String,
-    /// Concurrent native OSR search contexts. Each worker owns its router
-    /// handles: CXX UniquePtr/router state is never shared across threads.
+    /// Concurrent independent native OSR searches over the same read-only
+    /// region graphs (each graph is opened only once during startup).
     #[arg(long, default_value_t = 3)]
     workers: usize,
 }
@@ -65,11 +65,10 @@ struct Response {
     error: Option<String>,
 }
 
-fn run_request(
-    graphs: &mut BTreeMap<String, cxx::UniquePtr<ffi::Router>>,
-    paths: &BTreeMap<String, PathBuf>,
-    query: Request,
-) -> Result<Vec<Access>> {
+/// Immutable region registry shared across all worker threads.
+type Graphs = BTreeMap<String, cxx::SharedPtr<ffi::Router>>;
+
+fn run_request(graphs: &Graphs, query: Request) -> Result<Vec<Access>> {
     ensure!(query.direction <= 1, "invalid OSR query direction");
     ensure!(
         query.latitude.is_finite() && query.longitude.is_finite(),
@@ -83,16 +82,9 @@ fn run_request(
         query.stops.len() <= 4096,
         "too many stops for one OSR query"
     );
-    if !graphs.contains_key(&query.region) {
-        let dir = paths.get(&query.region).context("unknown OSR region")?;
-        let router = ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
-        ensure!(!router.is_null(), "OSR graph is null: {}", query.region);
-        eprintln!("Opened native OSR mmap: {}", query.region);
-        graphs.insert(query.region.clone(), router);
-    }
-    let graph = graphs
-        .get(&query.region)
-        .context("OSR region is not loaded")?;
+    // Every region is loaded before the TCP listener starts. No allocations
+    // or graph loading occur on a worker's request path.
+    let graph = graphs.get(&query.region).context("unknown OSR region")?;
     let router = graph.as_ref().context("OSR graph is null")?;
     let options = ffi::RoutingOptions {
         max_cost: query.max_seconds,
@@ -194,11 +186,7 @@ fn run_request(
     Ok(results)
 }
 
-fn handle(
-    stream: TcpStream,
-    graphs: &mut BTreeMap<String, cxx::UniquePtr<ffi::Router>>,
-    paths: &BTreeMap<String, PathBuf>,
-) -> Result<()> {
+fn handle(stream: TcpStream, graphs: &Graphs) -> Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
     let reader = BufReader::new(stream.try_clone()?);
@@ -212,7 +200,7 @@ fn handle(
         "OSR request exceeds 512KiB or is not newline terminated"
     );
     let response = match serde_json::from_slice::<Request>(&input) {
-        Ok(req) => match run_request(graphs, paths, req) {
+        Ok(req) => match run_request(graphs, req) {
             Ok(reachable) => Response {
                 reachable,
                 error: None,
@@ -234,8 +222,7 @@ fn handle(
     Ok(())
 }
 
-/// Resolve graph directories in the acceptor thread; CXX native routers are
-/// opened independently inside their owning worker threads.
+/// Resolve the region registry once before loading native read-only routers.
 fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>> {
     let registry = data_dir.join("regions.geojson");
     let document: serde_json::Value = serde_json::from_slice(&fs::read(&registry)?)?;
@@ -265,15 +252,14 @@ fn region_paths(data_dir: &std::path::Path) -> Result<BTreeMap<String, PathBuf>>
     Ok(paths)
 }
 
-/// The primary worker eagerly initializes the configured regions. Additional
-/// workers initialize handles lazily per region. Native handles never cross
-/// thread boundaries; read-only mmap pages share the Linux page cache.
-fn open_graphs(
-    paths: &BTreeMap<String, PathBuf>,
-) -> Result<BTreeMap<String, cxx::UniquePtr<ffi::Router>>> {
-    let mut graphs = BTreeMap::new();
+/// Open exactly one shared, immutable C++ Router per configured region.
+/// Failure is fatal before binding the listening socket, so no request sees
+/// an uninitialized or partially initialized graph registry.
+fn open_graphs(paths: &BTreeMap<String, PathBuf>) -> Result<Graphs> {
+    let mut graphs = Graphs::new();
     for (id, dir) in paths {
-        let router = ffi::open_router(dir.to_str().context("non-UTF8 OSR path")?)?;
+        let router = ffi::open_shared_router(dir.to_str().context("non-UTF8 OSR path")?)
+            .with_context(|| format!("opening OSR region {id} from {}", dir.display()))?;
         ensure!(!router.is_null(), "OSR graph is null: {id}");
         eprintln!("Opened native OSR mmap: {id}");
         graphs.insert(id.clone(), router);
@@ -288,55 +274,34 @@ fn main() -> Result<()> {
         "--workers must be in 1..=16"
     );
     let cfg: Config = toml::from_str(&fs::read_to_string(&args.config)?)?;
-    let paths = Arc::new(region_paths(&cfg.osm_manager.data_dir)?);
+    let paths = region_paths(&cfg.osm_manager.data_dir)?;
+    // Eagerly open and validate every configured OSR graph exactly once.
+    // The C++ SharedPtr handles are then read concurrently by every worker.
+    let graphs = Arc::new(open_graphs(&paths)?);
     let listener = TcpListener::bind(&args.listen)?;
 
-    // Bounded queue provides backpressure under load. Only TcpStreams, never
-    // native CXX routers, cross thread boundaries.
+    // Bounded queue provides backpressure under load. Request-local match
+    // stores and Dijkstra state are never shared between concurrent calls.
     let (send, recv) = mpsc::sync_channel::<TcpStream>(args.workers * 4);
     let recv = Arc::new(Mutex::new(recv));
-    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
     for worker in 0..args.workers {
         let recv = Arc::clone(&recv);
-        let paths = Arc::clone(&paths);
-        let ready = ready_tx.clone();
+        let graphs = Arc::clone(&graphs);
         thread::Builder::new()
             .name(format!("osr-query-{worker}"))
             .spawn(move || {
-                // One eagerly initialized context retains the previous startup
-                // validation behavior. Additional contexts initialize lazily,
-                // avoiding duplicate native memory for OSR regions never queried.
-                let mut graphs = if worker == 0 {
-                    match open_graphs(&paths) {
-                        Ok(g) => g,
-                        Err(error) => {
-                            let _ = ready.send(Err(error));
-                            return;
-                        }
-                    }
-                } else {
-                    BTreeMap::new()
-                };
-                let _ = ready.send(Ok(()));
                 loop {
                     // Do not hold the receiver mutex while running native OSR.
                     let stream = match recv.lock().expect("OSR queue poisoned").recv() {
                         Ok(stream) => stream,
                         Err(_) => break,
                     };
-                    if let Err(error) = handle(stream, &mut graphs, &paths) {
+                    if let Err(error) = handle(stream, &graphs) {
                         eprintln!("OSR client: {error}");
                     }
                 }
             })
             .context("spawning OSR worker")?;
-    }
-    drop(ready_tx);
-    // Do not advertise a listening worker until all routers have opened.
-    for _ in 0..args.workers {
-        ready_rx
-            .recv()
-            .context("OSR worker failed to initialize")??;
     }
     eprintln!(
         "OSR worker listening at {} ({} concurrent queries)",
@@ -349,4 +314,46 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_registry_can_be_shared_across_threads() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Arc<Graphs>>();
+
+        let graphs = Arc::new(Graphs::new());
+        let cloned = Arc::clone(&graphs);
+        let original = Arc::as_ptr(&graphs) as usize;
+        let worker = thread::spawn(move || Arc::as_ptr(&cloned) as usize);
+        assert_eq!(original, worker.join().expect("OSR test worker panicked"));
+    }
+
+    #[test]
+    fn request_rejects_unknown_region_without_attempting_to_open_a_graph() {
+        let query: Request = serde_json::from_value(serde_json::json!({
+            "region": "missing-region",
+            "latitude": 33.65,
+            "longitude": -117.83,
+            "max_seconds": 900,
+            "stops": []
+        }))
+        .expect("valid OSR request");
+        let error = run_request(&Graphs::new(), query)
+            .err()
+            .expect("unknown region should fail");
+        assert!(error.to_string().contains("unknown OSR region"));
+    }
+
+    #[test]
+    fn registry_open_fails_before_listen_when_graph_is_missing() {
+        let dir = std::env::temp_dir()
+            .join(format!("nonexistent-osr-graph-{}", std::process::id()))
+            .join("missing");
+        let paths = BTreeMap::from([("missing".to_owned(), dir)]);
+        assert!(open_graphs(&paths).is_err());
+    }
 }
