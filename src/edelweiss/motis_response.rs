@@ -37,6 +37,7 @@ struct TripKey {
     feed: String,
     attempt: String,
     trip: String,
+    route: String,
 }
 
 fn ride_identity(
@@ -47,11 +48,19 @@ fn ride_identity(
     let trip = index.trip_for_transport(transport)?;
     let record = tt.trip_ids().get(index.id_record_for_trip(trip)?)?;
     let (chateau, feed, attempt) = tt.source(record.source)?;
+    // Look up colours by the timetable's public route identity, even when the
+    // corresponding trips_compressed row has been removed or rotated.
+    let route = tt.trip_public_route_ids().get(trip)
+        .and_then(|id| tt.route_ids().get(id.idx()))
+        .and_then(|id| tt.get_string(id.id))
+        .unwrap_or_default()
+        .to_owned();
     Some(TripKey {
         chateau: chateau.to_owned(),
         feed: feed.to_owned(),
         attempt: attempt.to_owned(),
         trip: tt.get_string(record.id)?.to_owned(),
+        route,
     })
 }
 
@@ -82,20 +91,27 @@ fn metadata(
     let feeds: Vec<_> = keys.values().map(|k| k.feed.clone()).collect();
     let attempts: Vec<_> = keys.values().map(|k| k.attempt.clone()).collect();
     let trips: Vec<_> = keys.values().map(|k| k.trip.clone()).collect();
+    let routes: Vec<_> = keys.values().map(|k| k.route.clone()).collect();
     let mut db = Client::connect(url, NoTls).context("connecting to metadata database")?;
     let rows = db.query(
-        "SELECT t.onestop_feed_id, t.attempt_id, t.trip_id, t.route_id,
+        "SELECT wanted.feed, wanted.attempt, wanted.trip,
+                COALESCE(NULLIF(wanted.route_id, ''), t.route_id, ''),
                 r.short_name, r.long_name, t.trip_short_name, m.trip_headsign,
                 r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
                 r.route_type, t.direction_id,
-                COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6))
-         FROM unnest($1::text[], $2::text[], $3::text[]) AS wanted(feed, attempt, trip)
-         JOIN gtfs.trips_compressed t
+                COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6)),
+                s.color, s.text_color, ds.color, ds.text_color
+         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[])
+              AS wanted(feed, attempt, trip, route_id)
+         -- The timetable is authoritative for the route identity. A missing
+         -- historical trip must not suppress its route style or badge.
+         LEFT JOIN gtfs.trips_compressed t
               ON t.onestop_feed_id = wanted.feed
              AND t.attempt_id = wanted.attempt AND t.trip_id = wanted.trip
          LEFT JOIN gtfs.routes r
-              ON r.onestop_feed_id = t.onestop_feed_id
-             AND r.attempt_id = t.attempt_id AND r.route_id = t.route_id
+              ON r.onestop_feed_id = wanted.feed
+             AND r.attempt_id = wanted.attempt
+             AND r.route_id = COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
          LEFT JOIN gtfs.itinerary_pattern_meta m
               ON m.onestop_feed_id = t.onestop_feed_id
              AND m.attempt_id = t.attempt_id
@@ -103,9 +119,6 @@ fn metadata(
          LEFT JOIN gtfs.shapes s
               ON s.onestop_feed_id = m.onestop_feed_id
              AND s.attempt_id = m.attempt_id AND s.shape_id = m.shape_id
-         -- Some compact itinerary patterns omit their shape while the direction
-         -- pattern still points to the original GTFS geometry. Resolve it only
-         -- from the SAME feed and import attempt, never from an unrelated trip.
          LEFT JOIN gtfs.direction_pattern_meta d
               ON d.onestop_feed_id = m.onestop_feed_id
              AND d.attempt_id = m.attempt_id
@@ -115,9 +128,9 @@ fn metadata(
              AND ds.attempt_id = d.attempt_id
              AND ds.shape_id = d.gtfs_shape_id
          LEFT JOIN gtfs.agencies a
-              ON a.static_onestop_id = t.onestop_feed_id
-             AND a.attempt_id = t.attempt_id AND a.agency_id = r.agency_id",
-        &[&feeds, &attempts, &trips],
+              ON a.static_onestop_id = wanted.feed
+             AND a.attempt_id = wanted.attempt AND a.agency_id = r.agency_id",
+        &[&feeds, &attempts, &trips, &routes],
     )?;
     let mut result = BTreeMap::new();
     for row in rows {
@@ -129,6 +142,12 @@ fn metadata(
         let id: String = row.get(2);
         let feed: String = row.get(0);
         let attempt: String = row.get(1);
+        let route_color: Option<String> = row.get(11);
+        let route_text_color: Option<String> = row.get(12);
+        let shape_color: Option<String> = row.get(16);
+        let shape_text_color: Option<String> = row.get(17);
+        let direction_color: Option<String> = row.get(18);
+        let direction_text_color: Option<String> = row.get(19);
         result.insert(
             (feed, attempt, id.clone()),
             TripInfo {
@@ -142,8 +161,16 @@ fn metadata(
                 agency_id: row.get(8),
                 agency_name: row.get(9),
                 agency_url: row.get(10),
-                route_color: row.get(11),
-                route_text_color: row.get(12),
+                route_color: first_normalized_color(&[
+                    route_color.as_deref(),
+                    shape_color.as_deref(),
+                    direction_color.as_deref(),
+                ]),
+                route_text_color: first_normalized_color(&[
+                    route_text_color.as_deref(),
+                    shape_text_color.as_deref(),
+                    direction_text_color.as_deref(),
+                ]),
                 route_type: row.get(13),
                 direction_id: row.get(14),
                 shape,
@@ -151,6 +178,26 @@ fn metadata(
         );
     }
     Ok(result)
+}
+
+/// Accept only valid GTFS hex colours; return canonical CSS colours for clients.
+/// Never turn malformed input into an arbitrary (and misleading) route colour.
+fn normalize_color(value: &str) -> Option<String> {
+    let value = value.trim();
+    let value = value.strip_prefix('#').unwrap_or(value);
+    if !matches!(value.len(), 3 | 6) || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let hex = if value.len() == 3 {
+        value.chars().flat_map(|ch| [ch, ch]).collect::<String>()
+    } else {
+        value.to_owned()
+    };
+    Some(format!("#{}", hex.to_ascii_uppercase()))
+}
+
+fn first_normalized_color(candidates: &[Option<&str>]) -> Option<String> {
+    candidates.iter().filter_map(|value| *value).find_map(normalize_color)
 }
 
 fn parse_linestring(s: &str) -> Option<Vec<[f64; 2]>> {
@@ -698,6 +745,7 @@ mod tests {
             feed: "f-rail".into(),
             attempt: "attempt-1".into(),
             trip: "train-123".into(),
+            route: "R".into(),
         };
         let missing = trip_info_for_key(&BTreeMap::new(), Some(key.clone()));
         assert_eq!(missing.chateau.as_deref(), Some("nationalrailuk"));
@@ -726,4 +774,21 @@ mod tests {
         assert_eq!(result.chateau, None);
         assert!(json!({"chateau":result.chateau})["chateau"].is_null());
     }
+    #[test]
+    fn postgres_route_colours_are_normalized_and_prefer_explicit_routes() {
+        assert_eq!(normalize_color(" ff00aB "), Some("#FF00AB".into()));
+        assert_eq!(normalize_color("#abc"), Some("#AABBCC".into()));
+        assert_eq!(normalize_color("not a colour"), None);
+        assert_eq!(normalize_color("12345"), None);
+        assert_eq!(
+            first_normalized_color(&[Some(" D9382E "), Some("112233")]),
+            Some("#D9382E".into())
+        );
+        assert_eq!(
+            first_normalized_color(&[Some("bad"), Some("a1b2c3"), Some("000000")]),
+            Some("#A1B2C3".into())
+        );
+        assert_eq!(first_normalized_color(&[None, Some(""), None]), None);
+    }
+
 }
