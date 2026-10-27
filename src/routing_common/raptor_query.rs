@@ -1629,6 +1629,96 @@ mod tests {
         assert!(search(first_departure - 17, 18).is_empty());
     }
 
+
+    #[test]
+    fn arrive_by_finds_latest_origin_departure_and_keeps_real_arrival() {
+        let tt = fixture();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        // The train departs stop 0 at 08:00:20, arrives stop 2 at 08:23:05.
+        // With 2 min access and 3 min egress, we depart at 07:58:20,
+        // arrive at 08:26:05 (not the later requested 09:00 deadline).
+        let midnight = 20_000_i64 * 86_400;
+        let deadline = midnight + 9 * 3600;
+        let query = Query {
+            departure_unix_seconds: deadline,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 120 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 180 }],
+            direct_walk_seconds: None,
+            max_boardings: 2,
+            max_duration_seconds: 2 * 3600,
+        };
+        let (journeys, stats) = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap();
+        assert!(!journeys.is_empty());
+        assert_eq!(journeys[0].departure_unix_seconds, midnight + 8 * 3600 + 20 - 120);
+        assert_eq!(journeys[0].arrival_unix_seconds, midnight + 8 * 3600 + 23 * 60 + 5 + 180);
+        assert_eq!(journeys[0].boardings, 1);
+        assert!(stats.active_transport_days > 0);
+    }
+
+    #[test]
+    fn arrive_by_rejects_deadlines_before_egress_is_possible() {
+        let bytes = fixture().encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let query = Query {
+            departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600 + 23 * 60,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 180 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3600,
+        };
+        assert!(crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0.is_empty());
+    }
+
+    #[test]
+    fn arrive_by_handles_two_transit_legs_and_directional_footpaths() {
+        use crate::routing_common::timetable::PackedFootpath;
+        let mut tt = multi_route_fixture();
+        // A directed footpath 1 -> 2; reverse search MUST traverse the
+        // inbound CSR at stop 2, not assume symmetrical footpaths.
+        tt.footpaths_out_offsets = vec![0, 0, 1, 1, 1];
+        tt.footpaths_out = vec![PackedFootpath::new(LocationIdx(2), 75).unwrap()];
+        tt.footpaths_in_offsets = vec![0, 0, 0, 1, 1];
+        tt.footpaths_in = vec![PackedFootpath::new(LocationIdx(1), 75).unwrap()];
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let deadline = 20_000_i64 * 86_400 + 8 * 3600 + 40 * 60;
+        let query = Query {
+            departure_unix_seconds: deadline,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(3), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 2,
+            max_duration_seconds: 7200,
+        };
+        let journeys = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0;
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(journeys[0].boardings, 2);
+        assert_eq!(journeys[0].arrival_unix_seconds, 20_000_i64 * 86_400 + 8 * 3600 + 35 * 60);
+        // The last ride is 2 -> 3, and the first is 0 -> 2.
+        assert!(journeys[0].legs.iter().filter(|leg| matches!(leg, Leg::Ride {..})).count() == 2);
+    }
+
+    #[test]
+    fn arrive_by_direct_walk_uses_deadline_as_actual_arrival() {
+        let bytes = fixture().encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let deadline = 20_000_i64 * 86_400 + 72000;
+        let query = Query {
+            departure_unix_seconds: deadline,
+            access: vec![],
+            egress: vec![],
+            direct_walk_seconds: Some(95),
+            max_boardings: 1,
+            max_duration_seconds: 180,
+        };
+        let journeys = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0;
+        assert_eq!(journeys.len(), 1);
+        assert_eq!(journeys[0].departure_unix_seconds, deadline - 95);
+        assert_eq!(journeys[0].arrival_unix_seconds, deadline);
+    }
+
     #[test]
     fn route_with_one_vehicle_returns_one_boarding() {
         let tt = fixture();
