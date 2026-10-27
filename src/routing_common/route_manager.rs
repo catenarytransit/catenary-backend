@@ -1,5 +1,6 @@
 use crate::routing_common::metadata_index::MetadataIndex;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
+use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
@@ -315,6 +316,31 @@ impl Router {
             journeys,
             raptor_stats,
         })
+    }
+
+    /// Reverse RAPTOR: find the latest departure that reaches the destination by
+    /// arrival_unix_seconds. Access and egress retain their original direction.
+    pub fn route_arrive_by_with_access(
+        &self,
+        selection: RoutingSelection,
+        arrival_unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+    ) -> Result<RoutingResponse> {
+        let tt = self.timetable_for(&selection.transit_region)?;
+        let (journeys, raptor_stats) = raptor_arrive_by::route_arrive_by_with_stats(
+            &tt,
+            &Query {
+                departure_unix_seconds: arrival_unix_seconds,
+                access,
+                egress,
+                direct_walk_seconds,
+                max_boardings: self.settings.max_boardings,
+                max_duration_seconds: self.settings.max_duration_seconds,
+            },
+        )?;
+        Ok(RoutingResponse { selection, journeys, raptor_stats })
     }
 
     pub fn nearest_stops(
