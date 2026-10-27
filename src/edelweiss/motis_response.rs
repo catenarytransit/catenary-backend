@@ -1,5 +1,5 @@
 //! Convert an internal RAPTOR journey into a client-facing MOTIS plan response.
-//! All metadata is resolved against the exact feed/attempt/trip, never the route index.
+//! Metadata is looked up by feed and public GTFS IDs across import attempts.
 use anyhow::{Context, Result};
 use catenary::routing_common::route_manager::Coordinates;
 use catenary::routing_common::{
@@ -10,6 +10,92 @@ use catenary::routing_common::{
 use postgres::{Client, NoTls};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+
+const METADATA_SQL: &str = r#"
+SELECT wanted.feed, wanted.attempt, wanted.trip,
+       COALESCE(NULLIF(wanted.route_id, ''), t.route_id, ''),
+       r.short_name, r.long_name, t.trip_short_name, m.trip_headsign,
+       r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
+       r.route_type, t.direction_id,
+       COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6)),
+       s.color, s.text_color, ds.color, ds.text_color
+FROM unnest($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+     AS wanted(chateau, feed, attempt, trip, route_id)
+-- The timetable attempt is carried through solely to identify the response.
+-- Look up GTFS metadata by chateau/feed/GTFS ID across all import attempts.
+LEFT JOIN LATERAL (
+    SELECT tc.onestop_feed_id, tc.attempt_id, tc.route_id,
+           tc.trip_short_name, tc.itinerary_pattern_id, tc.direction_id
+    FROM gtfs.trips_compressed tc
+    LEFT JOIN gtfs.ingested_static ti
+           ON ti.onestop_feed_id = tc.onestop_feed_id
+          AND ti.attempt_id = tc.attempt_id
+    WHERE tc.chateau = wanted.chateau
+      AND tc.onestop_feed_id = wanted.feed
+      AND tc.trip_id = wanted.trip
+    ORDER BY (tc.route_id = NULLIF(wanted.route_id, '')) DESC NULLS LAST,
+             (ti.production AND ti.ingestion_successfully_finished
+              AND NOT ti.ingesting_in_progress AND NOT ti.ingestion_errored
+              AND NOT ti.deleted) DESC NULLS LAST,
+             ti.ingest_end_unix_time_ms DESC NULLS LAST,
+             tc.attempt_id DESC
+    LIMIT 1
+) t ON TRUE
+-- The public route ID survives timetable compilation even when the trip was
+-- rotated out of PostgreSQL. Prefer the newest completed production route.
+LEFT JOIN LATERAL (
+    SELECT rr.attempt_id, rr.short_name, rr.long_name, rr.agency_id,
+           rr.color, rr.text_color, rr.route_type
+    FROM gtfs.routes rr
+    LEFT JOIN gtfs.ingested_static ri
+           ON ri.onestop_feed_id = rr.onestop_feed_id
+          AND ri.attempt_id = rr.attempt_id
+    WHERE rr.chateau = wanted.chateau
+      AND rr.onestop_feed_id = wanted.feed
+      AND rr.route_id = COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
+    ORDER BY (ri.production AND ri.ingestion_successfully_finished
+              AND NOT ri.ingesting_in_progress AND NOT ri.ingestion_errored
+              AND NOT ri.deleted) DESC NULLS LAST,
+             ri.ingest_end_unix_time_ms DESC NULLS LAST,
+             (rr.attempt_id = t.attempt_id) DESC NULLS LAST,
+             rr.attempt_id DESC
+    LIMIT 1
+) r ON TRUE
+-- Pattern and shape rows must belong to the selected trip import; otherwise
+-- identical pattern IDs reused by other attempts may produce wrong geometry.
+LEFT JOIN gtfs.itinerary_pattern_meta m
+       ON m.onestop_feed_id = t.onestop_feed_id
+      AND m.attempt_id = t.attempt_id
+      AND m.itinerary_pattern_id = t.itinerary_pattern_id
+LEFT JOIN gtfs.shapes s
+       ON s.onestop_feed_id = m.onestop_feed_id
+      AND s.attempt_id = m.attempt_id AND s.shape_id = m.shape_id
+LEFT JOIN gtfs.direction_pattern_meta d
+       ON d.onestop_feed_id = m.onestop_feed_id
+      AND d.attempt_id = m.attempt_id
+      AND d.direction_pattern_id = m.direction_pattern_id
+LEFT JOIN gtfs.shapes ds
+       ON ds.onestop_feed_id = d.onestop_feed_id
+      AND ds.attempt_id = d.attempt_id
+      AND ds.shape_id = d.gtfs_shape_id
+LEFT JOIN LATERAL (
+    SELECT aa.agency_name, aa.agency_url
+    FROM gtfs.agencies aa
+    LEFT JOIN gtfs.ingested_static ai
+           ON ai.onestop_feed_id = aa.static_onestop_id
+          AND ai.attempt_id = aa.attempt_id
+    WHERE aa.chateau = wanted.chateau
+      AND aa.static_onestop_id = wanted.feed
+      AND aa.agency_id = r.agency_id
+    ORDER BY (aa.attempt_id = r.attempt_id) DESC NULLS LAST,
+             (ai.production AND ai.ingestion_successfully_finished
+              AND NOT ai.ingesting_in_progress AND NOT ai.ingestion_errored
+              AND NOT ai.deleted) DESC NULLS LAST,
+             ai.ingest_end_unix_time_ms DESC NULLS LAST,
+             aa.attempt_id DESC
+    LIMIT 1
+) a ON TRUE
+"#;
 
 #[derive(Clone, Default)]
 struct TripInfo {
@@ -67,7 +153,7 @@ fn ride_identity(
 }
 
 /// Resolve only trips in returned journeys, in one PostgreSQL round trip.
-/// Source identity prevents collisions across feeds and import attempts.
+/// Timetable attempt identity is retained only to map results to the correct leg.
 fn metadata(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
@@ -90,49 +176,17 @@ fn metadata(
     let Some(url) = database_url else {
         return Ok(BTreeMap::new());
     };
+    let chateaus: Vec<_> = keys.values().map(|k| k.chateau.clone()).collect();
     let feeds: Vec<_> = keys.values().map(|k| k.feed.clone()).collect();
+    // These attempt IDs only distinguish compiled rides in the result map.
+    // The SQL deliberately never uses them as metadata lookup predicates.
     let attempts: Vec<_> = keys.values().map(|k| k.attempt.clone()).collect();
     let trips: Vec<_> = keys.values().map(|k| k.trip.clone()).collect();
     let routes: Vec<_> = keys.values().map(|k| k.route.clone()).collect();
     let mut db = Client::connect(url, NoTls).context("connecting to metadata database")?;
     let rows = db.query(
-        "SELECT wanted.feed, wanted.attempt, wanted.trip,
-                COALESCE(NULLIF(wanted.route_id, ''), t.route_id, ''),
-                r.short_name, r.long_name, t.trip_short_name, m.trip_headsign,
-                r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
-                r.route_type, t.direction_id,
-                COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6)),
-                s.color, s.text_color, ds.color, ds.text_color
-         FROM unnest($1::text[], $2::text[], $3::text[], $4::text[])
-              AS wanted(feed, attempt, trip, route_id)
-         -- The timetable is authoritative for the route identity. A missing
-         -- historical trip must not suppress its route style or badge.
-         LEFT JOIN gtfs.trips_compressed t
-              ON t.onestop_feed_id = wanted.feed
-             AND t.attempt_id = wanted.attempt AND t.trip_id = wanted.trip
-         LEFT JOIN gtfs.routes r
-              ON r.onestop_feed_id = wanted.feed
-             AND r.attempt_id = wanted.attempt
-             AND r.route_id = COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
-         LEFT JOIN gtfs.itinerary_pattern_meta m
-              ON m.onestop_feed_id = t.onestop_feed_id
-             AND m.attempt_id = t.attempt_id
-             AND m.itinerary_pattern_id = t.itinerary_pattern_id
-         LEFT JOIN gtfs.shapes s
-              ON s.onestop_feed_id = m.onestop_feed_id
-             AND s.attempt_id = m.attempt_id AND s.shape_id = m.shape_id
-         LEFT JOIN gtfs.direction_pattern_meta d
-              ON d.onestop_feed_id = m.onestop_feed_id
-             AND d.attempt_id = m.attempt_id
-             AND d.direction_pattern_id = m.direction_pattern_id
-         LEFT JOIN gtfs.shapes ds
-              ON ds.onestop_feed_id = d.onestop_feed_id
-             AND ds.attempt_id = d.attempt_id
-             AND ds.shape_id = d.gtfs_shape_id
-         LEFT JOIN gtfs.agencies a
-              ON a.static_onestop_id = wanted.feed
-             AND a.attempt_id = wanted.attempt AND a.agency_id = r.agency_id",
-        &[&feeds, &attempts, &trips, &routes],
+        METADATA_SQL,
+        &[&chateaus, &feeds, &attempts, &trips, &routes],
     )?;
     let mut result = BTreeMap::new();
     for row in rows {
@@ -714,6 +768,16 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn metadata_lookups_do_not_filter_on_compiled_attempts() {
+        assert!(METADATA_SQL.contains("AS wanted(chateau, feed, attempt, trip, route_id)"));
+        assert!(!METADATA_SQL.contains("= wanted.attempt"));
+        assert!(METADATA_SQL.contains("tc.trip_id = wanted.trip"));
+        assert!(METADATA_SQL.contains("rr.route_id = COALESCE"));
+        // One selected trip, route and agency per ride even with many import attempts.
+        assert_eq!(METADATA_SQL.matches("LIMIT 1").count(), 3);
+    }
+
     #[test]
     fn missing_database_route_type_uses_compiled_timetable_class() {
         assert_eq!(transit_mode(None, Some(Clasz::Bus as u8)), "BUS");
