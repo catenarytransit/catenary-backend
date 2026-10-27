@@ -5,7 +5,7 @@ use catenary::routing_common::route_manager::Coordinates;
 use catenary::routing_common::{
     metadata_index::MetadataIndex,
     raptor_query::{Journey, Leg},
-    timetable::{RouteIdx, TransportIdx, ZeroCopyTimetable},
+    timetable::{Clasz, RouteIdx, TransportIdx, ZeroCopyTimetable},
 };
 use postgres::{Client, NoTls};
 use serde_json::{Value, json};
@@ -385,6 +385,44 @@ fn trip_info(
     trip_info_for_key(info, ride_identity(tt, index, transport))
 }
 
+/// The compiled timetable remains usable when PostgreSQL no longer contains
+/// the exact GTFS import attempt used for a routed trip.
+fn timetable_route_id<'a>(
+    tt: &'a ZeroCopyTimetable<'_>,
+    index: &MetadataIndex,
+    transport: u32,
+) -> Option<&'a str> {
+    let trip = index.trip_for_transport(transport)?;
+    let route_idx = tt.trip_public_route_ids().get(trip)?;
+    let record = tt.route_ids().get(route_idx.idx())?;
+    tt.get_string(record.id)
+}
+
+/// Never collapse a known transit class into "TRANSIT" just because a metadata
+/// database join did not return the original route type.
+fn transit_mode(route_type: Option<i16>, compiled_class: Option<u8>) -> &'static str {
+    match route_type {
+        Some(0) => return "TRAM",
+        Some(1) => return "SUBWAY",
+        Some(2) => return "RAIL",
+        Some(3) => return "BUS",
+        Some(4) => return "FERRY",
+        Some(7) => return "FUNICULAR",
+        _ => {}
+    }
+    match compiled_class {
+        Some(c) if c == Clasz::Subway as u8 => "SUBWAY",
+        Some(c) if c == Clasz::Tram as u8 => "TRAM",
+        Some(c) if c == Clasz::Bus as u8 || c == Clasz::Coach as u8 => "BUS",
+        Some(c) if c == Clasz::Ship as u8 => "FERRY",
+        Some(c) if c == Clasz::Funicular as u8 => "FUNICULAR",
+        Some(c) if matches!(c, x if x == Clasz::HighSpeed as u8
+            || x == Clasz::LongDistance as u8 || x == Clasz::Night as u8
+            || x == Clasz::Regional as u8 || x == Clasz::Suburban as u8) => "RAIL",
+        _ => "TRANSIT",
+    }
+}
+
 fn transit_leg(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
@@ -407,7 +445,10 @@ fn transit_leg(
     else {
         unreachable!()
     };
-    let meta = trip_info(tt, index, info, *transport);
+    let mut meta = trip_info(tt, index, info, *transport);
+    if meta.route_id.is_empty() {
+        meta.route_id = timetable_route_id(tt, index, *transport).unwrap_or_default().to_owned();
+    }
     let all = tt.stops_on(RouteIdx(*route));
     let from = place(tt, *from_stop);
     let to = place(tt, *to_stop);
@@ -448,15 +489,7 @@ fn transit_leg(
     } else {
         Vec::new()
     };
-    let mode = match meta.route_type {
-        Some(0) => "TRAM",
-        Some(1) => "SUBWAY",
-        Some(2) => "RAIL",
-        Some(3) => "BUS",
-        Some(4) => "FERRY",
-        Some(7) => "FUNICULAR",
-        _ => "TRANSIT",
-    };
+    let mode = transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied());
     let start = *departure_unix_seconds;
     let end = *arrival_unix_seconds;
     json!({
@@ -597,6 +630,17 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn missing_database_route_type_uses_compiled_timetable_class() {
+        assert_eq!(transit_mode(None, Some(Clasz::Bus as u8)), "BUS");
+        assert_eq!(transit_mode(None, Some(Clasz::Suburban as u8)), "RAIL");
+        assert_eq!(transit_mode(None, Some(Clasz::Tram as u8)), "TRAM");
+        assert_eq!(transit_mode(None, Some(Clasz::Subway as u8)), "SUBWAY");
+        assert_eq!(transit_mode(None, Some(Clasz::Ship as u8)), "FERRY");
+        assert_eq!(transit_mode(None, None), "TRANSIT");
+        assert_eq!(transit_mode(Some(3), Some(Clasz::Regional as u8)), "BUS");
+    }
+
     #[test]
     fn polyline_six_digit_encoding() {
         let encoded = polyline(&[[-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252]]);
