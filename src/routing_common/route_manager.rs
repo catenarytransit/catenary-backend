@@ -118,6 +118,36 @@ fn bbox_area(geometry: &geo::Geometry<f64>) -> f64 {
         .unwrap_or(f64::INFINITY)
 }
 
+/// Choose the most specific compiled transit region for one coordinate.
+/// Do not select a larger region simply because it contains both endpoints.
+fn transit_region_for<'a>(
+    regions: impl Iterator<Item = (&'a str, &'a [geo::Geometry<f64>])>,
+    point: Coordinates,
+) -> Option<&'a str> {
+    regions
+        .filter(|(_, geometries)| contains(geometries, point))
+        .min_by(|(id_a, geometry_a), (id_b, geometry_b)| {
+            let area = |pieces: &[geo::Geometry<f64>]| pieces.iter().map(bbox_area).sum::<f64>();
+            area(geometry_a)
+                .total_cmp(&area(geometry_b))
+                .then(id_a.cmp(id_b))
+        })
+        .map(|(id, _)| id)
+}
+
+fn require_same_transit_region<'a>(
+    origin: Option<&'a str>,
+    destination: Option<&'a str>,
+) -> Result<&'a str> {
+    let origin = origin.context("origin is outside all compiled transit regions")?;
+    let destination = destination.context("destination is outside all compiled transit regions")?;
+    ensure!(
+        origin == destination,
+        "origin and destination are in different compiled transit regions: {origin} and {destination}"
+    );
+    Ok(origin)
+}
+
 impl Router {
     pub fn load(
         routing_config: &Path,
@@ -217,19 +247,22 @@ impl Router {
                 "invalid coordinates"
             );
         }
+        let origin_region = transit_region_for(
+            self.transit.iter().map(|r| (r.id.as_str(), r.geometry.as_slice())),
+            from,
+        );
+        let destination_region = transit_region_for(
+            self.transit.iter().map(|r| (r.id.as_str(), r.geometry.as_slice())),
+            to,
+        );
+        // Reject cross-region requests before contacting OSR or running RAPTOR.
+        // Different OSR street-graph regions are still permitted within one
+        // transit region, since access and egress can use separate OSR graphs.
+        let region = require_same_transit_region(origin_region, destination_region)?;
         let start_osr = self.street_for(from)?.to_owned();
         let end_osr = self.street_for(to)?.to_owned();
-        let region = self
-            .transit
-            .iter()
-            .filter(|r| contains(&r.geometry, from) && contains(&r.geometry, to))
-            .min_by(|a, b| {
-                let size = |r: &TransitRegion| r.geometry.iter().map(bbox_area).sum::<f64>();
-                size(a).total_cmp(&size(b)).then(a.id.cmp(&b.id))
-            })
-            .context("no single compiled transit region contains both endpoints")?;
         Ok(RoutingSelection {
-            transit_region: region.id.clone(),
+            transit_region: region.to_owned(),
             origin_osr_region: start_osr,
             destination_osr_region: end_osr,
         })
@@ -311,4 +344,90 @@ fn haversine_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let a = (dy * 0.5).sin().powi(2)
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dx * 0.5).sin().powi(2);
     12_742_000.0 * a.sqrt().asin()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rectangle(west: f64, south: f64, east: f64, north: f64) -> geo::Geometry<f64> {
+        geo::Geometry::Polygon(geo::Rect::new((west, south), (east, north)).to_polygon())
+    }
+
+    #[test]
+    fn same_region_is_accepted() {
+        let west = [rectangle(-120.0, 30.0, -115.0, 40.0)];
+        let east = [rectangle(-115.0, 30.0, -110.0, 40.0)];
+        let regions = [("west", west.as_slice()), ("east", east.as_slice())];
+        let from = Coordinates { lat: 34.0, lon: -118.0 };
+        let to = Coordinates { lat: 35.0, lon: -117.0 };
+        let a = transit_region_for(regions.iter().copied(), from);
+        let b = transit_region_for(regions.iter().copied(), to);
+        assert_eq!(require_same_transit_region(a, b).unwrap(), "west");
+    }
+
+    #[test]
+    fn different_regions_are_rejected() {
+        let west = [rectangle(-120.0, 30.0, -115.0, 40.0)];
+        let east = [rectangle(-115.0, 30.0, -110.0, 40.0)];
+        let regions = [("west", west.as_slice()), ("east", east.as_slice())];
+        let from = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 34.0, lon: -118.0 },
+        );
+        let to = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 34.0, lon: -112.0 },
+        );
+        let err = require_same_transit_region(from, to).unwrap_err().to_string();
+        assert!(err.contains("different compiled transit regions: west and east"));
+    }
+
+    #[test]
+    fn overlapping_regions_do_not_fall_back_to_larger_region() {
+        let large = [rectangle(-120.0, 30.0, -110.0, 40.0)];
+        let small = [rectangle(-119.0, 33.0, -117.0, 35.0)];
+        let regions = [("large", large.as_slice()), ("small", small.as_slice())];
+        let from = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 34.0, lon: -118.0 },
+        );
+        let to = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 34.0, lon: -112.0 },
+        );
+        assert_eq!(from, Some("small"));
+        assert_eq!(to, Some("large"));
+        assert!(require_same_transit_region(from, to).is_err());
+    }
+
+    #[test]
+    fn equal_area_overlap_uses_region_id_tiebreaker() {
+        let a = [rectangle(-119.0, 33.0, -117.0, 35.0)];
+        let b = [rectangle(-119.0, 33.0, -117.0, 35.0)];
+        let regions = [("zeta", a.as_slice()), ("alpha", b.as_slice())];
+        assert_eq!(
+            transit_region_for(
+                regions.iter().copied(),
+                Coordinates { lat: 34.0, lon: -118.0 }
+            ),
+            Some("alpha")
+        );
+    }
+
+    #[test]
+    fn coordinates_outside_compiled_regions_are_rejected() {
+        let region = [rectangle(-119.0, 33.0, -117.0, 35.0)];
+        let regions = [("socal", region.as_slice())];
+        let inside = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 34.0, lon: -118.0 },
+        );
+        let outside = transit_region_for(
+            regions.iter().copied(),
+            Coordinates { lat: 48.0, lon: 2.0 },
+        );
+        let err = require_same_transit_region(inside, outside).unwrap_err().to_string();
+        assert!(err.contains("destination is outside all compiled transit regions"));
+    }
 }
