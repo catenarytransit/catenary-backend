@@ -50,7 +50,9 @@ fn ride_identity(
     let (chateau, feed, attempt) = tt.source(record.source)?;
     // Look up colours by the timetable's public route identity, even when the
     // corresponding trips_compressed row has been removed or rotated.
-    let route = tt.trip_public_route_ids().get(trip)
+    let route = tt
+        .trip_public_route_ids()
+        .get(trip)
         .and_then(|id| tt.route_ids().get(id.idx()))
         .and_then(|id| tt.get_string(id.id))
         .unwrap_or_default()
@@ -197,7 +199,10 @@ fn normalize_color(value: &str) -> Option<String> {
 }
 
 fn first_normalized_color(candidates: &[Option<&str>]) -> Option<String> {
-    candidates.iter().filter_map(|value| *value).find_map(normalize_color)
+    candidates
+        .iter()
+        .filter_map(|value| *value)
+        .find_map(normalize_color)
 }
 
 fn parse_linestring(s: &str) -> Option<Vec<[f64; 2]>> {
@@ -486,9 +491,13 @@ fn transit_mode(route_type: Option<i16>, compiled_class: Option<u8>) -> &'static
         Some(c) if c == Clasz::Bus as u8 || c == Clasz::Coach as u8 => "BUS",
         Some(c) if c == Clasz::Ship as u8 => "FERRY",
         Some(c) if c == Clasz::Funicular as u8 => "FUNICULAR",
-        Some(c) if matches!(c, x if x == Clasz::HighSpeed as u8
+        Some(c)
+            if matches!(c, x if x == Clasz::HighSpeed as u8
             || x == Clasz::LongDistance as u8 || x == Clasz::Night as u8
-            || x == Clasz::Regional as u8 || x == Clasz::Suburban as u8) => "RAIL",
+            || x == Clasz::Regional as u8 || x == Clasz::Suburban as u8) =>
+        {
+            "RAIL"
+        }
         _ => "TRANSIT",
     }
 }
@@ -517,7 +526,9 @@ fn transit_leg(
     };
     let mut meta = trip_info(tt, index, info, *transport);
     if meta.route_id.is_empty() {
-        meta.route_id = timetable_route_id(tt, index, *transport).unwrap_or_default().to_owned();
+        meta.route_id = timetable_route_id(tt, index, *transport)
+            .unwrap_or_default()
+            .to_owned();
     }
     let all = tt.stops_on(RouteIdx(*route));
     let from = place(tt, *from_stop);
@@ -559,7 +570,10 @@ fn transit_leg(
     } else {
         Vec::new()
     };
-    let mode = transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied());
+    let mode = transit_mode(
+        meta.route_type,
+        tt.route_clasz().get(*route as usize).copied(),
+    );
     let start = *departure_unix_seconds;
     let end = *arrival_unix_seconds;
     json!({
@@ -790,5 +804,4 @@ mod tests {
         );
         assert_eq!(first_normalized_color(&[None, Some(""), None]), None);
     }
-
 }

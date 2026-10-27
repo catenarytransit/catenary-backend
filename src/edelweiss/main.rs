@@ -492,7 +492,10 @@ async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResp
     }
 }
 
-fn resolve_database_url(explicit: Option<String>, config_path: &std::path::Path) -> Result<Option<String>> {
+fn resolve_database_url(
+    explicit: Option<String>,
+    config_path: &std::path::Path,
+) -> Result<Option<String>> {
     if let Some(url) = explicit.filter(|url| !url.trim().is_empty()) {
         return Ok(Some(url));
     }
@@ -502,9 +505,11 @@ fn resolve_database_url(explicit: Option<String>, config_path: &std::path::Path)
         Err(e) => return Err(e).with_context(|| format!("reading {}", config_path.display())),
     };
     let config: catenary::catenaryconfig::CatenaryConfig =
-        toml::from_str(&contents)
-            .with_context(|| format!("parsing {}", config_path.display()))?;
-    Ok(config.postgres.database_url.filter(|url| !url.trim().is_empty()))
+        toml::from_str(&contents).with_context(|| format!("parsing {}", config_path.display()))?;
+    Ok(config
+        .postgres
+        .database_url
+        .filter(|url| !url.trim().is_empty()))
 }
 
 #[actix_web::main]
@@ -523,7 +528,9 @@ async fn main() -> Result<()> {
     // [postgres].database_url in the selected catenaryconfig.toml file.
     let database_url = resolve_database_url(args.database_url.clone(), &args.catenary_config)?;
     if database_url.is_none() {
-        eprintln!("Warning: no PostgreSQL URL configured; route colours and other GTFS metadata will be unavailable");
+        eprintln!(
+            "Warning: no PostgreSQL URL configured; route colours and other GTFS metadata will be unavailable"
+        );
     }
     let router = Arc::new(Router::load(
         &args.regions_config,
@@ -539,12 +546,7 @@ async fn main() -> Result<()> {
         // runtime. Running it on an Actix worker thread would nest runtimes and
         // panic; use the same blocking pool as the HTTP route handler.
         let (response, timings) = web::block(move || {
-            run_query(
-                &router,
-                request,
-                database_url.as_deref(),
-                &args.osr_worker,
-            )
+            run_query(&router, request, database_url.as_deref(), &args.osr_worker)
         })
         .await
         .context("CLI route-query worker failed")??;
@@ -598,13 +600,19 @@ mod tests {
             std::process::id(),
             std::thread::current().name().unwrap_or("test")
         ));
-        std::fs::write(&config, "[postgres]\ndatabase_url = 'postgres://configured/db'\n").unwrap();
+        std::fs::write(
+            &config,
+            "[postgres]\ndatabase_url = 'postgres://configured/db'\n",
+        )
+        .unwrap();
         assert_eq!(
             resolve_database_url(None, &config).unwrap().as_deref(),
             Some("postgres://configured/db")
         );
         assert_eq!(
-            resolve_database_url(Some("postgres://cli/db".into()), &config).unwrap().as_deref(),
+            resolve_database_url(Some("postgres://cli/db".into()), &config)
+                .unwrap()
+                .as_deref(),
             Some("postgres://cli/db")
         );
         std::fs::remove_file(config).unwrap();

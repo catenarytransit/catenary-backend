@@ -248,11 +248,15 @@ impl Router {
             );
         }
         let origin_region = transit_region_for(
-            self.transit.iter().map(|r| (r.id.as_str(), r.geometry.as_slice())),
+            self.transit
+                .iter()
+                .map(|r| (r.id.as_str(), r.geometry.as_slice())),
             from,
         );
         let destination_region = transit_region_for(
-            self.transit.iter().map(|r| (r.id.as_str(), r.geometry.as_slice())),
+            self.transit
+                .iter()
+                .map(|r| (r.id.as_str(), r.geometry.as_slice())),
             to,
         );
         // Reject cross-region requests before contacting OSR or running RAPTOR.
@@ -359,8 +363,14 @@ mod tests {
         let west = [rectangle(-120.0, 30.0, -115.0, 40.0)];
         let east = [rectangle(-115.0, 30.0, -110.0, 40.0)];
         let regions = [("west", west.as_slice()), ("east", east.as_slice())];
-        let from = Coordinates { lat: 34.0, lon: -118.0 };
-        let to = Coordinates { lat: 35.0, lon: -117.0 };
+        let from = Coordinates {
+            lat: 34.0,
+            lon: -118.0,
+        };
+        let to = Coordinates {
+            lat: 35.0,
+            lon: -117.0,
+        };
         let a = transit_region_for(regions.iter().copied(), from);
         let b = transit_region_for(regions.iter().copied(), to);
         assert_eq!(require_same_transit_region(a, b).unwrap(), "west");
@@ -373,13 +383,21 @@ mod tests {
         let regions = [("west", west.as_slice()), ("east", east.as_slice())];
         let from = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 34.0, lon: -118.0 },
+            Coordinates {
+                lat: 34.0,
+                lon: -118.0,
+            },
         );
         let to = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 34.0, lon: -112.0 },
+            Coordinates {
+                lat: 34.0,
+                lon: -112.0,
+            },
         );
-        let err = require_same_transit_region(from, to).unwrap_err().to_string();
+        let err = require_same_transit_region(from, to)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("different compiled transit regions: west and east"));
     }
 
@@ -390,11 +408,17 @@ mod tests {
         let regions = [("large", large.as_slice()), ("small", small.as_slice())];
         let from = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 34.0, lon: -118.0 },
+            Coordinates {
+                lat: 34.0,
+                lon: -118.0,
+            },
         );
         let to = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 34.0, lon: -112.0 },
+            Coordinates {
+                lat: 34.0,
+                lon: -112.0,
+            },
         );
         assert_eq!(from, Some("small"));
         assert_eq!(to, Some("large"));
@@ -409,7 +433,10 @@ mod tests {
         assert_eq!(
             transit_region_for(
                 regions.iter().copied(),
-                Coordinates { lat: 34.0, lon: -118.0 }
+                Coordinates {
+                    lat: 34.0,
+                    lon: -118.0
+                }
             ),
             Some("alpha")
         );
@@ -421,13 +448,21 @@ mod tests {
         let regions = [("socal", region.as_slice())];
         let inside = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 34.0, lon: -118.0 },
+            Coordinates {
+                lat: 34.0,
+                lon: -118.0,
+            },
         );
         let outside = transit_region_for(
             regions.iter().copied(),
-            Coordinates { lat: 48.0, lon: 2.0 },
+            Coordinates {
+                lat: 48.0,
+                lon: 2.0,
+            },
         );
-        let err = require_same_transit_region(inside, outside).unwrap_err().to_string();
+        let err = require_same_transit_region(inside, outside)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("destination is outside all compiled transit regions"));
     }
 }

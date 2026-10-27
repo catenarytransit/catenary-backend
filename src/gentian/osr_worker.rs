@@ -199,10 +199,7 @@ fn run_request(
     Ok(results)
 }
 
-fn handle(
-    stream: TcpStream,
-    graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Router>>,
-) -> Result<()> {
+fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Router>>) -> Result<()> {
     stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
     stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
     let reader = BufReader::new(stream.try_clone()?);
@@ -355,9 +352,7 @@ mod tests {
 
     #[test]
     fn exclusions_default_to_empty_for_existing_configs() -> Result<()> {
-        let config: Config = toml::from_str(
-            "[osm_manager]\ndata_dir = '/tmp/osr-data'\n",
-        )?;
+        let config: Config = toml::from_str("[osm_manager]\ndata_dir = '/tmp/osr-data'\n")?;
         assert!(config.osr_worker.excluded_regions.is_empty());
         Ok(())
     }
@@ -393,13 +388,10 @@ mod tests {
             "features": [{"properties": {"id": "asia/japan"}}]
         });
         let excluded = BTreeSet::from(["asia/japan".to_owned()]);
-        let error = region_paths_from_registry(
-            std::path::Path::new("/tmp/osr-data"),
-            &registry,
-            &excluded,
-        )
-        .err()
-        .expect("no enabled regions must fail startup");
+        let error =
+            region_paths_from_registry(std::path::Path::new("/tmp/osr-data"), &registry, &excluded)
+                .err()
+                .expect("no enabled regions must fail startup");
         assert!(error.to_string().contains("no OSR regions enabled"));
     }
 
