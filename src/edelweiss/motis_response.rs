@@ -88,7 +88,7 @@ fn metadata(
                 r.short_name, r.long_name, t.trip_short_name, m.trip_headsign,
                 r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
                 r.route_type, t.direction_id,
-                ST_AsGeoJSON(s.linestring, 6)
+                COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6))
          FROM unnest($1::text[], $2::text[], $3::text[]) AS wanted(feed, attempt, trip)
          JOIN gtfs.trips_compressed t
               ON t.onestop_feed_id = wanted.feed
@@ -103,6 +103,17 @@ fn metadata(
          LEFT JOIN gtfs.shapes s
               ON s.onestop_feed_id = m.onestop_feed_id
              AND s.attempt_id = m.attempt_id AND s.shape_id = m.shape_id
+         -- Some compact itinerary patterns omit their shape while the direction
+         -- pattern still points to the original GTFS geometry. Resolve it only
+         -- from the SAME feed and import attempt, never from an unrelated trip.
+         LEFT JOIN gtfs.direction_pattern_meta d
+              ON d.onestop_feed_id = m.onestop_feed_id
+             AND d.attempt_id = m.attempt_id
+             AND d.direction_pattern_id = m.direction_pattern_id
+         LEFT JOIN gtfs.shapes ds
+              ON ds.onestop_feed_id = d.onestop_feed_id
+             AND ds.attempt_id = d.attempt_id
+             AND ds.shape_id = d.gtfs_shape_id
          LEFT JOIN gtfs.agencies a
               ON a.static_onestop_id = t.onestop_feed_id
              AND a.attempt_id = t.attempt_id AND a.agency_id = r.agency_id",
@@ -187,7 +198,7 @@ fn projection(poly: &[[f64; 2]], point: [f64; 2], start: usize) -> Option<(usize
 
 /// Project boarding and alighting points to the actual shape, retaining its
 /// intermediate vertices instead of connecting stops by straight lines.
-fn clipped_shape(poly: &[[f64; 2]], from: [f64; 2], to: [f64; 2]) -> Vec<[f64; 2]> {
+fn clipped_shape_forward(poly: &[[f64; 2]], from: [f64; 2], to: [f64; 2]) -> Vec<[f64; 2]> {
     let Some((a, at, pa)) = projection(poly, from, 0) else {
         return Vec::new();
     };
@@ -207,6 +218,18 @@ fn clipped_shape(poly: &[[f64; 2]], from: [f64; 2], to: [f64; 2]) -> Vec<[f64; 2
         result.push(pb);
     }
     result
+}
+
+/// Shapes are usually encoded in increasing stop order, but a GTFS shape can
+/// be stored in the opposite direction. Only use the actual shape vertices;
+/// never replace a missing rail/bus shape with a straight-line guess.
+fn clipped_shape(poly: &[[f64; 2]], from: [f64; 2], to: [f64; 2]) -> Vec<[f64; 2]> {
+    let forward = clipped_shape_forward(poly, from, to);
+    if forward.len() >= 2 && forward.first() != forward.last() {
+        return forward;
+    }
+    let reverse: Vec<_> = poly.iter().rev().copied().collect();
+    clipped_shape_forward(&reverse, from, to)
 }
 
 fn polyline(points: &[[f64; 2]]) -> Value {
@@ -651,6 +674,16 @@ mod tests {
     #[test]
     fn clipping_retains_curvature() {
         let shape = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [2.0, 1.0]];
+        let clipped = clipped_shape(&shape, [0.5, 0.0], [1.5, 1.0]);
+        assert_eq!(
+            clipped,
+            vec![[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [1.5, 1.0]]
+        );
+    }
+
+    #[test]
+    fn reverse_direction_gtfs_geometry_remains_drawable() {
+        let shape = [[2.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
         let clipped = clipped_shape(&shape, [0.5, 0.0], [1.5, 1.0]);
         assert_eq!(
             clipped,
