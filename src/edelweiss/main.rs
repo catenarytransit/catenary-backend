@@ -57,7 +57,10 @@ struct Endpoint {
 struct Request {
     from: Coordinates,
     to: Coordinates,
-    departure_unix_seconds: i64,
+    #[serde(default)]
+    departure_unix_seconds: Option<i64>,
+    #[serde(default)]
+    arrival_unix_seconds: Option<i64>,
     #[serde(default)]
     access: Vec<Endpoint>,
     #[serde(default)]
@@ -360,6 +363,12 @@ fn run_query(
     let origin = request.from;
     let destination = request.to;
     let detailed_legs = request.detailed_legs;
+    // Exactly one timestamp is required. Reject ambiguity explicitly.
+    let (request_time, arrive_by) = match (request.departure_unix_seconds, request.arrival_unix_seconds) {
+        (Some(t), None) if t > 0 => (t, false),
+        (None, Some(t)) if t > 0 => (t, true),
+        _ => anyhow::bail!("supply exactly one positive departure_unix_seconds or arrival_unix_seconds"),
+    };
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -448,8 +457,11 @@ fn run_query(
     let direct = direct.0?;
 
     let phase = Instant::now();
-    let routing =
-        router.route_with_access(selection, request.departure_unix_seconds, from, to, direct)?;
+    let routing = if arrive_by {
+        router.route_arrive_by_with_access(selection, request_time, from, to, direct)?
+    } else {
+        router.route_with_access(selection, request_time, from, to, direct)?
+    };
     timings.raptor_ms = milliseconds(phase);
 
     let phase = Instant::now();

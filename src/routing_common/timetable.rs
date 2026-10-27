@@ -906,6 +906,16 @@ impl ZeroCopyTimetable<'_> {
         }
         &self.footpaths_out()[o[i] as usize..o[i + 1] as usize]
     }
+    /// Inbound footpaths ending at loc, storing the predecessor as target.
+    /// Used for true reverse-time routing without constructing a new graph.
+    pub fn footpaths_to(&self, loc: LocationIdx) -> &[PackedFootpath] {
+        let i = loc.idx();
+        let o = self.footpaths_in_offsets();
+        if i + 1 >= o.len() {
+            return &[];
+        }
+        &self.footpaths_in()[o[i] as usize..o[i + 1] as usize]
+    }
     /// Shared, stop-order event offsets for one transport. Resolution is O(1)
     /// and the slice can be reused throughout an entire RAPTOR route scan.
     pub fn events_for_transport(&self, transport: TransportIdx) -> Option<&[Delta]> {
