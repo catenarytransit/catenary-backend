@@ -843,6 +843,34 @@ mod tests {
         assert!(json!({"chateau":result.chateau})["chateau"].is_null());
     }
     #[test]
+    fn recovered_route_metadata_keeps_original_timetable_identity() {
+        let key = TripKey {
+            chateau: "amtrak".into(),
+            feed: "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle".into(),
+            attempt: "old-attempt".into(),
+            trip: "259676".into(),
+            route: "78".into(),
+        };
+        let mut rows = BTreeMap::new();
+        rows.insert(
+            (key.feed.clone(), key.attempt.clone(), key.trip.clone()),
+            TripInfo {
+                route_id: "78".into(),
+                short_name: Some("Pacific Surfliner".into()),
+                route_color: Some("#1772AC".into()),
+                route_type: Some(2),
+                ..TripInfo::default()
+            },
+        );
+        let resolved = trip_info_for_key(&rows, Some(key));
+        assert_eq!(resolved.route_id, "78");
+        assert_eq!(resolved.id, "");
+        assert_eq!(resolved.route_type, Some(2));
+        assert_eq!(resolved.route_color.as_deref(), Some("#1772AC"));
+        assert_eq!(resolved.short_name.as_deref(), Some("Pacific Surfliner"));
+    }
+
+    #[test]
     fn postgres_route_colours_are_normalized_and_prefer_explicit_routes() {
         assert_eq!(normalize_color(" ff00aB "), Some("#FF00AB".into()));
         assert_eq!(normalize_color("#abc"), Some("#AABBCC".into()));
