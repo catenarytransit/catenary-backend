@@ -102,7 +102,8 @@ fn metadata(
                 r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
                 r.route_type, t.direction_id,
                 COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6)),
-                s.color, s.text_color, ds.color, ds.text_color
+                s.color, s.text_color, ds.color, ds.text_color,
+                r.attempt_id AS resolved_route_attempt
          FROM unnest($1::text[], $2::text[], $3::text[], $4::text[])
               AS wanted(feed, attempt, trip, route_id)
          -- The timetable is authoritative for the route identity. A missing
@@ -110,10 +111,35 @@ fn metadata(
          LEFT JOIN gtfs.trips_compressed t
               ON t.onestop_feed_id = wanted.feed
              AND t.attempt_id = wanted.attempt AND t.trip_id = wanted.trip
-         LEFT JOIN gtfs.routes r
-              ON r.onestop_feed_id = wanted.feed
-             AND r.attempt_id = wanted.attempt
-             AND r.route_id = COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
+         -- A timetable is an immutable snapshot. Maple may rotate/delete its
+         -- GTFS import before Edelweiss is restarted or the region recompiled.
+         -- Resolve the exact route first, then the newest successful production
+         -- import of the same feed and raw route ID. Never cross feeds.
+         LEFT JOIN LATERAL (
+             SELECT candidate.*
+             FROM gtfs.routes AS candidate
+             LEFT JOIN gtfs.ingested_static AS ingest
+               ON ingest.onestop_feed_id = candidate.onestop_feed_id
+              AND ingest.attempt_id = candidate.attempt_id
+             WHERE candidate.onestop_feed_id = wanted.feed
+               AND candidate.route_id =
+                   COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
+               AND (
+                   candidate.attempt_id = wanted.attempt
+                   OR (
+                       ingest.production
+                       AND ingest.ingestion_successfully_finished
+                       AND NOT ingest.ingesting_in_progress
+                       AND NOT ingest.ingestion_errored
+                       AND NOT ingest.deleted
+                   )
+               )
+             ORDER BY
+               (candidate.attempt_id = wanted.attempt) DESC,
+               ingest.ingest_end_unix_time_ms DESC NULLS LAST,
+               candidate.attempt_id DESC
+             LIMIT 1
+         ) AS r ON true
          LEFT JOIN gtfs.itinerary_pattern_meta m
               ON m.onestop_feed_id = t.onestop_feed_id
              AND m.attempt_id = t.attempt_id
@@ -131,10 +157,12 @@ fn metadata(
              AND ds.shape_id = d.gtfs_shape_id
          LEFT JOIN gtfs.agencies a
               ON a.static_onestop_id = wanted.feed
-             AND a.attempt_id = wanted.attempt AND a.agency_id = r.agency_id",
+             AND a.attempt_id = r.attempt_id AND a.agency_id = r.agency_id",
         &[&feeds, &attempts, &trips, &routes],
     )?;
     let mut result = BTreeMap::new();
+    let mut fallback_routes = 0_usize;
+    let mut unmatched_routes = Vec::new();
     for row in rows {
         let shape_geojson: Option<String> = row.get(15);
         let shape = shape_geojson
@@ -150,6 +178,20 @@ fn metadata(
         let shape_text_color: Option<String> = row.get(17);
         let direction_color: Option<String> = row.get(18);
         let direction_text_color: Option<String> = row.get(19);
+        let resolved_route_attempt: Option<String> = row.get(20);
+        if let Some(resolved_attempt) = resolved_route_attempt.as_deref() {
+            if resolved_attempt != attempt {
+                fallback_routes += 1;
+            }
+        } else if unmatched_routes.len() < 5 {
+            unmatched_routes.push(format!(
+                "feed={} compiled_attempt={} route={} trip={}",
+                feed,
+                attempt,
+                row.get::<_, String>(3),
+                id,
+            ));
+        }
         result.insert(
             (feed, attempt, id.clone()),
             TripInfo {
@@ -177,6 +219,18 @@ fn metadata(
                 direction_id: row.get(14),
                 shape,
             },
+        );
+    }
+    if fallback_routes > 0 {
+        eprintln!(
+            "Edelweiss: recovered {} route metadata entries from a newer production GTFS import",
+            fallback_routes
+        );
+    }
+    if !unmatched_routes.is_empty() {
+        eprintln!(
+            "Edelweiss: no PostgreSQL route metadata for {} (up to 5 shown); recompile Gentian if the route ID changed or the feed was removed",
+            unmatched_routes.join("; ")
         );
     }
     Ok(result)
