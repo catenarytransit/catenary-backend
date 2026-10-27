@@ -102,7 +102,8 @@ fn metadata(
                 r.agency_id, a.agency_name, a.agency_url, r.color, r.text_color,
                 r.route_type, t.direction_id,
                 COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6)),
-                s.color, s.text_color, ds.color, ds.text_color
+                s.color, s.text_color, ds.color, ds.text_color,
+                fallback_shape.color, fallback_shape.text_color
          FROM unnest($1::text[], $2::text[], $3::text[], $4::text[])
               AS wanted(feed, attempt, trip, route_id)
          -- The timetable is authoritative for the route identity. A missing
@@ -131,7 +132,33 @@ fn metadata(
              AND ds.shape_id = d.gtfs_shape_id
          LEFT JOIN gtfs.agencies a
               ON a.static_onestop_id = wanted.feed
-             AND a.attempt_id = wanted.attempt AND a.agency_id = r.agency_id",
+             AND a.attempt_id = wanted.attempt AND a.agency_id = r.agency_id
+         -- Rail imports can retain their route and shapes after the exact
+         -- trips_compressed row has gone away. Resolve colours from the
+         -- route's own shapes without depending on the trip join.
+         LEFT JOIN LATERAL (
+             SELECT matched.color, matched.text_color
+             FROM (
+                 SELECT listed.shape_id, 0 AS priority
+                 FROM unnest(r.shapes_list) AS listed(shape_id)
+                 UNION ALL
+                 -- Some generated rail shapes appear only on direction patterns.
+                 SELECT pattern.gtfs_shape_id AS shape_id, 1 AS priority
+                 FROM gtfs.direction_pattern_meta AS pattern
+                 WHERE pattern.chateau = r.chateau
+                   AND pattern.onestop_feed_id = wanted.feed
+                   AND pattern.attempt_id = wanted.attempt
+                   AND pattern.route_id = COALESCE(NULLIF(wanted.route_id, ''), t.route_id)
+                   AND pattern.gtfs_shape_id IS NOT NULL
+             ) AS candidates
+             JOIN gtfs.shapes AS matched
+               ON matched.onestop_feed_id = wanted.feed
+              AND matched.attempt_id = wanted.attempt
+              AND matched.shape_id = candidates.shape_id
+             WHERE matched.color IS NOT NULL OR matched.text_color IS NOT NULL
+             ORDER BY candidates.priority, candidates.shape_id
+             LIMIT 1
+         ) AS fallback_shape ON true",
         &[&feeds, &attempts, &trips, &routes],
     )?;
     let mut result = BTreeMap::new();
@@ -150,6 +177,8 @@ fn metadata(
         let shape_text_color: Option<String> = row.get(17);
         let direction_color: Option<String> = row.get(18);
         let direction_text_color: Option<String> = row.get(19);
+        let fallback_shape_color: Option<String> = row.get(20);
+        let fallback_shape_text_color: Option<String> = row.get(21);
         result.insert(
             (feed, attempt, id.clone()),
             TripInfo {
@@ -167,11 +196,13 @@ fn metadata(
                     route_color.as_deref(),
                     shape_color.as_deref(),
                     direction_color.as_deref(),
+                    fallback_shape_color.as_deref(),
                 ]),
                 route_text_color: first_normalized_color(&[
                     route_text_color.as_deref(),
                     shape_text_color.as_deref(),
                     direction_text_color.as_deref(),
+                    fallback_shape_text_color.as_deref(),
                 ]),
                 route_type: row.get(13),
                 direction_id: row.get(14),
@@ -803,5 +834,21 @@ mod tests {
             Some("#A1B2C3".into())
         );
         assert_eq!(first_normalized_color(&[None, Some(""), None]), None);
+        // For a rail trip whose compressed metadata is no longer available,
+        // PostgreSQL route-level shape colour must still be usable.
+        assert_eq!(
+            first_normalized_color(&[None, None, None, Some("e51c23")]),
+            Some("#E51C23".into())
+        );
+        // An explicit GTFS route colour remains authoritative.
+        assert_eq!(
+            first_normalized_color(&[Some("123456"), None, None, Some("e51c23")]),
+            Some("#123456".into())
+        );
+        // A malformed route colour must not hide a valid shape colour.
+        assert_eq!(
+            first_normalized_color(&[Some("invalid"), None, None, Some("#0f7")]),
+            Some("#00FF77".into())
+        );
     }
 }
