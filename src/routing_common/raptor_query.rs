@@ -622,6 +622,49 @@ fn optimize_final_walk_on_trip(tt: &ZeroCopyTimetable<'_>, request: &Query, jour
     journey.arrival_unix_seconds = arrival;
 }
 
+/// Depart from the origin as late as possible while still boarding the
+/// *same* scheduled first vehicle. RAPTOR starts access walking at the search
+/// time to find the earliest arrival, but that is not the actual time the
+/// passenger needs to leave. Match Nigiri's optimized initial departure:
+/// shift the pedestrian prefix to end at the first boarding event.
+///
+/// Only shift a complete access + footpath chain before the first ride.
+/// Direct walks and walk-only journeys must still start at the request time.
+/// The scheduled boarding, transfers, and destination arrival stay unchanged.
+fn optimize_initial_departure(journey: &mut Journey) {
+    let mut walking_seconds = 0i64;
+    for (index, leg) in journey.legs.iter().enumerate() {
+        match leg {
+            Leg::Access { seconds, .. } if index == 0 => {
+                let Some(total) = walking_seconds.checked_add(i64::from(*seconds)) else {
+                    return;
+                };
+                walking_seconds = total;
+            }
+            Leg::Transfer { seconds, .. } if index > 0 => {
+                let Some(total) = walking_seconds.checked_add(i64::from(*seconds)) else {
+                    return;
+                };
+                walking_seconds = total;
+            }
+            Leg::Ride {
+                departure_unix_seconds,
+                ..
+            } if index > 0 => {
+                if let Some(latest_start) = departure_unix_seconds.checked_sub(walking_seconds) {
+                    // Never make an infeasible itinerary appear feasible by
+                    // moving its departure earlier than the query time.
+                    if latest_start >= journey.departure_unix_seconds {
+                        journey.departure_unix_seconds = latest_start;
+                    }
+                }
+                return;
+            }
+            _ => return,
+        }
+    }
+}
+
 fn optimize_same_trip_endpoint_walks(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
@@ -629,6 +672,7 @@ fn optimize_same_trip_endpoint_walks(
 ) {
     optimize_initial_walk_on_trip(tt, request, journey);
     optimize_final_walk_on_trip(tt, request, journey);
+    optimize_initial_departure(journey);
 }
 
 fn reconstruct(
@@ -863,6 +907,92 @@ mod tests {
     };
 
     #[test]
+    fn delays_origin_walk_until_first_boarding_including_initial_footpaths() {
+        let searched_at = 86_400 - 1_000;
+        let first_boarding = 86_400 + 500;
+        let final_arrival = first_boarding + 900;
+        let mut journey = Journey {
+            boardings: 1,
+            departure_unix_seconds: searched_at,
+            arrival_unix_seconds: final_arrival,
+            legs: vec![
+                Leg::Access {
+                    to_stop: 0,
+                    seconds: 180,
+                },
+                Leg::Transfer {
+                    from_stop: 0,
+                    to_stop: 1,
+                    seconds: 120,
+                },
+                Leg::Ride {
+                    from_stop: 1,
+                    to_stop: 2,
+                    route: 0,
+                    transport: 0,
+                    service_day: 0,
+                    board_stop_index: 1,
+                    alight_stop_index: 2,
+                    departure_unix_seconds: first_boarding,
+                    arrival_unix_seconds: final_arrival,
+                },
+                Leg::Egress {
+                    from_stop: 2,
+                    seconds: 0,
+                },
+            ],
+        };
+        optimize_initial_departure(&mut journey);
+        assert_eq!(journey.departure_unix_seconds, first_boarding - 300);
+        assert_eq!(journey.arrival_unix_seconds, final_arrival);
+        assert!(matches!(
+            journey.legs[2],
+            Leg::Ride {
+                departure_unix_seconds,
+                ..
+            } if departure_unix_seconds == first_boarding
+        ));
+    }
+
+    #[test]
+    fn keeps_requested_departure_for_direct_walk_or_unreachable_late_start() {
+        let searched_at = 10_000;
+        let mut direct = Journey {
+            boardings: 0,
+            departure_unix_seconds: searched_at,
+            arrival_unix_seconds: searched_at + 120,
+            legs: vec![Leg::DirectWalk { seconds: 120 }],
+        };
+        optimize_initial_departure(&mut direct);
+        assert_eq!(direct.departure_unix_seconds, searched_at);
+
+        let mut too_late = Journey {
+            boardings: 1,
+            departure_unix_seconds: searched_at,
+            arrival_unix_seconds: searched_at + 300,
+            legs: vec![
+                Leg::Access {
+                    to_stop: 0,
+                    seconds: 240,
+                },
+                Leg::Ride {
+                    from_stop: 0,
+                    to_stop: 1,
+                    route: 0,
+                    transport: 0,
+                    service_day: 0,
+                    board_stop_index: 0,
+                    alight_stop_index: 1,
+                    departure_unix_seconds: searched_at + 100,
+                    arrival_unix_seconds: searched_at + 300,
+                },
+            ],
+        };
+        optimize_initial_departure(&mut too_late);
+        assert_eq!(too_late.departure_unix_seconds, searched_at);
+    }
+
+    #[test]
     fn prefers_closer_downstream_boarding_on_identical_bus() {
         let tt = fixture();
         let bytes = tt.encode().unwrap();
@@ -899,6 +1029,17 @@ mod tests {
         .unwrap();
         assert_eq!(shorter.len(), 1);
         assert_eq!(original.len(), 1);
+        // Stop 1 departs at 08:12:25 and is two minutes away on foot.
+        // The original boarding at stop 0 departs at 08:00:20.
+        let service_midnight = 20_000_i64 * 86_400;
+        assert_eq!(
+            shorter[0].departure_unix_seconds,
+            service_midnight + 8 * 3_600 + 10 * 60 + 25
+        );
+        assert_eq!(
+            original[0].departure_unix_seconds,
+            service_midnight + 7 * 3_600 + 50 * 60 + 20
+        );
         assert_eq!(
             shorter[0].arrival_unix_seconds,
             original[0].arrival_unix_seconds
