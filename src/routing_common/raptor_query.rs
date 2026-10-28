@@ -23,6 +23,10 @@ pub struct RaptorStats {
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
+    /// Number of point-in-time RAPTOR searches executed for a timetable view.
+    pub profile_searches: u64,
+    /// Geometric expansions of the requested departure/arrival interval.
+    pub profile_interval_extensions: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
