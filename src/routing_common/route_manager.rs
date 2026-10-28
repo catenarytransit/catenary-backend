@@ -1,6 +1,7 @@
 use crate::routing_common::metadata_index::MetadataIndex;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
 use crate::routing_common::raptor_arrive_by;
+use crate::routing_common::profile_search::{self, ProfileOptions};
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
@@ -316,6 +317,35 @@ impl Router {
             journeys,
             raptor_stats,
         })
+    }
+
+    /// MOTIS-style timetable view with an adaptive window and departure-aware
+    /// Pareto filtering. OSR access/egress are reused for all profile anchors.
+    pub fn route_profile_with_access(
+        &self,
+        selection: RoutingSelection,
+        unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+        arrive_by: bool,
+        options: ProfileOptions,
+    ) -> Result<RoutingResponse> {
+        let tt = self.timetable_for(&selection.transit_region)?;
+        let (journeys, raptor_stats) = profile_search::route_profile_with_stats(
+            &tt,
+            &Query {
+                departure_unix_seconds: unix_seconds,
+                access,
+                egress,
+                direct_walk_seconds,
+                max_boardings: self.settings.max_boardings,
+                max_duration_seconds: options.max_journey_duration_seconds,
+            },
+            options,
+            arrive_by,
+        )?;
+        Ok(RoutingResponse { selection, journeys, raptor_stats })
     }
 
     /// Reverse RAPTOR: find the latest departure that reaches the destination by
