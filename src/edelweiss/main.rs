@@ -7,6 +7,7 @@ mod motis_response;
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
 use catenary::routing_common::raptor_query::WalkingEndpoint;
+use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::route_manager::{
     Coordinates, Router, RouterSettings, RoutingResponse,
 };
@@ -63,8 +64,21 @@ struct Request {
     #[serde(default)]
     egress: Vec<Endpoint>,
     direct_walk_seconds: Option<u32>,
+    #[serde(default = "default_timetable_view")]
+    timetable_view: bool,
+    #[serde(default)]
+    search_window_seconds: Option<u32>,
+    #[serde(default)]
+    max_search_window_seconds: Option<u32>,
+    #[serde(default)]
+    min_itineraries: Option<usize>,
+    #[serde(default)]
+    max_journey_duration_seconds: Option<u32>,
     #[serde(default = "default_detailed_legs")]
     detailed_legs: bool,
+}
+fn default_timetable_view() -> bool {
+    true
 }
 fn default_detailed_legs() -> bool {
     true
@@ -309,7 +323,22 @@ fn run_query(
     let direct = direct.0?;
 
     let phase = Instant::now();
-    let routing = if arrive_by {
+    let profile_defaults = ProfileOptions::default();
+    let options = ProfileOptions {
+        search_window_seconds: request.search_window_seconds
+            .unwrap_or(profile_defaults.search_window_seconds),
+        max_search_window_seconds: request.max_search_window_seconds
+            .unwrap_or(profile_defaults.max_search_window_seconds),
+        min_itineraries: request.min_itineraries
+            .unwrap_or(profile_defaults.min_itineraries),
+        max_journey_duration_seconds: request.max_journey_duration_seconds
+            .unwrap_or(profile_defaults.max_journey_duration_seconds),
+    };
+    let routing = if request.timetable_view {
+        router.route_profile_with_access(
+            selection, request_time, from, to, direct, arrive_by, options
+        )?
+    } else if arrive_by {
         router.route_arrive_by_with_access(selection, request_time, from, to, direct)?
     } else {
         router.route_with_access(selection, request_time, from, to, direct)?
