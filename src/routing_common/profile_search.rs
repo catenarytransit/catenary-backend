@@ -86,6 +86,7 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.transport_days_tested += one.transport_days_tested;
     total.active_transport_days += one.active_transport_days;
     total.stop_events_scanned += one.stop_events_scanned;
+    total.transport_lookup_probes += one.transport_lookup_probes;
     total.footpath_edges_examined += one.footpath_edges_examined;
     total.walking_heap_pushes += one.walking_heap_pushes;
     total.labels_improved += one.labels_improved;
