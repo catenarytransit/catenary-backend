@@ -147,6 +147,25 @@ fn routes_from_marked(
     routes
 }
 
+/// Latest time at which we can arrive by vehicle, including transfer rules.
+fn alighting_deadline(
+    tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize,
+) -> Option<i64> {
+    if label.time == NEG_INF { return None; }
+    let Some((next_stop, next_departure)) = label.next_board else {
+        return Some(label.time);
+    };
+    let rule = tt.station_transfer_rule(LocationIdx(stop as u32), LocationIdx(next_stop as u32));
+    if rule.is_some_and(|r| r.prohibited()) { return None; }
+    let change = tt.location_transfer_seconds()[stop]
+        .max(tt.location_transfer_seconds()[next_stop])
+        .max(rule.map_or(0, |r| r.min_seconds));
+    Some(label.time.min(next_departure - i64::from(change)))
+}
+
+/// Reverse-time counterpart to the FIFO forward scan. A reverse upper bound
+/// identifies the latest active vehicle that can reach each alighting stop.
+/// The carried vehicle is replaced only when a later index is feasible.
 fn reverse_scan(
     tt: &ZeroCopyTimetable<'_>,
     previous: &[Label],
@@ -156,109 +175,69 @@ fn reverse_scan(
     deadline: i64,
     stats: &mut RaptorStats,
 ) {
+    use crate::routing_common::raptor_query::{
+        for_each_route_service_day, get_latest_transport, transport_event_second,
+    };
     let started = std::time::Instant::now();
-    let base = i64::from(tt.header().first_utc_day);
-    let horizon = i64::from(tt.header().day_count);
-    if horizon == 0 {
-        return;
-    }
     for &route in routes {
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
-        if stops.len() < 2 {
-            continue;
-        }
-        let transport_range = tt.route_transport_ranges()[route.idx()];
-        for id in transport_range.from..transport_range.to {
-            let transport = TransportIdx(id);
-            let traffic = &tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first_departure =
-                i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
-            let Some(events) = tt.events_for_transport(transport) else {
-                continue;
-            };
-            let earliest_event =
-                first_departure + i64::from(events.first().map_or(0, |e| e.seconds()));
-            let latest_event =
-                first_departure + i64::from(events.last().map_or(0, |e| e.seconds()));
-            let first_day = ((min_time - latest_event).div_euclid(86_400) - base).max(0);
-            let last_day = ((deadline - earliest_event).div_euclid(86_400) - base).min(horizon - 1);
-            if first_day > last_day {
-                continue;
-            }
-            let first_word = first_day as usize / 64;
-            let last_word = last_day as usize / 64;
-            for word in first_word..=last_word {
-                let low = if word == first_word {
-                    first_day as usize % 64
-                } else {
-                    0
-                };
-                let high = if word == last_word {
-                    last_day as usize % 64
-                } else {
-                    63
-                };
-                let mask = (u64::MAX << low) & (u64::MAX >> (63 - high));
-                let mut active = traffic.words[word] & mask;
-                stats.transport_days_tested += (high - low + 1) as u64;
-                while active != 0 {
-                    let bit = active.trailing_zeros() as usize;
-                    active &= active - 1;
-                    let service_day = (word * 64 + bit) as i64;
-                    stats.active_transport_days += 1;
-                    let midnight = (base + service_day) * 86_400 + first_departure;
-                    // This is the first feasible *later alighting* on this
-                    // vehicle while scanning its stops in reverse order.
-                    let mut alighting: Option<(usize, i64, usize)> = None;
-                    for (position, stop) in stops.iter().enumerate().rev() {
-                        stats.stop_events_scanned += 1;
-                        let loc = stop.location().idx();
-                        if let Some((to, arrival, alight_stop_index)) = alighting {
-                            if stop.outbound() && position + 1 < stops.len() {
-                                if let Some(offset) = events.get(position * 2) {
-                                    let dep = midnight + i64::from(offset.seconds());
-                                    if dep >= min_time
-                                        && dep <= deadline
-                                        && improve(
-                                            current,
-                                            loc,
-                                            dep,
-                                            Next::Ride {
-                                                to,
-                                                route: route.0,
-                                                transport: transport.0,
-                                                service_day: service_day as u16,
-                                                board_stop_index: position,
-                                                alight_stop_index,
-                                                departure: dep,
-                                                arrival,
-                                            },
-                                            Some((loc, dep)),
-                                        )
-                                    {
-                                        stats.labels_improved += 1;
-                                    }
-                                }
-                            }
-                        }
-                        if alighting.is_none() && stop.inbound() && position > 0 {
-                            if let Some(offset) = events.get(position * 2 - 1) {
-                                let arrival = midnight + i64::from(offset.seconds());
-                                if arrival >= min_time
-                                    && arrival <= deadline
-                                    && can_alight(tt, previous[loc], loc, arrival)
-                                {
-                                    alighting = Some((loc, arrival, position));
-                                }
+        if stops.len() < 2 { continue; }
+        for_each_route_service_day(tt, route, min_time, deadline, stats, |day, stats| {
+            let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
+            let mut alighting: Option<(TransportIdx, usize, i64, usize)> = None;
+            for (position, stop) in stops.iter().enumerate().rev() {
+                stats.stop_events_scanned += 1;
+                let loc = stop.location().idx();
+                if let Some((transport, to, arrival, alight_index)) = alighting {
+                    if stop.outbound() && position + 1 < stops.len() {
+                        if let Some(dep) =
+                            transport_event_second(tt, route, transport, position, false, midnight)
+                        {
+                            if dep >= min_time && dep <= deadline
+                                && improve(current, loc, dep, Next::Ride {
+                                    to,
+                                    route: route.0,
+                                    transport: transport.0,
+                                    service_day: day as u16,
+                                    board_stop_index: position,
+                                    alight_stop_index: alight_index,
+                                    departure: dep,
+                                    arrival,
+                                }, Some((loc, dep)))
+                            {
+                                stats.labels_improved += 1;
                             }
                         }
                     }
                 }
+                if !stop.inbound() || position == 0 { continue; }
+                let Some(latest) = alighting_deadline(tt, previous[loc], loc) else {
+                    continue;
+                };
+                if latest < min_time { continue; }
+                if let Some((candidate, arrival)) =
+                    get_latest_transport(tt, route, position, day, latest, stats)
+                {
+                    if arrival >= min_time
+                        && onboard_later(alighting, candidate)
+                    {
+                        alighting = Some((candidate, loc, arrival, position));
+                    }
+                }
             }
-        }
+        });
     }
     stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
+}
+
+/// The reverse search prefers a later trip, which is the higher FIFO index.
+#[inline]
+fn onboard_later(
+    current: Option<(TransportIdx, usize, i64, usize)>,
+    candidate: TransportIdx,
+) -> bool {
+    current.is_none_or(|(transport, _, _, _)| candidate.0 > transport.0)
 }
 
 fn reconstruct(
