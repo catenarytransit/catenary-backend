@@ -30,6 +30,8 @@ pub struct RaptorStats {
     /// True when the bounded profile approximation stopped before reaching
     /// the requested number of transit alternatives.
     pub profile_budget_exhausted: bool,
+    /// Number of FIFO binary-search probes and inactive-service skips.
+    pub transport_lookup_probes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -284,126 +286,180 @@ fn routes_from_marked(
     routes
 }
 
+/// Absolute event time on the given timetable service day. Compare seconds,
+/// never packed Delta integers (which are not chronologically ordered).
+pub(crate) fn transport_event_second(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, transport: TransportIdx,
+    stop: usize, arrival: bool, midnight: i64,
+) -> Option<i64> {
+    Some(midnight
+        + i64::from(tt.transport_first_dep_offset().get(transport.idx())?.seconds())
+        + i64::from(tt.event_time(route, transport, stop, arrival)?.seconds()))
+}
+
+/// Earliest service-active transport departing at or after the ready time.
+/// Gentian partitions schedules into FIFO chains, so every stop has a sorted
+/// transport column. Skipping inactive services happens only AFTER lower_bound.
+pub(crate) fn get_earliest_transport(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize,
+    service_day: usize, ready_at: i64, stats: &mut RaptorStats,
+) -> Option<(TransportIdx, i64)> {
+    let range = *tt.route_transport_ranges().get(route.idx())?;
+    let midnight = (i64::from(tt.header().first_utc_day) + service_day as i64) * 86_400;
+    let (mut lo, mut hi) = (range.from, range.to);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        stats.transport_lookup_probes += 1;
+        let t = transport_event_second(tt, route, TransportIdx(mid), stop, false, midnight)?;
+        if t < ready_at { lo = mid + 1; } else { hi = mid; }
+    }
+    for idx in lo..range.to {
+        stats.transport_lookup_probes += 1;
+        let transport = TransportIdx(idx);
+        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()].test(service_day) {
+            let t = transport_event_second(tt, route, transport, stop, false, midnight)?;
+            return Some((transport, t));
+        }
+    }
+    None
+}
+
+/// Latest service-active transport arriving by the deadline: upper_bound in
+/// the same FIFO transport column, then backwards across inactive services.
+pub(crate) fn get_latest_transport(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize,
+    service_day: usize, latest_at: i64, stats: &mut RaptorStats,
+) -> Option<(TransportIdx, i64)> {
+    let range = *tt.route_transport_ranges().get(route.idx())?;
+    let midnight = (i64::from(tt.header().first_utc_day) + service_day as i64) * 86_400;
+    let (mut lo, mut hi) = (range.from, range.to);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        stats.transport_lookup_probes += 1;
+        let t = transport_event_second(tt, route, TransportIdx(mid), stop, true, midnight)?;
+        if t <= latest_at { lo = mid + 1; } else { hi = mid; }
+    }
+    while lo > range.from {
+        lo -= 1;
+        stats.transport_lookup_probes += 1;
+        let transport = TransportIdx(lo);
+        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()].test(service_day) {
+            let t = transport_event_second(tt, route, transport, stop, true, midnight)?;
+            return Some((transport, t));
+        }
+    }
+    None
+}
+
+/// A FIFO route's first and last transports bound its event span. Its traffic
+/// bitmap is the union of transport calendars. This retains long overnight
+/// service while avoiding a per-transport scan to discover active days.
+pub(crate) fn for_each_route_service_day(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx,
+    earliest: i64, latest: i64, stats: &mut RaptorStats,
+    mut visit: impl FnMut(usize, &mut RaptorStats),
+) {
+    let range = tt.route_transport_ranges()[route.idx()];
+    if range.from == range.to || tt.header().day_count == 0 { return; }
+    let first = TransportIdx(range.from);
+    let last = TransportIdx(range.to - 1);
+    let (Some(first_events), Some(last_events)) =
+        (tt.events_for_transport(first), tt.events_for_transport(last))
+    else { return; };
+    let first_offset = i64::from(tt.transport_first_dep_offset()[first.idx()].seconds())
+        + i64::from(first_events.first().map_or(0, |e| e.seconds()));
+    let last_offset = i64::from(tt.transport_first_dep_offset()[last.idx()].seconds())
+        + i64::from(last_events.last().map_or(0, |e| e.seconds()));
+    let base = i64::from(tt.header().first_utc_day);
+    let from_day = ((earliest - last_offset).div_euclid(86_400) - base).max(0);
+    let to_day = ((latest - first_offset).div_euclid(86_400) - base)
+        .min(i64::from(tt.header().day_count) - 1);
+    if from_day > to_day { return; }
+    let active = &tt.bitfields()[tt.route_traffic_days()[route.idx()].idx()];
+    let first_word = from_day as usize / 64;
+    let last_word = to_day as usize / 64;
+    for word in first_word..=last_word {
+        let lo = if word == first_word { from_day as usize % 64 } else { 0 };
+        let hi = if word == last_word { to_day as usize % 64 } else { 63 };
+        stats.transport_days_tested += (hi - lo + 1) as u64;
+        let mut mask = active.words[word] & (u64::MAX << lo) & (u64::MAX >> (63 - hi));
+        while mask != 0 {
+            let bit = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            stats.active_transport_days += 1;
+            visit(word * 64 + bit, stats);
+        }
+    }
+}
+
+fn boarding_ready_time(
+    tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize,
+) -> Option<i64> {
+    if label.time == INF { return None; }
+    let Some((from, alight_time)) = label.last_alight else { return Some(label.time); };
+    let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(stop as u32));
+    if rule.is_some_and(|r| r.prohibited()) { return None; }
+    let change = tt.location_transfer_seconds()[from]
+        .max(tt.location_transfer_seconds()[stop])
+        .max(rule.map_or(0, |r| r.min_seconds));
+    Some(label.time.max(alight_time + i64::from(change)))
+}
+
+/// Traverse each route only once per active service day, choosing the earliest
+/// eligible transport per stop using a FIFO lower bound. A better earlier
+/// transport at a downstream stop can replace the currently carried trip.
 fn traverse_routes_profiled(
-    tt: &ZeroCopyTimetable<'_>,
-    prev: &[Label],
-    curr: &mut [Label],
-    marked_routes: &[RouteIdx],
-    departure: i64,
-    max_time: i64,
+    tt: &ZeroCopyTimetable<'_>, prev: &[Label], curr: &mut [Label],
+    marked_routes: &[RouteIdx], departure: i64, max_time: i64,
     stats: &mut RaptorStats,
 ) -> Result<()> {
     let started = std::time::Instant::now();
-    let base = i64::from(tt.header().first_utc_day);
-    let horizon = i64::from(tt.header().day_count);
-    if horizon == 0 {
-        return Ok(());
-    }
-
     for &route in marked_routes {
         stats.routes_scanned += 1;
-        let transport_range = tt.route_transport_ranges()[route.idx()];
         let stops = tt.stops_on(route);
-        if stops.len() < 2 {
-            continue;
-        }
-
-        // A service day contributes only when its actual event interval
-        // intersects the request interval. Do not use a fixed GTFS lookback.
-        for index in transport_range.from..transport_range.to {
-            let transport = TransportIdx(index);
-            let active_days = tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first_departure =
-                i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
-            let Some(events) = tt.events_for_transport(transport) else {
-                continue;
-            };
-            let earliest_event =
-                first_departure + i64::from(events.first().map_or(0, |x| x.seconds()));
-            let latest_event =
-                first_departure + i64::from(events.last().map_or(0, |x| x.seconds()));
-            let first_day = ((departure - latest_event).div_euclid(86_400) - base).max(0);
-            let last_day = ((max_time - earliest_event).div_euclid(86_400) - base).min(horizon - 1);
-            if first_day > last_day {
-                continue;
-            }
-
-            // Walk only active service days within the exact window, using
-            // bit operations rather than visiting each inactive calendar day.
-            let first_word = (first_day as usize) / 64;
-            let last_word = (last_day as usize) / 64;
-            for word_idx in first_word..=last_word {
-                let lower = if word_idx == first_word {
-                    (first_day as usize) % 64
-                } else {
-                    0
-                };
-                let upper = if word_idx == last_word {
-                    (last_day as usize) % 64
-                } else {
-                    63
-                };
-                let lower_mask = u64::MAX << lower;
-                let upper_mask = u64::MAX >> (63 - upper);
-                let mut remaining = active_days.words[word_idx] & lower_mask & upper_mask;
-                stats.transport_days_tested += (upper - lower + 1) as u64;
-                while remaining != 0 {
-                    let bit = remaining.trailing_zeros() as usize;
-                    remaining &= remaining - 1;
-                    let day = (word_idx * 64 + bit) as i64;
-                    stats.active_transport_days += 1;
-                    let absolute_first = (base + day) * 86_400 + first_departure;
-                    let mut onboard: Option<(usize, i64, usize)> = None;
-                    for (position, stop) in stops.iter().enumerate() {
-                        stats.stop_events_scanned += 1;
-                        let loc = stop.location().idx();
-                        if let Some((boarding_loc, boarding_time, board_stop_index)) = onboard {
-                            if stop.inbound() {
-                                if let Some(offset) = position
-                                    .checked_mul(2)
-                                    .and_then(|i| i.checked_sub(1))
-                                    .and_then(|i| events.get(i))
-                                {
-                                    let arrival = absolute_first + i64::from(offset.seconds());
-                                    if arrival <= max_time {
-                                        if improve(
-                                            curr,
-                                            loc,
-                                            arrival,
-                                            Parent::Ride {
-                                                from: boarding_loc,
-                                                route: route.0,
-                                                transport: transport.0,
-                                                service_day: day as u16,
-                                                board_stop_index,
-                                                alight_stop_index: position,
-                                                departure: boarding_time,
-                                                arrival,
-                                            },
-                                            Some((loc, arrival)),
-                                        ) {
-                                            stats.labels_improved += 1;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if onboard.is_none() && stop.outbound() && position + 1 < stops.len() {
-                            if let Some(offset) =
-                                position.checked_mul(2).and_then(|i| events.get(i))
+        if stops.len() < 2 { continue; }
+        for_each_route_service_day(tt, route, departure, max_time, stats, |day, stats| {
+            let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
+            let mut onboard: Option<(TransportIdx, usize, i64, usize)> = None;
+            for (position, stop) in stops.iter().enumerate() {
+                stats.stop_events_scanned += 1;
+                let loc = stop.location().idx();
+                if let Some((transport, from, board_time, board_index)) = onboard {
+                    if stop.inbound() {
+                        if let Some(arrival) =
+                            transport_event_second(tt, route, transport, position, true, midnight)
+                        {
+                            if arrival <= max_time
+                                && improve(curr, loc, arrival, Parent::Ride {
+                                    from,
+                                    route: route.0,
+                                    transport: transport.0,
+                                    service_day: day as u16,
+                                    board_stop_index: board_index,
+                                    alight_stop_index: position,
+                                    departure: board_time,
+                                    arrival,
+                                }, Some((loc, arrival)))
                             {
-                                let board_time = absolute_first + i64::from(offset.seconds());
-                                if board_time <= max_time
-                                    && can_board(tt, prev[loc], loc, board_time)
-                                {
-                                    onboard = Some((loc, board_time, position));
-                                }
+                                stats.labels_improved += 1;
                             }
                         }
                     }
                 }
+                if !stop.outbound() || position + 1 >= stops.len() { continue; }
+                let Some(ready) = boarding_ready_time(tt, prev[loc], loc) else { continue; };
+                if ready > max_time { continue; }
+                if let Some((candidate, board_time)) =
+                    get_earliest_transport(tt, route, position, day, ready, stats)
+                {
+                    if board_time <= max_time
+                        && onboard.is_none_or(|(t, _, _, _)| candidate.0 < t.0)
+                    {
+                        onboard = Some((candidate, loc, board_time, position));
+                    }
+                }
             }
-        }
+        });
     }
     stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
     Ok(())
