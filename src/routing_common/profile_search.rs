@@ -13,22 +13,24 @@
 
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{
-    self, Journey, Leg, Query, RaptorStats, WalkingEndpoint,
+    self, Journey, Leg, Query, RaptorStats,
 };
 use crate::routing_common::timetable::ZeroCopyTimetable;
-use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx};
 use anyhow::{Result, ensure};
-use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::time::{Duration, Instant};
 
 pub const DEFAULT_SEARCH_WINDOW_SECONDS: u32 = 15 * 60;
 pub const DEFAULT_MAX_SEARCH_WINDOW_SECONDS: u32 = 48 * 3_600;
 pub const DEFAULT_MIN_ITINERARIES: usize = 5;
 pub const DEFAULT_MAX_JOURNEY_DURATION_SECONDS: u32 = 4 * 86_400;
 
-// Fail explicitly instead of silently returning an incomplete frontier.
-// A native multi-time profile RAPTOR is needed to eliminate this guard.
-const MAX_PROFILE_SOLVES: usize = 256;
+// Each point RAPTOR search visits a large transit network. A request must
+// never turn a few candidate connections into hundreds of complete searches.
+// Nigiri instead reuses a single algorithm state across timetable start events.
+// Until we implement that native interval algorithm, bound the approximation.
+const MAX_PROFILE_SOLVES: usize = 5;
+const PROFILE_WALL_BUDGET: Duration = Duration::from_secs(5);
+const INITIAL_POINT_HORIZON_SECONDS: u32 = 12 * 3_600;
 const MAX_SOLVER_HORIZON_SECONDS: u32 = 7 * 86_400;
 
 #[derive(Clone, Copy, Debug)]
@@ -154,135 +156,6 @@ pub fn sort_journeys_for_response(journeys: &mut [Journey], arrive_by: bool) {
     }
 }
 
-/// Compute the shortest directional pedestrian path from each OSR access or
-/// egress endpoint. Compiled one-way footpaths must not be treated as symmetric.
-fn pedestrian_distances(
-    tt: &ZeroCopyTimetable<'_>,
-    endpoints: &[WalkingEndpoint],
-    reverse: bool,
-) -> Vec<u64> {
-    let mut distances = vec![u64::MAX; tt.coordinates().len()];
-    let mut queue = BinaryHeap::new();
-    for endpoint in endpoints {
-        let index = endpoint.stop.idx();
-        let cost = u64::from(endpoint.seconds);
-        if index < distances.len() && cost < distances[index] {
-            distances[index] = cost;
-            queue.push((Reverse(cost), index));
-        }
-    }
-    while let Some((Reverse(cost), index)) = queue.pop() {
-        if distances[index] != cost {
-            continue;
-        }
-        let edges = if reverse {
-            tt.footpaths_to(LocationIdx(index as u32))
-        } else {
-            tt.footpaths_from(LocationIdx(index as u32))
-        };
-        for edge in edges {
-            let next = edge.target().idx();
-            let candidate = cost.saturating_add(u64::from(edge.seconds()));
-            if next < distances.len() && candidate < distances[next] {
-                distances[next] = candidate;
-                queue.push((Reverse(candidate), next));
-            }
-        }
-    }
-    distances
-}
-
-/// Enumerate every potentially boardable first-vehicle departure, or last-
-/// vehicle arrival, shifted to the origin/destination by pedestrian travel.
-/// The active-day bitfield is authoritative, including overnight GTFS events.
-/// Anchor enumeration is not itself a routing result: each anchor is verified
-/// by RAPTOR and the resulting journeys undergo full Pareto filtering.
-fn profile_event_anchors(
-    tt: &ZeroCopyTimetable<'_>,
-    request: &Query,
-    reference: i64,
-    maximum_window: u32,
-    arrive_by: bool,
-    maximum_walk: u32,
-) -> Vec<i64> {
-    let walking = pedestrian_distances(
-        tt,
-        if arrive_by {
-            &request.egress
-        } else {
-            &request.access
-        },
-        arrive_by,
-    );
-    let first_utc_day = i64::from(tt.header().first_utc_day);
-    let days = i64::from(tt.header().day_count);
-    let (start, end) = if arrive_by {
-        (reference - i64::from(maximum_window), reference)
-    } else {
-        (reference, reference + i64::from(maximum_window))
-    };
-    let mut anchors = vec![reference];
-    if days == 0 {
-        return anchors;
-    }
-    for (route_index, range) in tt.route_transport_ranges().iter().enumerate() {
-        let stops = tt.stops_on(RouteIdx(route_index as u32));
-        let relevant: Vec<(usize, i64)> = stops
-            .iter()
-            .enumerate()
-            .filter_map(|(position, stop)| {
-                let seconds = *walking.get(stop.location().idx())?;
-                if seconds > u64::from(maximum_walk)
-                    || (arrive_by && (position == 0 || !stop.inbound()))
-                    || (!arrive_by && (position + 1 == stops.len() || !stop.outbound()))
-                {
-                    None
-                } else {
-                    Some((position, seconds as i64))
-                }
-            })
-            .collect();
-        if relevant.is_empty() {
-            continue;
-        }
-        for id in range.from..range.to {
-            let transport = TransportIdx(id);
-            let traffic = &tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first_departure =
-                i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
-            let Some(events) = tt.events_for_transport(transport) else {
-                continue;
-            };
-            for &(position, walk) in &relevant {
-                let event_index = if arrive_by {
-                    position * 2 - 1
-                } else {
-                    position * 2
-                };
-                let Some(event) = events.get(event_index) else {
-                    continue;
-                };
-                let delta = first_departure
-                    + i64::from(event.seconds())
-                    + if arrive_by { walk } else { -walk };
-                let from_day = ((start - delta).div_euclid(86_400) - first_utc_day).max(0);
-                let to_day = ((end - delta).div_euclid(86_400) - first_utc_day).min(days - 1);
-                for day in from_day..=to_day {
-                    if traffic.test(day as usize) {
-                        anchors.push((first_utc_day + day) * 86_400 + delta);
-                    }
-                }
-            }
-        }
-    }
-    anchors.sort_unstable();
-    anchors.dedup();
-    if arrive_by {
-        anchors.reverse();
-    }
-    anchors
-}
-
 /// Search timetable breakpoints, not arbitrarily sampled timestamps.
 /// OSR offsets and the timetable are reused across the entire profile.
 /// The search horizon covers wait until the last permitted starting event
@@ -291,6 +164,19 @@ fn profile_event_anchors(
 /// The current point-query solver provides just one frontier per anchor. The
 /// bounded multi-search approach returns useful later departures for sparse
 /// intercity service without pretending to compute a complete profile.
+/// Bounded adaptive point-search approximation.
+///
+/// Nigiri performs an interval/profile search with shared RAPTOR state and
+/// progressive start-label insertion. Our point solver does not have that state;
+/// therefore it is fundamentally unsafe to run it once per departure event.
+/// A small number of progressively extended point queries provides a useful
+/// Pareto subset while controlling the number of full-network scans.
+///
+/// The first search uses a twelve-hour deadline, not the old four-day default.
+/// Long-distance or sparse services extend the search horizon geometrically.
+/// Query results are Pareto-filtered and sorted separately from direct travel.
+/// A resource-budget exit returns the non-dominated partial result and exposes
+/// that fact in the debug counters, rather than returning an HTTP 500.
 pub fn route_profile_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
@@ -298,87 +184,128 @@ pub fn route_profile_with_stats(
     arrive_by: bool,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
-    let mut stats = RaptorStats::default();
+    let started = Instant::now();
     let reference = request.departure_unix_seconds;
+    let limit = i64::from(options.max_search_window_seconds);
+    let boundary = if arrive_by {
+        reference.checked_sub(limit)
+    } else {
+        reference.checked_add(limit)
+    }
+    .ok_or_else(|| anyhow::anyhow!("profile interval timestamp overflow"))?;
+    let maximum_horizon = options
+        .max_journey_duration_seconds
+        .checked_add(options.max_search_window_seconds)
+        .ok_or_else(|| anyhow::anyhow!("profile solver horizon overflow"))?;
+    let mut horizon = INITIAL_POINT_HORIZON_SECONDS.min(maximum_horizon);
     let mut window = options.search_window_seconds;
     let mut anchor = reference;
-    let mut journeys = Vec::new();
+    let mut stats = RaptorStats::default();
+    let mut transit = Vec::new();
 
-    // Direct walking is independent of the transit Pareto frontier and does not
-    // satisfy the requested minimum number of transit alternatives.
-    let anchors = profile_event_anchors(
-        tt,
-        request,
-        reference,
-        options.max_search_window_seconds,
-        arrive_by,
-        options.max_journey_duration_seconds,
-    );
-    let mut cursor = 0usize;
-    let mut solves = 0usize;
-    loop {
-        let cutoff = if arrive_by {
-            reference - i64::from(window)
-        } else {
-            reference + i64::from(window)
-        };
-        while cursor < anchors.len()
-            && (if arrive_by {
-                anchors[cursor] >= cutoff
-            } else {
-                anchors[cursor] <= cutoff
-            })
-        {
-            if solves >= MAX_PROFILE_SOLVES {
-                anyhow::bail!(
-                    "profile exceeds the {}-event solve budget: completeness \
-                     cannot be guaranteed; narrow the time interval",
-                    MAX_PROFILE_SOLVES
-                );
-            }
-            let anchor = anchors[cursor];
-            cursor += 1;
-            solves += 1;
-            let mut q = request.clone();
-            q.departure_unix_seconds = anchor;
-            q.direct_walk_seconds = None;
-            q.max_duration_seconds = options.max_journey_duration_seconds;
-            let (candidates, one_stats) = if arrive_by {
-                raptor_arrive_by::route_arrive_by_with_stats(tt, &q)?
-            } else {
-                raptor_query::route_with_stats(tt, &q)?
-            };
-            accumulate_stats(&mut stats, one_stats);
-            for journey in candidates {
-                let event = if arrive_by {
-                    journey.arrival_unix_seconds
-                } else {
-                    journey.departure_unix_seconds
-                };
-                let lower = if arrive_by { cutoff } else { reference };
-                let upper = if arrive_by { reference } else { cutoff };
-                if event < lower
-                    || event > upper
-                    || journey.arrival_unix_seconds - journey.departure_unix_seconds
-                        > i64::from(options.max_journey_duration_seconds)
-                {
-                    continue;
-                }
-                journeys.push(journey);
-            }
-            journeys = departure_aware_pareto(journeys);
+    for solve in 0..MAX_PROFILE_SOLVES {
+        if (arrive_by && anchor < boundary) || (!arrive_by && anchor > boundary) {
+            break;
         }
-        if journeys.len() >= options.min_itineraries
-            || window >= options.max_search_window_seconds
-            || cursor == anchors.len()
+        if solve != 0 && started.elapsed() >= PROFILE_WALL_BUDGET {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
+
+        let mut q = request.clone();
+        q.departure_unix_seconds = anchor;
+        q.direct_walk_seconds = None;
+        // Use a short point-query deadline first. The requested maximum
+        // *journey* duration remains a separate filter below.
+        q.max_duration_seconds = horizon;
+        let (mut candidates, one_stats) = if arrive_by {
+            raptor_arrive_by::route_arrive_by_with_stats(tt, &q)?
+        } else {
+            raptor_query::route_with_stats(tt, &q)?
+        };
+        accumulate_stats(&mut stats, one_stats);
+
+        // No event can be inferred from an empty result. Broaden only the
+        // solver time horizon; do not guess at global timetable breakpoints.
+        if candidates.is_empty() {
+            if horizon == maximum_horizon {
+                break;
+            }
+            horizon = horizon.saturating_mul(2).min(maximum_horizon);
+            continue;
+        }
+
+        if arrive_by {
+            candidates.sort_by_key(|j| std::cmp::Reverse(j.arrival_unix_seconds));
+        } else {
+            candidates.sort_by_key(|j| j.departure_unix_seconds);
+        }
+        let next_event = if arrive_by {
+            candidates[0].arrival_unix_seconds
+        } else {
+            candidates[0].departure_unix_seconds
+        };
+        let distance = if arrive_by {
+            reference.saturating_sub(next_event)
+        } else {
+            next_event.saturating_sub(reference)
+        };
+        if distance > limit {
+            break;
+        }
+        extend_to_include(
+            &mut window,
+            distance as u32,
+            options.max_search_window_seconds,
+            &mut stats,
+        );
+        for journey in candidates {
+            let time = if arrive_by {
+                journey.arrival_unix_seconds
+            } else {
+                journey.departure_unix_seconds
+            };
+            let in_window = if arrive_by {
+                time >= reference - i64::from(window) && time <= reference
+            } else {
+                time >= reference && time <= reference + i64::from(window)
+            };
+            if in_window
+                && journey.arrival_unix_seconds - journey.departure_unix_seconds
+                    <= i64::from(options.max_journey_duration_seconds)
+            {
+                transit.push(journey);
+            }
+        }
+        transit = departure_aware_pareto(transit);
+        if transit.len() >= options.min_itineraries {
+            break;
+        }
+
+        // Move strictly past the last event used for this anchor. If an
+        // alternative has not yet been found, the next point query may retain
+        // a larger time horizon but never expands the number of searches.
+        let next_anchor = if arrive_by {
+            next_event.saturating_sub(1)
+        } else {
+            next_event.saturating_add(1)
+        };
+        if (arrive_by && next_anchor >= anchor)
+            || (!arrive_by && next_anchor <= anchor)
         {
             break;
         }
-        window = window
-            .saturating_mul(2)
-            .min(options.max_search_window_seconds);
-        stats.profile_interval_extensions += 1;
+        anchor = next_anchor;
     }
+
+    if stats.profile_searches as usize == MAX_PROFILE_SOLVES
+        && transit.len() < options.min_itineraries
+    {
+        stats.profile_budget_exhausted = true;
+    }
+
+    // Direct walking is independent of the transit Pareto frontier and must
+    // neither suppress transit results nor satisfy the minimum count.
     if let Some(seconds) = request.direct_walk_seconds {
         if seconds <= options.max_journey_duration_seconds {
             let (departure, arrival) = if arrive_by {
@@ -386,7 +313,7 @@ pub fn route_profile_with_stats(
             } else {
                 (reference, reference + i64::from(seconds))
             };
-            journeys.push(Journey {
+            transit.push(Journey {
                 boardings: 0,
                 departure_unix_seconds: departure,
                 arrival_unix_seconds: arrival,
@@ -394,8 +321,8 @@ pub fn route_profile_with_stats(
             });
         }
     }
-    sort_journeys_for_response(&mut journeys, arrive_by);
-    Ok((journeys, stats))
+    sort_journeys_for_response(&mut transit, arrive_by);
+    Ok((transit, stats))
 }
 
 #[cfg(test)]
@@ -551,18 +478,43 @@ mod tests {
     }
 
     #[test]
-    fn event_anchors_respect_service_days_and_direction() {
+    fn sparse_profile_searches_are_bounded_without_event_enumeration() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let q = request();
-        let base = 20_000_i64 * 86_400;
-        let forward = profile_event_anchors(&tt, &q, base + 8 * 3_600, 48 * 3_600, false, 60);
-        assert!(forward.contains(&(base + 9 * 3_600)));
-        assert!(forward.contains(&(base + 86_400 + 9 * 3_600)));
-        assert!(forward.windows(2).all(|w| w[0] < w[1]));
+        let (journeys, stats) = route_profile_with_stats(
+            &tt,
+            &request(),
+            ProfileOptions {
+                min_itineraries: 3,
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert!(stats.profile_searches >= 1);
+        assert!(stats.profile_searches <= MAX_PROFILE_SOLVES as u64);
+        assert!(!journeys.is_empty());
+    }
 
-        let arrive = profile_event_anchors(&tt, &q, base + 2 * 86_400, 48 * 3_600, true, 60);
-        assert!(arrive.windows(2).all(|w| w[0] > w[1]));
+    #[test]
+    fn empty_profile_does_not_run_unbounded_point_queries() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut q = request();
+        q.max_boardings = 0;
+        let (journeys, stats) = route_profile_with_stats(
+            &tt,
+            &q,
+            ProfileOptions {
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert!(journeys.is_empty());
+        assert!(stats.profile_searches <= MAX_PROFILE_SOLVES as u64);
     }
 
     #[test]
