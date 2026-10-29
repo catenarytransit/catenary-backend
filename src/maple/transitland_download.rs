@@ -393,7 +393,7 @@ async fn try_to_download(
             )
             .multipart(form);
 
-        let request = add_auth_headers(request, feed_id).await;
+        let request = add_auth_headers(request, feed_id, parsed_url).await;
 
         return request.send().await.map(DownloadResult::Response);
     }
@@ -409,7 +409,8 @@ async fn try_to_download(
 
     let request = client.get(&new_url).header("Accept", "*/*");
 
-    let request = add_auth_headers(request, feed_id);
+    let parsed_new_url = Url::parse(&new_url).unwrap_or_else(|_| parsed_url.clone());
+let request = add_auth_headers(request, feed_id, &parsed_new_url);
 
     let response = request.await.send().await;
 
@@ -437,7 +438,8 @@ async fn try_to_download(
 
                 // Retry the actual download with the warmed-up client
                 let request = browser_client.get(&new_url).header("Accept", "*/*");
-                let request = add_auth_headers(request, feed_id);
+                let parsed_new_url = Url::parse(&new_url).unwrap_or_else(|_| parsed_url.clone());
+                let request = add_auth_headers(request, feed_id, &parsed_new_url);
                 let retry_result = request.await.send().await;
 
                 match retry_result {
@@ -923,7 +925,11 @@ fn transform_for_bay_area(x: String) -> String {
     }
 }
 
-async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuilder {
+async fn add_auth_headers(
+    request: RequestBuilder,
+    feed_id: &str,
+    parsed_url: &Url,
+) -> RequestBuilder {
     let mut request = request;
     let maple_config = &catenaryconfig::config().maple;
 
@@ -1059,6 +1065,18 @@ async fn add_auth_headers(request: RequestBuilder, feed_id: &str) -> RequestBuil
                 println!("Password found for grand lyon!");
                 request = request.basic_auth(username, Some(password));
             }
+        }
+    }
+
+    if parsed_url.host_str() == Some("api.transport.nsw.gov.au") {
+        let nsw_api_key = maple_config
+            .transitland_download
+            .nsw_api_key
+            .clone()
+            .or_else(|| std::env::var("NSW_API_KEY").ok());
+
+        if let Some(api_key) = nsw_api_key {
+            headers.insert("Authorization", api_key.parse().unwrap());
         }
     }
 

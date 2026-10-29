@@ -19,6 +19,7 @@ grand_lyon_username = ""
 grand_lyon_password = ""
 de_username = ""
 de_password = ""
+nsw_api_key = ""
 
 [aspen]
 etcd_urls = ["localhost:2379"]

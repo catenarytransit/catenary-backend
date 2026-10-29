@@ -1044,7 +1044,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-czptt" => {
-            let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-europe-latest.osm.pbf",
                 None,

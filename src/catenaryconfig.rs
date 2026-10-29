@@ -55,6 +55,7 @@ pub struct TransitlandDownloadConfig {
     pub grand_lyon_password: Option<String>,
     pub de_username: Option<String>,
     pub de_password: Option<String>,
+    pub nsw_api_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
