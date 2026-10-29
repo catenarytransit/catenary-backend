@@ -480,6 +480,52 @@ mod tests {
     }
 
     #[test]
+    fn output_order_tracks_the_search_direction() {
+        let make = |dep, arr, boardings| Journey {
+            departure_unix_seconds: dep,
+            arrival_unix_seconds: arr,
+            boardings,
+            legs: Vec::new(),
+        };
+        let original = vec![
+            make(100, 180, 2),
+            make(140, 190, 1),
+            make(120, 180, 1),
+        ];
+        let mut forward = original.clone();
+        sort_journeys_for_response(&mut forward, false);
+        assert_eq!(
+            forward.iter().map(|j| (j.departure_unix_seconds, j.boardings)).collect::<Vec<_>>(),
+            vec![(100, 2), (120, 1), (140, 1)]
+        );
+        let mut backward = original;
+        sort_journeys_for_response(&mut backward, true);
+        assert_eq!(
+            backward.iter().map(|j| (j.arrival_unix_seconds, j.boardings)).collect::<Vec<_>>(),
+            vec![(180, 1), (180, 2), (190, 1)]
+        );
+    }
+
+    #[test]
+    fn event_anchors_respect_service_days_and_direction() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        let base = 20_000_i64 * 86_400;
+        let forward = profile_event_anchors(
+            &tt, &q, base + 8 * 3_600, 48 * 3_600, false, 60,
+        );
+        assert!(forward.contains(&(base + 9 * 3_600)));
+        assert!(forward.contains(&(base + 86_400 + 9 * 3_600)));
+        assert!(forward.windows(2).all(|w| w[0] < w[1]));
+
+        let arrive = profile_event_anchors(
+            &tt, &q, base + 2 * 86_400, 48 * 3_600, true, 60,
+        );
+        assert!(arrive.windows(2).all(|w| w[0] > w[1]));
+    }
+
+    #[test]
     fn rejects_unbounded_profile_horizons() {
         assert!(ProfileOptions {
             max_journey_duration_seconds: 7 * 86_400,
