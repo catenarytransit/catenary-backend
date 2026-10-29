@@ -1349,6 +1349,67 @@ mod tests {
     }
 
     #[test]
+    fn fifo_lower_and_upper_bound_respect_calendar_and_exact_seconds() {
+        let mut tt = fixture();
+        tt.day_count = 3;
+        // Three vehicles in FIFO order: 08:00:20, 08:10:20, 08:20:20.
+        let first = tt.transport_first_dep_offset[0].seconds();
+        for (i, offset) in [600u32, 1200u32].into_iter().enumerate() {
+            tt.transport_route.push(RouteIdx(0));
+            tt.transport_first_dep_offset
+                .push(Delta::from_seconds(first + offset).unwrap());
+            tt.transport_timing_profile.push(
+                crate::routing_common::timetable::TimingProfileIdx(0),
+            );
+            tt.transport_initial_day_offset.push(0);
+            tt.transport_to_trip_section_offsets.push(0);
+            // Last service runs only on day 1.
+            tt.transport_traffic_days.push(if i == 0 {
+                BitfieldIdx(2)
+            } else {
+                BitfieldIdx(1)
+            });
+        }
+        tt.route_transport_ranges[0].to = 3;
+        // Original and third trip run on day zero, middle trip only on day one.
+        let mut day_one = TrafficDays::default();
+        day_one.set(1, true).unwrap();
+        tt.bitfields.push(day_one);
+        let mut union = TrafficDays::default();
+        union.set(0, true).unwrap();
+        union.set(1, true).unwrap();
+        tt.bitfields.push(union);
+        tt.route_traffic_days[0] = BitfieldIdx(3);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let t0 = base + i64::from(first);
+        let mut stats = RaptorStats::default();
+
+        assert_eq!(
+            get_earliest_transport(&view, RouteIdx(0), 0, 0, t0, &mut stats)
+                .unwrap().0,
+            TransportIdx(0)
+        );
+        assert_eq!(
+            get_earliest_transport(&view, RouteIdx(0), 0, 0, t0 + 1, &mut stats)
+                .unwrap().0,
+            TransportIdx(2)
+        );
+        assert_eq!(
+            get_latest_transport(&view, RouteIdx(0), 2, 0, t0 + 1200 + 22*60 + 45, &mut stats)
+                .unwrap().0,
+            TransportIdx(2)
+        );
+        assert_eq!(
+            get_latest_transport(&view, RouteIdx(0), 2, 0, t0 + 1200 + 22*60 + 44, &mut stats)
+                .unwrap().0,
+            TransportIdx(0)
+        );
+        assert!(stats.transport_lookup_probes > 0);
+    }
+
+    #[test]
     fn active_day_window_skips_outside_service_days() {
         let mut tt = fixture();
         // A three-day calendar with service only on day zero. Starting a
