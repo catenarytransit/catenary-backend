@@ -342,27 +342,17 @@ pub fn route_arrive_by_with_stats(
         }
     }
     for (round, layer) in layers.iter().enumerate() {
-        let origin = request.access.iter()
+        for start in request.access.iter()
             .filter(|ep| layer[ep.stop.idx()].time - i64::from(ep.seconds) >= min_time)
-            .max_by_key(|ep| layer[ep.stop.idx()].time - i64::from(ep.seconds));
-        if let Some(start) = origin {
+        {
             if let Some(journey) = reconstruct(&layers, round, start.stop.idx(), start.seconds, min_time, deadline) {
                 journeys.push(journey);
             }
         }
     }
-    // Latest feasible origin departure is the primary arrive-by objective.
-    // Keep a Pareto frontier by boardings, favoring later departures within
-    // each transfer budget. The actual arrival never exceeds the deadline.
-    journeys.sort_by_key(|j| (j.boardings, std::cmp::Reverse(j.departure_unix_seconds), j.arrival_unix_seconds));
-    let mut best_departure = i64::MIN;
-    journeys.retain(|j| {
-        if j.departure_unix_seconds > best_departure {
-            best_departure = j.departure_unix_seconds;
-            true
-        } else {
-            false
-        }
-    });
+    // Preserve alternatives with different arrival times and boardings.
+    // The common frontier is direction-independent; output order is not.
+    let mut journeys = crate::routing_common::profile_search::departure_aware_pareto(journeys);
+    crate::routing_common::profile_search::sort_journeys_for_response(&mut journeys, true);
     Ok((journeys, stats))
 }
