@@ -334,7 +334,7 @@ fn run_query(
         max_journey_duration_seconds: request.max_journey_duration_seconds
             .unwrap_or(profile_defaults.max_journey_duration_seconds),
     };
-    let routing = if request.timetable_view {
+    let mut routing = if request.timetable_view {
         router.route_profile_with_access(
             selection, request_time, from, to, direct, arrive_by, options
         )?
@@ -344,6 +344,9 @@ fn run_query(
         router.route_with_access(selection, request_time, from, to, direct)?
     };
     timings.raptor_ms = milliseconds(phase);
+    catenary::routing_common::profile_search::sort_journeys_for_response(
+        &mut routing.journeys, arrive_by,
+    );
 
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
