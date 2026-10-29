@@ -27,6 +27,9 @@ pub struct RaptorStats {
     pub profile_searches: u64,
     /// Geometric expansions of the requested departure/arrival interval.
     pub profile_interval_extensions: u64,
+    /// True when the bounded profile approximation stopped before reaching
+    /// the requested number of transit alternatives.
+    pub profile_budget_exhausted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
