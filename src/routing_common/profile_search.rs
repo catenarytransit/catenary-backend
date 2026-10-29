@@ -28,8 +28,8 @@ pub const DEFAULT_MAX_JOURNEY_DURATION_SECONDS: u32 = 4 * 86_400;
 // never turn a few candidate connections into hundreds of complete searches.
 // Nigiri instead reuses a single algorithm state across timetable start events.
 // Until we implement that native interval algorithm, bound the approximation.
-const MAX_PROFILE_SOLVES: usize = 5;
-const PROFILE_WALL_BUDGET: Duration = Duration::from_secs(5);
+const MAX_PROFILE_SOLVES: usize = 3;
+const PROFILE_WALL_BUDGET: Duration = Duration::from_secs(4);
 const INITIAL_POINT_HORIZON_SECONDS: u32 = 12 * 3_600;
 const MAX_SOLVER_HORIZON_SECONDS: u32 = 7 * 86_400;
 
