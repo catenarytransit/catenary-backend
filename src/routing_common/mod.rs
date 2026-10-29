@@ -15,7 +15,7 @@ pub mod ways;
 
 #[cfg(test)]
 mod graph_tests;
-pub mod raptor_query;
-pub mod raptor_arrive_by;
-pub mod route_manager;
 pub mod profile_search;
+pub mod raptor_arrive_by;
+pub mod raptor_query;
+pub mod route_manager;

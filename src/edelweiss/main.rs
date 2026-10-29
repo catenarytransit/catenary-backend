@@ -6,8 +6,8 @@ mod motis_response;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
-use catenary::routing_common::raptor_query::WalkingEndpoint;
 use catenary::routing_common::profile_search::ProfileOptions;
+use catenary::routing_common::raptor_query::WalkingEndpoint;
 use catenary::routing_common::route_manager::{
     Coordinates, Router, RouterSettings, RoutingResponse,
 };
@@ -18,11 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Instant;
-use std::{
-    fs,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{fs, path::PathBuf, sync::Arc};
 
 #[derive(Parser)]
 struct Args {
@@ -230,11 +226,14 @@ fn run_query(
     let destination = request.to;
     let detailed_legs = request.detailed_legs;
     // Exactly one timestamp is required. Reject ambiguity explicitly.
-    let (request_time, arrive_by) = match (request.departure_unix_seconds, request.arrival_unix_seconds) {
-        (Some(t), None) if t > 0 => (t, false),
-        (None, Some(t)) if t > 0 => (t, true),
-        _ => anyhow::bail!("supply exactly one positive departure_unix_seconds or arrival_unix_seconds"),
-    };
+    let (request_time, arrive_by) =
+        match (request.departure_unix_seconds, request.arrival_unix_seconds) {
+            (Some(t), None) if t > 0 => (t, false),
+            (None, Some(t)) if t > 0 => (t, true),
+            _ => anyhow::bail!(
+                "supply exactly one positive departure_unix_seconds or arrival_unix_seconds"
+            ),
+        };
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -325,18 +324,28 @@ fn run_query(
     let phase = Instant::now();
     let profile_defaults = ProfileOptions::default();
     let options = ProfileOptions {
-        search_window_seconds: request.search_window_seconds
+        search_window_seconds: request
+            .search_window_seconds
             .unwrap_or(profile_defaults.search_window_seconds),
-        max_search_window_seconds: request.max_search_window_seconds
+        max_search_window_seconds: request
+            .max_search_window_seconds
             .unwrap_or(profile_defaults.max_search_window_seconds),
-        min_itineraries: request.min_itineraries
+        min_itineraries: request
+            .min_itineraries
             .unwrap_or(profile_defaults.min_itineraries),
-        max_journey_duration_seconds: request.max_journey_duration_seconds
+        max_journey_duration_seconds: request
+            .max_journey_duration_seconds
             .unwrap_or(profile_defaults.max_journey_duration_seconds),
     };
-    let routing = if request.timetable_view {
+    let mut routing = if request.timetable_view {
         router.route_profile_with_access(
-            selection, request_time, from, to, direct, arrive_by, options
+            selection,
+            request_time,
+            from,
+            to,
+            direct,
+            arrive_by,
+            options,
         )?
     } else if arrive_by {
         router.route_arrive_by_with_access(selection, request_time, from, to, direct)?
@@ -344,6 +353,10 @@ fn run_query(
         router.route_with_access(selection, request_time, from, to, direct)?
     };
     timings.raptor_ms = milliseconds(phase);
+    catenary::routing_common::profile_search::sort_journeys_for_response(
+        &mut routing.journeys,
+        arrive_by,
+    );
 
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
