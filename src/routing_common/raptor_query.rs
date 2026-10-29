@@ -1627,7 +1627,6 @@ mod tests {
         assert!(search(first_departure - 17, 18).is_empty());
     }
 
-
     #[test]
     fn arrive_by_finds_latest_origin_departure_and_keeps_real_arrival() {
         let tt = fixture();
@@ -1640,16 +1639,30 @@ mod tests {
         let deadline = midnight + 9 * 3600;
         let query = Query {
             departure_unix_seconds: deadline,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 120 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 180 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 120,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 180,
+            }],
             direct_walk_seconds: None,
             max_boardings: 2,
             max_duration_seconds: 2 * 3600,
         };
-        let (journeys, stats) = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap();
+        let (journeys, stats) =
+            crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query)
+                .unwrap();
         assert!(!journeys.is_empty());
-        assert_eq!(journeys[0].departure_unix_seconds, midnight + 8 * 3600 + 20 - 120);
-        assert_eq!(journeys[0].arrival_unix_seconds, midnight + 8 * 3600 + 23 * 60 + 5 + 180);
+        assert_eq!(
+            journeys[0].departure_unix_seconds,
+            midnight + 8 * 3600 + 20 - 120
+        );
+        assert_eq!(
+            journeys[0].arrival_unix_seconds,
+            midnight + 8 * 3600 + 23 * 60 + 5 + 180
+        );
         assert_eq!(journeys[0].boardings, 1);
         assert!(stats.active_transport_days > 0);
     }
@@ -1660,13 +1673,24 @@ mod tests {
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let query = Query {
             departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600 + 23 * 60,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 180 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 180,
+            }],
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 3600,
         };
-        assert!(crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0.is_empty());
+        assert!(
+            crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query)
+                .unwrap()
+                .0
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1684,18 +1708,37 @@ mod tests {
         let deadline = 20_000_i64 * 86_400 + 8 * 3600 + 40 * 60;
         let query = Query {
             departure_unix_seconds: deadline,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(3), seconds: 0 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(3),
+                seconds: 0,
+            }],
             direct_walk_seconds: None,
             max_boardings: 2,
             max_duration_seconds: 7200,
         };
-        let journeys = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0;
+        let journeys =
+            crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query)
+                .unwrap()
+                .0;
         assert_eq!(journeys.len(), 1);
         assert_eq!(journeys[0].boardings, 2);
-        assert_eq!(journeys[0].arrival_unix_seconds, 20_000_i64 * 86_400 + 8 * 3600 + 35 * 60);
+        assert_eq!(
+            journeys[0].arrival_unix_seconds,
+            20_000_i64 * 86_400 + 8 * 3600 + 35 * 60
+        );
         // The last ride is 2 -> 3, and the first is 0 -> 2.
-        assert!(journeys[0].legs.iter().filter(|leg| matches!(leg, Leg::Ride {..})).count() == 2);
+        assert!(
+            journeys[0]
+                .legs
+                .iter()
+                .filter(|leg| matches!(leg, Leg::Ride { .. }))
+                .count()
+                == 2
+        );
     }
 
     #[test]
@@ -1711,7 +1754,10 @@ mod tests {
             max_boardings: 1,
             max_duration_seconds: 180,
         };
-        let journeys = crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query).unwrap().0;
+        let journeys =
+            crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&view, &query)
+                .unwrap()
+                .0;
         assert_eq!(journeys.len(), 1);
         assert_eq!(journeys[0].departure_unix_seconds, deadline - 95);
         assert_eq!(journeys[0].arrival_unix_seconds, deadline);

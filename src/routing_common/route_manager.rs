@@ -1,7 +1,7 @@
 use crate::routing_common::metadata_index::MetadataIndex;
-use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
-use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::profile_search::{self, ProfileOptions};
+use crate::routing_common::raptor_arrive_by;
+use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
@@ -345,7 +345,11 @@ impl Router {
             options,
             arrive_by,
         )?;
-        Ok(RoutingResponse { selection, journeys, raptor_stats })
+        Ok(RoutingResponse {
+            selection,
+            journeys,
+            raptor_stats,
+        })
     }
 
     /// Reverse RAPTOR: find the latest departure that reaches the destination by
@@ -370,7 +374,11 @@ impl Router {
                 max_duration_seconds: self.settings.max_duration_seconds,
             },
         )?;
-        Ok(RoutingResponse { selection, journeys, raptor_stats })
+        Ok(RoutingResponse {
+            selection,
+            journeys,
+            raptor_stats,
+        })
     }
 
     pub fn nearest_stops(

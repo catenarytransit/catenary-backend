@@ -5,16 +5,23 @@
 //! it can discard a later departure that still arrives on time.
 use crate::routing_common::raptor_query::{Journey, Leg, Query, RaptorStats};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use std::collections::BinaryHeap;
 
 const NEG_INF: i64 = i64::MIN / 4;
 
 #[derive(Clone, Copy)]
 enum Next {
-    Egress { seconds: u32 },
-    Carry { previous_round: usize },
-    Walk { to: usize, seconds: u32 },
+    Egress {
+        seconds: u32,
+    },
+    Carry {
+        previous_round: usize,
+    },
+    Walk {
+        to: usize,
+        seconds: u32,
+    },
     Ride {
         to: usize,
         route: u32,
@@ -36,9 +43,19 @@ struct Label {
     next_board: Option<(usize, i64)>,
 }
 
-fn improve(labels: &mut [Label], stop: usize, time: i64, next: Next, next_board: Option<(usize, i64)>) -> bool {
+fn improve(
+    labels: &mut [Label],
+    stop: usize,
+    time: i64,
+    next: Next,
+    next_board: Option<(usize, i64)>,
+) -> bool {
     if time > labels[stop].time {
-        labels[stop] = Label { time, next: Some(next), next_board };
+        labels[stop] = Label {
+            time,
+            next: Some(next),
+            next_board,
+        };
         true
     } else {
         false
@@ -94,7 +111,13 @@ fn relax_reverse_walks(
             let earlier = time - i64::from(seconds);
             let next_board = labels[to].next_board;
             if earlier >= min_time
-                && improve(labels, from, earlier, Next::Walk { to, seconds }, next_board)
+                && improve(
+                    labels,
+                    from,
+                    earlier,
+                    Next::Walk { to, seconds },
+                    next_board,
+                )
             {
                 heap.push((earlier, from));
                 stats.walking_heap_pushes += 1;
@@ -105,7 +128,12 @@ fn relax_reverse_walks(
     stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
 }
 
-fn routes_from_marked(tt: &ZeroCopyTimetable<'_>, stops: &[usize], seen: &mut [u8], round: u8) -> Vec<RouteIdx> {
+fn routes_from_marked(
+    tt: &ZeroCopyTimetable<'_>,
+    stops: &[usize],
+    seen: &mut [u8],
+    round: u8,
+) -> Vec<RouteIdx> {
     let mut routes = Vec::new();
     for &stop in stops {
         for &route in tt.routes_at(LocationIdx(stop as u32)) {
@@ -144,12 +172,15 @@ fn reverse_scan(
         for id in transport_range.from..transport_range.to {
             let transport = TransportIdx(id);
             let traffic = &tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()];
-            let first_departure = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
+            let first_departure =
+                i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds());
             let Some(events) = tt.events_for_transport(transport) else {
                 continue;
             };
-            let earliest_event = first_departure + i64::from(events.first().map_or(0, |e| e.seconds()));
-            let latest_event = first_departure + i64::from(events.last().map_or(0, |e| e.seconds()));
+            let earliest_event =
+                first_departure + i64::from(events.first().map_or(0, |e| e.seconds()));
+            let latest_event =
+                first_departure + i64::from(events.last().map_or(0, |e| e.seconds()));
             let first_day = ((min_time - latest_event).div_euclid(86_400) - base).max(0);
             let last_day = ((deadline - earliest_event).div_euclid(86_400) - base).min(horizon - 1);
             if first_day > last_day {
@@ -158,8 +189,16 @@ fn reverse_scan(
             let first_word = first_day as usize / 64;
             let last_word = last_day as usize / 64;
             for word in first_word..=last_word {
-                let low = if word == first_word { first_day as usize % 64 } else { 0 };
-                let high = if word == last_word { last_day as usize % 64 } else { 63 };
+                let low = if word == first_word {
+                    first_day as usize % 64
+                } else {
+                    0
+                };
+                let high = if word == last_word {
+                    last_day as usize % 64
+                } else {
+                    63
+                };
                 let mask = (u64::MAX << low) & (u64::MAX >> (63 - high));
                 let mut active = traffic.words[word] & mask;
                 stats.transport_days_tested += (high - low + 1) as u64;
@@ -179,14 +218,24 @@ fn reverse_scan(
                             if stop.outbound() && position + 1 < stops.len() {
                                 if let Some(offset) = events.get(position * 2) {
                                     let dep = midnight + i64::from(offset.seconds());
-                                    if dep >= min_time && dep <= deadline
-                                        && improve(current, loc, dep,
+                                    if dep >= min_time
+                                        && dep <= deadline
+                                        && improve(
+                                            current,
+                                            loc,
+                                            dep,
                                             Next::Ride {
-                                                to, route: route.0, transport: transport.0,
+                                                to,
+                                                route: route.0,
+                                                transport: transport.0,
                                                 service_day: service_day as u16,
-                                                board_stop_index: position, alight_stop_index,
-                                                departure: dep, arrival,
-                                            }, Some((loc, dep)))
+                                                board_stop_index: position,
+                                                alight_stop_index,
+                                                departure: dep,
+                                                arrival,
+                                            },
+                                            Some((loc, dep)),
+                                        )
                                     {
                                         stats.labels_improved += 1;
                                     }
@@ -196,7 +245,8 @@ fn reverse_scan(
                         if alighting.is_none() && stop.inbound() && position > 0 {
                             if let Some(offset) = events.get(position * 2 - 1) {
                                 let arrival = midnight + i64::from(offset.seconds());
-                                if arrival >= min_time && arrival <= deadline
+                                if arrival >= min_time
+                                    && arrival <= deadline
                                     && can_alight(tt, previous[loc], loc, arrival)
                                 {
                                     alighting = Some((loc, arrival, position));
@@ -223,7 +273,10 @@ fn reconstruct(
     if departure < min_time {
         return None;
     }
-    let mut legs = vec![Leg::Access { to_stop: origin as u32, seconds: access_seconds }];
+    let mut legs = vec![Leg::Access {
+        to_stop: origin as u32,
+        seconds: access_seconds,
+    }];
     let mut clock = departure + i64::from(access_seconds);
     let mut stop = origin;
     let mut level = round;
@@ -236,27 +289,46 @@ fn reconstruct(
         }
         match all[level][stop].next? {
             Next::Egress { seconds } => {
-                legs.push(Leg::Egress { from_stop: stop as u32, seconds });
+                legs.push(Leg::Egress {
+                    from_stop: stop as u32,
+                    seconds,
+                });
                 clock += i64::from(seconds);
                 break;
             }
             Next::Carry { previous_round } => level = previous_round,
             Next::Walk { to, seconds } => {
-                legs.push(Leg::Transfer { from_stop: stop as u32, to_stop: to as u32, seconds });
+                legs.push(Leg::Transfer {
+                    from_stop: stop as u32,
+                    to_stop: to as u32,
+                    seconds,
+                });
                 stop = to;
                 clock += i64::from(seconds);
             }
             Next::Ride {
-                to, route, transport, service_day, board_stop_index,
-                alight_stop_index, departure: ride_departure, arrival,
+                to,
+                route,
+                transport,
+                service_day,
+                board_stop_index,
+                alight_stop_index,
+                departure: ride_departure,
+                arrival,
             } => {
                 if clock > ride_departure || level == 0 {
                     return None;
                 }
                 legs.push(Leg::Ride {
-                    from_stop: stop as u32, to_stop: to as u32, route, transport,
-                    service_day, board_stop_index, alight_stop_index,
-                    departure_unix_seconds: ride_departure, arrival_unix_seconds: arrival,
+                    from_stop: stop as u32,
+                    to_stop: to as u32,
+                    route,
+                    transport,
+                    service_day,
+                    board_stop_index,
+                    alight_stop_index,
+                    departure_unix_seconds: ride_departure,
+                    arrival_unix_seconds: arrival,
                 });
                 clock = arrival;
                 stop = to;
@@ -269,8 +341,10 @@ fn reconstruct(
         return None;
     }
     Some(Journey {
-        boardings, departure_unix_seconds: departure,
-        arrival_unix_seconds: clock, legs,
+        boardings,
+        departure_unix_seconds: departure,
+        arrival_unix_seconds: clock,
+        legs,
     })
 }
 
@@ -282,52 +356,96 @@ pub fn route_arrive_by_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
-    ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
-    ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
-        "max_duration_seconds must be between 1 second and 7 days");
+    ensure!(
+        request.max_boardings <= 16,
+        "max_boardings exceeds supported query limit"
+    );
+    ensure!(
+        (1..=7 * 86_400).contains(&request.max_duration_seconds),
+        "max_duration_seconds must be between 1 second and 7 days"
+    );
     let n = tt.coordinates().len();
     for endpoint in request.access.iter().chain(&request.egress) {
-        ensure!(endpoint.stop.idx() < n, "access or egress stop out of range");
+        ensure!(
+            endpoint.stop.idx() < n,
+            "access or egress stop out of range"
+        );
     }
     let mut stats = RaptorStats::default();
     let deadline = request.departure_unix_seconds;
     let min_time = deadline - i64::from(request.max_duration_seconds);
-    let mut first = vec![Label { time: NEG_INF, next: None, next_board: None }; n];
+    let mut first = vec![
+        Label {
+            time: NEG_INF,
+            next: None,
+            next_board: None
+        };
+        n
+    ];
     for endpoint in &request.egress {
         let latest = deadline - i64::from(endpoint.seconds);
         if latest >= min_time {
-            improve(&mut first, endpoint.stop.idx(), latest,
-                Next::Egress { seconds: endpoint.seconds }, None);
+            improve(
+                &mut first,
+                endpoint.stop.idx(),
+                latest,
+                Next::Egress {
+                    seconds: endpoint.seconds,
+                },
+                None,
+            );
         }
     }
     let seeds: Vec<usize> = request.egress.iter().map(|ep| ep.stop.idx()).collect();
     relax_reverse_walks(tt, &mut first, &seeds, min_time, &mut stats);
-    let mut marked: Vec<usize> = first.iter().enumerate()
-        .filter_map(|(idx, label)| (label.time >= min_time).then_some(idx)).collect();
+    let mut marked: Vec<usize> = first
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, label)| (label.time >= min_time).then_some(idx))
+        .collect();
     let mut layers = vec![first];
     let mut seen = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
         stats.rounds += 1;
         stats.marked_stops += marked.len() as u64;
         let prev = &layers[round - 1];
-        let mut curr = prev.iter().map(|label| Label {
-            time: label.time,
-            next: if label.time == NEG_INF { None } else {
-                Some(Next::Carry { previous_round: round - 1 })
-            },
-            next_board: label.next_board,
-        }).collect::<Vec<_>>();
+        let mut curr = prev
+            .iter()
+            .map(|label| Label {
+                time: label.time,
+                next: if label.time == NEG_INF {
+                    None
+                } else {
+                    Some(Next::Carry {
+                        previous_round: round - 1,
+                    })
+                },
+                next_board: label.next_board,
+            })
+            .collect::<Vec<_>>();
         stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
         let routes = routes_from_marked(tt, &marked, &mut seen, round as u8);
-        if routes.is_empty() { break; }
+        if routes.is_empty() {
+            break;
+        }
         reverse_scan(tt, prev, &mut curr, &routes, min_time, deadline, &mut stats);
-        let seeds: Vec<usize> = curr.iter().zip(prev).enumerate()
-            .filter_map(|(i, (new, old))| (new.time > old.time).then_some(i)).collect();
+        let seeds: Vec<usize> = curr
+            .iter()
+            .zip(prev)
+            .enumerate()
+            .filter_map(|(i, (new, old))| (new.time > old.time).then_some(i))
+            .collect();
         relax_reverse_walks(tt, &mut curr, &seeds, min_time, &mut stats);
-        marked = curr.iter().zip(prev).enumerate()
-            .filter_map(|(i, (new, old))| (new.time > old.time).then_some(i)).collect();
+        marked = curr
+            .iter()
+            .zip(prev)
+            .enumerate()
+            .filter_map(|(i, (new, old))| (new.time > old.time).then_some(i))
+            .collect();
         layers.push(curr);
-        if marked.is_empty() { break; }
+        if marked.is_empty() {
+            break;
+        }
     }
 
     let mut journeys = Vec::new();
@@ -342,10 +460,19 @@ pub fn route_arrive_by_with_stats(
         }
     }
     for (round, layer) in layers.iter().enumerate() {
-        for start in request.access.iter()
+        for start in request
+            .access
+            .iter()
             .filter(|ep| layer[ep.stop.idx()].time - i64::from(ep.seconds) >= min_time)
         {
-            if let Some(journey) = reconstruct(&layers, round, start.stop.idx(), start.seconds, min_time, deadline) {
+            if let Some(journey) = reconstruct(
+                &layers,
+                round,
+                start.stop.idx(),
+                start.seconds,
+                min_time,
+                deadline,
+            ) {
                 journeys.push(journey);
             }
         }
