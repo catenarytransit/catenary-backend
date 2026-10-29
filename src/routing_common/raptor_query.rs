@@ -873,12 +873,11 @@ pub fn route_with_stats(
         }
     }
     for (round, layer) in labels.iter().enumerate() {
-        let best = request
+        for dest in request
             .egress
             .iter()
             .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
-            .min_by_key(|x| layer[x.stop.idx()].time + i64::from(x.seconds));
-        if let Some(dest) = best {
+        {
             if let Some(journey) =
                 reconstruct(&labels, round, dest.stop.idx(), dest.seconds, departure)
             {
@@ -891,15 +890,10 @@ pub fn route_with_stats(
     for journey in &mut journeys {
         optimize_same_trip_endpoint_walks(tt, request, journey);
     }
-    journeys.sort_by_key(|x| (x.boardings, x.arrival_unix_seconds));
-    let mut frontier = Vec::new();
-    let mut best_arrival = i64::MAX;
-    for journey in journeys {
-        if journey.arrival_unix_seconds < best_arrival {
-            best_arrival = journey.arrival_unix_seconds;
-            frontier.push(journey);
-        }
-    }
+    // A minimum-arrival-only reduction loses alternatives when the departure
+    // was optimized after reconstruction. Keep the full three-dimensional
+    // Pareto frontier (departure, arrival, number of boardings).
+    let frontier = crate::routing_common::profile_search::departure_aware_pareto(journeys);
     Ok((frontier, stats))
 }
 
