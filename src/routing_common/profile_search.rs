@@ -449,10 +449,11 @@ pub fn route_profile_with_stats(
     // interrupted before any valid journey. This invokes *one* bounded,
     // well-tested point RAPTOR search rather than the former 128 point solves.
     // The incomplete profile remains explicitly visible in debug statistics.
+    // Do not silently reduce multi-day journey eligibility on fallback.
     if transit.is_empty() && !request.access.is_empty() && !request.egress.is_empty() {
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
-        fallback.max_duration_seconds = options.max_journey_duration_seconds.min(12 * 3_600);
+        fallback.max_duration_seconds = options.max_journey_duration_seconds;
         fallback.departure_unix_seconds = events.first().copied().unwrap_or(reference);
         let (candidates, one) = if arrive_by {
             raptor_arrive_by::route_arrive_by_with_stats(tt, &fallback)?
