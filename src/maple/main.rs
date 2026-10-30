@@ -148,6 +148,40 @@ fn get_threads_gtfs(maple_config: &catenaryconfig::MapleConfig) -> usize {
     }
 }
 
+// Present the effective download/ingestion scope in Discord notifications.
+fn discord_feed_scope(restrict_to_feed_ids: Option<&HashSet<String>>) -> String {
+    match restrict_to_feed_ids {
+        None => "Scope: all eligible GTFS feeds".to_string(),
+        Some(ids) => {
+            let mut ids = ids.iter().collect::<Vec<_>>();
+            ids.sort();
+            let shown = ids.iter().take(15).map(|id| format!("`{id}`")).join(", ");
+            let extra = ids.len().saturating_sub(15);
+            let extra_text = if extra > 0 { format!(", and {extra} more") } else { String::new() };
+            let ids_text = if ids.is_empty() { String::new() } else { format!(": {shown}") };
+            format!("Scope: {} selected feed ID(s){}{}", ids.len(), ids_text, extra_text)
+        }
+    }
+}
+
+#[cfg(test)]
+mod discord_status_tests {
+    use super::*;
+    #[test]
+    fn unrestricted_scope() {
+        assert_eq!(discord_feed_scope(None), "Scope: all eligible GTFS feeds");
+    }
+    #[test]
+    fn restricted_scope_is_sorted() {
+        let ids = HashSet::from(["f-b".to_string(), "f-a".to_string()]);
+        assert_eq!(discord_feed_scope(Some(&ids)), "Scope: 2 selected feed ID(s): `f-a`, `f-b`");
+    }
+    #[test]
+    fn empty_scope_is_still_restricted() {
+        assert_eq!(discord_feed_scope(Some(&HashSet::new())), "Scope: 0 selected feed ID(s)");
+    }
+}
+
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     let catenary_config = catenaryconfig::config();
     let maple_config = &catenary_config.maple;
@@ -317,6 +351,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         },
     };
 
+    let discord_scope = discord_feed_scope(restrict_to_feed_ids.as_ref());
+
     let gtfs_temp_storage = std::env::var("GTFS_ZIP_TEMP")
         .ok()
         .or_else(|| maple_config.gtfs_zip_temp.clone())
@@ -391,28 +427,30 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
         dmfr_result.operator_hashmap.len()
     );
 
+    let mut updated_feeds_count = 0usize;
+    let mut scheduled_feeds_count = 0usize;
+
     // The DMFR result dataset looks genuine, with over 200 pieces of data!
     if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
         if let Some(discord_log_env) = &discord_log_env {
+            let start_message = if restrict_to_feed_ids.is_some() {
+                format!("Checking selected feeds for updates.\n{}\nStarted: {}", discord_scope, chrono::Utc::now().to_rfc3339())
+            } else {
+                format!(
+                    "Checking {} GTFS feeds listed in Transitland for updates.\n{}\nStarted: {}",
+                    dmfr_result.feed_hashmap.values().filter(|feed| feed.spec == dmfr::FeedSpec::Gtfs).count(),
+                    discord_scope,
+                    chrono::Utc::now().to_rfc3339()
+                )
+            };
             let hook_result = Webhook::new(discord_log_env.as_str())
                 .username("Catenary Maple")
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
                 .content("")
-                .add_embed(
-                    Embed::new()
-                        .title("Maple Downloads Starting")
-                        .description(format!(
-                            "Downloading {} feeds, start time at {}",
-                            dmfr_result
-                                .feed_hashmap
-                                .values()
-                                .filter(|x| x.spec == dmfr::FeedSpec::Gtfs)
-                                .count(),
-                            chrono::Utc::now().to_rfc3339()
-                        )),
-                )
+                .add_embed(Embed::new().title("Maple Downloads Starting").description(start_message))
                 .send();
         }
+
 
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
             &gtfs_temp_storage,
@@ -478,10 +516,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
                 .content("")
                 .add_embed(Embed::new().title("Download finished").description(format!(
-                    "{:?} eligible feeds, {:?} bytes, {:?} bytes to import, time `{}`",
+                    "{:?} eligible feeds, {:?} bytes, {:?} bytes to import.\n{}\nFinished: {}",
                     counter_of_eligible_feeds,
                     total_downloaded_bytes.map(|x| bytefmt::format(x)),
                     total_downloaded_bytes_to_import.map(|x| bytefmt::format(x)),
+                    discord_scope,
                     chrono::Utc::now().to_rfc3339()
                 )))
                 .send();
@@ -779,6 +818,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .collect();
 
             let total_feeds_to_process = feeds_to_process.len() as u16;
+            scheduled_feeds_count = feeds_to_process.len();
+            let feeds_updated = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
             println!("Processing {} feeds", total_feeds_to_process);
 
@@ -791,8 +832,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         Embed::new()
                             .title("Feed processing starting")
                             .description(format!(
-                                "Processing {} feeds, start time at {}",
+                                "Processing {} feed(s).\n{}\nStarted: {}",
                                 total_feeds_to_process,
+                                discord_scope,
                                 chrono::Utc::now().to_rfc3339()
                             )),
                     )
@@ -812,6 +854,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 let country_index = Arc::clone(&country_index);
                 let elasticclient = elasticclient.clone();
                 let discord_log_env = discord_log_env.clone();
+                let feeds_updated = Arc::clone(&feeds_updated);
 
                 let handle = async move {
                     // Acquire semaphore permit for concurrency control
@@ -978,6 +1021,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         gtfs_process_result.as_ref().unwrap().bbox,
                                     )
                                     .await;
+                                if assign_prod_tables.is_ok() {
+                                    feeds_updated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                } else {
+                                    eprintln!("Failed to assign production tables for {}", feed_id);
+                                }
 
                                 // Capture both old and new unified-agency memberships before stale
                                 // attempts are deleted. If an agency moved, both sides are recomputed.
@@ -1275,6 +1323,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Wait for all tasks to complete
             futures::future::join_all(handles).await;
+            updated_feeds_count = feeds_updated.load(std::sync::atomic::Ordering::Relaxed);
 
             // delete static feeds that no longer exist
 
@@ -1368,7 +1417,10 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 Embed::new()
                     .title("Ingestion completed")
                     .description(format!(
-                        "Time of completion: {}",
+                        "Successfully updated {} feed(s) out of {} scheduled for processing.\n{}\nCompletion time: {}",
+                        updated_feeds_count,
+                        scheduled_feeds_count,
+                        discord_scope,
                         chrono::Utc::now().to_rfc3339()
                     )),
             )
