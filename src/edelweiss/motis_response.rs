@@ -399,6 +399,7 @@ struct PathQuery {
     max_seconds: u32,
     include_geometry: bool,
     stops: Vec<PathTarget>,
+    mode: String,
 }
 #[derive(serde::Serialize)]
 struct PathTarget {
@@ -423,6 +424,7 @@ fn street_path(
     from: [f64; 2],
     to: [f64; 2],
     budget: u32,
+    mode: &str,
 ) -> Result<Vec<[f64; 2]>> {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -432,6 +434,7 @@ fn street_path(
         longitude: from[0],
         max_seconds: budget.clamp(1, 3600),
         include_geometry: true,
+        mode: mode.to_owned(),
         stops: vec![PathTarget {
             stop: 0,
             latitude: to[1],
@@ -476,7 +479,7 @@ fn street_leg(
         to["lat"].as_f64().unwrap_or_default(),
     ];
     let coordinates = if detailed {
-        street_path(addr, region, first, last, seconds.saturating_add(900))?
+        street_path(addr, region, first, last, seconds.saturating_add(900), mode)?
     } else {
         Vec::new()
     };
