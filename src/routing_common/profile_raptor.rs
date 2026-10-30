@@ -182,7 +182,7 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
     let mut previous_alight: Option<(usize, i64)> = None;
     let mut rides = 0usize;
     for (i, leg) in j.legs.iter().enumerate() {
-        match *leg {
+        match leg.clone() {
             Leg::Access { to_stop, seconds } if i == 0 => {
                 if !request.access.iter().any(|a| a.stop.0 == to_stop && a.seconds == seconds) {
                     return false;
@@ -483,12 +483,12 @@ pub(crate) fn route_profile_incremental(
     let mut journeys = Vec::new();
     // For arrive-by, later destination deadlines improve labels; for depart-
     // after, earlier origin departure events improve labels.
-    let events: Box<dyn Iterator<Item = &i64>> = if arrive_by {
-        Box::new(anchors.iter())
+    let ordered_events: Vec<i64> = if arrive_by {
+        anchors.to_vec()
     } else {
-        Box::new(anchors.iter().rev())
+        anchors.iter().rev().copied().collect()
     };
-    for (event_idx, &anchor) in events.enumerate() {
+    for (event_idx, anchor) in ordered_events.into_iter().enumerate() {
         if event_idx != 0 && started.elapsed() >= budget {
             stats.profile_budget_exhausted = true;
             break;
