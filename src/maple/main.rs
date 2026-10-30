@@ -1323,7 +1323,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Wait for all tasks to complete
             futures::future::join_all(handles).await;
-            updated_feeds_count = feeds_updated.load(std::sync::atomic::Ordering::Relaxed);
+            updated_feeds_count = feeds_updated.as_ref().load(std::sync::atomic::Ordering::Relaxed);
 
             // delete static feeds that no longer exist
 
