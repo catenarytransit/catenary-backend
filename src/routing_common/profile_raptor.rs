@@ -879,8 +879,11 @@ pub(crate) fn route_profile_incremental(
             if !arrive_by {
                 optimize_same_trip_endpoint_walks(tt, request, &mut journey);
             }
+            stats.profile_journeys_reconstructed += 1;
             if valid_journey(tt, request, &journey) {
                 journeys.push(journey);
+            } else {
+                stats.profile_journeys_rejected += 1;
             }
         }
         if stats.profile_budget_exhausted {
