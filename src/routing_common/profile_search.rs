@@ -12,9 +12,7 @@
 //! searches is bounded to prevent pathological work on dense urban networks.
 
 use crate::routing_common::raptor_arrive_by;
-use crate::routing_common::raptor_query::{
-    self, Journey, Leg, Query, RaptorStats,
-};
+use crate::routing_common::raptor_query::{self, Journey, Leg, Query, RaptorStats};
 use crate::routing_common::timetable::ZeroCopyTimetable;
 use anyhow::{Result, ensure};
 use std::time::{Duration, Instant};
@@ -291,9 +289,7 @@ pub fn route_profile_with_stats(
         } else {
             next_event.saturating_add(1)
         };
-        if (arrive_by && next_anchor >= anchor)
-            || (!arrive_by && next_anchor <= anchor)
-        {
+        if (arrive_by && next_anchor >= anchor) || (!arrive_by && next_anchor <= anchor) {
             break;
         }
         anchor = next_anchor;

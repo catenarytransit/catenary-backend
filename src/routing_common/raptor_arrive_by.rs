@@ -83,24 +83,40 @@ fn can_alight(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, arrival: i6
 /// A single reverse-footpath relaxation over Gentian's directed closure.
 /// Egress offsets are supplied by OSR and are not expanded as transfer walks.
 fn relax_reverse_walks(
-    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label],
-    seeds: &[usize], min_time: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    labels: &mut [Label],
+    seeds: &[usize],
+    min_time: i64,
+    stats: &mut RaptorStats,
 ) {
     let started = std::time::Instant::now();
-    let updates: Vec<_> = seeds.iter().filter_map(|&to| {
-        let label = labels[to];
-        (label.time >= min_time).then_some((to, label.time, label.next_board))
-    }).collect();
+    let updates: Vec<_> = seeds
+        .iter()
+        .filter_map(|&to| {
+            let label = labels[to];
+            (label.time >= min_time).then_some((to, label.time, label.next_board))
+        })
+        .collect();
     for (to, time, next_board) in updates {
         for edge in tt.footpaths_to(LocationIdx(to as u32)) {
             stats.footpath_edges_examined += 1;
             let from = edge.target().idx();
             let seconds = edge.seconds();
-            if seconds == 0 { continue; }
+            if seconds == 0 {
+                continue;
+            }
             let earlier = time - i64::from(seconds);
-            if earlier >= min_time && improve(labels, from, earlier,
-                Next::Walk { to, seconds }, next_board)
-            { stats.labels_improved += 1; }
+            if earlier >= min_time
+                && improve(
+                    labels,
+                    from,
+                    earlier,
+                    Next::Walk { to, seconds },
+                    next_board,
+                )
+            {
+                stats.labels_improved += 1;
+            }
         }
     }
     stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
@@ -126,15 +142,17 @@ fn routes_from_marked(
 }
 
 /// Latest time at which we can arrive by vehicle, including transfer rules.
-fn alighting_deadline(
-    tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize,
-) -> Option<i64> {
-    if label.time == NEG_INF { return None; }
+fn alighting_deadline(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize) -> Option<i64> {
+    if label.time == NEG_INF {
+        return None;
+    }
     let Some((next_stop, next_departure)) = label.next_board else {
         return Some(label.time);
     };
     let rule = tt.station_transfer_rule(LocationIdx(stop as u32), LocationIdx(next_stop as u32));
-    if rule.is_some_and(|r| r.prohibited()) { return None; }
+    if rule.is_some_and(|r| r.prohibited()) {
+        return None;
+    }
     let change = tt.location_transfer_seconds()[stop]
         .max(tt.location_transfer_seconds()[next_stop])
         .max(rule.map_or(0, |r| r.min_seconds));
@@ -160,7 +178,9 @@ fn reverse_scan(
     for &route in routes {
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
-        if stops.len() < 2 { continue; }
+        if stops.len() < 2 {
+            continue;
+        }
         for_each_route_service_day(tt, route, min_time, deadline, stats, |day, stats| {
             let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
             let mut alighting: Option<(TransportIdx, usize, i64, usize)> = None;
@@ -172,34 +192,43 @@ fn reverse_scan(
                         if let Some(dep) =
                             transport_event_second(tt, route, transport, position, false, midnight)
                         {
-                            if dep >= min_time && dep <= deadline
-                                && improve(current, loc, dep, Next::Ride {
-                                    to,
-                                    route: route.0,
-                                    transport: transport.0,
-                                    service_day: day as u16,
-                                    board_stop_index: position,
-                                    alight_stop_index: alight_index,
-                                    departure: dep,
-                                    arrival,
-                                }, Some((loc, dep)))
+                            if dep >= min_time
+                                && dep <= deadline
+                                && improve(
+                                    current,
+                                    loc,
+                                    dep,
+                                    Next::Ride {
+                                        to,
+                                        route: route.0,
+                                        transport: transport.0,
+                                        service_day: day as u16,
+                                        board_stop_index: position,
+                                        alight_stop_index: alight_index,
+                                        departure: dep,
+                                        arrival,
+                                    },
+                                    Some((loc, dep)),
+                                )
                             {
                                 stats.labels_improved += 1;
                             }
                         }
                     }
                 }
-                if !stop.inbound() || position == 0 { continue; }
+                if !stop.inbound() || position == 0 {
+                    continue;
+                }
                 let Some(latest) = alighting_deadline(tt, previous[loc], loc) else {
                     continue;
                 };
-                if latest < min_time { continue; }
+                if latest < min_time {
+                    continue;
+                }
                 if let Some((candidate, arrival)) =
                     get_latest_transport(tt, route, position, day, latest, stats)
                 {
-                    if arrival >= min_time
-                        && onboard_later(alighting, candidate)
-                    {
+                    if arrival >= min_time && onboard_later(alighting, candidate) {
                         alighting = Some((candidate, loc, arrival, position));
                     }
                 }

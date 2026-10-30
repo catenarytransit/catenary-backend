@@ -49,10 +49,18 @@ struct Endpoint {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum StreetMode { Walk, Bike }
-impl StreetMode { fn name(self) -> &'static str {
-    match self { Self::Walk => "WALK", Self::Bike => "BIKE" }
-} }
+enum StreetMode {
+    Walk,
+    Bike,
+}
+impl StreetMode {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Walk => "WALK",
+            Self::Bike => "BIKE",
+        }
+    }
+}
 #[derive(Deserialize)]
 struct Request {
     from: Coordinates,
@@ -163,8 +171,10 @@ fn osr_access(
     osr_region: &str,
     point: Coordinates,
     direction: u8,
-    mode: StreetMode, max_seconds: u32,
-    pedestrian_speed: f32, cycling_speed: f32,
+    mode: StreetMode,
+    max_seconds: u32,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
     let nearest = router.nearest_stops(transit_region, point, 4096)?;
     let table = router.timetable_for(transit_region)?;
@@ -273,23 +283,34 @@ fn run_query(
         };
     let pedestrian_speed = request.pedestrian_speed.unwrap_or(1.2);
     let cycling_speed = request.cycling_speed.unwrap_or(4.2);
-    anyhow::ensure!(pedestrian_speed.is_finite() && (0.3..=10.0).contains(&pedestrian_speed),
-        "pedestrianSpeed must be between 0.3 and 10.0 m/s");
-    anyhow::ensure!(cycling_speed.is_finite() && (0.7..=20.0).contains(&cycling_speed),
-        "cyclingSpeed must be between 0.7 and 20.0 m/s");
+    anyhow::ensure!(
+        pedestrian_speed.is_finite() && (0.3..=10.0).contains(&pedestrian_speed),
+        "pedestrianSpeed must be between 0.3 and 10.0 m/s"
+    );
+    anyhow::ensure!(
+        cycling_speed.is_finite() && (0.7..=20.0).contains(&cycling_speed),
+        "cyclingSpeed must be between 0.7 and 20.0 m/s"
+    );
     let modes = |items: &[StreetMode]| -> anyhow::Result<StreetMode> {
-        match items { [] => Ok(StreetMode::Walk), [mode] => Ok(*mode),
-            _ => anyhow::bail!("only one pre/post transit mode is currently supported") }
+        match items {
+            [] => Ok(StreetMode::Walk),
+            [mode] => Ok(*mode),
+            _ => anyhow::bail!("only one pre/post transit mode is currently supported"),
+        }
     };
     let access_mode = modes(&request.pre_transit_modes)?;
     let egress_mode = modes(&request.post_transit_modes)?;
     let access_budget = request.max_pre_transit_time.unwrap_or(900);
     let egress_budget = request.max_post_transit_time.unwrap_or(900);
-    anyhow::ensure!((1..=3600).contains(&access_budget) && (1..=3600).contains(&egress_budget),
-        "pre/post transit time budgets must be between 1 and 3600 seconds");
+    anyhow::ensure!(
+        (1..=3600).contains(&access_budget) && (1..=3600).contains(&egress_budget),
+        "pre/post transit time budgets must be between 1 and 3600 seconds"
+    );
     let direct_budget = request.max_direct_time.unwrap_or(1800);
-    anyhow::ensure!((1..=3600).contains(&direct_budget),
-        "maxDirectTime must be between 1 and 3600 seconds");
+    anyhow::ensure!(
+        (1..=3600).contains(&direct_budget),
+        "maxDirectTime must be between 1 and 3600 seconds"
+    );
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -312,7 +333,10 @@ fn run_query(
                     &selection.origin_osr_region,
                     request.from,
                     0,
-                    access_mode, access_budget, pedestrian_speed, cycling_speed,
+                    access_mode,
+                    access_budget,
+                    pedestrian_speed,
+                    cycling_speed,
                 )
             } else {
                 Ok(request
@@ -338,7 +362,10 @@ fn run_query(
                             &selection.destination_osr_region,
                             request.to,
                             1,
-                            egress_mode, egress_budget, pedestrian_speed, cycling_speed,
+                            egress_mode,
+                            egress_budget,
+                            pedestrian_speed,
+                            cycling_speed,
                         )
                     } else {
                         Ok(request

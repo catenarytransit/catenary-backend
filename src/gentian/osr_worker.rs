@@ -48,7 +48,11 @@ struct WorkerConfig {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-enum StreetMode { #[default] Walk, Bike }
+enum StreetMode {
+    #[default]
+    Walk,
+    Bike,
+}
 
 #[derive(Deserialize)]
 struct Request {
@@ -96,17 +100,27 @@ struct Response {
 fn profile_and_speed(query: &Request) -> Result<(Profile, f32)> {
     match query.mode {
         StreetMode::Walk => {
-            ensure!(query.cycling_speed.is_none(), "cycling speed supplied for walking");
+            ensure!(
+                query.cycling_speed.is_none(),
+                "cycling speed supplied for walking"
+            );
             let speed = query.pedestrian_speed.unwrap_or(1.2);
-            ensure!(speed.is_finite() && (0.3..=10.0).contains(&speed),
-                "pedestrian speed out of range");
+            ensure!(
+                speed.is_finite() && (0.3..=10.0).contains(&speed),
+                "pedestrian speed out of range"
+            );
             Ok((Profile::Foot, speed))
         }
         StreetMode::Bike => {
-            ensure!(query.pedestrian_speed.is_none(), "walking speed supplied for cycling");
+            ensure!(
+                query.pedestrian_speed.is_none(),
+                "walking speed supplied for cycling"
+            );
             let speed = query.cycling_speed.unwrap_or(4.2);
-            ensure!(speed.is_finite() && (0.7..=20.0).contains(&speed),
-                "cycling speed out of range");
+            ensure!(
+                speed.is_finite() && (0.7..=20.0).contains(&speed),
+                "cycling speed out of range"
+            );
             Ok((Profile::BikeFast, speed))
         }
     }
@@ -118,8 +132,16 @@ fn run_request(
 ) -> Result<Vec<Access>> {
     ensure!(query.direction <= 1, "invalid OSR query direction");
     let (profile, selected_speed) = profile_and_speed(&query)?;
-    let foot_speed = if matches!(query.mode, StreetMode::Walk) { selected_speed } else { 0.0 };
-    let bike_speed = if matches!(query.mode, StreetMode::Bike) { selected_speed } else { 0.0 };
+    let foot_speed = if matches!(query.mode, StreetMode::Walk) {
+        selected_speed
+    } else {
+        0.0
+    };
+    let bike_speed = if matches!(query.mode, StreetMode::Bike) {
+        selected_speed
+    } else {
+        0.0
+    };
     ensure!(
         query.latitude.is_finite() && query.longitude.is_finite(),
         "invalid origin"

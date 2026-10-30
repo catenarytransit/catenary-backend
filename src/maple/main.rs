@@ -157,9 +157,22 @@ fn discord_feed_scope(restrict_to_feed_ids: Option<&HashSet<String>>) -> String 
             ids.sort();
             let shown = ids.iter().take(15).map(|id| format!("`{id}`")).join(", ");
             let extra = ids.len().saturating_sub(15);
-            let extra_text = if extra > 0 { format!(", and {extra} more") } else { String::new() };
-            let ids_text = if ids.is_empty() { String::new() } else { format!(": {shown}") };
-            format!("Scope: {} selected feed ID(s){}{}", ids.len(), ids_text, extra_text)
+            let extra_text = if extra > 0 {
+                format!(", and {extra} more")
+            } else {
+                String::new()
+            };
+            let ids_text = if ids.is_empty() {
+                String::new()
+            } else {
+                format!(": {shown}")
+            };
+            format!(
+                "Scope: {} selected feed ID(s){}{}",
+                ids.len(),
+                ids_text,
+                extra_text
+            )
         }
     }
 }
@@ -174,11 +187,17 @@ mod discord_status_tests {
     #[test]
     fn restricted_scope_is_sorted() {
         let ids = HashSet::from(["f-b".to_string(), "f-a".to_string()]);
-        assert_eq!(discord_feed_scope(Some(&ids)), "Scope: 2 selected feed ID(s): `f-a`, `f-b`");
+        assert_eq!(
+            discord_feed_scope(Some(&ids)),
+            "Scope: 2 selected feed ID(s): `f-a`, `f-b`"
+        );
     }
     #[test]
     fn empty_scope_is_still_restricted() {
-        assert_eq!(discord_feed_scope(Some(&HashSet::new())), "Scope: 0 selected feed ID(s)");
+        assert_eq!(
+            discord_feed_scope(Some(&HashSet::new())),
+            "Scope: 0 selected feed ID(s)"
+        );
     }
 }
 
@@ -434,11 +453,19 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     if dmfr_result.feed_hashmap.len() > 200 && dmfr_result.operator_hashmap.len() > 100 {
         if let Some(discord_log_env) = &discord_log_env {
             let start_message = if restrict_to_feed_ids.is_some() {
-                format!("Checking selected feeds for updates.\n{}\nStarted: {}", discord_scope, chrono::Utc::now().to_rfc3339())
+                format!(
+                    "Checking selected feeds for updates.\n{}\nStarted: {}",
+                    discord_scope,
+                    chrono::Utc::now().to_rfc3339()
+                )
             } else {
                 format!(
                     "Checking {} GTFS feeds listed in Transitland for updates.\n{}\nStarted: {}",
-                    dmfr_result.feed_hashmap.values().filter(|feed| feed.spec == dmfr::FeedSpec::Gtfs).count(),
+                    dmfr_result
+                        .feed_hashmap
+                        .values()
+                        .filter(|feed| feed.spec == dmfr::FeedSpec::Gtfs)
+                        .count(),
                     discord_scope,
                     chrono::Utc::now().to_rfc3339()
                 )
@@ -447,10 +474,13 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 .username("Catenary Maple")
                 .avatar_url("https://images.pexels.com/photos/255381/pexels-photo-255381.jpeg")
                 .content("")
-                .add_embed(Embed::new().title("Maple Downloads Starting").description(start_message))
+                .add_embed(
+                    Embed::new()
+                        .title("Maple Downloads Starting")
+                        .description(start_message),
+                )
                 .send();
         }
-
 
         let eligible_feeds = transitland_download::download_return_eligible_feeds(
             &gtfs_temp_storage,
@@ -1022,7 +1052,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     )
                                     .await;
                                 if assign_prod_tables.is_ok() {
-                                    feeds_updated.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    feeds_updated
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 } else {
                                     eprintln!("Failed to assign production tables for {}", feed_id);
                                 }
@@ -1323,7 +1354,9 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             // Wait for all tasks to complete
             futures::future::join_all(handles).await;
-            updated_feeds_count = feeds_updated.as_ref().load(std::sync::atomic::Ordering::Relaxed);
+            updated_feeds_count = feeds_updated
+                .as_ref()
+                .load(std::sync::atomic::Ordering::Relaxed);
 
             // delete static feeds that no longer exist
 

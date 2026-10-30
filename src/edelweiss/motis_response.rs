@@ -489,7 +489,16 @@ fn street_leg(
         to["lat"].as_f64().unwrap_or_default(),
     ];
     let coordinates = if detailed {
-        street_path(addr, region, first, last, seconds.saturating_add(900), mode, pedestrian_speed, cycling_speed)?
+        street_path(
+            addr,
+            region,
+            first,
+            last,
+            seconds.saturating_add(900),
+            mode,
+            pedestrian_speed,
+            cycling_speed,
+        )?
     } else {
         Vec::new()
     };

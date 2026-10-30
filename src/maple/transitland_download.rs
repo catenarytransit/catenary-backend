@@ -410,7 +410,7 @@ async fn try_to_download(
     let request = client.get(&new_url).header("Accept", "*/*");
 
     let parsed_new_url = Url::parse(&new_url).unwrap_or_else(|_| parsed_url.clone());
-let request = add_auth_headers(request, feed_id, &parsed_new_url);
+    let request = add_auth_headers(request, feed_id, &parsed_new_url);
 
     let response = request.await.send().await;
 

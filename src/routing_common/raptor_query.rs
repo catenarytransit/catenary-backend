@@ -169,36 +169,60 @@ fn can_board(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, departure: i
 /// walking graph. Seeds must be transit improvements only; initial OSR
 /// access offsets are already complete and must not be chained.
 fn relax_walks_from(
-    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label], seeds: &[usize],
-    max_time: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    labels: &mut [Label],
+    seeds: &[usize],
+    max_time: i64,
+    stats: &mut RaptorStats,
 ) {
     let started = std::time::Instant::now();
-    let updates: Vec<_> = seeds.iter().filter_map(|&from| {
-        let label = labels[from];
-        (label.time < INF && label.time <= max_time)
-            .then_some((from, label.time, label.last_alight))
-    }).collect();
+    let updates: Vec<_> = seeds
+        .iter()
+        .filter_map(|&from| {
+            let label = labels[from];
+            (label.time < INF && label.time <= max_time).then_some((
+                from,
+                label.time,
+                label.last_alight,
+            ))
+        })
+        .collect();
     for (from, t, last_alight) in updates {
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
             stats.footpath_edges_examined += 1;
             let to = edge.target().idx();
             let seconds = edge.seconds();
-            if seconds == 0 { continue; }
+            if seconds == 0 {
+                continue;
+            }
             let next = t + i64::from(seconds);
-            if next <= max_time && improve(labels, to, next,
-                Parent::Walk { from, seconds }, last_alight)
-            { stats.labels_improved += 1; }
+            if next <= max_time
+                && improve(
+                    labels,
+                    to,
+                    next,
+                    Parent::Walk { from, seconds },
+                    last_alight,
+                )
+            {
+                stats.labels_improved += 1;
+            }
         }
     }
     stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
 }
 
 fn relax_walks_profiled(
-    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label],
-    max_time: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    labels: &mut [Label],
+    max_time: i64,
+    stats: &mut RaptorStats,
 ) {
-    let seeds: Vec<_> = labels.iter().enumerate()
-        .filter_map(|(i, label)| (label.time < INF).then_some(i)).collect();
+    let seeds: Vec<_> = labels
+        .iter()
+        .enumerate()
+        .filter_map(|(i, label)| (label.time < INF).then_some(i))
+        .collect();
     relax_walks_from(tt, labels, &seeds, max_time, stats);
 }
 
@@ -237,20 +261,34 @@ fn routes_from_marked(
 /// Absolute event time on the given timetable service day. Compare seconds,
 /// never packed Delta integers (which are not chronologically ordered).
 pub(crate) fn transport_event_second(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, transport: TransportIdx,
-    stop: usize, arrival: bool, midnight: i64,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    transport: TransportIdx,
+    stop: usize,
+    arrival: bool,
+    midnight: i64,
 ) -> Option<i64> {
-    Some(midnight
-        + i64::from(tt.transport_first_dep_offset().get(transport.idx())?.seconds())
-        + i64::from(tt.event_time(route, transport, stop, arrival)?.seconds()))
+    Some(
+        midnight
+            + i64::from(
+                tt.transport_first_dep_offset()
+                    .get(transport.idx())?
+                    .seconds(),
+            )
+            + i64::from(tt.event_time(route, transport, stop, arrival)?.seconds()),
+    )
 }
 
 /// Earliest service-active transport departing at or after the ready time.
 /// Gentian partitions schedules into FIFO chains, so every stop has a sorted
 /// transport column. Skipping inactive services happens only AFTER lower_bound.
 pub(crate) fn get_earliest_transport(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize,
-    service_day: usize, ready_at: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    stop: usize,
+    service_day: usize,
+    ready_at: i64,
+    stats: &mut RaptorStats,
 ) -> Option<(TransportIdx, i64)> {
     let range = *tt.route_transport_ranges().get(route.idx())?;
     let midnight = (i64::from(tt.header().first_utc_day) + service_day as i64) * 86_400;
@@ -259,7 +297,11 @@ pub(crate) fn get_earliest_transport(
         let mid = lo + (hi - lo) / 2;
         stats.transport_lookup_probes += 1;
         let t = transport_event_second(tt, route, TransportIdx(mid), stop, false, midnight)?;
-        if t < ready_at { lo = mid + 1; } else { hi = mid; }
+        if t < ready_at {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
     }
     for idx in lo..range.to {
         stats.transport_lookup_probes += 1;
@@ -275,8 +317,12 @@ pub(crate) fn get_earliest_transport(
 /// Latest service-active transport arriving by the deadline: upper_bound in
 /// the same FIFO transport column, then backwards across inactive services.
 pub(crate) fn get_latest_transport(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize,
-    service_day: usize, latest_at: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    stop: usize,
+    service_day: usize,
+    latest_at: i64,
+    stats: &mut RaptorStats,
 ) -> Option<(TransportIdx, i64)> {
     let range = *tt.route_transport_ranges().get(route.idx())?;
     let midnight = (i64::from(tt.header().first_utc_day) + service_day as i64) * 86_400;
@@ -285,7 +331,11 @@ pub(crate) fn get_latest_transport(
         let mid = lo + (hi - lo) / 2;
         stats.transport_lookup_probes += 1;
         let t = transport_event_second(tt, route, TransportIdx(mid), stop, true, midnight)?;
-        if t <= latest_at { lo = mid + 1; } else { hi = mid; }
+        if t <= latest_at {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
     }
     while lo > range.from {
         lo -= 1;
@@ -303,17 +353,25 @@ pub(crate) fn get_latest_transport(
 /// bitmap is the union of transport calendars. This retains long overnight
 /// service while avoiding a per-transport scan to discover active days.
 pub(crate) fn for_each_route_service_day(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx,
-    earliest: i64, latest: i64, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    earliest: i64,
+    latest: i64,
+    stats: &mut RaptorStats,
     mut visit: impl FnMut(usize, &mut RaptorStats),
 ) {
     let range = tt.route_transport_ranges()[route.idx()];
-    if range.from == range.to || tt.header().day_count == 0 { return; }
+    if range.from == range.to || tt.header().day_count == 0 {
+        return;
+    }
     let first = TransportIdx(range.from);
     let last = TransportIdx(range.to - 1);
-    let (Some(first_events), Some(last_events)) =
-        (tt.events_for_transport(first), tt.events_for_transport(last))
-    else { return; };
+    let (Some(first_events), Some(last_events)) = (
+        tt.events_for_transport(first),
+        tt.events_for_transport(last),
+    ) else {
+        return;
+    };
     let first_offset = i64::from(tt.transport_first_dep_offset()[first.idx()].seconds())
         + i64::from(first_events.first().map_or(0, |e| e.seconds()));
     let last_offset = i64::from(tt.transport_first_dep_offset()[last.idx()].seconds())
@@ -322,13 +380,23 @@ pub(crate) fn for_each_route_service_day(
     let from_day = ((earliest - last_offset).div_euclid(86_400) - base).max(0);
     let to_day = ((latest - first_offset).div_euclid(86_400) - base)
         .min(i64::from(tt.header().day_count) - 1);
-    if from_day > to_day { return; }
+    if from_day > to_day {
+        return;
+    }
     let active = &tt.bitfields()[tt.route_traffic_days()[route.idx()].idx()];
     let first_word = from_day as usize / 64;
     let last_word = to_day as usize / 64;
     for word in first_word..=last_word {
-        let lo = if word == first_word { from_day as usize % 64 } else { 0 };
-        let hi = if word == last_word { to_day as usize % 64 } else { 63 };
+        let lo = if word == first_word {
+            from_day as usize % 64
+        } else {
+            0
+        };
+        let hi = if word == last_word {
+            to_day as usize % 64
+        } else {
+            63
+        };
         stats.transport_days_tested += (hi - lo + 1) as u64;
         let mut mask = active.words[word] & (u64::MAX << lo) & (u64::MAX >> (63 - hi));
         while mask != 0 {
@@ -340,13 +408,17 @@ pub(crate) fn for_each_route_service_day(
     }
 }
 
-fn boarding_ready_time(
-    tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize,
-) -> Option<i64> {
-    if label.time == INF { return None; }
-    let Some((from, alight_time)) = label.last_alight else { return Some(label.time); };
+fn boarding_ready_time(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize) -> Option<i64> {
+    if label.time == INF {
+        return None;
+    }
+    let Some((from, alight_time)) = label.last_alight else {
+        return Some(label.time);
+    };
     let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(stop as u32));
-    if rule.is_some_and(|r| r.prohibited()) { return None; }
+    if rule.is_some_and(|r| r.prohibited()) {
+        return None;
+    }
     let change = tt.location_transfer_seconds()[from]
         .max(tt.location_transfer_seconds()[stop])
         .max(rule.map_or(0, |r| r.min_seconds));
@@ -357,15 +429,21 @@ fn boarding_ready_time(
 /// eligible transport per stop using a FIFO lower bound. A better earlier
 /// transport at a downstream stop can replace the currently carried trip.
 fn traverse_routes_profiled(
-    tt: &ZeroCopyTimetable<'_>, prev: &[Label], curr: &mut [Label],
-    marked_routes: &[RouteIdx], departure: i64, max_time: i64,
+    tt: &ZeroCopyTimetable<'_>,
+    prev: &[Label],
+    curr: &mut [Label],
+    marked_routes: &[RouteIdx],
+    departure: i64,
+    max_time: i64,
     stats: &mut RaptorStats,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     for &route in marked_routes {
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
-        if stops.len() < 2 { continue; }
+        if stops.len() < 2 {
+            continue;
+        }
         for_each_route_service_day(tt, route, departure, max_time, stats, |day, stats| {
             let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
             let mut onboard: Option<(TransportIdx, usize, i64, usize)> = None;
@@ -378,25 +456,37 @@ fn traverse_routes_profiled(
                             transport_event_second(tt, route, transport, position, true, midnight)
                         {
                             if arrival <= max_time
-                                && improve(curr, loc, arrival, Parent::Ride {
-                                    from,
-                                    route: route.0,
-                                    transport: transport.0,
-                                    service_day: day as u16,
-                                    board_stop_index: board_index,
-                                    alight_stop_index: position,
-                                    departure: board_time,
+                                && improve(
+                                    curr,
+                                    loc,
                                     arrival,
-                                }, Some((loc, arrival)))
+                                    Parent::Ride {
+                                        from,
+                                        route: route.0,
+                                        transport: transport.0,
+                                        service_day: day as u16,
+                                        board_stop_index: board_index,
+                                        alight_stop_index: position,
+                                        departure: board_time,
+                                        arrival,
+                                    },
+                                    Some((loc, arrival)),
+                                )
                             {
                                 stats.labels_improved += 1;
                             }
                         }
                     }
                 }
-                if !stop.outbound() || position + 1 >= stops.len() { continue; }
-                let Some(ready) = boarding_ready_time(tt, prev[loc], loc) else { continue; };
-                if ready > max_time { continue; }
+                if !stop.outbound() || position + 1 >= stops.len() {
+                    continue;
+                }
+                let Some(ready) = boarding_ready_time(tt, prev[loc], loc) else {
+                    continue;
+                };
+                if ready > max_time {
+                    continue;
+                }
                 if let Some((candidate, board_time)) =
                     get_earliest_transport(tt, route, position, day, ready, stats)
                 {
@@ -1306,9 +1396,8 @@ mod tests {
             tt.transport_route.push(RouteIdx(0));
             tt.transport_first_dep_offset
                 .push(Delta::from_seconds(first + offset).unwrap());
-            tt.transport_timing_profile.push(
-                crate::routing_common::timetable::TimingProfileIdx(0),
-            );
+            tt.transport_timing_profile
+                .push(crate::routing_common::timetable::TimingProfileIdx(0));
             tt.transport_initial_day_offset.push(0);
             tt.transport_to_trip_section_offsets.push(0);
             // Last service runs only on day 1.
@@ -1336,22 +1425,40 @@ mod tests {
 
         assert_eq!(
             get_earliest_transport(&view, RouteIdx(0), 0, 0, t0, &mut stats)
-                .unwrap().0,
+                .unwrap()
+                .0,
             TransportIdx(0)
         );
         assert_eq!(
             get_earliest_transport(&view, RouteIdx(0), 0, 0, t0 + 1, &mut stats)
-                .unwrap().0,
+                .unwrap()
+                .0,
             TransportIdx(2)
         );
         assert_eq!(
-            get_latest_transport(&view, RouteIdx(0), 2, 0, t0 + 1200 + 22*60 + 45, &mut stats)
-                .unwrap().0,
+            get_latest_transport(
+                &view,
+                RouteIdx(0),
+                2,
+                0,
+                t0 + 1200 + 22 * 60 + 45,
+                &mut stats
+            )
+            .unwrap()
+            .0,
             TransportIdx(2)
         );
         assert_eq!(
-            get_latest_transport(&view, RouteIdx(0), 2, 0, t0 + 1200 + 22*60 + 44, &mut stats)
-                .unwrap().0,
+            get_latest_transport(
+                &view,
+                RouteIdx(0),
+                2,
+                0,
+                t0 + 1200 + 22 * 60 + 44,
+                &mut stats
+            )
+            .unwrap()
+            .0,
             TransportIdx(0)
         );
         assert!(stats.transport_lookup_probes > 0);

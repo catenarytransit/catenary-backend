@@ -178,7 +178,10 @@ pub fn bounded_closure(
 ) -> Result<Vec<Vec<(u32, u32)>>> {
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
-    ensure!((1..=3600).contains(&max_seconds), "invalid closure duration");
+    ensure!(
+        (1..=3600).contains(&max_seconds),
+        "invalid closure duration"
+    );
     let mut result = Vec::with_capacity(edges.len());
     for source in 0..edges.len() {
         let mut distances = HashMap::<usize, u32>::new();
@@ -186,13 +189,21 @@ pub fn bounded_closure(
         distances.insert(source, 0);
         queue.push(Reverse((0u32, source)));
         while let Some(Reverse((elapsed, from))) = queue.pop() {
-            if distances.get(&from) != Some(&elapsed) { continue; }
+            if distances.get(&from) != Some(&elapsed) {
+                continue;
+            }
             for &(target, seconds) in &edges[from] {
                 let to = target as usize;
                 ensure!(to < edges.len(), "transfer destination out of range");
-                if seconds == 0 { continue; }
-                let Some(next) = elapsed.checked_add(seconds) else { continue; };
-                if next > max_seconds { continue; }
+                if seconds == 0 {
+                    continue;
+                }
+                let Some(next) = elapsed.checked_add(seconds) else {
+                    continue;
+                };
+                if next > max_seconds {
+                    continue;
+                }
                 if next < *distances.get(&to).unwrap_or(&u32::MAX) {
                     distances.insert(to, next);
                     queue.push(Reverse((next, to)));
@@ -200,8 +211,10 @@ pub fn bounded_closure(
             }
         }
         distances.remove(&source);
-        let mut shortcuts: Vec<_> = distances.into_iter()
-            .map(|(idx, seconds)| (idx as u32, seconds)).collect();
+        let mut shortcuts: Vec<_> = distances
+            .into_iter()
+            .map(|(idx, seconds)| (idx as u32, seconds))
+            .collect();
         shortcuts.sort_unstable_by_key(|&(idx, duration)| (duration, idx));
         result.push(shortcuts);
     }
