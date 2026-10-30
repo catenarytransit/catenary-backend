@@ -373,8 +373,9 @@ pub fn route_profile_with_stats(
             )?
         };
         stopped_early |= batch_stats.profile_budget_exhausted;
+        let anchor_count = batch_stats.profile_anchor_events;
         accumulate_stats(&mut stats, batch_stats);
-        stats.profile_anchor_events += batch_stats.profile_anchor_events;
+        stats.profile_anchor_events += anchor_count;
         transit.extend(batch.into_iter().filter(|j| {
             let t = if arrive_by { j.arrival_unix_seconds } else { j.departure_unix_seconds };
             t.abs_diff(reference) <= u64::from(window)
