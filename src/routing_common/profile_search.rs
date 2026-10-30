@@ -516,6 +516,54 @@ mod tests {
     }
 
     #[test]
+    fn incremental_profile_matches_daily_compressed_event_timestamps() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = Query {
+            max_duration_seconds: 36 * 3_600,
+            ..request()
+        };
+        let base = 20_000_i64 * 86_400;
+        let tomorrow = base + 86_400 + 9 * 3_600;
+        let later = base + 2 * 86_400 + 9 * 3_600;
+        let (journeys, stats) =
+            crate::routing_common::profile_raptor::route_profile_incremental(
+                &tt, &q, &[tomorrow, later], false, Duration::from_secs(5),
+            )
+            .unwrap();
+        let departure_times: Vec<_> = journeys.iter().map(|j| j.departure_unix_seconds).collect();
+        assert!(departure_times.contains(&tomorrow), "missing first daily service: {departure_times:?}");
+        assert!(departure_times.contains(&later), "missing later daily service: {departure_times:?}");
+        assert_eq!(stats.profile_anchor_events, 2);
+        for j in journeys {
+            assert_eq!(j.arrival_unix_seconds - j.departure_unix_seconds, 8 * 3_600);
+            assert_eq!(j.boardings, 1);
+        }
+    }
+
+    #[test]
+    fn reverse_profile_matches_daily_compressed_event_timestamps() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = Query {
+            max_duration_seconds: 36 * 3_600,
+            ..request()
+        };
+        let base = 20_000_i64 * 86_400;
+        let first_arrival = base + 86_400 + 17 * 3_600;
+        let second_arrival = base + 2 * 86_400 + 17 * 3_600;
+        let (journeys, stats) =
+            crate::routing_common::profile_raptor::route_profile_incremental(
+                &tt, &q, &[first_arrival, second_arrival], true, Duration::from_secs(5),
+            )
+            .unwrap();
+        assert_eq!(stats.profile_anchor_events, 2);
+        assert!(journeys.iter().any(|j| j.arrival_unix_seconds == first_arrival));
+        assert!(journeys.iter().any(|j| j.arrival_unix_seconds == second_arrival));
+        assert!(journeys.iter().all(|j| j.boardings == 1));
+    }
+
+    #[test]
     fn later_departure_with_later_arrival_is_an_alternative() {
         let make = |departure, arrival, boardings| Journey {
             departure_unix_seconds: departure,
