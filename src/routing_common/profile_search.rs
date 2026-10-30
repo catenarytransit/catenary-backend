@@ -26,12 +26,9 @@ pub const DEFAULT_EXTREME_DURATION_RATIO: f64 = 1.75;
 pub const DEFAULT_EXTREME_DURATION_SLACK_SECONDS: u32 = 30 * 60;
 pub const DEFAULT_COMPARISON_WINDOW_SECONDS: u32 = 90 * 60;
 
-// Exhaust the timetable events in the interval rather than arbitrarily
-// sampling three start times. This guard prevents dense urban timetables from
-// monopolizing a worker until the shared-state profile solver is available.
-// Full-network per-event solves have been removed from forward profiles.
-const MAX_EVENT_SOLVES: usize = 128;
-const PROFILE_WALL_BUDGET: Duration = Duration::from_secs(25);
+// Process each real origin event only once, with a shared wall budget.
+const MAX_PROFILE_BATCHES: usize = 64;
+const PROFILE_WALL_BUDGET: Duration = Duration::from_secs(5);
 const MAX_SOLVER_HORIZON_SECONDS: u32 = 7 * 86_400;
 
 #[derive(Clone, Copy, Debug)]
@@ -114,7 +111,10 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.round_copy_bytes += one.round_copy_bytes;
     total.route_scan_ms += one.route_scan_ms;
     total.walking_ms += one.walking_ms;
-    total.profile_searches += 1;
+    total.profile_searches += one.profile_searches;
+    total.profile_journeys_reconstructed += one.profile_journeys_reconstructed;
+    total.profile_journeys_rejected += one.profile_journeys_rejected;
+    total.profile_fallback_searches += one.profile_fallback_searches;
 }
 
 /// Departure/arrival/boardings dominance matches Nigiri's journey criteria.
@@ -227,7 +227,9 @@ fn timetable_start_events(
     arrive_by: bool,
     stats: &mut RaptorStats,
 ) -> Vec<i64> {
-    let mut events = vec![reference];
+    // Do not enqueue a fake service at the requested timestamp: an empty
+    // initial window must advance to the first actual boarding/alighting.
+    let mut events = Vec::new();
     let endpoints = if arrive_by {
         &request.egress
     } else {
@@ -364,41 +366,61 @@ pub fn route_profile_with_stats(
     // for every timetable departure.
     let events = timetable_start_events(tt, request, reference, boundary, arrive_by, &mut stats);
     let mut window = options.search_window_seconds;
-    // An empty current window is never a reason to expand the *journey*
-    // horizon; interval search already permits long journeys.
     let mut transit = Vec::new();
-    let mut stopped_early = false;
-    let started = Instant::now();
-    loop {
-        let selected: Vec<_> = events
-            .iter()
-            .copied()
-            .filter(|&event| event.abs_diff(reference) <= u64::from(window))
-            .collect();
-        if selected.is_empty() {
+    let mut examined = 0usize;
+    // The enumerator orders forward events ascending and reverse events
+    // descending: either way their distance from the reference increases.
+    let mut batch_count = 0usize;
+    let deadline = started
+        .checked_add(PROFILE_WALL_BUDGET)
+        .unwrap_or(started);
+    stats.profile_events_enumerated = events.len() as u64;
+
+    while examined < events.len() {
+        if Instant::now() >= deadline || batch_count >= MAX_PROFILE_BATCHES {
+            stats.profile_budget_exhausted = true;
             break;
         }
-        // Forward search sweeps events in reverse order with persistent
-        // RAPTOR round labels. Reverse queries retain a single arrive-by
-        // fallback until reverse shared-state reconstruction is implemented.
-        // Avoid the previous 128 full network solves in both directions.
+        // Empty windows cost O(1) instead of repeating full RAPTOR scans.
+        // At 02:00 with the first accessible service at 05:42, this jumps
+        // straight to its origin departure event.
+        let next_distance = events[examined].abs_diff(reference);
+        window = grow_window(
+            window,
+            next_distance.min(u64::from(u32::MAX)) as u32,
+            options.max_search_window_seconds,
+            &mut stats,
+        );
+        let from = examined;
+        while examined < events.len()
+            && events[examined].abs_diff(reference) <= u64::from(window)
+        {
+            examined += 1;
+        }
+        if from == examined {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         let mut q = request.clone();
         q.direct_walk_seconds = None;
         q.max_duration_seconds = options.max_journey_duration_seconds;
-        let mut sorted = selected;
-        sorted.sort_unstable();
+        let mut selected = events[from..examined].to_vec();
+        selected.sort_unstable();
         let (batch, batch_stats) =
             crate::routing_common::profile_raptor::route_profile_incremental(
-                tt,
-                &q,
-                &sorted,
-                arrive_by,
-                Duration::from_secs(3),
+                tt, &q, &selected, arrive_by,
+                remaining.min(Duration::from_secs(3)),
             )?;
-        stopped_early |= batch_stats.profile_budget_exhausted;
-        let anchor_count = batch_stats.profile_anchor_events;
+        batch_count += 1;
+        stats.profile_budget_exhausted |= batch_stats.profile_budget_exhausted;
+        let processed_anchors = batch_stats.profile_anchor_events;
         accumulate_stats(&mut stats, batch_stats);
-        stats.profile_anchor_events += anchor_count;
+        stats.profile_anchor_events += processed_anchors;
+
         transit.extend(batch.into_iter().filter(|j| {
             let t = if arrive_by {
                 j.arrival_unix_seconds
@@ -411,22 +433,48 @@ pub fn route_profile_with_stats(
                     <= i64::from(options.max_journey_duration_seconds)
         }));
         transit = departure_aware_pareto(transit);
-        let presentable = filter_extreme_durations(transit.clone(), options, arrive_by);
-        if presentable.len() >= options.min_itineraries
-            || window >= options.max_search_window_seconds
+        if filter_extreme_durations(transit.clone(), options, arrive_by).len()
+            >= options.min_itineraries
+            || stats.profile_budget_exhausted
         {
             break;
         }
-        if stopped_early || started.elapsed() >= Duration::from_secs(4) {
-            stopped_early = true;
-            break;
+        if examined < events.len() && window < options.max_search_window_seconds {
+            window = window.saturating_mul(2).min(options.max_search_window_seconds);
+            stats.profile_interval_extensions += 1;
         }
-        window = window
-            .saturating_mul(2)
-            .min(options.max_search_window_seconds);
-        stats.profile_interval_extensions += 1;
     }
-    stats.profile_budget_exhausted |= stopped_early;
+
+    // Recover a usable candidate when the incremental provenance skyline is
+    // interrupted before any valid journey. This invokes *one* bounded,
+    // well-tested point RAPTOR search rather than the former 128 point solves.
+    // The incomplete profile remains explicitly visible in debug statistics.
+    if transit.is_empty() && !request.access.is_empty() && !request.egress.is_empty() {
+        let mut fallback = request.clone();
+        fallback.direct_walk_seconds = None;
+        fallback.max_duration_seconds = options.max_journey_duration_seconds.min(12 * 3_600);
+        fallback.departure_unix_seconds = events.first().copied().unwrap_or(reference);
+        let (candidates, one) = if arrive_by {
+            raptor_arrive_by::route_arrive_by_with_stats(tt, &fallback)?
+        } else {
+            raptor_query::route_with_stats(tt, &fallback)?
+        };
+        stats.profile_fallback_searches += 1;
+        accumulate_stats(&mut stats, one);
+        transit.extend(candidates.into_iter().filter(|j| {
+            let t = if arrive_by {
+                j.arrival_unix_seconds
+            } else {
+                j.departure_unix_seconds
+            };
+            t.abs_diff(reference) <= u64::from(options.max_search_window_seconds)
+                && j.arrival_unix_seconds
+                    .saturating_sub(j.departure_unix_seconds)
+                    <= i64::from(options.max_journey_duration_seconds)
+        }));
+        transit = departure_aware_pareto(transit);
+    }
+
     let total_before_filter = transit.len();
     transit = filter_extreme_durations(transit, options, arrive_by);
     stats.profile_duration_filtered = (total_before_filter - transit.len()) as u64;
@@ -686,7 +734,7 @@ mod tests {
         )
         .unwrap();
         assert!(stats.profile_searches >= 1);
-        assert!(stats.profile_searches <= MAX_EVENT_SOLVES as u64);
+        assert!(stats.profile_searches <= MAX_PROFILE_BATCHES as u64);
         assert!(!journeys.is_empty());
     }
 
@@ -707,7 +755,7 @@ mod tests {
         )
         .unwrap();
         assert!(journeys.is_empty());
-        assert!(stats.profile_searches <= MAX_EVENT_SOLVES as u64);
+        assert!(stats.profile_searches <= MAX_PROFILE_BATCHES as u64);
     }
 
     #[test]
