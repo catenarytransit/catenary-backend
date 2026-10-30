@@ -469,7 +469,7 @@ fn run_query(
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
     let index = router.metadata_for(&routing.selection.transit_region)?;
-    let response = motis_response::build(
+    let mut response = motis_response::build(
         &timetable,
         index,
         &routing.journeys,
@@ -486,6 +486,13 @@ fn run_query(
         pedestrian_speed,
         cycling_speed,
     )?;
+    // Keep MOTIS-compatible response shape but never hide an incomplete
+    // timetable profile behind an unconditional empty debugOutput.
+    response["debugOutput"] = serde_json::json!({
+        "raptor": routing.raptor_stats,
+        "timetableView": request.timetable_view,
+        "arriveBy": arrive_by,
+    });
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
 
