@@ -75,7 +75,7 @@ pub fn fix_background_colour_rgb_feed_route(
             "302" => RGB::new(0, 65, 160),
             _ => fix_background_colour_rgb(background),
         },
-        "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" => {
+        "f-r6-nswtrainlink~sydneytrains~buswayswesternsydney~interlinebus" | "f-nsw2~buses" => {
             match &route.short_name {
                 Some(short_name) => match &route.desc.as_deref() {
                     None => fix_background_colour_rgb(background),
