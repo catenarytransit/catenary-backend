@@ -47,6 +47,12 @@ struct Endpoint {
     seconds: u32,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum StreetMode { Walk, Bike }
+impl StreetMode { fn name(self) -> &'static str {
+    match self { Self::Walk => "WALK", Self::Bike => "BIKE" }
+} }
 #[derive(Deserialize)]
 struct Request {
     from: Coordinates,
@@ -55,6 +61,18 @@ struct Request {
     departure_unix_seconds: Option<i64>,
     #[serde(default)]
     arrival_unix_seconds: Option<i64>,
+    #[serde(default, rename = "preTransitModes")]
+    pre_transit_modes: Vec<StreetMode>,
+    #[serde(default, rename = "postTransitModes")]
+    post_transit_modes: Vec<StreetMode>,
+    #[serde(default, rename = "pedestrianSpeed")]
+    pedestrian_speed: Option<f32>,
+    #[serde(default, rename = "cyclingSpeed")]
+    cycling_speed: Option<f32>,
+    #[serde(default, rename = "maxPreTransitTime")]
+    max_pre_transit_time: Option<u32>,
+    #[serde(default, rename = "maxPostTransitTime")]
+    max_post_transit_time: Option<u32>,
     #[serde(default)]
     access: Vec<Endpoint>,
     #[serde(default)]
@@ -119,6 +137,11 @@ struct OsrRequest<'a> {
     longitude: f64,
     max_seconds: u32,
     stops: Vec<OsrStop>,
+    mode: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pedestrian_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cycling_speed: Option<f32>,
 }
 #[derive(Deserialize)]
 struct OsrAccess {
@@ -138,6 +161,8 @@ fn osr_access(
     osr_region: &str,
     point: Coordinates,
     direction: u8,
+    mode: StreetMode, max_seconds: u32,
+    pedestrian_speed: f32, cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
     let nearest = router.nearest_stops(transit_region, point, 4096)?;
     let table = router.timetable_for(transit_region)?;
@@ -157,8 +182,11 @@ fn osr_access(
         direction,
         latitude: point.lat,
         longitude: point.lon,
-        max_seconds: 1800,
+        max_seconds,
         stops,
+        mode: mode.name(),
+        pedestrian_speed: matches!(mode, StreetMode::Walk).then_some(pedestrian_speed),
+        cycling_speed: matches!(mode, StreetMode::Bike).then_some(cycling_speed),
     };
     let mut stream = TcpStream::connect(addr)?;
     stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
@@ -193,7 +221,10 @@ fn direct_osr_seconds(
         direction: 0,
         latitude: from.lat,
         longitude: from.lon,
-        max_seconds: 3600,
+        max_seconds: 1800,
+        mode: "WALK",
+        pedestrian_speed: None,
+        cycling_speed: None,
         stops: vec![OsrStop {
             stop: 0,
             latitude: to.lat,
@@ -234,6 +265,22 @@ fn run_query(
                 "supply exactly one positive departure_unix_seconds or arrival_unix_seconds"
             ),
         };
+    let pedestrian_speed = request.pedestrian_speed.unwrap_or(1.2);
+    let cycling_speed = request.cycling_speed.unwrap_or(4.2);
+    anyhow::ensure!(pedestrian_speed.is_finite() && (0.3..=10.0).contains(&pedestrian_speed),
+        "pedestrianSpeed must be between 0.3 and 10.0 m/s");
+    anyhow::ensure!(cycling_speed.is_finite() && (0.7..=20.0).contains(&cycling_speed),
+        "cyclingSpeed must be between 0.7 and 20.0 m/s");
+    let modes = |items: &[StreetMode]| -> anyhow::Result<StreetMode> {
+        match items { [] => Ok(StreetMode::Walk), [mode] => Ok(*mode),
+            _ => anyhow::bail!("only one pre/post transit mode is currently supported") }
+    };
+    let access_mode = modes(&request.pre_transit_modes)?;
+    let egress_mode = modes(&request.post_transit_modes)?;
+    let access_budget = request.max_pre_transit_time.unwrap_or(900);
+    let egress_budget = request.max_post_transit_time.unwrap_or(900);
+    anyhow::ensure!((1..=3600).contains(&access_budget) && (1..=3600).contains(&egress_budget),
+        "pre/post transit time budgets must be between 1 and 3600 seconds");
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -256,6 +303,7 @@ fn run_query(
                     &selection.origin_osr_region,
                     request.from,
                     0,
+                    access_mode, access_budget, pedestrian_speed, cycling_speed,
                 )
             } else {
                 Ok(request
@@ -281,6 +329,7 @@ fn run_query(
                             &selection.destination_osr_region,
                             request.to,
                             1,
+                            egress_mode, egress_budget, pedestrian_speed, cycling_speed,
                         )
                     } else {
                         Ok(request
