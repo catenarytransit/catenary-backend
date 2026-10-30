@@ -25,6 +25,8 @@ pub struct RaptorStats {
     pub walking_ms: f64,
     /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
+    /// Shared-state timetable events processed (not full point searches).
+    pub profile_anchor_events: u64,
     /// Geometric expansions of the requested departure/arrival interval.
     pub profile_interval_extensions: u64,
     /// True when the event interval scan was interrupted by its work/time budget.
@@ -767,7 +769,7 @@ fn optimize_initial_departure(journey: &mut Journey) {
     }
 }
 
-fn optimize_same_trip_endpoint_walks(
+pub(crate) fn optimize_same_trip_endpoint_walks(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
     journey: &mut Journey,
