@@ -46,6 +46,10 @@ struct WorkerConfig {
     excluded_regions: BTreeSet<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+enum StreetMode { #[default] Walk, Bike }
+
 #[derive(Deserialize)]
 struct Request {
     region: String,
@@ -55,6 +59,12 @@ struct Request {
     /// 0 = forward routing (access), 1 = backward routing (egress).
     #[serde(default)]
     direction: u8,
+    #[serde(default)]
+    mode: StreetMode,
+    #[serde(default)]
+    pedestrian_speed: Option<f32>,
+    #[serde(default)]
+    cycling_speed: Option<f32>,
     stops: Vec<Stop>,
     #[serde(default)]
     include_geometry: bool,
@@ -83,6 +93,24 @@ fn run_request(
     query: Request,
 ) -> Result<Vec<Access>> {
     ensure!(query.direction <= 1, "invalid OSR query direction");
+    let (profile, selected_speed) = match query.mode {
+        StreetMode::Walk => {
+            ensure!(query.cycling_speed.is_none(), "cycling speed supplied for walking");
+            let speed = query.pedestrian_speed.unwrap_or(1.2);
+            ensure!(speed.is_finite() && (0.3..=10.0).contains(&speed),
+                "pedestrian speed out of range");
+            (Profile::Foot, speed)
+        }
+        StreetMode::Bike => {
+            ensure!(query.pedestrian_speed.is_none(), "walking speed supplied for cycling");
+            let speed = query.cycling_speed.unwrap_or(4.2);
+            ensure!(speed.is_finite() && (0.7..=20.0).contains(&speed),
+                "cycling speed out of range");
+            (Profile::Bike, speed)
+        }
+    };
+    let foot_speed = if matches!(query.mode, StreetMode::Walk) { selected_speed } else { 0.0 };
+    let bike_speed = if matches!(query.mode, StreetMode::Bike) { selected_speed } else { 0.0 };
     ensure!(
         query.latitude.is_finite() && query.longitude.is_finite(),
         "invalid origin"
@@ -102,7 +130,9 @@ fn run_request(
     let options = ffi::RoutingOptions {
         max_cost: query.max_seconds,
         include_segments: query.include_geometry,
-        ..ffi::RoutingOptions::default().profile(Profile::Foot)
+        foot_speed_meters_per_second: foot_speed,
+        bike_speed_meters_per_second: bike_speed,
+        ..ffi::RoutingOptions::default().profile(profile)
     };
     // A backward query is from the arrival point to the stops in OSR search
     // order, yielding legal stop-to-destination egress costs.
@@ -122,11 +152,12 @@ fn run_request(
     let mut source_matches = router.create_match_store();
     let mut target_matches = router.create_match_store();
     let origin_options = ffi::MatchOptions {
-        profile: Profile::Foot as u8,
+        profile: profile as u8,
         direction: query.direction,
         reverse: false,
         max_match_distance_meters: options.max_match_distance_meters,
         foot_speed_meters_per_second: options.foot_speed_meters_per_second,
+        bike_speed_meters_per_second: options.bike_speed_meters_per_second,
     };
     let destination_options = ffi::MatchOptions {
         reverse: true,
