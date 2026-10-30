@@ -14,11 +14,19 @@ use crate::routing_common::raptor_query::{
     optimize_same_trip_endpoint_walks, transport_event_second, Journey, Leg, Query, RaptorStats,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
+use ahash::AHashMap;
 use anyhow::{ensure, Result};
 use std::time::{Duration, Instant};
 
 const INF: i64 = i64::MAX / 4;
 const NEG_INF: i64 = i64::MIN / 4;
+/// Bound immutable-path allocations; exhausting it produces an explicitly
+/// incomplete profile rather than unbounded memory consumption.
+const MAX_PATH_NODES: usize = 1_000_000;
+
+/// Sparse stop frontiers avoid allocating an empty Vec for every stop in
+/// every round of a continental-scale timetable.
+type Round = AHashMap<usize, Vec<Label>>;
 
 #[derive(Clone, Copy, Debug)]
 struct Label {
@@ -28,8 +36,12 @@ struct Label {
     // Last alighting stop and time (forward), or next boarding stop and time
     // (reverse); these are required for directional station transfer rules.
     transit: Option<(usize, i64)>,
-    // Origin departure (forward) or destination arrival (reverse).
+    // Actual departure at origin (forward) or arrival at destination (reverse)
+    // once the first vehicle has been chosen. For zero-ride root labels this
+    // is the requested origin/deadline event and is refined on boarding.
     anchor: i64,
+    // Exact number of boarded vehicles, even for labels carried to later rounds.
+    rides: u8,
 }
 
 #[derive(Clone)]
@@ -42,6 +54,130 @@ fn append_path(nodes: &mut Vec<PathNode>, leg: Leg, next: Option<usize>) -> usiz
     let id = nodes.len();
     nodes.push(PathNode { leg, next });
     id
+}
+
+
+/// A sufficient (deliberately conservative) transfer-feasibility dominance
+/// relation. Equal arrival times alone cannot dominate a label reached from a
+/// different last-alighting stop: stop-pair GTFS transfer constraints vary with
+/// the origin of the transfer. The reverse case is symmetric.
+///
+/// In addition to journey Pareto dimensions, the last alighting/next boarding
+/// event must be no worse. An earlier arrival with a *later* last alighting
+/// timestamp can have a worse departure-ready time after walking.
+fn label_dominates(a: &Label, b: &Label, arrive_by: bool) -> bool {
+    if a.rides > b.rides {
+        return false;
+    }
+    let compatible = match (a.transit, b.transit) {
+        (None, None) => true,
+        (Some((a_stop, a_time)), Some((b_stop, b_time))) if a_stop == b_stop => {
+            if arrive_by { a_time >= b_time } else { a_time <= b_time }
+        }
+        _ => false,
+    };
+    compatible && if arrive_by {
+        a.time >= b.time && a.anchor <= b.anchor
+    } else {
+        a.time <= b.time && a.anchor >= b.anchor
+    }
+}
+
+/// An insertion affects the next RAPTOR round only when it extends the
+/// non-dominated skyline. The caller's path remains an immutable arena link.
+fn insert_label(round: &mut Round, stop: usize, label: Label, arrive_by: bool) -> bool {
+    let frontier = round.entry(stop).or_default();
+    if frontier.iter().any(|existing| label_dominates(existing, &label, arrive_by)) {
+        return false;
+    }
+    frontier.retain(|existing| !label_dominates(&label, existing, arrive_by));
+    frontier.push(label);
+    true
+}
+
+/// Materialize an immutable leg only after its candidate is known to survive
+/// provenance-sensitive dominance; dominated candidates allocate no nodes.
+fn insert_path_label(
+    round: &mut Round,
+    stop: usize,
+    mut candidate: Label,
+    leg: Leg,
+    predecessor: Option<usize>,
+    nodes: &mut Vec<PathNode>,
+    arrive_by: bool,
+    stats: &mut RaptorStats,
+    changed: &mut Vec<usize>,
+) -> Option<Label> {
+    let frontier = round.entry(stop).or_default();
+    if frontier.iter().any(|existing| label_dominates(existing, &candidate, arrive_by)) {
+        stats.labels_dominated += 1;
+        return None;
+    }
+    if nodes.len() >= MAX_PATH_NODES {
+        stats.profile_budget_exhausted = true;
+        return None;
+    }
+    candidate.path = Some(append_path(nodes, leg, predecessor));
+    frontier.retain(|existing| !label_dominates(&candidate, existing, arrive_by));
+    frontier.push(candidate);
+    changed.push(stop);
+    stats.labels_improved += 1;
+    Some(candidate)
+}
+
+#[derive(Clone, Copy)]
+struct Onboard {
+    transport: TransportIdx,
+    from: usize,
+    event_time: i64,
+    position: usize,
+    predecessor: usize,
+    anchor: i64,
+    rides: u8,
+}
+
+/// FIFO transport columns permit pruning already-boarded alternatives *after*
+/// their transfer-feasibility checks. Earlier vehicles are no later downstream;
+/// the anchor/boarding dimensions must also be no worse.
+fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
+    a.rides <= b.rides && if arrive_by {
+        a.transport.0 >= b.transport.0 && a.anchor <= b.anchor
+    } else {
+        a.transport.0 <= b.transport.0 && a.anchor >= b.anchor
+    }
+}
+
+fn insert_onboard(candidates: &mut Vec<Onboard>, candidate: Onboard, arrive_by: bool) {
+    if candidates.iter().any(|existing| onboard_dominates(existing, &candidate, arrive_by)) {
+        return;
+    }
+    candidates.retain(|existing| !onboard_dominates(&candidate, existing, arrive_by));
+    candidates.push(candidate);
+}
+
+/// For the first boarding, the requested search anchor is replaced with the
+/// *actual* latest departure / earliest arrival implied by the booked train
+/// and the OSR access or egress duration. This prevents raw query timestamps
+/// from incorrectly dominating otherwise valid journeys.
+fn first_vehicle_anchor(
+    nodes: &[PathNode],
+    predecessor: usize,
+    label: Label,
+    event_time: i64,
+    arrive_by: bool,
+) -> Option<i64> {
+    if label.rides > 0 {
+        return Some(label.anchor);
+    }
+    match (&nodes.get(predecessor)?.leg, arrive_by) {
+        (Leg::Access { seconds, .. }, false) => {
+            event_time.checked_sub(i64::from(*seconds))
+        }
+        (Leg::Egress { seconds, .. }, true) => {
+            event_time.checked_add(i64::from(*seconds))
+        }
+        _ => None,
+    }
 }
 
 fn marked_routes(
@@ -667,7 +803,7 @@ mod tests {
             departure_unix_seconds: 100, arrival_unix_seconds: 150,
         }, Some(first));
         let preserved = reconstruct_forward(&nodes,
-            Label { time: 150, path: Some(ride), transit: None, anchor: 50 }, 2, 0).unwrap();
+            Label { time: 150, path: Some(ride), transit: None, anchor: 50, rides: 1 }, 2, 0).unwrap();
         let _later = append_path(&mut nodes, Leg::Access { to_stop: 1, seconds: 1 }, None);
         assert!(matches!(preserved.legs[0], Leg::Access { seconds: 30, .. }));
         assert!(matches!(preserved.legs[1], Leg::Ride { departure_unix_seconds: 100, .. }));
@@ -676,7 +812,7 @@ mod tests {
     #[test]
     fn reconstruction_rejects_cycles_and_missing_nodes() {
         let nodes = vec![PathNode { leg: Leg::Access { to_stop: 0, seconds: 0 }, next: Some(5) }];
-        let label = Label { time: 100, path: Some(0), transit: None, anchor: 0 };
+        let label = Label { time: 100, path: Some(0), transit: None, anchor: 0, rides: 0 };
         assert!(reconstruct_forward(&nodes, label, 0, 0).is_none());
     }
 }
