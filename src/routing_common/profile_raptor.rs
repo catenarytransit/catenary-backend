@@ -715,6 +715,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn different_last_alighting_stops_cannot_dominate_each_other() {
+        let early_restricted = Label {
+            time: 100, path: None, transit: Some((1, 100)),
+            anchor: 50, rides: 1,
+        };
+        let later_allowed = Label {
+            time: 105, path: None, transit: Some((2, 105)),
+            anchor: 50, rides: 1,
+        };
+        let mut frontier = Round::default();
+        assert!(insert_label(&mut frontier, 3, early_restricted, false));
+        assert!(insert_label(&mut frontier, 3, later_allowed, false));
+        assert_eq!(frontier[&3].len(), 2);
+    }
+
+    #[test]
+    fn different_next_boarding_stops_survive_reverse_dominance() {
+        let later_restricted = Label {
+            time: 200, path: None, transit: Some((7, 200)),
+            anchor: 250, rides: 1,
+        };
+        let earlier_allowed = Label {
+            time: 195, path: None, transit: Some((8, 195)),
+            anchor: 250, rides: 1,
+        };
+        let mut frontier = Round::default();
+        assert!(insert_label(&mut frontier, 3, later_restricted, true));
+        assert!(insert_label(&mut frontier, 3, earlier_allowed, true));
+        assert_eq!(frontier[&3].len(), 2);
+    }
+
+    #[test]
+    fn travel_time_and_origin_time_form_a_two_dimensional_frontier() {
+        let mut frontier = Round::default();
+        let late_slow = Label { time: 400, path: None, transit: None, anchor: 350, rides: 0 };
+        let early_fast = Label { time: 390, path: None, transit: None, anchor: 300, rides: 0 };
+        assert!(insert_label(&mut frontier, 1, late_slow, false));
+        assert!(insert_label(&mut frontier, 1, early_fast, false));
+        assert_eq!(frontier[&1].len(), 2);
+        let late_fast = Label { time: 380, path: None, transit: None, anchor: 350, rides: 0 };
+        assert!(insert_label(&mut frontier, 1, late_fast, false));
+        assert_eq!(frontier[&1].len(), 1);
+    }
+
+    #[test]
+    fn transfer_ready_time_depends_on_last_alighting_timestamp() {
+        let earlier_walk = Label {
+            time: 120, path: None, transit: Some((1, 115)), anchor: 50, rides: 1,
+        };
+        let later_alight = Label {
+            time: 120, path: None, transit: Some((1, 120)), anchor: 50, rides: 1,
+        };
+        assert!(label_dominates(&earlier_walk, &later_alight, false));
+        assert!(!label_dominates(&later_alight, &earlier_walk, false));
+    }
+
+    #[test]
+    fn fewer_boardings_remain_independent_of_profile_round() {
+        let mut frontier = Round::default();
+        let one_boarding = Label { time: 130, path: None, transit: Some((1, 130)), anchor: 50, rides: 1 };
+        let two_boardings = Label { time: 120, path: None, transit: Some((1, 120)), anchor: 50, rides: 2 };
+        assert!(insert_label(&mut frontier, 1, one_boarding, false));
+        assert!(insert_label(&mut frontier, 1, two_boardings, false));
+        assert_eq!(frontier[&1].len(), 2);
+    }
+
+    #[test]
     fn immutable_prefix_and_suffix_survive_later_improvements() {
         let mut nodes = Vec::new();
         let first = append_path(&mut nodes, Leg::Access { to_stop: 1, seconds: 30 }, None);
