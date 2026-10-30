@@ -423,6 +423,8 @@ fn run_query(
         detailed_legs,
         access_mode.name(),
         egress_mode.name(),
+        pedestrian_speed,
+        cycling_speed,
     )?;
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
