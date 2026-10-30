@@ -10,8 +10,8 @@
 //! depending on compressed timetable materialization.
 
 use crate::routing_common::raptor_query::{
-    Journey, Leg, Query, RaptorStats, for_each_route_service_day, get_earliest_transport,
-    get_latest_transport, optimize_same_trip_endpoint_walks, transport_event_second,
+    Journey, Leg, Query, RaptorStats, for_each_route_service_day,
+    optimize_same_trip_endpoint_walks, transport_event_second,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use ahash::AHashMap;
@@ -138,6 +138,9 @@ fn insert_path_label(
 #[derive(Clone, Copy)]
 struct Onboard {
     transport: TransportIdx,
+    // The same FIFO transport column can run on multiple GTFS service days.
+    // Keep them distinct when comparing onboard alternatives.
+    service_day: usize,
     from: usize,
     event_time: i64,
     position: usize,
@@ -150,7 +153,8 @@ struct Onboard {
 /// their transfer-feasibility checks. Earlier vehicles are no later downstream;
 /// the anchor/boarding dimensions must also be no worse.
 fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
-    a.rides <= b.rides
+    a.service_day == b.service_day
+        && a.rides <= b.rides
         && if arrive_by {
             a.transport.0 >= b.transport.0 && a.anchor <= b.anchor
         } else {
@@ -460,22 +464,83 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
     rides > 0 && rides == j.boardings && time == j.arrival_unix_seconds
 }
 
+/// Find a service-active transport using a day-local FIFO column.
+///
+/// Nigiri searches a compact event column at the boarding stop. Gentian keeps
+/// events compressed in shared timing profiles, so materialize only the *u32
+/// transport indices* for the route/day once and binary-search those. No stop
+/// times are decompressed or duplicated. This also prevents a label lookup
+/// from walking thousands of inactive transport calendars after lower_bound.
+fn indexed_transport(
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    pos: usize,
+    day: usize,
+    ready: i64,
+    arrive_by: bool,
+    active: &[TransportIdx],
+    stats: &mut RaptorStats,
+) -> Option<(TransportIdx, i64)> {
+    let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
+    let (mut lo, mut hi) = (0, active.len());
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        stats.transport_lookup_probes += 1;
+        let event = transport_event_second(
+            tt, route, active[mid], pos, arrive_by, midnight,
+        )?;
+        if if arrive_by { event <= ready } else { event < ready } {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let i = if arrive_by {
+        lo.checked_sub(1)?
+    } else {
+        if lo == active.len() {
+            return None;
+        }
+        lo
+    };
+    let transport = active[i];
+    let event = transport_event_second(tt, route, transport, pos, arrive_by, midnight)?;
+    Some((transport, event))
+}
+
+/// Nigiri-style stop-major route scan, restricted to newly marked boarding stops.
+///
+/// Static FIFO transport columns and GTFS calendars remain mmap-backed. We
+/// enumerate the route's feasible service days once, then visit each route stop
+/// once instead of visiting all stops again for every service day. Onboard
+/// states retain their service day and their immutable predecessor path.
+///
+/// Only a newly improved previous-round stop can board. Carried labels are
+/// still visible in the round frontier, but cannot mark a stop by themselves.
 fn scan_routes(
     tt: &ZeroCopyTimetable<'_>,
     previous: &Round,
     current: &mut Round,
     nodes: &mut Vec<PathNode>,
     routes: &[RouteIdx],
+    marked: &[usize],
     lower: i64,
     upper: i64,
+    first_anchor: i64,
+    last_anchor: i64,
+    first_board_lower: i64,
+    first_board_upper: i64,
     arrive_by: bool,
+    deadline: Instant,
     stats: &mut RaptorStats,
     changed: &mut Vec<usize>,
     ride_seeds: &mut Vec<(usize, Label)>,
 ) {
     let started = Instant::now();
+    debug_assert!(marked.windows(2).all(|w| w[0] < w[1]));
     for &route in routes {
-        if stats.profile_budget_exhausted {
+        if stats.profile_budget_exhausted || Instant::now() >= deadline {
+            stats.profile_budget_exhausted = true;
             break;
         }
         stats.routes_scanned += 1;
@@ -483,147 +548,204 @@ fn scan_routes(
         if stops.len() < 2 {
             continue;
         }
-        for_each_route_service_day(tt, route, lower, upper, stats, |day, stats| {
-            if stats.profile_budget_exhausted {
-                return;
-            }
-            let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
-            let mut onboard: Vec<Onboard> = Vec::new();
-            let positions: Vec<usize> = if arrive_by {
-                (0..stops.len()).rev().collect()
+
+        // Constrain the service-day range to when a marked state could board.
+        // In the first-ride case, avoid enumerating several days of otherwise
+        // valid journeys which are outside the requested departure interval.
+        let mut earliest_ready = i64::MAX;
+        let mut latest_ready = i64::MIN;
+        let mut has_transfer_boarding = false;
+        for (pos, stop) in stops.iter().enumerate() {
+            let can_start = if arrive_by {
+                stop.inbound() && pos > 0
             } else {
-                (0..stops.len()).collect()
+                stop.outbound() && pos + 1 < stops.len()
             };
-            for pos in positions {
-                if stats.profile_budget_exhausted {
-                    break;
-                }
-                stats.stop_events_scanned += 1;
-                let stop = stops[pos];
-                let loc = stop.location().idx();
-                let can_finish = if arrive_by {
-                    stop.outbound() && pos + 1 < stops.len()
-                } else {
-                    stop.inbound() && pos > 0
-                };
-                if can_finish {
-                    let mut proposals = Vec::new();
-                    for riding in &onboard {
-                        let event = transport_event_second(
-                            tt,
-                            route,
-                            riding.transport,
-                            pos,
-                            !arrive_by,
-                            midnight,
-                        );
-                        let Some(event) = event else { continue };
-                        if event < lower || event > upper {
-                            continue;
-                        }
-                        let anchor = riding.anchor;
-                        let time = event;
-                        let transit = Some((loc, event));
-                        let leg = if arrive_by {
-                            Leg::Ride {
-                                from_stop: loc as u32,
-                                to_stop: riding.from as u32,
-                                route: route.0,
-                                transport: riding.transport.0,
-                                service_day: day as u16,
-                                board_stop_index: pos,
-                                alight_stop_index: riding.position,
-                                departure_unix_seconds: event,
-                                arrival_unix_seconds: riding.event_time,
-                            }
-                        } else {
-                            Leg::Ride {
-                                from_stop: riding.from as u32,
-                                to_stop: loc as u32,
-                                route: route.0,
-                                transport: riding.transport.0,
-                                service_day: day as u16,
-                                board_stop_index: riding.position,
-                                alight_stop_index: pos,
-                                departure_unix_seconds: riding.event_time,
-                                arrival_unix_seconds: event,
-                            }
-                        };
-                        proposals.push((
-                            Label {
-                                time,
-                                path: None,
-                                transit,
-                                anchor,
-                                rides: riding.rides,
-                            },
-                            leg,
-                            riding.predecessor,
-                        ));
+            let loc = stop.location().idx();
+            if !can_start || marked.binary_search(&loc).is_err() {
+                continue;
+            }
+            if let Some(labels) = previous.get(&loc) {
+                for &label in labels {
+                    let ready = if arrive_by {
+                        reverse_ready(tt, label, loc)
+                    } else {
+                        forward_ready(tt, label, loc)
+                    };
+                    let Some(ready) = ready else { continue };
+                    if ready < lower || ready > upper {
+                        continue;
                     }
-                    for (candidate, leg, predecessor) in proposals {
-                        if let Some(label) = insert_path_label(
-                            current,
-                            loc,
-                            candidate,
-                            leg,
-                            Some(predecessor),
-                            nodes,
-                            arrive_by,
-                            stats,
-                            changed,
-                        ) {
-                            ride_seeds.push((loc, label));
+                    earliest_ready = earliest_ready.min(ready);
+                    latest_ready = latest_ready.max(ready);
+                    has_transfer_boarding |= label.rides > 0;
+                }
+            }
+        }
+        if earliest_ready == i64::MAX {
+            continue;
+        }
+        let mut day_lower = lower;
+        let mut day_upper = upper;
+        if arrive_by {
+            day_upper = day_upper.min(latest_ready);
+            if !has_transfer_boarding {
+                day_lower = day_lower.max(first_board_lower);
+            }
+        } else {
+            day_lower = day_lower.max(earliest_ready);
+            if !has_transfer_boarding {
+                day_upper = day_upper.min(first_board_upper);
+            }
+        }
+        if day_lower > day_upper {
+            continue;
+        }
+
+        // The per-day active index is local to this route scan, and contains
+        // no expanded event times. It is especially valuable when hundreds of
+        // provenance labels probe a route with many inactive service patterns.
+        let mut active_days: Vec<(usize, Vec<TransportIdx>)> = Vec::new();
+        let range = tt.route_transport_ranges()[route.idx()];
+        for_each_route_service_day(
+            tt, route, day_lower, day_upper, stats, |day, _| {
+                let active: Vec<_> = (range.from..range.to)
+                    .map(TransportIdx)
+                    .filter(|t| {
+                        tt.bitfields()[tt.transport_traffic_days()[t.idx()].idx()]
+                            .test(day)
+                    })
+                    .collect();
+                if !active.is_empty() {
+                    active_days.push((day, active));
+                }
+            },
+        );
+        if active_days.is_empty() {
+            continue;
+        }
+
+        let mut onboard: Vec<Onboard> = Vec::new();
+        for step in 0..stops.len() {
+            if stats.profile_budget_exhausted {
+                break;
+            }
+            stats.stop_events_scanned += 1;
+            if (stats.stop_events_scanned & 255) == 0 && Instant::now() >= deadline {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
+            let pos = if arrive_by { stops.len() - 1 - step } else { step };
+            let stop = stops[pos];
+            let loc = stop.location().idx();
+            let can_finish = if arrive_by {
+                stop.outbound() && pos + 1 < stops.len()
+            } else {
+                stop.inbound() && pos > 0
+            };
+            if can_finish {
+                for riding in &onboard {
+                    let midnight = (i64::from(tt.header().first_utc_day)
+                        + riding.service_day as i64) * 86_400;
+                    let Some(event) = transport_event_second(
+                        tt, route, riding.transport, pos, !arrive_by, midnight,
+                    ) else { continue };
+                    if event < lower || event > upper {
+                        continue;
+                    }
+                    let leg = if arrive_by {
+                        Leg::Ride {
+                            from_stop: loc as u32,
+                            to_stop: riding.from as u32,
+                            route: route.0,
+                            transport: riding.transport.0,
+                            service_day: riding.service_day as u16,
+                            board_stop_index: pos,
+                            alight_stop_index: riding.position,
+                            departure_unix_seconds: event,
+                            arrival_unix_seconds: riding.event_time,
                         }
-                        if stats.profile_budget_exhausted {
-                            break;
+                    } else {
+                        Leg::Ride {
+                            from_stop: riding.from as u32,
+                            to_stop: loc as u32,
+                            route: route.0,
+                            transport: riding.transport.0,
+                            service_day: riding.service_day as u16,
+                            board_stop_index: riding.position,
+                            alight_stop_index: pos,
+                            departure_unix_seconds: riding.event_time,
+                            arrival_unix_seconds: event,
                         }
+                    };
+                    if let Some(label) = insert_path_label(
+                        current, loc,
+                        Label {
+                            time: event,
+                            path: None,
+                            transit: Some((loc, event)),
+                            anchor: riding.anchor,
+                            rides: riding.rides,
+                        },
+                        leg, Some(riding.predecessor), nodes, arrive_by,
+                        stats, changed,
+                    ) {
+                        ride_seeds.push((loc, label));
+                    }
+                    if stats.profile_budget_exhausted {
+                        break;
                     }
                 }
-                let can_start = if arrive_by {
-                    stop.inbound() && pos > 0
-                } else {
-                    stop.outbound() && pos + 1 < stops.len()
-                };
-                if !can_start {
-                    continue;
-                }
-                if let Some(labels) = previous.get(&loc) {
-                    for &label in labels {
-                        let ready = if arrive_by {
-                            reverse_ready(tt, label, loc)
-                        } else {
-                            forward_ready(tt, label, loc)
-                        };
-                        let Some(ready) = ready else {
-                            continue;
-                        };
-                        if ready < lower || ready > upper {
-                            continue;
-                        }
-                        let option = if arrive_by {
-                            get_latest_transport(tt, route, pos, day, ready, stats)
-                        } else {
-                            get_earliest_transport(tt, route, pos, day, ready, stats)
-                        };
-                        let Some((transport, event_time)) = option else {
-                            continue;
-                        };
+            }
+            let can_start = if arrive_by {
+                stop.inbound() && pos > 0
+            } else {
+                stop.outbound() && pos + 1 < stops.len()
+            };
+            if !can_start || marked.binary_search(&loc).is_err() {
+                continue;
+            }
+            if let Some(labels) = previous.get(&loc) {
+                for &label in labels {
+                    let ready = if arrive_by {
+                        reverse_ready(tt, label, loc)
+                    } else {
+                        forward_ready(tt, label, loc)
+                    };
+                    let Some(ready) = ready else { continue };
+                    if ready < lower || ready > upper {
+                        continue;
+                    }
+                    for (day, active) in &active_days {
+                        let Some((transport, event_time)) = indexed_transport(
+                            tt, route, pos, *day, ready, arrive_by, active, stats,
+                        ) else { continue };
                         if event_time < lower || event_time > upper {
                             continue;
                         }
-                        let Some(predecessor) = label.path else {
+                        // The first boarding/last alighting is the actual
+                        // profile anchor. Do not let an unrelated train several
+                        // days later inflate the provenance skyline.
+                        if label.rides == 0
+                            && (event_time < first_board_lower
+                                || event_time > first_board_upper)
+                        {
                             continue;
-                        };
+                        }
+                        let Some(predecessor) = label.path else { continue };
                         let Some(anchor) =
                             first_vehicle_anchor(nodes, predecessor, label, event_time, arrive_by)
-                        else {
+                        else { continue };
+                        if label.rides == 0
+                            && (anchor < first_anchor || anchor > last_anchor)
+                        {
                             continue;
-                        };
+                        }
                         insert_onboard(
                             &mut onboard,
                             Onboard {
                                 transport,
+                                service_day: *day,
                                 from: loc,
                                 event_time,
                                 position: pos,
@@ -636,7 +758,7 @@ fn scan_routes(
                     }
                 }
             }
-        });
+        }
     }
     stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
 }
@@ -687,11 +809,32 @@ pub(crate) fn route_profile_incremental(
             .saturating_add(i64::from(request.max_duration_seconds))
     };
 
+    let first_anchor = anchors[0];
+    let last_anchor = *anchors.last().unwrap();
+    let max_offset = if arrive_by {
+        request.egress.iter().map(|ep| ep.seconds).max().unwrap_or(0)
+    } else {
+        request.access.iter().map(|ep| ep.seconds).max().unwrap_or(0)
+    };
+    // Only first vehicle events need to lie near the selected profile anchors.
+    // Subsequent transfers retain the full journey horizon.
+    let first_board_lower = if arrive_by {
+        first_anchor.saturating_sub(i64::from(max_offset))
+    } else {
+        first_anchor
+    };
+    let first_board_upper = if arrive_by {
+        last_anchor
+    } else {
+        last_anchor.saturating_add(i64::from(max_offset))
+    };
+
     let mut rounds = vec![Round::default(); request.max_boardings + 1];
     let mut nodes = Vec::new();
     let mut stamps = vec![0u32; tt.route_transport_ranges().len()];
     let mut epoch = 0u32;
     let started = Instant::now();
+    let deadline = started.checked_add(budget).unwrap_or(started);
     let mut journeys = Vec::new();
     let ordered: Vec<i64> = if arrive_by {
         anchors.to_vec()
@@ -766,9 +909,10 @@ pub(crate) fn route_profile_incremental(
             for &stop in &marked {
                 if let Some(labels) = prev.get(&stop) {
                     for &label in labels {
-                        if insert_label(curr, stop, label, arrive_by) {
-                            changed.push(stop);
-                        }
+                        // Carrying an earlier label does not create a new
+                        // boarding opportunity. Only genuine ride/footpath
+                        // improvements may mark the next RAPTOR round.
+                        insert_label(curr, stop, label, arrive_by);
                     }
                 }
             }
@@ -780,9 +924,15 @@ pub(crate) fn route_profile_incremental(
                 curr,
                 &mut nodes,
                 &routes,
+                &marked,
                 lower,
                 upper,
+                first_anchor,
+                last_anchor,
+                first_board_lower,
+                first_board_upper,
                 arrive_by,
+                deadline,
                 &mut stats,
                 &mut changed,
                 &mut ride_seeds,
