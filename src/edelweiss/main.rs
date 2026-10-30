@@ -137,6 +137,14 @@ fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
 
+/// Include the same measurements emitted by --query-timings in the HTTP
+/// response, preserving the existing RAPTOR diagnostics in debugOutput.
+/// The OSR wall time is the elapsed time for three concurrent phases, not
+/// the sum of their individual durations.
+fn attach_query_timings(response: &mut serde_json::Value, timings: &QueryTimings) {
+    response["debugOutput"]["timings"] = serde_json::json!(timings);
+}
+
 struct State {
     router: Arc<Router>,
     database_url: Option<String>,
@@ -495,6 +503,7 @@ fn run_query(
     });
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
+    attach_query_timings(&mut response, &timings);
 
     Ok((response, timings))
 }
@@ -618,6 +627,43 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn query_timings_are_included_in_response_without_erasing_raptor_diagnostics() {
+        let timings = QueryTimings {
+            selection_ms: 1.0,
+            access_ms: 28.0,
+            egress_ms: 95.0,
+            direct_walk_ms: 12.0,
+            osr_parallel_wall_ms: 100.0,
+            raptor_ms: 625.0,
+            metadata_ms: 8.0,
+            query_total_ms: 740.0,
+        };
+        let mut response = serde_json::json!({
+            "debugOutput": {
+                "raptor": {"rounds": 3},
+                "timetableView": true,
+                "arriveBy": false
+            },
+            "itineraries": []
+        });
+        attach_query_timings(&mut response, &timings);
+
+        assert_eq!(response["debugOutput"]["raptor"]["rounds"], 3);
+        assert_eq!(response["debugOutput"]["timetableView"], true);
+        assert_eq!(response["debugOutput"]["arriveBy"], false);
+        assert_eq!(
+            response["debugOutput"]["timings"],
+            serde_json::to_value(&timings).unwrap()
+        );
+        assert_eq!(response["debugOutput"]["timings"]["raptor_ms"], 625.0);
+        assert_eq!(
+            response["debugOutput"]["timings"]["osr_parallel_wall_ms"],
+            100.0
+        );
+        assert!(response["itineraries"].as_array().unwrap().is_empty());
+    }
 
     #[test]
     fn optional_profile_quality_fields_deserialize_and_preserve_defaults() {
