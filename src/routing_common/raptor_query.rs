@@ -27,6 +27,14 @@ pub struct RaptorStats {
     pub profile_searches: u64,
     /// Shared-state timetable events processed (not full point searches).
     pub profile_anchor_events: u64,
+    /// Timetable anchors enumerated from real reachable boarding/alighting events.
+    pub profile_events_enumerated: u64,
+    /// Full transit journeys reconstructed by the incremental engine.
+    pub profile_journeys_reconstructed: u64,
+    /// Reconstructed journeys discarded by strict timetable validation.
+    pub profile_journeys_rejected: u64,
+    /// One-shot reference RAPTOR searches used to recover empty profiles.
+    pub profile_fallback_searches: u64,
     /// Geometric expansions of the requested departure/arrival interval.
     pub profile_interval_extensions: u64,
     /// True when the event interval scan was interrupted by its work/time budget.
