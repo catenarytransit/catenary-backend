@@ -400,6 +400,10 @@ struct PathQuery {
     include_geometry: bool,
     stops: Vec<PathTarget>,
     mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pedestrian_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cycling_speed: Option<f32>,
 }
 #[derive(serde::Serialize)]
 struct PathTarget {
@@ -425,6 +429,8 @@ fn street_path(
     to: [f64; 2],
     budget: u32,
     mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Vec<[f64; 2]>> {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -435,6 +441,8 @@ fn street_path(
         max_seconds: budget.clamp(1, 3600),
         include_geometry: true,
         mode: mode.to_owned(),
+        pedestrian_speed: (mode == "WALK").then_some(pedestrian_speed),
+        cycling_speed: (mode == "BIKE").then_some(cycling_speed),
         stops: vec![PathTarget {
             stop: 0,
             latitude: to[1],
@@ -469,6 +477,8 @@ fn street_leg(
     seconds: u32,
     detailed: bool,
     mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Value> {
     let first = [
         from["lon"].as_f64().unwrap_or_default(),
@@ -479,7 +489,7 @@ fn street_leg(
         to["lat"].as_f64().unwrap_or_default(),
     ];
     let coordinates = if detailed {
-        street_path(addr, region, first, last, seconds.saturating_add(900), mode)?
+        street_path(addr, region, first, last, seconds.saturating_add(900), mode, pedestrian_speed, cycling_speed)?
     } else {
         Vec::new()
     };
@@ -666,6 +676,8 @@ pub fn build(
     detailed: bool,
     access_mode: &str,
     egress_mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Value> {
     let info = metadata(tt, index, journeys, database_url)?;
     let mut itineraries = Vec::new();
@@ -687,6 +699,8 @@ pub fn build(
                         *seconds,
                         detailed,
                         access_mode,
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -707,6 +721,8 @@ pub fn build(
                         *seconds,
                         detailed,
                         "WALK",
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -731,6 +747,8 @@ pub fn build(
                         *seconds,
                         detailed,
                         egress_mode,
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
@@ -746,6 +764,8 @@ pub fn build(
                         *seconds,
                         detailed,
                         "WALK",
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
