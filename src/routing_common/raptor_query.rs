@@ -165,93 +165,41 @@ fn can_board(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, departure: i
 // Only newly improved labels need to start a Dijkstra relaxation: the
 // previous round already contains the shortest walking closure for every
 // unchanged label. Footpath weights are positive and time-independent.
+/// Apply one-hop relaxations over Gentian's bounded, transitively closed
+/// walking graph. Seeds must be transit improvements only; initial OSR
+/// access offsets are already complete and must not be chained.
 fn relax_walks_from(
-    tt: &ZeroCopyTimetable<'_>,
-    labels: &mut [Label],
-    seeds: &[usize],
-    max_time: i64,
-    stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label], seeds: &[usize],
+    max_time: i64, stats: &mut RaptorStats,
 ) {
     let started = std::time::Instant::now();
-    let mut heap = BinaryHeap::new();
-    for &idx in seeds {
-        let t = labels[idx].time;
-        if t < INF && t <= max_time {
-            heap.push(Reverse((t, idx)));
-            stats.walking_heap_pushes += 1;
-        }
-    }
-    while let Some(Reverse((time, from))) = heap.pop() {
-        if labels[from].time != time {
-            continue;
-        }
+    let updates: Vec<_> = seeds.iter().filter_map(|&from| {
+        let label = labels[from];
+        (label.time < INF && label.time <= max_time)
+            .then_some((from, label.time, label.last_alight))
+    }).collect();
+    for (from, t, last_alight) in updates {
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
             stats.footpath_edges_examined += 1;
             let to = edge.target().idx();
             let seconds = edge.seconds();
-            let next = time + i64::from(seconds);
-            let last_alight = labels[from].last_alight;
-            if next <= max_time
-                && improve(
-                    labels,
-                    to,
-                    next,
-                    Parent::Walk { from, seconds },
-                    last_alight,
-                )
-            {
-                stats.labels_improved += 1;
-                stats.walking_heap_pushes += 1;
-                heap.push(Reverse((next, to)));
-            }
+            if seconds == 0 { continue; }
+            let next = t + i64::from(seconds);
+            if next <= max_time && improve(labels, to, next,
+                Parent::Walk { from, seconds }, last_alight)
+            { stats.labels_improved += 1; }
         }
     }
     stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
 }
 
 fn relax_walks_profiled(
-    tt: &ZeroCopyTimetable<'_>,
-    labels: &mut [Label],
-    max_time: i64,
-    stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label],
+    max_time: i64, stats: &mut RaptorStats,
 ) {
-    let started = std::time::Instant::now();
-    let mut heap = BinaryHeap::new();
-    for (idx, label) in labels.iter().enumerate() {
-        if label.time < INF && label.time <= max_time {
-            heap.push(Reverse((label.time, idx)));
-            stats.walking_heap_pushes += 1;
-        }
-    }
-    while let Some(Reverse((time, from))) = heap.pop() {
-        if labels[from].time != time {
-            continue;
-        }
-        for edge in tt.footpaths_from(LocationIdx(from as u32)) {
-            stats.footpath_edges_examined += 1;
-            let to = edge.target().idx();
-            let seconds = u32::from(edge.seconds());
-            if seconds == 0 {
-                continue;
-            }
-            let next = time + i64::from(seconds);
-            let last_alight = labels[from].last_alight;
-            if next <= max_time
-                && improve(
-                    labels,
-                    to,
-                    next,
-                    Parent::Walk { from, seconds },
-                    last_alight,
-                )
-            {
-                stats.labels_improved += 1;
-                stats.walking_heap_pushes += 1;
-                heap.push(Reverse((next, to)));
-            }
-        }
-    }
-    stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
+    let seeds: Vec<_> = labels.iter().enumerate()
+        .filter_map(|(i, label)| (label.time < INF).then_some(i)).collect();
+    relax_walks_from(tt, labels, &seeds, max_time, stats);
 }
 
 #[cfg(test)]
@@ -864,8 +812,8 @@ pub fn route_with_stats(
             );
         }
     }
-    let access_seeds: Vec<usize> = request.access.iter().map(|ep| ep.stop.idx()).collect();
-    relax_walks_from(tt, &mut round0, &access_seeds, max_time, &mut stats);
+    // OSR access offsets already encode first-mile reachability.
+    // Do not extend them again via arbitrary station footpaths.
     let mut marked_stops = round0
         .iter()
         .enumerate()
