@@ -1006,6 +1006,139 @@ pub fn route_with_stats(
     Ok((frontier, stats))
 }
 
+
+/// Incremental forward RAPTOR over an interval of compressed-timetable
+/// origin events. Later start events are injected first so the earliest-arrival
+/// labels improve monotonically as the origin is allowed to depart earlier.
+/// The predecessor layers and marked-route cache persist across all events.
+///
+/// Unlike N independent point searches, this allocates O(stops * boardings)
+/// only once and scans a route only when a new start improves a reachable
+/// stop at the preceding boarding round.
+pub(crate) fn route_interval_with_stats(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    anchors: &[i64],
+    budget: std::time::Duration,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
+    ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds), "invalid query horizon");
+    ensure!(
+        anchors.windows(2).all(|x| x[0] <= x[1]),
+        "forward interval anchors must be ascending"
+    );
+    let n = tt.coordinates().len();
+    for endpoint in request.access.iter().chain(&request.egress) {
+        ensure!(endpoint.stop.idx() < n, "access/egress stop out of range");
+    }
+    let unvisited = Label { time: INF, parent: None, last_alight: None };
+    let mut layers = vec![vec![unvisited; n]; request.max_boardings + 1];
+    let mut route_epochs = vec![0u32; tt.route_transport_ranges().len()];
+    let mut epoch = 0u32;
+    let mut stats = RaptorStats::default();
+    stats.profile_searches = 1;
+    let started = std::time::Instant::now();
+    let mut journeys = Vec::new();
+
+    for (event_index, &anchor) in anchors.iter().rev().enumerate() {
+        if event_index != 0 && started.elapsed() >= budget {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
+        stats.profile_anchor_events += 1;
+        let deadline = anchor.saturating_add(i64::from(request.max_duration_seconds));
+        let mut marked = Vec::new();
+        for ep in &request.access {
+            let time = anchor.saturating_add(i64::from(ep.seconds));
+            if time <= deadline && improve(
+                &mut layers[0], ep.stop.idx(), time,
+                Parent::Access { seconds: ep.seconds }, None,
+            ) {
+                marked.push(ep.stop.idx());
+            }
+        }
+        marked.sort_unstable();
+        marked.dedup();
+        let mut affected_destinations = Vec::new();
+
+        for round in 1..=request.max_boardings {
+            if marked.is_empty() {
+                break;
+            }
+            stats.rounds += 1;
+            stats.marked_stops += marked.len() as u64;
+            let (earlier, later) = layers.split_at_mut(round);
+            let prev = &earlier[round - 1];
+            let curr = &mut later[0];
+            let mut changed = Vec::new();
+            for &stop in &marked {
+                if prev[stop].time < curr[stop].time {
+                    curr[stop] = Label {
+                        time: prev[stop].time,
+                        parent: Some(Parent::Carry { previous_round: round - 1 }),
+                        last_alight: prev[stop].last_alight,
+                    };
+                    changed.push(stop);
+                }
+            }
+
+            epoch = epoch.wrapping_add(1);
+            if epoch == 0 {
+                route_epochs.fill(0);
+                epoch = 1;
+            }
+            let mut routes = Vec::new();
+            for &stop in &marked {
+                for &route in tt.routes_at(LocationIdx(stop as u32)) {
+                    if route_epochs[route.idx()] != epoch {
+                        route_epochs[route.idx()] = epoch;
+                        routes.push(route);
+                    }
+                }
+            }
+            routes.sort_unstable_by_key(|r| r.0);
+            let mut transit_seeds = Vec::new();
+            if !routes.is_empty() {
+                traverse_routes_profiled(
+                    tt, prev, curr, &routes, anchor, deadline,
+                    &mut stats, Some(&mut transit_seeds),
+                )?;
+            }
+            changed.extend(transit_seeds.iter().copied());
+            // Gentian already stores transitively-closed one-hop transfers;
+            // never expand the OSR access offsets through arbitrary footpaths.
+            relax_walks_from(
+                tt, curr, &transit_seeds, deadline, &mut stats,
+                Some(&mut changed),
+            );
+            changed.sort_unstable();
+            changed.dedup();
+            for ep in &request.egress {
+                if changed.binary_search(&ep.stop.idx()).is_ok()
+                    && curr[ep.stop.idx()].time.saturating_add(i64::from(ep.seconds))
+                        <= deadline
+                {
+                    affected_destinations.push((round, ep.stop.idx(), ep.seconds));
+                }
+            }
+            marked = changed;
+        }
+        // Parents in all rounds are now stable for this event.
+        for (round, stop, egress) in affected_destinations {
+            if let Some(mut journey) = reconstruct(&layers, round, stop, egress, anchor) {
+                optimize_same_trip_endpoint_walks(tt, request, &mut journey);
+                let elapsed = journey.arrival_unix_seconds
+                    .saturating_sub(journey.departure_unix_seconds);
+                if elapsed >= 0 && elapsed <= i64::from(request.max_duration_seconds) {
+                    journeys.push(journey);
+                }
+            }
+        }
+    }
+
+    Ok((crate::routing_common::profile_search::departure_aware_pareto(journeys), stats))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
