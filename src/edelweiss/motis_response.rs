@@ -465,6 +465,7 @@ fn street_leg(
     start: i64,
     seconds: u32,
     detailed: bool,
+    mode: &str,
 ) -> Result<Value> {
     let first = [
         from["lon"].as_f64().unwrap_or_default(),
@@ -481,7 +482,7 @@ fn street_leg(
     };
     let end = start + i64::from(seconds);
     Ok(json!({
-        "mode":"WALK","from":from,"to":to,"duration":seconds,
+        "mode":mode,"from":from,"to":to,"duration":seconds,
         "startTime":timestamp(start),"endTime":timestamp(end),
         "scheduledStartTime":timestamp(start),"scheduledEndTime":timestamp(end),
         "realTime":false,"scheduled":true,"cancelled":false,
@@ -660,6 +661,8 @@ pub fn build(
     osr_worker: &str,
     database_url: Option<&str>,
     detailed: bool,
+    access_mode: &str,
+    egress_mode: &str,
 ) -> Result<Value> {
     let info = metadata(tt, index, journeys, database_url)?;
     let mut itineraries = Vec::new();
@@ -680,6 +683,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        access_mode,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -699,6 +703,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        access_mode,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -722,6 +727,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        egress_mode,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
@@ -736,6 +742,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        access_mode,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
