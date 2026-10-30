@@ -98,6 +98,16 @@ struct Request {
     min_itineraries: Option<usize>,
     #[serde(default)]
     max_journey_duration_seconds: Option<u32>,
+    /// Relative duration cutoff for journeys with a faster nearby alternative.
+    /// None uses ProfileOptions::default().
+    #[serde(default)]
+    extreme_duration_ratio: Option<f64>,
+    /// Additive tolerance, in seconds, before filtering a slow alternative.
+    #[serde(default)]
+    extreme_duration_slack_seconds: Option<u32>,
+    /// Compare journey durations only for nearby departure/arrival times.
+    #[serde(default)]
+    comparison_window_seconds: Option<u32>,
     #[serde(default = "default_detailed_legs")]
     detailed_legs: bool,
 }
@@ -601,6 +611,64 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_profile_quality_fields_deserialize_and_preserve_defaults() {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "from": {"lat": 33.6, "lon": -117.8},
+            "to": {"lat": 32.9, "lon": -117.2},
+            "departure_unix_seconds": 1_793_500_000_i64
+        }))
+        .unwrap();
+
+        // Existing clients omit these parameters. Serde must accept them.
+        assert_eq!(request.extreme_duration_ratio, None);
+        assert_eq!(request.extreme_duration_slack_seconds, None);
+        assert_eq!(request.comparison_window_seconds, None);
+
+        let defaults = ProfileOptions::default();
+        assert_eq!(
+            request.extreme_duration_ratio.unwrap_or(defaults.extreme_duration_ratio),
+            1.75,
+        );
+        assert_eq!(
+            request.extreme_duration_slack_seconds.unwrap_or(defaults.extreme_duration_slack_seconds),
+            1800,
+        );
+        assert_eq!(
+            request.comparison_window_seconds.unwrap_or(defaults.comparison_window_seconds),
+            5400,
+        );
+    }
+
+    #[test]
+    fn profile_quality_overrides_deserialize_and_validate() {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "from": {"lat": 33.6, "lon": -117.8},
+            "to": {"lat": 32.9, "lon": -117.2},
+            "arrival_unix_seconds": 1_793_500_000_i64,
+            "extreme_duration_ratio": 2.0,
+            "extreme_duration_slack_seconds": 900,
+            "comparison_window_seconds": 3600
+        }))
+        .unwrap();
+
+        assert_eq!(request.extreme_duration_ratio, Some(2.0));
+        assert_eq!(request.extreme_duration_slack_seconds, Some(900));
+        assert_eq!(request.comparison_window_seconds, Some(3600));
+
+        let defaults = ProfileOptions::default();
+        let options = ProfileOptions {
+            extreme_duration_ratio: request.extreme_duration_ratio.unwrap_or(defaults.extreme_duration_ratio),
+            extreme_duration_slack_seconds: request.extreme_duration_slack_seconds.unwrap_or(defaults.extreme_duration_slack_seconds),
+            comparison_window_seconds: request.comparison_window_seconds.unwrap_or(defaults.comparison_window_seconds),
+            ..defaults
+        };
+        options.validate().unwrap();
+        assert_eq!(options.extreme_duration_ratio, 2.0);
+        assert_eq!(options.extreme_duration_slack_seconds, 900);
+        assert_eq!(options.comparison_window_seconds, 3600);
+    }
 
     #[test]
     fn configured_postgres_url_is_used_when_no_cli_override_exists() {
