@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_profile_searches_are_bounded_without_event_enumeration() {
+    fn sparse_profile_searches_remain_work_bounded() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let (journeys, stats) = route_profile_with_stats(
@@ -585,7 +585,7 @@ mod tests {
         )
         .unwrap();
         assert!(stats.profile_searches >= 1);
-        assert!(stats.profile_searches <= MAX_PROFILE_SOLVES as u64);
+        assert!(stats.profile_searches <= MAX_EVENT_SOLVES as u64);
         assert!(!journeys.is_empty());
     }
 
@@ -606,7 +606,7 @@ mod tests {
         )
         .unwrap();
         assert!(journeys.is_empty());
-        assert!(stats.profile_searches <= MAX_PROFILE_SOLVES as u64);
+        assert!(stats.profile_searches <= MAX_EVENT_SOLVES as u64);
     }
 
     #[test]
