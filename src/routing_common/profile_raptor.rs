@@ -1041,7 +1041,7 @@ pub(crate) fn route_profile_incremental(
         }
     }
     Ok((
-        crate::routing_common::profile_search::departure_aware_pareto(journeys),
+        crate::routing_common::profile_search::route_diverse_pareto(journeys),
         stats,
     ))
 }
