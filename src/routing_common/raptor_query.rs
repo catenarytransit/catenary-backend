@@ -23,8 +23,10 @@ pub struct RaptorStats {
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
-    /// Number of point solves executed over timetable start events.
+    /// Number of shared-state interval batches, not per-event point solves.
     pub profile_searches: u64,
+    /// Number of departure/arrival anchors incrementally inserted.
+    pub profile_anchor_events: u64,
     /// Geometric expansions of the requested departure/arrival interval.
     pub profile_interval_extensions: u64,
     /// True when the event interval scan was interrupted by its work/time budget.
@@ -175,6 +177,7 @@ fn relax_walks_from(
     seeds: &[usize],
     max_time: i64,
     stats: &mut RaptorStats,
+    mut touched: Option<&mut Vec<usize>>,
 ) {
     let started = std::time::Instant::now();
     let updates: Vec<_> = seeds
@@ -207,6 +210,9 @@ fn relax_walks_from(
                 )
             {
                 stats.labels_improved += 1;
+                if let Some(changes) = touched.as_mut() {
+                    changes.push(to);
+                }
             }
         }
     }
@@ -224,7 +230,7 @@ fn relax_walks_profiled(
         .enumerate()
         .filter_map(|(i, label)| (label.time < INF).then_some(i))
         .collect();
-    relax_walks_from(tt, labels, &seeds, max_time, stats);
+    relax_walks_from(tt, labels, &seeds, max_time, stats, None);
 }
 
 #[cfg(test)]
@@ -437,6 +443,7 @@ fn traverse_routes_profiled(
     departure: i64,
     max_time: i64,
     stats: &mut RaptorStats,
+    mut touched: Option<&mut Vec<usize>>,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     for &route in marked_routes {
@@ -475,6 +482,9 @@ fn traverse_routes_profiled(
                                 )
                             {
                                 stats.labels_improved += 1;
+                                if let Some(changes) = touched.as_mut() {
+                                    changes.push(loc);
+                                }
                             }
                         }
                     }
@@ -521,6 +531,7 @@ fn traverse_routes(
         departure,
         max_time,
         &mut RaptorStats::default(),
+        None,
     )
 }
 
@@ -938,7 +949,7 @@ pub fn route_with_stats(
             break;
         }
         traverse_routes_profiled(
-            tt, prev, &mut curr, &routes, departure, max_time, &mut stats,
+            tt, prev, &mut curr, &routes, departure, max_time, &mut stats, None,
         )?;
         let transit_seeds: Vec<usize> = curr
             .iter()
@@ -946,7 +957,7 @@ pub fn route_with_stats(
             .enumerate()
             .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
             .collect();
-        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats);
+        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats, None);
         marked_stops = curr
             .iter()
             .zip(prev)
