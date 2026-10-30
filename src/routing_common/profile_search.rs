@@ -572,6 +572,40 @@ mod tests {
     }
 
     #[test]
+    fn first_real_event_is_not_a_fake_requested_departure() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut stats = RaptorStats::default();
+        let request = request();
+        let reference = request.departure_unix_seconds;
+        let events = timetable_start_events(
+            &tt, &request, reference, reference + 2 * 86_400,
+            false, &mut stats,
+        );
+        assert!(!events.contains(&reference));
+        assert!(!events.is_empty());
+        assert!(events[0] > reference + 15 * 60);
+    }
+
+    #[test]
+    fn a_late_first_service_is_not_lost_before_interval_expansion() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        let (journeys, stats) = route_profile_with_stats(
+            &tt, &q,
+            ProfileOptions {
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            },
+            false,
+        ).unwrap();
+        assert!(!journeys.is_empty(), "first service was dropped: {stats:?}");
+        assert!(stats.profile_interval_extensions > 0);
+        assert!(stats.profile_events_enumerated > 0);
+    }
+
+    #[test]
     fn tomorrow_daily_train_is_not_lost_to_six_hour_point_horizon() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
