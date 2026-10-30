@@ -399,6 +399,11 @@ struct PathQuery {
     max_seconds: u32,
     include_geometry: bool,
     stops: Vec<PathTarget>,
+    mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pedestrian_speed: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cycling_speed: Option<f32>,
 }
 #[derive(serde::Serialize)]
 struct PathTarget {
@@ -423,6 +428,9 @@ fn street_path(
     from: [f64; 2],
     to: [f64; 2],
     budget: u32,
+    mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Vec<[f64; 2]>> {
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpStream;
@@ -432,6 +440,9 @@ fn street_path(
         longitude: from[0],
         max_seconds: budget.clamp(1, 3600),
         include_geometry: true,
+        mode: mode.to_owned(),
+        pedestrian_speed: (mode == "WALK").then_some(pedestrian_speed),
+        cycling_speed: (mode == "BIKE").then_some(cycling_speed),
         stops: vec![PathTarget {
             stop: 0,
             latitude: to[1],
@@ -465,6 +476,9 @@ fn street_leg(
     start: i64,
     seconds: u32,
     detailed: bool,
+    mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Value> {
     let first = [
         from["lon"].as_f64().unwrap_or_default(),
@@ -475,13 +489,13 @@ fn street_leg(
         to["lat"].as_f64().unwrap_or_default(),
     ];
     let coordinates = if detailed {
-        street_path(addr, region, first, last, seconds.saturating_add(900))?
+        street_path(addr, region, first, last, seconds.saturating_add(900), mode, pedestrian_speed, cycling_speed)?
     } else {
         Vec::new()
     };
     let end = start + i64::from(seconds);
     Ok(json!({
-        "mode":"WALK","from":from,"to":to,"duration":seconds,
+        "mode":mode,"from":from,"to":to,"duration":seconds,
         "startTime":timestamp(start),"endTime":timestamp(end),
         "scheduledStartTime":timestamp(start),"scheduledEndTime":timestamp(end),
         "realTime":false,"scheduled":true,"cancelled":false,
@@ -660,6 +674,10 @@ pub fn build(
     osr_worker: &str,
     database_url: Option<&str>,
     detailed: bool,
+    access_mode: &str,
+    egress_mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Value> {
     let info = metadata(tt, index, journeys, database_url)?;
     let mut itineraries = Vec::new();
@@ -680,6 +698,9 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        access_mode,
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -699,6 +720,9 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        "WALK",
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -722,6 +746,9 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        egress_mode,
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
@@ -736,6 +763,9 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
+                        "WALK",
+                        pedestrian_speed,
+                        cycling_speed,
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;

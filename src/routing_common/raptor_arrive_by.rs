@@ -80,49 +80,27 @@ fn can_alight(tt: &ZeroCopyTimetable<'_>, label: Label, stop: usize, arrival: i6
     arrival + i64::from(change) <= next_departure
 }
 
+/// A single reverse-footpath relaxation over Gentian's directed closure.
+/// Egress offsets are supplied by OSR and are not expanded as transfer walks.
 fn relax_reverse_walks(
-    tt: &ZeroCopyTimetable<'_>,
-    labels: &mut [Label],
-    seeds: &[usize],
-    min_time: i64,
-    stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>, labels: &mut [Label],
+    seeds: &[usize], min_time: i64, stats: &mut RaptorStats,
 ) {
     let started = std::time::Instant::now();
-    let mut heap = BinaryHeap::<(i64, usize)>::new();
-    for &stop in seeds {
-        if labels[stop].time >= min_time {
-            heap.push((labels[stop].time, stop));
-            stats.walking_heap_pushes += 1;
-        }
-    }
-    while let Some((time, to)) = heap.pop() {
-        if labels[to].time != time {
-            continue;
-        }
-        // Inbound CSR entries describe source -> to. Do not assume walking
-        // edges are symmetric; one-way paths matter in arrival searches.
+    let updates: Vec<_> = seeds.iter().filter_map(|&to| {
+        let label = labels[to];
+        (label.time >= min_time).then_some((to, label.time, label.next_board))
+    }).collect();
+    for (to, time, next_board) in updates {
         for edge in tt.footpaths_to(LocationIdx(to as u32)) {
             stats.footpath_edges_examined += 1;
             let from = edge.target().idx();
             let seconds = edge.seconds();
-            if seconds == 0 {
-                continue;
-            }
+            if seconds == 0 { continue; }
             let earlier = time - i64::from(seconds);
-            let next_board = labels[to].next_board;
-            if earlier >= min_time
-                && improve(
-                    labels,
-                    from,
-                    earlier,
-                    Next::Walk { to, seconds },
-                    next_board,
-                )
-            {
-                heap.push((earlier, from));
-                stats.walking_heap_pushes += 1;
-                stats.labels_improved += 1;
-            }
+            if earlier >= min_time && improve(labels, from, earlier,
+                Next::Walk { to, seconds }, next_board)
+            { stats.labels_improved += 1; }
         }
     }
     stats.walking_ms += started.elapsed().as_secs_f64() * 1000.0;
@@ -375,8 +353,7 @@ pub fn route_arrive_by_with_stats(
             );
         }
     }
-    let seeds: Vec<usize> = request.egress.iter().map(|ep| ep.stop.idx()).collect();
-    relax_reverse_walks(tt, &mut first, &seeds, min_time, &mut stats);
+    // OSR egress offsets are final-mile paths; no further footpath expansion.
     let mut marked: Vec<usize> = first
         .iter()
         .enumerate()

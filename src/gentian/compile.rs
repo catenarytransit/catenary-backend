@@ -1069,6 +1069,9 @@ pub fn build(
     // Nigiri also connects nearby platforms under one station, where the
     // street graph often omits indoor passages. Never replace a routed OSR edge.
     super::footpaths::add_station_links(&tt, &mut transfers)?;
+    // Nigiri-style one-time bounded closure. Running Dijkstra over unbounded
+    // footpaths during every RAPTOR round previously allowed hours of walking.
+    let transfers = super::footpaths::bounded_closure(&transfers, max_seconds)?;
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;

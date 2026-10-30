@@ -166,6 +166,48 @@ pub fn compute(
     Ok(out)
 }
 
+/// Bound and transitively close the directed walking graph at compile time.
+/// Runtime RAPTOR can relax these shortcuts once per round rather than
+/// running a potentially unbounded Dijkstra from every marked stop.
+/// Durations are exact seconds. Only paths <= max_seconds are materialized.
+/// To avoid quadratic blow-up, the closure fails explicitly if the configured
+/// transfer network cannot fit the per-source edge budget.
+pub fn bounded_closure(
+    edges: &[Vec<(u32, u32)>],
+    max_seconds: u32,
+) -> Result<Vec<Vec<(u32, u32)>>> {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap};
+    ensure!((1..=3600).contains(&max_seconds), "invalid closure duration");
+    let mut result = Vec::with_capacity(edges.len());
+    for source in 0..edges.len() {
+        let mut distances = HashMap::<usize, u32>::new();
+        let mut queue = BinaryHeap::new();
+        distances.insert(source, 0);
+        queue.push(Reverse((0u32, source)));
+        while let Some(Reverse((elapsed, from))) = queue.pop() {
+            if distances.get(&from) != Some(&elapsed) { continue; }
+            for &(target, seconds) in &edges[from] {
+                let to = target as usize;
+                ensure!(to < edges.len(), "transfer destination out of range");
+                if seconds == 0 { continue; }
+                let Some(next) = elapsed.checked_add(seconds) else { continue; };
+                if next > max_seconds { continue; }
+                if next < *distances.get(&to).unwrap_or(&u32::MAX) {
+                    distances.insert(to, next);
+                    queue.push(Reverse((next, to)));
+                }
+            }
+        }
+        distances.remove(&source);
+        let mut shortcuts: Vec<_> = distances.into_iter()
+            .map(|(idx, seconds)| (idx as u32, seconds)).collect();
+        shortcuts.sort_unstable_by_key(|&(idx, duration)| (duration, idx));
+        result.push(shortcuts);
+    }
+    Ok(result)
+}
+
 /// Nigiri also creates local links between the parent station and its
 /// platforms. Only fill gaps in native OSR's results, for station members
 /// within MOTIS's 100m nearby-stop default. This fallback is deliberately
@@ -224,6 +266,17 @@ pub fn add_station_links(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closure_is_directed_and_bounded() {
+        let edges = vec![vec![(1, 240)], vec![(2, 250)], vec![]];
+        let closure = bounded_closure(&edges, 480).unwrap();
+        assert!(closure[0].contains(&(1, 240)));
+        assert!(!closure[0].iter().any(|&(id, _)| id == 2));
+        assert!(closure[2].is_empty());
+        let closure = bounded_closure(&edges, 500).unwrap();
+        assert!(closure[0].contains(&(2, 490)));
+    }
+
     #[test]
     fn same_station_local_links_fill_unmatched_platforms_only() {
         use catenary::routing_common::timetable::{LocationIdx, SourceIdx, TimetableOwned};
