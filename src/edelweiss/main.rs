@@ -421,6 +421,8 @@ fn run_query(
         osr_worker,
         url,
         detailed_legs,
+        access_mode.name(),
+        egress_mode.name(),
     )?;
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
