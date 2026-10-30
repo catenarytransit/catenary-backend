@@ -1051,6 +1051,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn active_transport_index_skips_inactive_calendar_without_changing_fifo_order() {
+        use crate::routing_common::timetable::{
+            BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TimingProfileIdx,
+            TrafficDays,
+        };
+        let mut owned = TimetableOwned::empty(20_000, 2);
+        for _ in 0..2 {
+            owned.coordinates.push(Default::default());
+            owned.location_id.push(Default::default());
+            owned.location_name.push(Default::default());
+            owned.location_source.push(Default::default());
+            owned.location_parent.push(LocationIdx::INVALID);
+            owned.location_type.push(1);
+            owned.location_transfer_seconds.push(0);
+            owned.location_routes_offsets.push(0);
+            owned.footpaths_out_offsets.push(0);
+            owned.footpaths_in_offsets.push(0);
+        }
+        owned.route_stops.extend([
+            PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+            PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+        ]);
+        owned.route_stop_offsets.push(2);
+        owned.route_transport_ranges.push(Range { from: 0, to: 3 });
+        owned.route_clasz.push(2);
+        owned.timing_profile_events.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(600).unwrap(),
+        ]);
+        owned.timing_profile_offsets.push(2);
+        for time in [1_000, 2_000, 3_000] {
+            owned.transport_route.push(RouteIdx(0));
+            owned.transport_timing_profile.push(TimingProfileIdx(0));
+            owned.transport_first_dep_offset.push(Delta::from_seconds(time).unwrap());
+            owned.transport_initial_day_offset.push(0);
+        }
+        let mut active = TrafficDays::default();
+        active.set(0, true).unwrap();
+        let inactive = TrafficDays::default();
+        owned.bitfields.extend([active, inactive]);
+        owned.transport_traffic_days.extend([
+            BitfieldIdx(1), BitfieldIdx(2), BitfieldIdx(1),
+        ]);
+        owned.route_traffic_days.push(BitfieldIdx(1));
+        owned.route_section_clasz_offsets.push(0);
+        owned.section_flag_offsets.push(0);
+        owned.transport_to_trip_section_offsets.push(0);
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let day = 0usize;
+        let active = [TransportIdx(0), TransportIdx(2)];
+        let midnight = 20_000_i64 * 86_400;
+        let mut stats = RaptorStats::default();
+        let next = indexed_transport(
+            &tt, RouteIdx(0), 0, day, midnight + 1_500, false, &active,
+            &mut stats,
+        );
+        assert_eq!(next, Some((TransportIdx(2), midnight + 3_000)));
+        let previous = indexed_transport(
+            &tt, RouteIdx(0), 1, day, midnight + 3_700, true, &active,
+            &mut stats,
+        );
+        assert_eq!(previous, Some((TransportIdx(2), midnight + 3_600)));
+        assert!(indexed_transport(
+            &tt, RouteIdx(0), 0, day, midnight + 3_001, false, &active,
+            &mut stats,
+        ).is_none());
+    }
+
+    #[test]
     fn different_last_alighting_stops_cannot_dominate_each_other() {
         let early_restricted = Label {
             time: 100,
