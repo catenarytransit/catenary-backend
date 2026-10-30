@@ -520,8 +520,8 @@ pub fn route_profile_with_stats(
                     .saturating_sub(j.departure_unix_seconds)
                     <= i64::from(options.max_journey_duration_seconds)
         }));
-        transit = departure_aware_pareto(transit);
-        if filter_extreme_durations(transit.clone(), options, arrive_by).len()
+        transit = route_diverse_pareto(transit);
+        if route_diversity_count(&filter_extreme_durations(transit.clone(), options, arrive_by))
             >= options.min_itineraries
             || stats.profile_budget_exhausted
         {
@@ -561,7 +561,7 @@ pub fn route_profile_with_stats(
                     .saturating_sub(j.departure_unix_seconds)
                     <= i64::from(options.max_journey_duration_seconds)
         }));
-        transit = departure_aware_pareto(transit);
+        transit = route_diverse_pareto(transit);
     }
 
     let total_before_filter = transit.len();
