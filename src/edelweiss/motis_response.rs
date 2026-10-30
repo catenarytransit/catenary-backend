@@ -706,7 +706,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
-                        access_mode,
+                        "WALK",
                     )?);
                     cursor += i64::from(*seconds);
                     previous = end;
@@ -745,7 +745,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
-                        access_mode,
+                        "WALK",
                     )?);
                     cursor += i64::from(*seconds);
                     previous = destination;
