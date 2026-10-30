@@ -410,157 +410,120 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
     rides > 0 && rides == j.boardings && time == j.arrival_unix_seconds
 }
 
-fn forward_route_scan(
+fn scan_routes(
     tt: &ZeroCopyTimetable<'_>,
-    prev: &[Label],
-    curr: &mut [Label],
+    previous: &Round,
+    current: &mut Round,
     nodes: &mut Vec<PathNode>,
     routes: &[RouteIdx],
     lower: i64,
     upper: i64,
+    arrive_by: bool,
     stats: &mut RaptorStats,
     changed: &mut Vec<usize>,
+    ride_seeds: &mut Vec<(usize, Label)>,
 ) {
     let started = Instant::now();
     for &route in routes {
+        if stats.profile_budget_exhausted { break; }
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
-        if stops.len() < 2 {
-            continue;
-        }
+        if stops.len() < 2 { continue; }
         for_each_route_service_day(tt, route, lower, upper, stats, |day, stats| {
+            if stats.profile_budget_exhausted { return; }
             let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
-            // The predecessor path is snapped when the vehicle is boarded.
-            let mut onboard: Option<(TransportIdx, usize, i64, usize, usize, i64)> = None;
-            for (pos, stop) in stops.iter().enumerate() {
+            let mut onboard: Vec<Onboard> = Vec::new();
+            let positions: Vec<usize> = if arrive_by {
+                (0..stops.len()).rev().collect()
+            } else {
+                (0..stops.len()).collect()
+            };
+            for pos in positions {
+                if stats.profile_budget_exhausted { break; }
                 stats.stop_events_scanned += 1;
+                let stop = stops[pos];
                 let loc = stop.location().idx();
-                if let Some((transport, from, dep, board_pos, prefix, anchor)) = onboard {
-                    if stop.inbound() {
-                        if let Some(arr) = transport_event_second(
-                            tt, route, transport, pos, true, midnight,
-                        ) {
-                            if arr <= upper && arr < curr[loc].time {
-                                let path = append_path(
-                                    nodes,
-                                    Leg::Ride {
-                                        from_stop: from as u32, to_stop: loc as u32,
-                                        route: route.0, transport: transport.0,
-                                        service_day: day as u16,
-                                        board_stop_index: board_pos,
-                                        alight_stop_index: pos,
-                                        departure_unix_seconds: dep,
-                                        arrival_unix_seconds: arr,
-                                    },
-                                    Some(prefix),
-                                );
-                                curr[loc] = Label {
-                                    time: arr, path: Some(path),
-                                    transit: Some((loc, arr)), anchor,
-                                };
-                                changed.push(loc);
-                                stats.labels_improved += 1;
-                            }
-                        }
-                    }
-                }
-                if !stop.outbound() || pos + 1 >= stops.len() {
-                    continue;
-                }
-                let Some(ready) = forward_ready(tt, prev[loc], loc) else {
-                    continue;
+                let can_finish = if arrive_by {
+                    stop.outbound() && pos + 1 < stops.len()
+                } else {
+                    stop.inbound() && pos > 0
                 };
-                if ready > upper {
-                    continue;
-                }
-                if let Some((transport, dep)) =
-                    get_earliest_transport(tt, route, pos, day, ready, stats)
-                {
-                    if dep <= upper
-                        && onboard.is_none_or(|(t, _, _, _, _, _)| transport.0 < t.0)
-                    {
-                        if let Some(path) = prev[loc].path {
-                            onboard = Some((transport, loc, dep, pos, path, prev[loc].anchor));
-                        }
-                    }
-                }
-            }
-        });
-    }
-    stats.route_scan_ms += started.elapsed().as_secs_f64() * 1000.0;
-}
-
-fn reverse_route_scan(
-    tt: &ZeroCopyTimetable<'_>,
-    prev: &[Label],
-    curr: &mut [Label],
-    nodes: &mut Vec<PathNode>,
-    routes: &[RouteIdx],
-    lower: i64,
-    upper: i64,
-    stats: &mut RaptorStats,
-    changed: &mut Vec<usize>,
-) {
-    let started = Instant::now();
-    for &route in routes {
-        stats.routes_scanned += 1;
-        let stops = tt.stops_on(route);
-        if stops.len() < 2 {
-            continue;
-        }
-        for_each_route_service_day(tt, route, lower, upper, stats, |day, stats| {
-            let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
-            let mut alighting: Option<(TransportIdx, usize, i64, usize, usize, i64)> = None;
-            for (pos, stop) in stops.iter().enumerate().rev() {
-                stats.stop_events_scanned += 1;
-                let loc = stop.location().idx();
-                if let Some((transport, to, arr, alight_pos, suffix, anchor)) = alighting {
-                    if stop.outbound() && pos + 1 < stops.len() {
-                        if let Some(dep) = transport_event_second(
-                            tt, route, transport, pos, false, midnight,
-                        ) {
-                            if dep >= lower && dep > curr[loc].time {
-                                let path = append_path(
-                                    nodes,
-                                    Leg::Ride {
-                                        from_stop: loc as u32, to_stop: to as u32,
-                                        route: route.0, transport: transport.0,
-                                        service_day: day as u16,
-                                        board_stop_index: pos,
-                                        alight_stop_index: alight_pos,
-                                        departure_unix_seconds: dep,
-                                        arrival_unix_seconds: arr,
-                                    },
-                                    Some(suffix),
-                                );
-                                curr[loc] = Label {
-                                    time: dep, path: Some(path),
-                                    transit: Some((loc, dep)), anchor,
-                                };
-                                changed.push(loc);
-                                stats.labels_improved += 1;
+                if can_finish {
+                    let mut proposals = Vec::new();
+                    for riding in &onboard {
+                        let event = transport_event_second(
+                            tt, route, riding.transport, pos, !arrive_by, midnight,
+                        );
+                        let Some(event) = event else { continue };
+                        if event < lower || event > upper { continue; }
+                        let anchor = riding.anchor;
+                        let time = event;
+                        let transit = Some((loc, event));
+                        let leg = if arrive_by {
+                            Leg::Ride {
+                                from_stop: loc as u32, to_stop: riding.from as u32,
+                                route: route.0, transport: riding.transport.0,
+                                service_day: day as u16, board_stop_index: pos,
+                                alight_stop_index: riding.position,
+                                departure_unix_seconds: event,
+                                arrival_unix_seconds: riding.event_time,
                             }
+                        } else {
+                            Leg::Ride {
+                                from_stop: riding.from as u32, to_stop: loc as u32,
+                                route: route.0, transport: riding.transport.0,
+                                service_day: day as u16, board_stop_index: riding.position,
+                                alight_stop_index: pos,
+                                departure_unix_seconds: riding.event_time,
+                                arrival_unix_seconds: event,
+                            }
+                        };
+                        proposals.push((
+                            Label { time, path: None, transit, anchor, rides: riding.rides },
+                            leg, riding.predecessor,
+                        ));
+                    }
+                    for (candidate, leg, predecessor) in proposals {
+                        if let Some(label) = insert_path_label(
+                            current, loc, candidate, leg, Some(predecessor), nodes,
+                            arrive_by, stats, changed,
+                        ) {
+                            ride_seeds.push((loc, label));
                         }
+                        if stats.profile_budget_exhausted { break; }
                     }
                 }
-                if !stop.inbound() || pos == 0 {
-                    continue;
-                }
-                let Some(latest) = reverse_ready(tt, prev[loc], loc) else {
-                    continue;
+                let can_start = if arrive_by {
+                    stop.inbound() && pos > 0
+                } else {
+                    stop.outbound() && pos + 1 < stops.len()
                 };
-                if latest < lower {
-                    continue;
-                }
-                if let Some((transport, arr)) =
-                    get_latest_transport(tt, route, pos, day, latest, stats)
-                {
-                    if arr >= lower
-                        && alighting.is_none_or(|(t, _, _, _, _, _)| transport.0 > t.0)
-                    {
-                        if let Some(path) = prev[loc].path {
-                            alighting = Some((transport, loc, arr, pos, path, prev[loc].anchor));
-                        }
+                if !can_start { continue; }
+                if let Some(labels) = previous.get(&loc) {
+                    for &label in labels {
+                        let ready = if arrive_by {
+                            reverse_ready(tt, label, loc)
+                        } else {
+                            forward_ready(tt, label, loc)
+                        };
+                        let Some(ready) = ready else { continue; };
+                        if ready < lower || ready > upper { continue; }
+                        let option = if arrive_by {
+                            get_latest_transport(tt, route, pos, day, ready, stats)
+                        } else {
+                            get_earliest_transport(tt, route, pos, day, ready, stats)
+                        };
+                        let Some((transport, event_time)) = option else { continue; };
+                        if event_time < lower || event_time > upper { continue; }
+                        let Some(predecessor) = label.path else { continue };
+                        let Some(anchor) = first_vehicle_anchor(
+                            nodes, predecessor, label, event_time, arrive_by,
+                        ) else { continue };
+                        insert_onboard(&mut onboard, Onboard {
+                            transport, from: loc, event_time,
+                            position: pos, predecessor, anchor,
+                            rides: label.rides.saturating_add(1),
+                        }, arrive_by);
                     }
                 }
             }
@@ -609,22 +572,18 @@ pub(crate) fn route_profile_incremental(
         anchors.last().unwrap().saturating_add(i64::from(request.max_duration_seconds))
     };
 
-    let unavailable = if arrive_by { NEG_INF } else { INF };
-    let blank = Label { time: unavailable, path: None, transit: None, anchor: 0 };
-    let mut rounds = vec![vec![blank; n]; request.max_boardings + 1];
+    let mut rounds = vec![Round::default(); request.max_boardings + 1];
     let mut nodes = Vec::new();
     let mut stamps = vec![0u32; tt.route_transport_ranges().len()];
     let mut epoch = 0u32;
     let started = Instant::now();
     let mut journeys = Vec::new();
-    // For arrive-by, later destination deadlines improve labels; for depart-
-    // after, earlier origin departure events improve labels.
-    let ordered_events: Vec<i64> = if arrive_by {
+    let ordered: Vec<i64> = if arrive_by {
         anchors.to_vec()
     } else {
         anchors.iter().rev().copied().collect()
     };
-    for (event_idx, anchor) in ordered_events.into_iter().enumerate() {
+    for (event_idx, anchor) in ordered.into_iter().enumerate() {
         if event_idx != 0 && started.elapsed() >= budget {
             stats.profile_budget_exhausted = true;
             break;
@@ -639,36 +598,25 @@ pub(crate) fn route_profile_incremental(
             } else {
                 anchor.saturating_add(i64::from(ep.seconds))
             };
-            if time < lower || time > upper {
-                continue;
-            }
-            let better = if arrive_by {
-                time > rounds[0][stop].time
-            } else {
-                time < rounds[0][stop].time
+            if time < lower || time > upper { continue; }
+            let candidate = Label {
+                time, path: None, transit: None, anchor, rides: 0,
             };
-            if !better {
-                continue;
-            }
             let leg = if arrive_by {
                 Leg::Egress { from_stop: ep.stop.0, seconds: ep.seconds }
             } else {
                 Leg::Access { to_stop: ep.stop.0, seconds: ep.seconds }
             };
-            let path = append_path(&mut nodes, leg, None);
-            rounds[0][stop] = Label {
-                time, path: Some(path), transit: None, anchor,
-            };
-            marked.push(stop);
+            insert_path_label(
+                &mut rounds[0], stop, candidate, leg, None,
+                &mut nodes, arrive_by, &mut stats, &mut marked,
+            );
         }
         marked.sort_unstable();
         marked.dedup();
-        let mut changed_ends = Vec::new();
-
+        let mut changed_ends: Vec<(usize, Label, usize, u32)> = Vec::new();
         for k in 1..=request.max_boardings {
-            if marked.is_empty() {
-                break;
-            }
+            if marked.is_empty() || stats.profile_budget_exhausted { break; }
             stats.rounds += 1;
             stats.marked_stops += marked.len() as u64;
             let (earlier, later) = rounds.split_at_mut(k);
@@ -676,38 +624,25 @@ pub(crate) fn route_profile_incremental(
             let curr = &mut later[0];
             let mut changed = Vec::new();
             for &stop in &marked {
-                let better = if arrive_by {
-                    prev[stop].time > curr[stop].time
-                } else {
-                    prev[stop].time < curr[stop].time
-                };
-                if better {
-                    curr[stop] = prev[stop]; // immutable path node, no carry edge.
-                    changed.push(stop);
+                if let Some(labels) = prev.get(&stop) {
+                    for &label in labels {
+                        if insert_label(curr, stop, label, arrive_by) {
+                            changed.push(stop);
+                        }
+                    }
                 }
             }
             let routes = marked_routes(tt, &marked, &mut stamps, &mut epoch);
             let mut ride_seeds = Vec::new();
-            if arrive_by {
-                reverse_route_scan(
-                    tt, prev, curr, &mut nodes, &routes,
-                    lower, upper, &mut stats, &mut ride_seeds,
-                );
-            } else {
-                forward_route_scan(
-                    tt, prev, curr, &mut nodes, &routes,
-                    lower, upper, &mut stats, &mut ride_seeds,
-                );
-            }
-            changed.extend(ride_seeds.iter().copied());
-
-            // Relax only stops improved by transit. OSR access and egress
-            // already contain complete first/last-mile street paths.
-            let seeds: Vec<_> = ride_seeds.iter().filter_map(|&stop| {
-                let l = curr[stop];
-                (l.path.is_some()).then_some((stop, l))
-            }).collect();
-            for (stop, source) in seeds {
+            scan_routes(
+                tt, prev, curr, &mut nodes, &routes, lower, upper,
+                arrive_by, &mut stats, &mut changed, &mut ride_seeds,
+            );
+            // Walk propagation is intentionally one hop: Gentian constructs a
+            // transfer closure. Each improved *provenance* remains independent.
+            for (stop, source) in ride_seeds {
+                if stats.profile_budget_exhausted { break; }
+                let Some(predecessor) = source.path else { continue };
                 let feet = if arrive_by {
                     tt.footpaths_to(LocationIdx(stop as u32))
                 } else {
@@ -717,25 +652,13 @@ pub(crate) fn route_profile_incremental(
                     stats.footpath_edges_examined += 1;
                     let target = edge.target().idx();
                     let secs = edge.seconds();
-                    if secs == 0 {
-                        continue;
-                    }
+                    if secs == 0 { continue; }
                     let time = if arrive_by {
                         source.time.saturating_sub(i64::from(secs))
                     } else {
                         source.time.saturating_add(i64::from(secs))
                     };
-                    if time < lower || time > upper {
-                        continue;
-                    }
-                    let better = if arrive_by {
-                        time > curr[target].time
-                    } else {
-                        time < curr[target].time
-                    };
-                    if !better {
-                        continue;
-                    }
+                    if time < lower || time > upper { continue; }
                     let leg = if arrive_by {
                         Leg::Transfer {
                             from_stop: target as u32, to_stop: stop as u32, seconds: secs,
@@ -745,43 +668,41 @@ pub(crate) fn route_profile_incremental(
                             from_stop: stop as u32, to_stop: target as u32, seconds: secs,
                         }
                     };
-                    let path = append_path(&mut nodes, leg, source.path);
-                    curr[target] = Label {
-                        time, path: Some(path), transit: source.transit,
-                        anchor: source.anchor,
-                    };
-                    changed.push(target);
-                    stats.labels_improved += 1;
+                    insert_path_label(
+                        curr, target, Label { time, path: None, ..source },
+                        leg, Some(predecessor), &mut nodes, arrive_by,
+                        &mut stats, &mut changed,
+                    );
+                    if stats.profile_budget_exhausted { break; }
                 }
             }
             changed.sort_unstable();
             changed.dedup();
             let endpoints = if arrive_by { &request.access } else { &request.egress };
             for ep in endpoints {
-                if changed.binary_search(&ep.stop.idx()).is_ok() {
-                    changed_ends.push((k, ep.stop.idx(), ep.seconds));
+                if changed.binary_search(&ep.stop.idx()).is_err() { continue; }
+                if let Some(labels) = curr.get(&ep.stop.idx()) {
+                    for &label in labels {
+                        changed_ends.push((k, label, ep.stop.idx(), ep.seconds));
+                    }
                 }
             }
             marked = changed;
         }
-
-        for (round, stop, offset) in changed_ends {
-            let label = rounds[round][stop];
+        for (_round, label, stop, offset) in changed_ends {
             let Some(mut journey) = (if arrive_by {
                 reconstruct_reverse(&nodes, label, stop, offset)
             } else {
                 reconstruct_forward(&nodes, label, stop, offset)
-            }) else {
-                continue;
-            };
+            }) else { continue };
             if !arrive_by {
-                // This routine is also used by the point-query solver.
                 optimize_same_trip_endpoint_walks(tt, request, &mut journey);
             }
             if valid_journey(tt, request, &journey) {
                 journeys.push(journey);
             }
         }
+        if stats.profile_budget_exhausted { break; }
     }
     Ok((
         crate::routing_common::profile_search::departure_aware_pareto(journeys),
