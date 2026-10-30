@@ -535,6 +535,8 @@ fn scan_routes(
     stats: &mut RaptorStats,
     changed: &mut Vec<usize>,
     ride_seeds: &mut Vec<(usize, Label)>,
+    final_stops: &[(usize, u32)],
+    terminal_alternatives: &mut Vec<(Label, usize, u32)>,
 ) {
     let started = Instant::now();
     debug_assert!(marked.windows(2).all(|w| w[0] < w[1]));
@@ -678,16 +680,61 @@ fn scan_routes(
                             arrival_unix_seconds: event,
                         }
                     };
+                    let candidate = Label {
+                        time: event,
+                        path: None,
+                        transit: Some((loc, event)),
+                        anchor: riding.anchor,
+                        rides: riding.rides,
+                    };
+                    // At the destination, a second route can be worthwhile
+                    // even when a faster route dominates its arrival label.
+                    // Capture a small number of distinct last-route choices
+                    // without injecting them back into the RAPTOR skyline.
+                    // This keeps the intermediate scan as selective as Nigiri.
+                    if !stats.profile_budget_exhausted
+                        && terminal_alternatives.len() < 32
+                        && final_stops.iter().any(|(stop, _)| *stop == loc)
+                    {
+                        let best = current.get(&loc)
+                            .and_then(|labels| labels.iter()
+                                .filter(|l| l.rides <= candidate.rides)
+                                .map(|l| l.time)
+                                .reduce(|a, b| if arrive_by { a.max(b) } else { a.min(b) }));
+                        let within_slack = best.is_none_or(|time| {
+                            if arrive_by {
+                                time.saturating_sub(event) <= 12 * 60
+                            } else {
+                                event.saturating_sub(time) <= 12 * 60
+                            }
+                        });
+                        let distinct_last_route = !terminal_alternatives.iter().any(
+                            |(prior, end, _)| {
+                                *end == loc && prior.path
+                                    .and_then(|id| nodes.get(id))
+                                    .is_some_and(|node| matches!(
+                                        &node.leg,
+                                        Leg::Ride { route: r, .. } if *r == route.0
+                                    ))
+                            },
+                        );
+                        if within_slack && distinct_last_route
+                            && nodes.len() < MAX_PATH_NODES
+                        {
+                            let mut terminal = candidate;
+                            terminal.path = Some(append_path(
+                                nodes, leg.clone(), Some(riding.predecessor),
+                            ));
+                            for &(end, seconds) in final_stops {
+                                if end == loc {
+                                    terminal_alternatives.push((terminal, end, seconds));
+                                }
+                            }
+                        }
+                    }
                     if let Some(label) = insert_path_label(
-                        current, loc,
-                        Label {
-                            time: event,
-                            path: None,
-                            transit: Some((loc, event)),
-                            anchor: riding.anchor,
-                            rides: riding.rides,
-                        },
-                        leg, Some(riding.predecessor), nodes, arrive_by,
+                        current, loc, candidate, leg,
+                        Some(riding.predecessor), nodes, arrive_by,
                         stats, changed,
                     ) {
                         ride_seeds.push((loc, label));
@@ -918,6 +965,12 @@ pub(crate) fn route_profile_incremental(
             }
             let routes = marked_routes(tt, &marked, &mut stamps, &mut epoch);
             let mut ride_seeds = Vec::new();
+            let final_stops: Vec<(usize, u32)> = (if arrive_by {
+                &request.access
+            } else {
+                &request.egress
+            }).iter().map(|ep| (ep.stop.idx(), ep.seconds)).collect();
+            let mut terminal_alternatives = Vec::new();
             scan_routes(
                 tt,
                 prev,
@@ -936,7 +989,12 @@ pub(crate) fn route_profile_incremental(
                 &mut stats,
                 &mut changed,
                 &mut ride_seeds,
+                &final_stops,
+                &mut terminal_alternatives,
             );
+            for (label, stop, offset) in terminal_alternatives {
+                changed_ends.push((k, label, stop, offset));
+            }
             // Walk propagation is intentionally one hop: Gentian constructs a
             // transfer closure. Each improved *provenance* remains independent.
             for (stop, source) in ride_seeds {
@@ -1041,7 +1099,7 @@ pub(crate) fn route_profile_incremental(
         }
     }
     Ok((
-        crate::routing_common::profile_search::departure_aware_pareto(journeys),
+        crate::routing_common::profile_search::route_diverse_pareto(journeys),
         stats,
     ))
 }

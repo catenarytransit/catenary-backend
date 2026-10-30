@@ -144,6 +144,94 @@ pub fn departure_aware_pareto(journeys: Vec<Journey>) -> Vec<Journey> {
     result
 }
 
+// Preserve the exact departure/arrival/boardings Pareto frontier. However,
+// Nigiri-style journey diversity is also a presentation requirement: two
+// distinct public-transport route sequences can be useful when their costs
+// are nearly identical. Keep a *small* number of such near-Pareto options
+// without inflating the RAPTOR label skyline at every intermediate stop.
+const MAX_NEAR_PARETO_ROUTE_OPTIONS: usize = 6;
+const MAX_ALTERNATIVE_ARRIVAL_SLACK_SECONDS: i64 = 12 * 60;
+const MAX_ALTERNATIVE_DEPARTURE_SLACK_SECONDS: i64 = 20 * 60;
+
+fn route_signature(j: &Journey) -> Vec<u32> {
+    j.legs
+        .iter()
+        .filter_map(|leg| match leg {
+            Leg::Ride { route, .. } => Some(*route),
+            _ => None,
+        })
+        .collect()
+}
+
+fn route_diversity_count(journeys: &[Journey]) -> usize {
+    let mut routes: Vec<Vec<u32>> = journeys
+        .iter()
+        .map(route_signature)
+        .filter(|routes| !routes.is_empty())
+        .collect();
+    routes.sort_unstable();
+    routes.dedup();
+    routes.len()
+}
+
+/// Keep all strict Pareto journeys, plus at most six route-distinct options
+/// that are close to a strict Pareto journey on time and number of boardings.
+/// The additional choices are deliberately presentation candidates, not
+/// pruning labels, so they never multiply route scans or transfers.
+pub(crate) fn route_diverse_pareto(journeys: Vec<Journey>) -> Vec<Journey> {
+    let pareto = departure_aware_pareto(journeys.clone());
+    let mut seen_routes: Vec<Vec<u32>> = pareto.iter().map(route_signature).collect();
+    let mut extras: Vec<Journey> = journeys
+        .into_iter()
+        .filter(|candidate| {
+            let key = route_signature(candidate);
+            if key.is_empty() || seen_routes.contains(&key) {
+                return false;
+            }
+            pareto.iter().any(|optimal| {
+                let arrival_gap =
+                    candidate.arrival_unix_seconds - optimal.arrival_unix_seconds;
+                let departure_gap =
+                    optimal.departure_unix_seconds - candidate.departure_unix_seconds;
+                dominates(optimal, candidate)
+                    && (0..=MAX_ALTERNATIVE_ARRIVAL_SLACK_SECONDS)
+                        .contains(&arrival_gap)
+                    && (0..=MAX_ALTERNATIVE_DEPARTURE_SLACK_SECONDS)
+                        .contains(&departure_gap)
+                    && candidate.boardings <= optimal.boardings.saturating_add(1)
+            })
+        })
+        .collect();
+    // Deterministic quality ordering means the per-signature representative
+    // is the fastest candidate, not whichever route was scanned first.
+    extras.sort_by_key(|j| {
+        (
+            j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds),
+            j.boardings,
+            j.departure_unix_seconds,
+            j.arrival_unix_seconds,
+        )
+    });
+    let mut result = pareto;
+    let mut added = 0;
+    for journey in extras {
+        if added >= MAX_NEAR_PARETO_ROUTE_OPTIONS {
+            break;
+        }
+        let key = route_signature(&journey);
+        if seen_routes.contains(&key) {
+            continue;
+        }
+        seen_routes.push(key);
+        result.push(journey);
+        added += 1;
+    }
+    result.sort_by_key(|j| {
+        (j.departure_unix_seconds, j.arrival_unix_seconds, j.boardings)
+    });
+    result
+}
+
 /// Presentation-only policy, deliberately separate from Pareto dominance.
 /// An extreme journey is suppressed only when a much faster journey exists
 /// *near the same requested-direction time*. Sparse daily trains are retained.
@@ -432,8 +520,8 @@ pub fn route_profile_with_stats(
                     .saturating_sub(j.departure_unix_seconds)
                     <= i64::from(options.max_journey_duration_seconds)
         }));
-        transit = departure_aware_pareto(transit);
-        if filter_extreme_durations(transit.clone(), options, arrive_by).len()
+        transit = route_diverse_pareto(transit);
+        if route_diversity_count(&filter_extreme_durations(transit.clone(), options, arrive_by))
             >= options.min_itineraries
             || stats.profile_budget_exhausted
         {
@@ -473,7 +561,7 @@ pub fn route_profile_with_stats(
                     .saturating_sub(j.departure_unix_seconds)
                     <= i64::from(options.max_journey_duration_seconds)
         }));
-        transit = departure_aware_pareto(transit);
+        transit = route_diverse_pareto(transit);
     }
 
     let total_before_filter = transit.len();
@@ -722,6 +810,61 @@ mod tests {
         assert_eq!(kept.len(), 2);
         assert_eq!(kept[0].departure_unix_seconds, 120);
         assert_eq!(kept[1].departure_unix_seconds, 200);
+    }
+
+    #[test]
+    fn preserves_bounded_distinct_route_options_without_showing_bad_detours() {
+        fn candidate(route: u32, dep: i64, arr: i64, boardings: usize) -> Journey {
+            Journey {
+                departure_unix_seconds: dep,
+                arrival_unix_seconds: arr,
+                boardings,
+                legs: vec![Leg::Ride {
+                    from_stop: 0,
+                    to_stop: 1,
+                    route,
+                    transport: route,
+                    service_day: 0,
+                    board_stop_index: 0,
+                    alight_stop_index: 1,
+                    departure_unix_seconds: dep,
+                    arrival_unix_seconds: arr,
+                }],
+            }
+        }
+        let options = route_diverse_pareto(vec![
+            candidate(1, 100, 1_900, 1), // Strict optimum.
+            candidate(2, 100, 2_140, 1), // +4 min, different route.
+            candidate(3, 100, 2_140, 1), // Equal time, different route.
+            candidate(1, 100, 2_080, 1), // Same route as optimum.
+            candidate(4, 100, 4_000, 1), // Unreasonable detour.
+        ]);
+        assert_eq!(options.len(), 3);
+        assert_eq!(route_diversity_count(&options), 3);
+        assert!(options.iter().any(|j| route_signature(j) == vec![2]));
+        assert!(options.iter().any(|j| route_signature(j) == vec![3]));
+        assert!(!options.iter().any(|j| route_signature(j) == vec![4]));
+    }
+
+    #[test]
+    fn route_diversity_supplement_preserves_daily_departure_pareto() {
+        fn candidate(dep: i64, arr: i64) -> Journey {
+            Journey {
+                departure_unix_seconds: dep,
+                arrival_unix_seconds: arr,
+                boardings: 1,
+                legs: vec![Leg::Ride {
+                    from_stop: 0, to_stop: 1, route: 1, transport: 0, service_day: 0,
+                    board_stop_index: 0, alight_stop_index: 1,
+                    departure_unix_seconds: dep, arrival_unix_seconds: arr,
+                }],
+            }
+        }
+        let choices = route_diverse_pareto(vec![
+            candidate(100, 1_900),
+            candidate(300, 2_100),
+        ]);
+        assert_eq!(choices.len(), 2);
     }
 
     #[test]
