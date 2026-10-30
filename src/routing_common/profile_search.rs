@@ -338,7 +338,7 @@ pub fn route_profile_with_stats(
     // Generate only the service-active anchors once from the compressed
     // stop/route/transport columns, rather than probing an entire route graph
     // for every timetable departure.
-    let mut events = timetable_start_events(tt, request, reference, boundary, arrive_by, &mut stats);
+    let events = timetable_start_events(tt, request, reference, boundary, arrive_by, &mut stats);
     let mut window = options.search_window_seconds;
     // An empty current window is never a reason to expand the *journey*
     // horizon; interval search already permits long journeys.
@@ -356,22 +356,15 @@ pub fn route_profile_with_stats(
         // RAPTOR round labels. Reverse queries retain a single arrive-by
         // fallback until reverse shared-state reconstruction is implemented.
         // Avoid the previous 128 full network solves in both directions.
-        let (batch, batch_stats) = if arrive_by {
-            let mut q = request.clone();
-            q.departure_unix_seconds = reference;
-            q.direct_walk_seconds = None;
-            q.max_duration_seconds = options.max_journey_duration_seconds;
-            raptor_arrive_by::route_arrive_by_with_stats(tt, &q)?
-        } else {
-            let mut q = request.clone();
-            q.direct_walk_seconds = None;
-            q.max_duration_seconds = options.max_journey_duration_seconds;
-            let mut sorted = selected.clone();
-            sorted.sort_unstable();
-            raptor_query::route_interval_with_stats(
-                tt, &q, &sorted, Duration::from_secs(3),
-            )?
-        };
+        let mut q = request.clone();
+        q.direct_walk_seconds = None;
+        q.max_duration_seconds = options.max_journey_duration_seconds;
+        let mut sorted = selected;
+        sorted.sort_unstable();
+        let (batch, batch_stats) =
+            crate::routing_common::profile_raptor::route_profile_incremental(
+                tt, &q, &sorted, arrive_by, Duration::from_secs(3),
+            )?;
         stopped_early |= batch_stats.profile_budget_exhausted;
         let anchor_count = batch_stats.profile_anchor_events;
         accumulate_stats(&mut stats, batch_stats);
