@@ -12,8 +12,7 @@
 
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{
-    self, Journey, Leg, Query, RaptorStats, for_each_route_service_day,
-    transport_event_second,
+    self, Journey, Leg, Query, RaptorStats, for_each_route_service_day, transport_event_second,
 };
 use crate::routing_common::timetable::{TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
@@ -195,11 +194,19 @@ fn filter_extreme_durations(
 pub fn sort_journeys_for_response(journeys: &mut [Journey], arrive_by: bool) {
     if arrive_by {
         journeys.sort_by_key(|j| {
-            (j.arrival_unix_seconds, j.boardings, j.departure_unix_seconds)
+            (
+                j.arrival_unix_seconds,
+                j.boardings,
+                j.departure_unix_seconds,
+            )
         });
     } else {
         journeys.sort_by_key(|j| {
-            (j.departure_unix_seconds, j.boardings, j.arrival_unix_seconds)
+            (
+                j.departure_unix_seconds,
+                j.boardings,
+                j.arrival_unix_seconds,
+            )
         });
     }
 }
@@ -221,16 +228,30 @@ fn timetable_start_events(
     stats: &mut RaptorStats,
 ) -> Vec<i64> {
     let mut events = vec![reference];
-    let endpoints = if arrive_by { &request.egress } else { &request.access };
+    let endpoints = if arrive_by {
+        &request.egress
+    } else {
+        &request.access
+    };
     for endpoint in endpoints {
         let offset = i64::from(endpoint.seconds);
-        let first_event = reference.min(boundary).saturating_add(if arrive_by { -offset } else { offset });
-        let last_event = reference.max(boundary).saturating_add(if arrive_by { -offset } else { offset });
+        let first_event =
+            reference
+                .min(boundary)
+                .saturating_add(if arrive_by { -offset } else { offset });
+        let last_event =
+            reference
+                .max(boundary)
+                .saturating_add(if arrive_by { -offset } else { offset });
         for &route in tt.routes_at(endpoint.stop) {
             let stops = tt.stops_on(route);
             for (position, stop) in stops.iter().enumerate() {
                 if stop.location() != endpoint.stop
-                    || if arrive_by { !stop.inbound() } else { !stop.outbound() }
+                    || if arrive_by {
+                        !stop.inbound()
+                    } else {
+                        !stop.outbound()
+                    }
                 {
                     continue;
                 }
@@ -246,15 +267,19 @@ fn timetable_start_events(
                     last_event,
                     stats,
                     |day, stats| {
-                        let midnight =
-                            (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
+                        let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
                         let range = tt.route_transport_ranges()[route.idx()];
                         let (mut lo, mut hi) = (range.from, range.to);
                         while lo < hi {
                             let mid = lo + (hi - lo) / 2;
                             stats.transport_lookup_probes += 1;
                             let Some(event) = transport_event_second(
-                                tt, route, TransportIdx(mid), position, arrive_by, midnight,
+                                tt,
+                                route,
+                                TransportIdx(mid),
+                                position,
+                                arrive_by,
+                                midnight,
                             ) else {
                                 return;
                             };
@@ -275,8 +300,7 @@ fn timetable_start_events(
                                 break;
                             }
                             stats.stop_events_scanned += 1;
-                            if !tt.bitfields()
-                                [tt.transport_traffic_days()[transport.idx()].idx()]
+                            if !tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
                                 .test(day)
                             {
                                 continue;
@@ -346,9 +370,11 @@ pub fn route_profile_with_stats(
     let mut stopped_early = false;
     let started = Instant::now();
     loop {
-        let selected: Vec<_> = events.iter().copied().filter(|&event| {
-            event.abs_diff(reference) <= u64::from(window)
-        }).collect();
+        let selected: Vec<_> = events
+            .iter()
+            .copied()
+            .filter(|&event| event.abs_diff(reference) <= u64::from(window))
+            .collect();
         if selected.is_empty() {
             break;
         }
@@ -363,28 +389,41 @@ pub fn route_profile_with_stats(
         sorted.sort_unstable();
         let (batch, batch_stats) =
             crate::routing_common::profile_raptor::route_profile_incremental(
-                tt, &q, &sorted, arrive_by, Duration::from_secs(3),
+                tt,
+                &q,
+                &sorted,
+                arrive_by,
+                Duration::from_secs(3),
             )?;
         stopped_early |= batch_stats.profile_budget_exhausted;
         let anchor_count = batch_stats.profile_anchor_events;
         accumulate_stats(&mut stats, batch_stats);
         stats.profile_anchor_events += anchor_count;
         transit.extend(batch.into_iter().filter(|j| {
-            let t = if arrive_by { j.arrival_unix_seconds } else { j.departure_unix_seconds };
+            let t = if arrive_by {
+                j.arrival_unix_seconds
+            } else {
+                j.departure_unix_seconds
+            };
             t.abs_diff(reference) <= u64::from(window)
-                && j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds)
+                && j.arrival_unix_seconds
+                    .saturating_sub(j.departure_unix_seconds)
                     <= i64::from(options.max_journey_duration_seconds)
         }));
         transit = departure_aware_pareto(transit);
         let presentable = filter_extreme_durations(transit.clone(), options, arrive_by);
-        if presentable.len() >= options.min_itineraries || window >= options.max_search_window_seconds {
+        if presentable.len() >= options.min_itineraries
+            || window >= options.max_search_window_seconds
+        {
             break;
         }
         if stopped_early || started.elapsed() >= Duration::from_secs(4) {
             stopped_early = true;
             break;
         }
-        window = window.saturating_mul(2).min(options.max_search_window_seconds);
+        window = window
+            .saturating_mul(2)
+            .min(options.max_search_window_seconds);
         stats.profile_interval_extensions += 1;
     }
     stats.profile_budget_exhausted |= stopped_early;
@@ -526,14 +565,23 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         let tomorrow = base + 86_400 + 9 * 3_600;
         let later = base + 2 * 86_400 + 9 * 3_600;
-        let (journeys, stats) =
-            crate::routing_common::profile_raptor::route_profile_incremental(
-                &tt, &q, &[tomorrow, later], false, Duration::from_secs(5),
-            )
-            .unwrap();
+        let (journeys, stats) = crate::routing_common::profile_raptor::route_profile_incremental(
+            &tt,
+            &q,
+            &[tomorrow, later],
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         let departure_times: Vec<_> = journeys.iter().map(|j| j.departure_unix_seconds).collect();
-        assert!(departure_times.contains(&tomorrow), "missing first daily service: {departure_times:?}");
-        assert!(departure_times.contains(&later), "missing later daily service: {departure_times:?}");
+        assert!(
+            departure_times.contains(&tomorrow),
+            "missing first daily service: {departure_times:?}"
+        );
+        assert!(
+            departure_times.contains(&later),
+            "missing later daily service: {departure_times:?}"
+        );
         assert_eq!(stats.profile_anchor_events, 2);
         for j in journeys {
             assert_eq!(j.arrival_unix_seconds - j.departure_unix_seconds, 8 * 3_600);
@@ -552,14 +600,25 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         let first_arrival = base + 86_400 + 17 * 3_600;
         let second_arrival = base + 2 * 86_400 + 17 * 3_600;
-        let (journeys, stats) =
-            crate::routing_common::profile_raptor::route_profile_incremental(
-                &tt, &q, &[first_arrival, second_arrival], true, Duration::from_secs(5),
-            )
-            .unwrap();
+        let (journeys, stats) = crate::routing_common::profile_raptor::route_profile_incremental(
+            &tt,
+            &q,
+            &[first_arrival, second_arrival],
+            true,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert_eq!(stats.profile_anchor_events, 2);
-        assert!(journeys.iter().any(|j| j.arrival_unix_seconds == first_arrival));
-        assert!(journeys.iter().any(|j| j.arrival_unix_seconds == second_arrival));
+        assert!(
+            journeys
+                .iter()
+                .any(|j| j.arrival_unix_seconds == first_arrival)
+        );
+        assert!(
+            journeys
+                .iter()
+                .any(|j| j.arrival_unix_seconds == second_arrival)
+        );
         assert!(journeys.iter().all(|j| j.boardings == 1));
     }
 
@@ -698,5 +757,4 @@ mod tests {
         );
         assert_eq!(kept.len(), 2);
     }
-
 }

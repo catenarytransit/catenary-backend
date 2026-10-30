@@ -10,12 +10,12 @@
 //! depending on compressed timetable materialization.
 
 use crate::routing_common::raptor_query::{
-    for_each_route_service_day, get_earliest_transport, get_latest_transport,
-    optimize_same_trip_endpoint_walks, transport_event_second, Journey, Leg, Query, RaptorStats,
+    Journey, Leg, Query, RaptorStats, for_each_route_service_day, get_earliest_transport,
+    get_latest_transport, optimize_same_trip_endpoint_walks, transport_event_second,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use ahash::AHashMap;
-use anyhow::{ensure, Result};
+use anyhow::{Result, ensure};
 use std::time::{Duration, Instant};
 
 const INF: i64 = i64::MAX / 4;
@@ -56,7 +56,6 @@ fn append_path(nodes: &mut Vec<PathNode>, leg: Leg, next: Option<usize>) -> usiz
     id
 }
 
-
 /// A sufficient (deliberately conservative) transfer-feasibility dominance
 /// relation. Equal arrival times alone cannot dominate a label reached from a
 /// different last-alighting stop: stop-pair GTFS transfer constraints vary with
@@ -72,22 +71,30 @@ fn label_dominates(a: &Label, b: &Label, arrive_by: bool) -> bool {
     let compatible = match (a.transit, b.transit) {
         (None, None) => true,
         (Some((a_stop, a_time)), Some((b_stop, b_time))) if a_stop == b_stop => {
-            if arrive_by { a_time >= b_time } else { a_time <= b_time }
+            if arrive_by {
+                a_time >= b_time
+            } else {
+                a_time <= b_time
+            }
         }
         _ => false,
     };
-    compatible && if arrive_by {
-        a.time >= b.time && a.anchor <= b.anchor
-    } else {
-        a.time <= b.time && a.anchor >= b.anchor
-    }
+    compatible
+        && if arrive_by {
+            a.time >= b.time && a.anchor <= b.anchor
+        } else {
+            a.time <= b.time && a.anchor >= b.anchor
+        }
 }
 
 /// An insertion affects the next RAPTOR round only when it extends the
 /// non-dominated skyline. The caller's path remains an immutable arena link.
 fn insert_label(round: &mut Round, stop: usize, label: Label, arrive_by: bool) -> bool {
     let frontier = round.entry(stop).or_default();
-    if frontier.iter().any(|existing| label_dominates(existing, &label, arrive_by)) {
+    if frontier
+        .iter()
+        .any(|existing| label_dominates(existing, &label, arrive_by))
+    {
         return false;
     }
     frontier.retain(|existing| !label_dominates(&label, existing, arrive_by));
@@ -109,7 +116,10 @@ fn insert_path_label(
     changed: &mut Vec<usize>,
 ) -> Option<Label> {
     let frontier = round.entry(stop).or_default();
-    if frontier.iter().any(|existing| label_dominates(existing, &candidate, arrive_by)) {
+    if frontier
+        .iter()
+        .any(|existing| label_dominates(existing, &candidate, arrive_by))
+    {
         stats.labels_dominated += 1;
         return None;
     }
@@ -140,15 +150,19 @@ struct Onboard {
 /// their transfer-feasibility checks. Earlier vehicles are no later downstream;
 /// the anchor/boarding dimensions must also be no worse.
 fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
-    a.rides <= b.rides && if arrive_by {
-        a.transport.0 >= b.transport.0 && a.anchor <= b.anchor
-    } else {
-        a.transport.0 <= b.transport.0 && a.anchor >= b.anchor
-    }
+    a.rides <= b.rides
+        && if arrive_by {
+            a.transport.0 >= b.transport.0 && a.anchor <= b.anchor
+        } else {
+            a.transport.0 <= b.transport.0 && a.anchor >= b.anchor
+        }
 }
 
 fn insert_onboard(candidates: &mut Vec<Onboard>, candidate: Onboard, arrive_by: bool) {
-    if candidates.iter().any(|existing| onboard_dominates(existing, &candidate, arrive_by)) {
+    if candidates
+        .iter()
+        .any(|existing| onboard_dominates(existing, &candidate, arrive_by))
+    {
         return;
     }
     candidates.retain(|existing| !onboard_dominates(&candidate, existing, arrive_by));
@@ -170,12 +184,8 @@ fn first_vehicle_anchor(
         return Some(label.anchor);
     }
     match (&nodes.get(predecessor)?.leg, arrive_by) {
-        (Leg::Access { seconds, .. }, false) => {
-            event_time.checked_sub(i64::from(*seconds))
-        }
-        (Leg::Egress { seconds, .. }, true) => {
-            event_time.checked_add(i64::from(*seconds))
-        }
+        (Leg::Access { seconds, .. }, false) => event_time.checked_sub(i64::from(*seconds)),
+        (Leg::Egress { seconds, .. }, true) => event_time.checked_add(i64::from(*seconds)),
         _ => None,
     }
 }
@@ -244,7 +254,10 @@ fn reconstruct_forward(
     stop: usize,
     egress: u32,
 ) -> Option<Journey> {
-    let mut legs = vec![Leg::Egress { from_stop: stop as u32, seconds: egress }];
+    let mut legs = vec![Leg::Egress {
+        from_stop: stop as u32,
+        seconds: egress,
+    }];
     let mut link = label.path?;
     let mut steps = 0usize;
     loop {
@@ -263,7 +276,10 @@ fn reconstruct_forward(
     if !matches!(legs.first(), Some(Leg::Access { .. })) {
         return None;
     }
-    let boardings = legs.iter().filter(|l| matches!(l, Leg::Ride { .. })).count();
+    let boardings = legs
+        .iter()
+        .filter(|l| matches!(l, Leg::Ride { .. }))
+        .count();
     Some(Journey {
         boardings,
         departure_unix_seconds: label.anchor,
@@ -278,7 +294,10 @@ fn reconstruct_reverse(
     stop: usize,
     access: u32,
 ) -> Option<Journey> {
-    let mut legs = vec![Leg::Access { to_stop: stop as u32, seconds: access }];
+    let mut legs = vec![Leg::Access {
+        to_stop: stop as u32,
+        seconds: access,
+    }];
     let mut link = label.path?;
     let mut steps = 0usize;
     loop {
@@ -296,7 +315,10 @@ fn reconstruct_reverse(
     if !matches!(legs.last(), Some(Leg::Egress { .. })) {
         return None;
     }
-    let boardings = legs.iter().filter(|l| matches!(l, Leg::Ride { .. })).count();
+    let boardings = legs
+        .iter()
+        .filter(|l| matches!(l, Leg::Ride { .. }))
+        .count();
     Some(Journey {
         boardings,
         departure_unix_seconds: label.time.saturating_sub(i64::from(access)),
@@ -309,7 +331,9 @@ fn reconstruct_reverse(
 /// calendar bits, ordered walking legs, and transfer-time constraints.
 /// Reconstruction should never silently yield a non-existent trip.
 fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bool {
-    let elapsed = j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds);
+    let elapsed = j
+        .arrival_unix_seconds
+        .saturating_sub(j.departure_unix_seconds);
     if elapsed < 0 || elapsed > i64::from(request.max_duration_seconds) {
         return false;
     }
@@ -320,17 +344,26 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
     for (i, leg) in j.legs.iter().enumerate() {
         match leg.clone() {
             Leg::Access { to_stop, seconds } if i == 0 => {
-                if !request.access.iter().any(|a| a.stop.0 == to_stop && a.seconds == seconds) {
+                if !request
+                    .access
+                    .iter()
+                    .any(|a| a.stop.0 == to_stop && a.seconds == seconds)
+                {
                     return false;
                 }
                 stop = Some(to_stop);
                 time = time.saturating_add(i64::from(seconds));
             }
-            Leg::Transfer { from_stop, to_stop, seconds } => {
+            Leg::Transfer {
+                from_stop,
+                to_stop,
+                seconds,
+            } => {
                 if stop != Some(from_stop)
-                    || !tt.footpaths_from(LocationIdx(from_stop)).iter().any(|f| {
-                        f.target().0 == to_stop && f.seconds() == seconds
-                    })
+                    || !tt
+                        .footpaths_from(LocationIdx(from_stop))
+                        .iter()
+                        .any(|f| f.target().0 == to_stop && f.seconds() == seconds)
                 {
                     return false;
                 }
@@ -338,11 +371,18 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
                 time = time.saturating_add(i64::from(seconds));
             }
             Leg::Ride {
-                from_stop, to_stop, route, transport, service_day,
-                board_stop_index, alight_stop_index,
-                departure_unix_seconds, arrival_unix_seconds,
+                from_stop,
+                to_stop,
+                route,
+                transport,
+                service_day,
+                board_stop_index,
+                alight_stop_index,
+                departure_unix_seconds,
+                arrival_unix_seconds,
             } => {
-                if stop != Some(from_stop) || time > departure_unix_seconds
+                if stop != Some(from_stop)
+                    || time > departure_unix_seconds
                     || board_stop_index >= alight_stop_index
                 {
                     return false;
@@ -353,14 +393,16 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
                     return false;
                 };
                 let stops = tt.stops_on(route);
-                if transport.0 < r.from || transport.0 >= r.to
-                    || stops.get(board_stop_index).is_none_or(|s| {
-                        s.location().0 != from_stop || !s.outbound()
-                    })
-                    || stops.get(alight_stop_index).is_none_or(|s| {
-                        s.location().0 != to_stop || !s.inbound()
-                    })
-                    || !tt.transport_traffic_days()
+                if transport.0 < r.from
+                    || transport.0 >= r.to
+                    || stops
+                        .get(board_stop_index)
+                        .is_none_or(|s| s.location().0 != from_stop || !s.outbound())
+                    || stops
+                        .get(alight_stop_index)
+                        .is_none_or(|s| s.location().0 != to_stop || !s.inbound())
+                    || !tt
+                        .transport_traffic_days()
                         .get(transport.idx())
                         .and_then(|b| tt.bitfields().get(b.idx()))
                         .is_some_and(|bits| bits.test(service_day as usize))
@@ -369,18 +411,23 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
                 }
                 let midnight =
                     (i64::from(tt.header().first_utc_day) + i64::from(service_day)) * 86_400;
-                if transport_event_second(
-                    tt, route, transport, board_stop_index, false, midnight,
-                ) != Some(departure_unix_seconds)
+                if transport_event_second(tt, route, transport, board_stop_index, false, midnight)
+                    != Some(departure_unix_seconds)
                     || transport_event_second(
-                        tt, route, transport, alight_stop_index, true, midnight,
+                        tt,
+                        route,
+                        transport,
+                        alight_stop_index,
+                        true,
+                        midnight,
                     ) != Some(arrival_unix_seconds)
                 {
                     return false;
                 }
                 if let Some((from, alight)) = previous_alight {
                     let to = from_stop as usize;
-                    let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(from_stop));
+                    let rule =
+                        tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(from_stop));
                     if rule.is_some_and(|r| r.prohibited()) {
                         return false;
                     }
@@ -398,7 +445,10 @@ fn valid_journey(tt: &ZeroCopyTimetable<'_>, request: &Query, j: &Journey) -> bo
             }
             Leg::Egress { from_stop, seconds } if i + 1 == j.legs.len() => {
                 if stop != Some(from_stop)
-                    || !request.egress.iter().any(|e| e.stop.0 == from_stop && e.seconds == seconds)
+                    || !request
+                        .egress
+                        .iter()
+                        .any(|e| e.stop.0 == from_stop && e.seconds == seconds)
                 {
                     return false;
                 }
@@ -425,12 +475,18 @@ fn scan_routes(
 ) {
     let started = Instant::now();
     for &route in routes {
-        if stats.profile_budget_exhausted { break; }
+        if stats.profile_budget_exhausted {
+            break;
+        }
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
-        if stops.len() < 2 { continue; }
+        if stops.len() < 2 {
+            continue;
+        }
         for_each_route_service_day(tt, route, lower, upper, stats, |day, stats| {
-            if stats.profile_budget_exhausted { return; }
+            if stats.profile_budget_exhausted {
+                return;
+            }
             let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
             let mut onboard: Vec<Onboard> = Vec::new();
             let positions: Vec<usize> = if arrive_by {
@@ -439,7 +495,9 @@ fn scan_routes(
                 (0..stops.len()).collect()
             };
             for pos in positions {
-                if stats.profile_budget_exhausted { break; }
+                if stats.profile_budget_exhausted {
+                    break;
+                }
                 stats.stop_events_scanned += 1;
                 let stop = stops[pos];
                 let loc = stop.location().idx();
@@ -452,45 +510,74 @@ fn scan_routes(
                     let mut proposals = Vec::new();
                     for riding in &onboard {
                         let event = transport_event_second(
-                            tt, route, riding.transport, pos, !arrive_by, midnight,
+                            tt,
+                            route,
+                            riding.transport,
+                            pos,
+                            !arrive_by,
+                            midnight,
                         );
                         let Some(event) = event else { continue };
-                        if event < lower || event > upper { continue; }
+                        if event < lower || event > upper {
+                            continue;
+                        }
                         let anchor = riding.anchor;
                         let time = event;
                         let transit = Some((loc, event));
                         let leg = if arrive_by {
                             Leg::Ride {
-                                from_stop: loc as u32, to_stop: riding.from as u32,
-                                route: route.0, transport: riding.transport.0,
-                                service_day: day as u16, board_stop_index: pos,
+                                from_stop: loc as u32,
+                                to_stop: riding.from as u32,
+                                route: route.0,
+                                transport: riding.transport.0,
+                                service_day: day as u16,
+                                board_stop_index: pos,
                                 alight_stop_index: riding.position,
                                 departure_unix_seconds: event,
                                 arrival_unix_seconds: riding.event_time,
                             }
                         } else {
                             Leg::Ride {
-                                from_stop: riding.from as u32, to_stop: loc as u32,
-                                route: route.0, transport: riding.transport.0,
-                                service_day: day as u16, board_stop_index: riding.position,
+                                from_stop: riding.from as u32,
+                                to_stop: loc as u32,
+                                route: route.0,
+                                transport: riding.transport.0,
+                                service_day: day as u16,
+                                board_stop_index: riding.position,
                                 alight_stop_index: pos,
                                 departure_unix_seconds: riding.event_time,
                                 arrival_unix_seconds: event,
                             }
                         };
                         proposals.push((
-                            Label { time, path: None, transit, anchor, rides: riding.rides },
-                            leg, riding.predecessor,
+                            Label {
+                                time,
+                                path: None,
+                                transit,
+                                anchor,
+                                rides: riding.rides,
+                            },
+                            leg,
+                            riding.predecessor,
                         ));
                     }
                     for (candidate, leg, predecessor) in proposals {
                         if let Some(label) = insert_path_label(
-                            current, loc, candidate, leg, Some(predecessor), nodes,
-                            arrive_by, stats, changed,
+                            current,
+                            loc,
+                            candidate,
+                            leg,
+                            Some(predecessor),
+                            nodes,
+                            arrive_by,
+                            stats,
+                            changed,
                         ) {
                             ride_seeds.push((loc, label));
                         }
-                        if stats.profile_budget_exhausted { break; }
+                        if stats.profile_budget_exhausted {
+                            break;
+                        }
                     }
                 }
                 let can_start = if arrive_by {
@@ -498,7 +585,9 @@ fn scan_routes(
                 } else {
                     stop.outbound() && pos + 1 < stops.len()
                 };
-                if !can_start { continue; }
+                if !can_start {
+                    continue;
+                }
                 if let Some(labels) = previous.get(&loc) {
                     for &label in labels {
                         let ready = if arrive_by {
@@ -506,24 +595,44 @@ fn scan_routes(
                         } else {
                             forward_ready(tt, label, loc)
                         };
-                        let Some(ready) = ready else { continue; };
-                        if ready < lower || ready > upper { continue; }
+                        let Some(ready) = ready else {
+                            continue;
+                        };
+                        if ready < lower || ready > upper {
+                            continue;
+                        }
                         let option = if arrive_by {
                             get_latest_transport(tt, route, pos, day, ready, stats)
                         } else {
                             get_earliest_transport(tt, route, pos, day, ready, stats)
                         };
-                        let Some((transport, event_time)) = option else { continue; };
-                        if event_time < lower || event_time > upper { continue; }
-                        let Some(predecessor) = label.path else { continue };
-                        let Some(anchor) = first_vehicle_anchor(
-                            nodes, predecessor, label, event_time, arrive_by,
-                        ) else { continue };
-                        insert_onboard(&mut onboard, Onboard {
-                            transport, from: loc, event_time,
-                            position: pos, predecessor, anchor,
-                            rides: label.rides.saturating_add(1),
-                        }, arrive_by);
+                        let Some((transport, event_time)) = option else {
+                            continue;
+                        };
+                        if event_time < lower || event_time > upper {
+                            continue;
+                        }
+                        let Some(predecessor) = label.path else {
+                            continue;
+                        };
+                        let Some(anchor) =
+                            first_vehicle_anchor(nodes, predecessor, label, event_time, arrive_by)
+                        else {
+                            continue;
+                        };
+                        insert_onboard(
+                            &mut onboard,
+                            Onboard {
+                                transport,
+                                from: loc,
+                                event_time,
+                                position: pos,
+                                predecessor,
+                                anchor,
+                                rides: label.rides.saturating_add(1),
+                            },
+                            arrive_by,
+                        );
                     }
                 }
             }
@@ -543,7 +652,10 @@ pub(crate) fn route_profile_incremental(
     arrive_by: bool,
     budget: Duration,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
-    ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
+    ensure!(
+        request.max_boardings <= 16,
+        "max_boardings exceeds supported query limit"
+    );
     ensure!(
         (1..=7 * 86_400).contains(&request.max_duration_seconds),
         "max_duration_seconds must be between 1 second and 7 days"
@@ -569,7 +681,10 @@ pub(crate) fn route_profile_incremental(
     let upper = if arrive_by {
         *anchors.last().unwrap()
     } else {
-        anchors.last().unwrap().saturating_add(i64::from(request.max_duration_seconds))
+        anchors
+            .last()
+            .unwrap()
+            .saturating_add(i64::from(request.max_duration_seconds))
     };
 
     let mut rounds = vec![Round::default(); request.max_boardings + 1];
@@ -590,7 +705,11 @@ pub(crate) fn route_profile_incremental(
         }
         stats.profile_anchor_events += 1;
         let mut marked = Vec::new();
-        let initial = if arrive_by { &request.egress } else { &request.access };
+        let initial = if arrive_by {
+            &request.egress
+        } else {
+            &request.access
+        };
         for ep in initial {
             let stop = ep.stop.idx();
             let time = if arrive_by {
@@ -598,25 +717,46 @@ pub(crate) fn route_profile_incremental(
             } else {
                 anchor.saturating_add(i64::from(ep.seconds))
             };
-            if time < lower || time > upper { continue; }
+            if time < lower || time > upper {
+                continue;
+            }
             let candidate = Label {
-                time, path: None, transit: None, anchor, rides: 0,
+                time,
+                path: None,
+                transit: None,
+                anchor,
+                rides: 0,
             };
             let leg = if arrive_by {
-                Leg::Egress { from_stop: ep.stop.0, seconds: ep.seconds }
+                Leg::Egress {
+                    from_stop: ep.stop.0,
+                    seconds: ep.seconds,
+                }
             } else {
-                Leg::Access { to_stop: ep.stop.0, seconds: ep.seconds }
+                Leg::Access {
+                    to_stop: ep.stop.0,
+                    seconds: ep.seconds,
+                }
             };
             insert_path_label(
-                &mut rounds[0], stop, candidate, leg, None,
-                &mut nodes, arrive_by, &mut stats, &mut marked,
+                &mut rounds[0],
+                stop,
+                candidate,
+                leg,
+                None,
+                &mut nodes,
+                arrive_by,
+                &mut stats,
+                &mut marked,
             );
         }
         marked.sort_unstable();
         marked.dedup();
         let mut changed_ends: Vec<(usize, Label, usize, u32)> = Vec::new();
         for k in 1..=request.max_boardings {
-            if marked.is_empty() || stats.profile_budget_exhausted { break; }
+            if marked.is_empty() || stats.profile_budget_exhausted {
+                break;
+            }
             stats.rounds += 1;
             stats.marked_stops += marked.len() as u64;
             let (earlier, later) = rounds.split_at_mut(k);
@@ -635,14 +775,27 @@ pub(crate) fn route_profile_incremental(
             let routes = marked_routes(tt, &marked, &mut stamps, &mut epoch);
             let mut ride_seeds = Vec::new();
             scan_routes(
-                tt, prev, curr, &mut nodes, &routes, lower, upper,
-                arrive_by, &mut stats, &mut changed, &mut ride_seeds,
+                tt,
+                prev,
+                curr,
+                &mut nodes,
+                &routes,
+                lower,
+                upper,
+                arrive_by,
+                &mut stats,
+                &mut changed,
+                &mut ride_seeds,
             );
             // Walk propagation is intentionally one hop: Gentian constructs a
             // transfer closure. Each improved *provenance* remains independent.
             for (stop, source) in ride_seeds {
-                if stats.profile_budget_exhausted { break; }
-                let Some(predecessor) = source.path else { continue };
+                if stats.profile_budget_exhausted {
+                    break;
+                }
+                let Some(predecessor) = source.path else {
+                    continue;
+                };
                 let feet = if arrive_by {
                     tt.footpaths_to(LocationIdx(stop as u32))
                 } else {
@@ -652,35 +805,61 @@ pub(crate) fn route_profile_incremental(
                     stats.footpath_edges_examined += 1;
                     let target = edge.target().idx();
                     let secs = edge.seconds();
-                    if secs == 0 { continue; }
+                    if secs == 0 {
+                        continue;
+                    }
                     let time = if arrive_by {
                         source.time.saturating_sub(i64::from(secs))
                     } else {
                         source.time.saturating_add(i64::from(secs))
                     };
-                    if time < lower || time > upper { continue; }
+                    if time < lower || time > upper {
+                        continue;
+                    }
                     let leg = if arrive_by {
                         Leg::Transfer {
-                            from_stop: target as u32, to_stop: stop as u32, seconds: secs,
+                            from_stop: target as u32,
+                            to_stop: stop as u32,
+                            seconds: secs,
                         }
                     } else {
                         Leg::Transfer {
-                            from_stop: stop as u32, to_stop: target as u32, seconds: secs,
+                            from_stop: stop as u32,
+                            to_stop: target as u32,
+                            seconds: secs,
                         }
                     };
                     insert_path_label(
-                        curr, target, Label { time, path: None, ..source },
-                        leg, Some(predecessor), &mut nodes, arrive_by,
-                        &mut stats, &mut changed,
+                        curr,
+                        target,
+                        Label {
+                            time,
+                            path: None,
+                            ..source
+                        },
+                        leg,
+                        Some(predecessor),
+                        &mut nodes,
+                        arrive_by,
+                        &mut stats,
+                        &mut changed,
                     );
-                    if stats.profile_budget_exhausted { break; }
+                    if stats.profile_budget_exhausted {
+                        break;
+                    }
                 }
             }
             changed.sort_unstable();
             changed.dedup();
-            let endpoints = if arrive_by { &request.access } else { &request.egress };
+            let endpoints = if arrive_by {
+                &request.access
+            } else {
+                &request.egress
+            };
             for ep in endpoints {
-                if changed.binary_search(&ep.stop.idx()).is_err() { continue; }
+                if changed.binary_search(&ep.stop.idx()).is_err() {
+                    continue;
+                }
                 if let Some(labels) = curr.get(&ep.stop.idx()) {
                     for &label in labels {
                         changed_ends.push((k, label, ep.stop.idx(), ep.seconds));
@@ -694,7 +873,9 @@ pub(crate) fn route_profile_incremental(
                 reconstruct_reverse(&nodes, label, stop, offset)
             } else {
                 reconstruct_forward(&nodes, label, stop, offset)
-            }) else { continue };
+            }) else {
+                continue;
+            };
             if !arrive_by {
                 optimize_same_trip_endpoint_walks(tt, request, &mut journey);
             }
@@ -702,7 +883,9 @@ pub(crate) fn route_profile_incremental(
                 journeys.push(journey);
             }
         }
-        if stats.profile_budget_exhausted { break; }
+        if stats.profile_budget_exhausted {
+            break;
+        }
     }
     Ok((
         crate::routing_common::profile_search::departure_aware_pareto(journeys),
@@ -717,12 +900,18 @@ mod tests {
     #[test]
     fn different_last_alighting_stops_cannot_dominate_each_other() {
         let early_restricted = Label {
-            time: 100, path: None, transit: Some((1, 100)),
-            anchor: 50, rides: 1,
+            time: 100,
+            path: None,
+            transit: Some((1, 100)),
+            anchor: 50,
+            rides: 1,
         };
         let later_allowed = Label {
-            time: 105, path: None, transit: Some((2, 105)),
-            anchor: 50, rides: 1,
+            time: 105,
+            path: None,
+            transit: Some((2, 105)),
+            anchor: 50,
+            rides: 1,
         };
         let mut frontier = Round::default();
         assert!(insert_label(&mut frontier, 3, early_restricted, false));
@@ -733,12 +922,18 @@ mod tests {
     #[test]
     fn different_next_boarding_stops_survive_reverse_dominance() {
         let later_restricted = Label {
-            time: 200, path: None, transit: Some((7, 200)),
-            anchor: 250, rides: 1,
+            time: 200,
+            path: None,
+            transit: Some((7, 200)),
+            anchor: 250,
+            rides: 1,
         };
         let earlier_allowed = Label {
-            time: 195, path: None, transit: Some((8, 195)),
-            anchor: 250, rides: 1,
+            time: 195,
+            path: None,
+            transit: Some((8, 195)),
+            anchor: 250,
+            rides: 1,
         };
         let mut frontier = Round::default();
         assert!(insert_label(&mut frontier, 3, later_restricted, true));
@@ -749,12 +944,30 @@ mod tests {
     #[test]
     fn travel_time_and_origin_time_form_a_two_dimensional_frontier() {
         let mut frontier = Round::default();
-        let late_slow = Label { time: 400, path: None, transit: None, anchor: 350, rides: 0 };
-        let early_fast = Label { time: 390, path: None, transit: None, anchor: 300, rides: 0 };
+        let late_slow = Label {
+            time: 400,
+            path: None,
+            transit: None,
+            anchor: 350,
+            rides: 0,
+        };
+        let early_fast = Label {
+            time: 390,
+            path: None,
+            transit: None,
+            anchor: 300,
+            rides: 0,
+        };
         assert!(insert_label(&mut frontier, 1, late_slow, false));
         assert!(insert_label(&mut frontier, 1, early_fast, false));
         assert_eq!(frontier[&1].len(), 2);
-        let late_fast = Label { time: 380, path: None, transit: None, anchor: 350, rides: 0 };
+        let late_fast = Label {
+            time: 380,
+            path: None,
+            transit: None,
+            anchor: 350,
+            rides: 0,
+        };
         assert!(insert_label(&mut frontier, 1, late_fast, false));
         assert_eq!(frontier[&1].len(), 1);
     }
@@ -762,10 +975,18 @@ mod tests {
     #[test]
     fn transfer_ready_time_depends_on_last_alighting_timestamp() {
         let earlier_walk = Label {
-            time: 120, path: None, transit: Some((1, 115)), anchor: 50, rides: 1,
+            time: 120,
+            path: None,
+            transit: Some((1, 115)),
+            anchor: 50,
+            rides: 1,
         };
         let later_alight = Label {
-            time: 120, path: None, transit: Some((1, 120)), anchor: 50, rides: 1,
+            time: 120,
+            path: None,
+            transit: Some((1, 120)),
+            anchor: 50,
+            rides: 1,
         };
         assert!(label_dominates(&earlier_walk, &later_alight, false));
         assert!(!label_dominates(&later_alight, &earlier_walk, false));
@@ -774,8 +995,20 @@ mod tests {
     #[test]
     fn fewer_boardings_remain_independent_of_profile_round() {
         let mut frontier = Round::default();
-        let one_boarding = Label { time: 130, path: None, transit: Some((1, 130)), anchor: 50, rides: 1 };
-        let two_boardings = Label { time: 120, path: None, transit: Some((1, 120)), anchor: 50, rides: 2 };
+        let one_boarding = Label {
+            time: 130,
+            path: None,
+            transit: Some((1, 130)),
+            anchor: 50,
+            rides: 1,
+        };
+        let two_boardings = Label {
+            time: 120,
+            path: None,
+            transit: Some((1, 120)),
+            anchor: 50,
+            rides: 2,
+        };
         assert!(insert_label(&mut frontier, 1, one_boarding, false));
         assert!(insert_label(&mut frontier, 1, two_boardings, false));
         assert_eq!(frontier[&1].len(), 2);
@@ -784,23 +1017,76 @@ mod tests {
     #[test]
     fn immutable_prefix_and_suffix_survive_later_improvements() {
         let mut nodes = Vec::new();
-        let first = append_path(&mut nodes, Leg::Access { to_stop: 1, seconds: 30 }, None);
-        let ride = append_path(&mut nodes, Leg::Ride {
-            from_stop: 1, to_stop: 2, route: 0, transport: 0,
-            service_day: 0, board_stop_index: 0, alight_stop_index: 1,
-            departure_unix_seconds: 100, arrival_unix_seconds: 150,
-        }, Some(first));
-        let preserved = reconstruct_forward(&nodes,
-            Label { time: 150, path: Some(ride), transit: None, anchor: 50, rides: 1 }, 2, 0).unwrap();
-        let _later = append_path(&mut nodes, Leg::Access { to_stop: 1, seconds: 1 }, None);
+        let first = append_path(
+            &mut nodes,
+            Leg::Access {
+                to_stop: 1,
+                seconds: 30,
+            },
+            None,
+        );
+        let ride = append_path(
+            &mut nodes,
+            Leg::Ride {
+                from_stop: 1,
+                to_stop: 2,
+                route: 0,
+                transport: 0,
+                service_day: 0,
+                board_stop_index: 0,
+                alight_stop_index: 1,
+                departure_unix_seconds: 100,
+                arrival_unix_seconds: 150,
+            },
+            Some(first),
+        );
+        let preserved = reconstruct_forward(
+            &nodes,
+            Label {
+                time: 150,
+                path: Some(ride),
+                transit: None,
+                anchor: 50,
+                rides: 1,
+            },
+            2,
+            0,
+        )
+        .unwrap();
+        let _later = append_path(
+            &mut nodes,
+            Leg::Access {
+                to_stop: 1,
+                seconds: 1,
+            },
+            None,
+        );
         assert!(matches!(preserved.legs[0], Leg::Access { seconds: 30, .. }));
-        assert!(matches!(preserved.legs[1], Leg::Ride { departure_unix_seconds: 100, .. }));
+        assert!(matches!(
+            preserved.legs[1],
+            Leg::Ride {
+                departure_unix_seconds: 100,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn reconstruction_rejects_cycles_and_missing_nodes() {
-        let nodes = vec![PathNode { leg: Leg::Access { to_stop: 0, seconds: 0 }, next: Some(5) }];
-        let label = Label { time: 100, path: Some(0), transit: None, anchor: 0, rides: 0 };
+        let nodes = vec![PathNode {
+            leg: Leg::Access {
+                to_stop: 0,
+                seconds: 0,
+            },
+            next: Some(5),
+        }];
+        let label = Label {
+            time: 100,
+            path: Some(0),
+            transit: None,
+            anchor: 0,
+            rides: 0,
+        };
         assert!(reconstruct_forward(&nodes, label, 0, 0).is_none());
     }
 }

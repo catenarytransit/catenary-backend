@@ -628,15 +628,21 @@ mod tests {
 
         let defaults = ProfileOptions::default();
         assert_eq!(
-            request.extreme_duration_ratio.unwrap_or(defaults.extreme_duration_ratio),
+            request
+                .extreme_duration_ratio
+                .unwrap_or(defaults.extreme_duration_ratio),
             1.75,
         );
         assert_eq!(
-            request.extreme_duration_slack_seconds.unwrap_or(defaults.extreme_duration_slack_seconds),
+            request
+                .extreme_duration_slack_seconds
+                .unwrap_or(defaults.extreme_duration_slack_seconds),
             1800,
         );
         assert_eq!(
-            request.comparison_window_seconds.unwrap_or(defaults.comparison_window_seconds),
+            request
+                .comparison_window_seconds
+                .unwrap_or(defaults.comparison_window_seconds),
             5400,
         );
     }
@@ -659,9 +665,15 @@ mod tests {
 
         let defaults = ProfileOptions::default();
         let options = ProfileOptions {
-            extreme_duration_ratio: request.extreme_duration_ratio.unwrap_or(defaults.extreme_duration_ratio),
-            extreme_duration_slack_seconds: request.extreme_duration_slack_seconds.unwrap_or(defaults.extreme_duration_slack_seconds),
-            comparison_window_seconds: request.comparison_window_seconds.unwrap_or(defaults.comparison_window_seconds),
+            extreme_duration_ratio: request
+                .extreme_duration_ratio
+                .unwrap_or(defaults.extreme_duration_ratio),
+            extreme_duration_slack_seconds: request
+                .extreme_duration_slack_seconds
+                .unwrap_or(defaults.extreme_duration_slack_seconds),
+            comparison_window_seconds: request
+                .comparison_window_seconds
+                .unwrap_or(defaults.comparison_window_seconds),
             ..defaults
         };
         options.validate().unwrap();
