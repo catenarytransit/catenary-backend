@@ -23,13 +23,14 @@ pub struct RaptorStats {
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
-    /// Number of point-in-time RAPTOR searches executed for a timetable view.
+    /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
     /// Geometric expansions of the requested departure/arrival interval.
     pub profile_interval_extensions: u64,
-    /// True when the bounded profile approximation stopped before reaching
-    /// the requested number of transit alternatives.
+    /// True when the event interval scan was interrupted by its work/time budget.
     pub profile_budget_exhausted: bool,
+    /// Pareto journeys excluded by the post-search journey-quality policy.
+    pub profile_duration_filtered: u64,
     /// Number of FIFO binary-search probes and inactive-service skips.
     pub transport_lookup_probes: u64,
 }
