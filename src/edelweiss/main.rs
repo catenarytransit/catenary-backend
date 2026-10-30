@@ -425,6 +425,15 @@ fn run_query(
         max_journey_duration_seconds: request
             .max_journey_duration_seconds
             .unwrap_or(profile_defaults.max_journey_duration_seconds),
+        extreme_duration_ratio: request
+            .extreme_duration_ratio
+            .unwrap_or(profile_defaults.extreme_duration_ratio),
+        extreme_duration_slack_seconds: request
+            .extreme_duration_slack_seconds
+            .unwrap_or(profile_defaults.extreme_duration_slack_seconds),
+        comparison_window_seconds: request
+            .comparison_window_seconds
+            .unwrap_or(profile_defaults.comparison_window_seconds),
     };
     let mut routing = if request.timetable_view {
         router.route_profile_with_access(
