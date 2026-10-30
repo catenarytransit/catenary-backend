@@ -88,27 +88,36 @@ struct Response {
     error: Option<String>,
 }
 
-fn run_request(
-    graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Router>>,
-    query: Request,
-) -> Result<Vec<Access>> {
-    ensure!(query.direction <= 1, "invalid OSR query direction");
-    let (profile, selected_speed) = match query.mode {
+/// Ordinary cycling minimizes elapsed travel time at the requested speed.
+/// The safety-weighted kBike profile adds an extra cost on major roads and
+/// may prefer significant detours despite a much shorter legal bike path.
+/// Keep bicycle access and one-way restrictions: BikeFast changes the
+/// ranking of bicycle-accessible routes, not the permitted street modes.
+fn profile_and_speed(query: &Request) -> Result<(Profile, f32)> {
+    match query.mode {
         StreetMode::Walk => {
             ensure!(query.cycling_speed.is_none(), "cycling speed supplied for walking");
             let speed = query.pedestrian_speed.unwrap_or(1.2);
             ensure!(speed.is_finite() && (0.3..=10.0).contains(&speed),
                 "pedestrian speed out of range");
-            (Profile::Foot, speed)
+            Ok((Profile::Foot, speed))
         }
         StreetMode::Bike => {
             ensure!(query.pedestrian_speed.is_none(), "walking speed supplied for cycling");
             let speed = query.cycling_speed.unwrap_or(4.2);
             ensure!(speed.is_finite() && (0.7..=20.0).contains(&speed),
                 "cycling speed out of range");
-            (Profile::Bike, speed)
+            Ok((Profile::BikeFast, speed))
         }
-    };
+    }
+}
+
+fn run_request(
+    graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Router>>,
+    query: Request,
+) -> Result<Vec<Access>> {
+    ensure!(query.direction <= 1, "invalid OSR query direction");
+    let (profile, selected_speed) = profile_and_speed(&query)?;
     let foot_speed = if matches!(query.mode, StreetMode::Walk) { selected_speed } else { 0.0 };
     let bike_speed = if matches!(query.mode, StreetMode::Bike) { selected_speed } else { 0.0 };
     ensure!(
@@ -441,6 +450,57 @@ mod tests {
             .err()
             .expect("unknown regions must fail");
         assert!(error.to_string().contains("OSR region is not loaded"));
+    }
+
+    #[test]
+    fn cycling_uses_time_optimized_bicycle_profile_at_requested_si_speed() -> Result<()> {
+        // The real Edelweiss payload uses metres per second: 23.5 km/h.
+        let mut query: Request = serde_json::from_value(serde_json::json!({
+            "region": "north-america/us-west/california",
+            "latitude": 33.642321091769816,
+            "longitude": -117.84098903360592,
+            "max_seconds": 1800,
+            "direction": 0,
+            "mode": "BIKE",
+            "cycling_speed": 6.527777777777778,
+            "stops": []
+        }))?;
+        let (profile, speed) = profile_and_speed(&query)?;
+        assert_eq!(profile, Profile::BikeFast);
+        assert!((speed - 23.5 / 3.6).abs() < 1e-5);
+
+        // The same profile and speed must apply to reverse egress searches.
+        query.direction = 1;
+        let (reverse_profile, reverse_speed) = profile_and_speed(&query)?;
+        assert_eq!(reverse_profile, Profile::BikeFast);
+        assert_eq!(reverse_speed, speed);
+
+        query.mode = StreetMode::Walk;
+        query.cycling_speed = None;
+        query.pedestrian_speed = Some(1.1904762);
+        let (walk_profile, walk_speed) = profile_and_speed(&query)?;
+        assert_eq!(walk_profile, Profile::Foot);
+        assert!((walk_speed - 1.1904762).abs() < 1e-6);
+        Ok(())
+    }
+
+    #[test]
+    fn bicycle_profile_rejects_walking_speed_field_and_invalid_bike_speed() -> Result<()> {
+        let mut query: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 0.0,
+            "longitude": 0.0,
+            "max_seconds": 1800,
+            "mode": "BIKE",
+            "cycling_speed": 6.527777777777778,
+            "pedestrian_speed": 1.1904761904761905,
+            "stops": []
+        }))?;
+        assert!(profile_and_speed(&query).is_err());
+        query.pedestrian_speed = None;
+        query.cycling_speed = Some(f32::NAN);
+        assert!(profile_and_speed(&query).is_err());
+        Ok(())
     }
 
     #[test]
