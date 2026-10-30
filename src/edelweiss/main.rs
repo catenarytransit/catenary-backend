@@ -73,6 +73,8 @@ struct Request {
     max_pre_transit_time: Option<u32>,
     #[serde(default, rename = "maxPostTransitTime")]
     max_post_transit_time: Option<u32>,
+    #[serde(default, rename = "maxDirectTime")]
+    max_direct_time: Option<u32>,
     #[serde(default)]
     access: Vec<Endpoint>,
     #[serde(default)]
@@ -215,16 +217,20 @@ fn direct_osr_seconds(
     region: &str,
     from: Coordinates,
     to: Coordinates,
+    mode: StreetMode,
+    max_seconds: u32,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
 ) -> Result<Option<u32>> {
     let request = OsrRequest {
         region,
         direction: 0,
         latitude: from.lat,
         longitude: from.lon,
-        max_seconds: 1800,
-        mode: "WALK",
-        pedestrian_speed: None,
-        cycling_speed: None,
+        max_seconds,
+        mode: mode.name(),
+        pedestrian_speed: matches!(mode, StreetMode::Walk).then_some(pedestrian_speed),
+        cycling_speed: matches!(mode, StreetMode::Bike).then_some(cycling_speed),
         stops: vec![OsrStop {
             stop: 0,
             latitude: to.lat,
@@ -281,6 +287,9 @@ fn run_query(
     let egress_budget = request.max_post_transit_time.unwrap_or(900);
     anyhow::ensure!((1..=3600).contains(&access_budget) && (1..=3600).contains(&egress_budget),
         "pre/post transit time budgets must be between 1 and 3600 seconds");
+    let direct_budget = request.max_direct_time.unwrap_or(1800);
+    anyhow::ensure!((1..=3600).contains(&direct_budget),
+        "maxDirectTime must be between 1 and 3600 seconds");
     let mut timings = QueryTimings::default();
 
     let phase = Instant::now();
@@ -353,6 +362,10 @@ fn run_query(
                             &selection.origin_osr_region,
                             request.from,
                             request.to,
+                            access_mode,
+                            direct_budget,
+                            pedestrian_speed,
+                            cycling_speed,
                         )
                     } else {
                         Ok(None)
@@ -423,6 +436,7 @@ fn run_query(
         detailed_legs,
         access_mode.name(),
         egress_mode.name(),
+        access_mode.name(),
         pedestrian_speed,
         cycling_speed,
     )?;
