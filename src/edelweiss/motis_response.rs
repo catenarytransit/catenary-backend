@@ -676,6 +676,7 @@ pub fn build(
     detailed: bool,
     access_mode: &str,
     egress_mode: &str,
+    direct_mode: &str,
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Value> {
@@ -763,7 +764,7 @@ pub fn build(
                         cursor,
                         *seconds,
                         detailed,
-                        "WALK",
+                        direct_mode,
                         pedestrian_speed,
                         cycling_speed,
                     )?);
