@@ -1065,7 +1065,7 @@ pub fn build(
     }
     assemble_routes(&mut tt, schedules)?;
     let mut transfers =
-        super::footpaths::compute(osr_dir, &tt.coordinates, max_seconds, candidate_meters)?;
+        super::footpaths::compute(osr_dir, &tt, max_seconds, candidate_meters)?;
     // Nigiri also connects nearby platforms under one station, where the
     // street graph often omits indoor passages. Never replace a routed OSR edge.
     super::footpaths::add_station_links(&tt, &mut transfers)?;
