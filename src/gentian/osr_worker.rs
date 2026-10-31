@@ -78,6 +78,8 @@ struct Stop {
     stop: u32,
     latitude: f64,
     longitude: f64,
+    #[serde(default)]
+    name: String,
 }
 #[derive(Serialize)]
 struct Access {
@@ -173,7 +175,18 @@ fn run_request(
             x.latitude.is_finite() && x.longitude.is_finite(),
             "invalid target"
         );
-        targets.push(ffi::Coordinate::outdoor(x.latitude, x.longitude));
+        let mut point = ffi::Coordinate::outdoor(x.latitude, x.longitude);
+        // MOTIS derives GTFS stop levels from matched OSM platforms.
+        // Using kNoLevel for an elevated or underground station can shadow
+        // the real pedestrian platform with a road/way on another level.
+        // Only set an explicit level for a conservatively matched platform.
+        if !x.name.is_empty() {
+            let matched = router.platform_level(&point, &x.name, 100.0)?;
+            if matched.found {
+                point = ffi::Coordinate::indoor(x.latitude, x.longitude, matched.level);
+            }
+        }
+        targets.push(point);
     }
     // Use low-level native OSR matching. Access queries start at the user
     // (forward); egress queries search backward from the destination to
