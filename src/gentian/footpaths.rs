@@ -23,6 +23,7 @@ fn meters(a: Coordinate, b: Coordinate) -> f64 {
 pub fn compute(
     osr_dir: &Path,
     tt: &catenary::routing_common::timetable::TimetableOwned,
+    metadata: &[catenary::routing_common::route_manager::PlatformStopMeta],
     max_seconds: u32,
     candidate_meters: f64,
 ) -> Result<Vec<Vec<(u32, u32)>>> {
@@ -39,6 +40,7 @@ pub fn compute(
         "too many locations for packed indexes"
     );
     let stops = &tt.coordinates;
+    ensure!(metadata.len() == stops.len(), "GTFS platform metadata count mismatch");
     const CELL: f64 = 0.02;
     let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (idx, stop) in stops.iter().enumerate() {
@@ -89,8 +91,10 @@ pub fn compute(
         let mut coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
         let stop_id = tt.location_id.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
         let name = tt.location_name.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
+        let hint = &metadata[i];
+        let routes = hint.route_names.join("\u{1f}");
         let matched = router.match_platform(
-            &coordinate, stop_id, name, "", "", 25.0,
+            &coordinate, stop_id, name, &hint.platform_code, &routes, 25.0,
         )?;
         if matched.found {
             coordinate = ffi::Coordinate::indoor(
