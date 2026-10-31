@@ -223,7 +223,6 @@ fn osr_access(
                     .to_owned(),
                 platform_code: platform_metadata[id.idx()].platform_code.clone(),
                 route_names: platform_metadata[id.idx()].route_names.clone(),
-            }).collect(),
             }
         })
         .collect();
