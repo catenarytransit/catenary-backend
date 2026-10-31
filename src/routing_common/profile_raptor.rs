@@ -161,7 +161,10 @@ fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
     if a.service_day == b.service_day && a.transport == b.transport
         && a.rides == b.rides && a.anchor == b.anchor
     {
-        return a.walking_seconds <= b.walking_seconds;
+        // Boarding at a different stop can change which downstream stops
+        // remain reachable. Keep both positions until final optimization.
+        return a.position == b.position
+            && a.walking_seconds <= b.walking_seconds;
     }
     a.service_day == b.service_day
         && a.rides <= b.rides
@@ -1222,7 +1225,7 @@ mod tests {
             anchor: 700, rides: 2, walking_seconds: 524,
         };
         let short = Onboard {
-            position: 4, from: 4, walking_seconds: 149, ..long
+            walking_seconds: 149, ..long
         };
         let mut states = Vec::new();
         insert_onboard(&mut states, long, false);
@@ -1235,6 +1238,22 @@ mod tests {
         insert_onboard(&mut states, long, false);
         assert_eq!(states.len(), 1);
         assert_eq!(states[0].walking_seconds, 149);
+    }
+
+    #[test]
+    fn same_vehicle_different_boarding_positions_remain_reachable() {
+        let early = Onboard {
+            transport: TransportIdx(7), service_day: 0, from: 3,
+            event_time: 1000, position: 2, predecessor: 0,
+            anchor: 700, rides: 2, walking_seconds: 524,
+        };
+        let later = Onboard {
+            position: 4, from: 4, walking_seconds: 149, ..early
+        };
+        let mut states = Vec::new();
+        insert_onboard(&mut states, early, false);
+        insert_onboard(&mut states, later, false);
+        assert_eq!(states.len(), 2);
     }
 
     #[test]
