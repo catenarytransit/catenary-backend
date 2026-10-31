@@ -147,12 +147,22 @@ struct Onboard {
     predecessor: usize,
     anchor: i64,
     rides: u8,
+    // Secondary tie-break only: walking time of the immutable predecessor path.
+    walking_seconds: u64,
 }
 
 /// FIFO transport columns permit pruning already-boarded alternatives *after*
 /// their transfer-feasibility checks. Earlier vehicles are no later downstream;
 /// the anchor/boarding dimensions must also be no worse.
 fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
+    // When both states board the same scheduled vehicle at the same anchor
+    // with identical boardings, the shorter walking predecessor is preferable.
+    // Do not let stop scan order choose the longer physical interchange.
+    if a.service_day == b.service_day && a.transport == b.transport
+        && a.rides == b.rides && a.anchor == b.anchor
+    {
+        return a.walking_seconds <= b.walking_seconds;
+    }
     a.service_day == b.service_day
         && a.rides <= b.rides
         && if arrive_by {
@@ -160,6 +170,29 @@ fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
         } else {
             a.transport.0 <= b.transport.0 && a.anchor >= b.anchor
         }
+}
+
+/// Walking is a secondary tie-breaker only. Recover it from the immutable
+/// predecessor chain without widening the hot-path Pareto label schema.
+fn predecessor_walk_seconds(nodes: &[PathNode], mut path: usize) -> u64 {
+    let mut seconds = 0u64;
+    let mut depth = 0usize;
+    while let Some(node) = nodes.get(path) {
+        seconds = seconds.saturating_add(match node.leg {
+            Leg::Access { seconds, .. }
+            | Leg::Egress { seconds, .. }
+            | Leg::Transfer { seconds, .. }
+            | Leg::DirectWalk { seconds } => u64::from(seconds),
+            Leg::Ride { .. } => 0,
+        });
+        depth += 1;
+        if depth > 128 {
+            return u64::MAX;
+        }
+        let Some(next) = node.next else { break };
+        path = next;
+    }
+    seconds
 }
 
 fn insert_onboard(candidates: &mut Vec<Onboard>, candidate: Onboard, arrive_by: bool) {
@@ -799,6 +832,7 @@ fn scan_routes(
                                 predecessor,
                                 anchor,
                                 rides: label.rides.saturating_add(1),
+                                walking_seconds: predecessor_walk_seconds(nodes, predecessor),
                             },
                             arrive_by,
                         );
@@ -1178,6 +1212,29 @@ mod tests {
             &tt, RouteIdx(0), 0, day, midnight + 3_001, false, &active,
             &mut stats,
         ).is_none());
+    }
+
+    #[test]
+    fn identical_onboard_vehicle_prefers_shorter_walk_independent_of_scan_order() {
+        let long = Onboard {
+            transport: TransportIdx(7), service_day: 0, from: 3,
+            event_time: 1000, position: 3, predecessor: 0,
+            anchor: 700, rides: 2, walking_seconds: 524,
+        };
+        let short = Onboard {
+            position: 4, from: 4, walking_seconds: 149, ..long
+        };
+        let mut states = Vec::new();
+        insert_onboard(&mut states, long, false);
+        insert_onboard(&mut states, short, false);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].walking_seconds, 149);
+
+        states.clear();
+        insert_onboard(&mut states, short, false);
+        insert_onboard(&mut states, long, false);
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].walking_seconds, 149);
     }
 
     #[test]
