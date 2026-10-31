@@ -110,14 +110,12 @@ fn inspect(router: &Router, request: Request) -> Result<Response> {
     let mut best: Option<(&str, LocationIdx, f64)> = None;
     for region in &router.transit {
         let tt = router.timetable_for(&region.id)?;
-        let candidates: Vec<LocationIdx> = if let Some(index) = request.stop_index {
-            vec![LocationIdx(index)]
-        } else {
-            (0..tt.coordinates().len()).map(|i| LocationIdx(i as u32)).collect()
-        };
-        for index in candidates {
+        let mut consider = |index: LocationIdx| {
             if let Some(point) = tt.coordinates().get(index.idx()) {
-                let distance = distance_meters(request.lat, request.lon, f64::from(point.lat), f64::from(point.lon));
+                let distance = distance_meters(
+                    request.lat, request.lon,
+                    f64::from(point.lat), f64::from(point.lon),
+                );
                 let radius = if request.stop_index.is_some() {
                     STOP_COORDINATE_TOLERANCE_METERS
                 } else {
@@ -128,6 +126,13 @@ fn inspect(router: &Router, request: Request) -> Result<Response> {
                 {
                     best = Some((&region.id, index, distance));
                 }
+            }
+        };
+        if let Some(index) = request.stop_index {
+            consider(LocationIdx(index));
+        } else {
+            for i in 0..tt.coordinates().len() {
+                consider(LocationIdx(i as u32));
             }
         }
     }
