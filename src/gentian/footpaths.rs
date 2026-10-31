@@ -35,11 +35,11 @@ pub fn compute(
         candidate_meters.is_finite() && candidate_meters > 0.0,
         "candidate radius must be positive and finite"
     );
+    let stops = &tt.coordinates;
     ensure!(
         u32::try_from(stops.len()).is_ok(),
         "too many locations for packed indexes"
     );
-    let stops = &tt.coordinates;
     ensure!(metadata.len() == stops.len(), "GTFS platform metadata count mismatch");
     const CELL: f64 = 0.02;
     let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
