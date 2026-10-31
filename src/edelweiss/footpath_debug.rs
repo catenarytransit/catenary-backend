@@ -13,11 +13,12 @@ use std::sync::Arc;
 const DEFAULT_MAX_EDGES: usize = 128;
 const HARD_MAX_EDGES: usize = 512;
 const STOP_COORDINATE_TOLERANCE_METERS: f64 = 30.0;
+const NEARBY_STOP_RADIUS_METERS: f64 = 250.0;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Request {
-    stop_index: u32,
+    stop_index: Option<u32>,
     lat: f64,
     lon: f64,
     max_edges: Option<usize>,
@@ -103,24 +104,35 @@ fn inspect(router: &Router, request: Request) -> Result<Response> {
         "invalid stop coordinates"
     );
     let limit = request.max_edges.unwrap_or(DEFAULT_MAX_EDGES).clamp(1, HARD_MAX_EDGES);
-    // The stop index is local to a compiled transit region. Checking its
-    // coordinates prevents silently inspecting an unrelated regional stop.
-    // This is O(number of loaded regions), not a scan of their stops.
-    let mut best: Option<(&str, f64)> = None;
+    // An itinerary supplies the exact timetable index. A standalone GTFS
+    // screen supplies coordinates only: resolve the nearest compiled location
+    // within a bounded radius, independently of regular route planning.
+    let mut best: Option<(&str, LocationIdx, f64)> = None;
     for region in &router.transit {
         let tt = router.timetable_for(&region.id)?;
-        if let Some(point) = tt.coordinates().get(request.stop_index as usize) {
-            let distance = distance_meters(request.lat, request.lon, f64::from(point.lat), f64::from(point.lon));
-            if distance <= STOP_COORDINATE_TOLERANCE_METERS
-                && best.is_none_or(|(_, previous)| distance < previous)
-            {
-                best = Some((&region.id, distance));
+        let candidates: Vec<LocationIdx> = if let Some(index) = request.stop_index {
+            vec![LocationIdx(index)]
+        } else {
+            (0..tt.coordinates().len()).map(|i| LocationIdx(i as u32)).collect()
+        };
+        for index in candidates {
+            if let Some(point) = tt.coordinates().get(index.idx()) {
+                let distance = distance_meters(request.lat, request.lon, f64::from(point.lat), f64::from(point.lon));
+                let radius = if request.stop_index.is_some() {
+                    STOP_COORDINATE_TOLERANCE_METERS
+                } else {
+                    NEARBY_STOP_RADIUS_METERS
+                };
+                if distance <= radius
+                    && best.is_none_or(|(_, _, previous)| distance < previous)
+                {
+                    best = Some((&region.id, index, distance));
+                }
             }
         }
     }
-    let (region, _) = best.context("stop index and coordinates do not match any loaded timetable region")?;
+    let (region, idx, _) = best.context("no matching compiled stop found near these coordinates")?;
     let tt = router.timetable_for(region)?;
-    let idx = LocationIdx(request.stop_index);
     let origin = stop(&tt, idx)?;
     let outgoing_paths = tt.footpaths_from(idx);
     let incoming_paths = tt.footpaths_to(idx);
