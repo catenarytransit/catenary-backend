@@ -462,6 +462,10 @@ pub fn route_arrive_by_with_stats(
             }
         }
     }
+    // Re-link fixed scheduled trips through the best legal directed footpath.
+    for journey in &mut journeys {
+        crate::routing_common::transfer_optimizer::optimize_internal_transfers(tt, journey);
+    }
     // Preserve alternatives with different arrival times and boardings.
     // The common frontier is direction-independent; output order is not.
     let mut journeys = crate::routing_common::profile_search::departure_aware_pareto(journeys);
