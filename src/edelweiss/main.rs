@@ -6,15 +6,14 @@ mod motis_response;
 mod footpath_debug;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::raptor_query::WalkingEndpoint;
 use catenary::routing_common::route_manager::{
-    Coordinates, Router, RouterSettings, RoutingResponse,
+    Coordinates, Router, RouterSettings,
 };
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
-use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -820,9 +819,9 @@ mod tests {
         // Verify the blocking worker is outside the HTTP executor; an
         // unreachable port is sufficient and requires no database fixture.
         let result = web::block(|| {
-            Client::connect(
+            postgres::Client::connect(
                 "host=127.0.0.1 port=1 user=postgres dbname=unavailable connect_timeout=1",
-                NoTls,
+                postgres::NoTls,
             )
             .is_err()
         })
