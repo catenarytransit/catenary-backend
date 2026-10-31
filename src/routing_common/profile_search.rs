@@ -424,14 +424,6 @@ fn timetable_start_events(
     events
 }
 
-fn grow_window(mut window: u32, needed: u32, max: u32, stats: &mut RaptorStats) -> u32 {
-    while needed > window && window < max {
-        window = window.saturating_mul(2).min(max);
-        stats.profile_interval_extensions += 1;
-    }
-    window
-}
-
 /// Solve at every reachable timetable event in the currently searched
 /// interval, extend when too few *presentable* itineraries were found, and
 /// preserve an explicit incomplete-result signal upon resource exhaustion.
@@ -479,8 +471,8 @@ pub fn route_profile_with_stats(
     // evaluated against the same frontier and immutable predecessor paths.
     let first = reference.min(boundary);
     let last = reference.max(boundary);
-    let mut state = ProfileSearchState::new(tt, &q, first, last, arrive_by,
-        Duration::from_secs(u64::from(options.timeout_seconds)))?;
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    let mut state = ProfileSearchState::new(tt, &q, first, last, arrive_by, remaining)?;
     let mut transit = Vec::new();
     loop {
         if Instant::now() >= deadline || batches >= MAX_PROFILE_BATCHES {
