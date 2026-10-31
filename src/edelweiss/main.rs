@@ -204,7 +204,7 @@ fn osr_access(
 ) -> Result<Vec<WalkingEndpoint>> {
     let nearest = router.nearest_stops(transit_region, point, 4096)?;
     let table = router.timetable_for(transit_region)?;
-    let metadata = router.metadata_for(transit_region)?;
+    let platform_metadata = router.platform_metadata_for(transit_region)?;
     let stops = nearest
         .into_iter()
         .map(|(id, _)| {
@@ -221,15 +221,9 @@ fn osr_access(
                     .and_then(|r| table.get_string(*r))
                     .unwrap_or("")
                     .to_owned(),
-                platform_code: String::new(),
-                route_names: table.routes_at(id).iter().filter_map(|route| {
-                    let transport = table.route_transport_ranges()
-                        .get(route.idx())?.from;
-                    let trip = metadata.trip_for_transport(transport)?;
-                    let route_id_idx = table.trip_public_route_ids().get(trip)?;
-                    let record = table.route_ids().get(route_id_idx.idx())?;
-                    table.get_string(record.id).map(ToOwned::to_owned)
-                }).collect(),
+                platform_code: platform_metadata[id.idx()].platform_code.clone(),
+                route_names: platform_metadata[id.idx()].route_names.clone(),
+            }).collect(),
             }
         })
         .collect();
