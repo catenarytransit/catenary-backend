@@ -202,6 +202,11 @@ fn osr_access(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
+    // MOTIS intermodal semantics: OSR one-to-many returns complete access
+    // offsets to traffic-bearing stops. Do not enable start footpaths or
+    // pre-extend these offsets through the timetable transfer graph.
+    // An extra relaxation would double-count walking and could create
+    // bogus first boarding opportunities.
     // MOTIS enumerates traffic-bearing stops in a mode-appropriate search
     // radius before performing one-to-many native street routing.
     let speed = f64::from(match mode {
@@ -259,14 +264,23 @@ fn osr_access(
     if let Some(err) = reply.error {
         anyhow::bail!("OSR query: {err}");
     }
-    Ok(reply
-        .reachable
-        .into_iter()
-        .map(|x| WalkingEndpoint {
-            stop: LocationIdx(x.stop),
-            seconds: x.seconds,
-        })
-        .collect())
+    // The OSR worker must only return destinations actually requested.
+    // Enforce this at the protocol boundary and keep the cheapest offset
+    // per stop before seeding round zero or enumerating profile anchors.
+    let requested: std::collections::HashSet<u32> =
+        request.stops.iter().map(|x| x.stop).collect();
+    let mut best = std::collections::HashMap::<u32, u32>::new();
+    for x in reply.reachable {
+        ensure!(requested.contains(&x.stop), "OSR returned unknown stop index");
+        ensure!(x.seconds <= max_seconds, "OSR returned duration outside access budget");
+        best.entry(x.stop).and_modify(|v| *v = (*v).min(x.seconds))
+            .or_insert(x.seconds);
+    }
+    let mut endpoints: Vec<_> = best.into_iter().map(|(stop, seconds)| WalkingEndpoint {
+        stop: LocationIdx(stop), seconds,
+    }).collect();
+    endpoints.sort_by_key(|x| (x.seconds, x.stop.0));
+    Ok(endpoints)
 }
 
 fn direct_osr_seconds(
