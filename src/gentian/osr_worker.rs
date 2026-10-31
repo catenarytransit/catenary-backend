@@ -80,6 +80,12 @@ struct Stop {
     longitude: f64,
     #[serde(default)]
     name: String,
+    #[serde(default)]
+    gtfs_id: String,
+    #[serde(default)]
+    platform_code: String,
+    #[serde(default)]
+    route_names: Vec<String>,
 }
 #[derive(Serialize)]
 struct Access {
@@ -180,8 +186,12 @@ fn run_request(
         // Using kNoLevel for an elevated or underground station can shadow
         // the real pedestrian platform with a road/way on another level.
         // Only set an explicit level for a conservatively matched platform.
-        if !x.name.is_empty() {
-            let matched = router.platform_level(&point, &x.name, 100.0)?;
+        if !x.name.is_empty() || !x.gtfs_id.is_empty() || !x.platform_code.is_empty() {
+            let route_names = x.route_names.join("\u{1f}");
+            let matched = router.match_platform(
+                &point, &x.gtfs_id, &x.name, &x.platform_code,
+                &route_names, 25.0,
+            )?;
             if matched.found {
                 point = ffi::Coordinate::indoor(x.latitude, x.longitude, matched.level);
             }
