@@ -513,6 +513,7 @@ fn run_query(
     let mut response = motis_response::build(
         &timetable,
         index,
+        router.platform_metadata_for(&routing.selection.transit_region)?,
         &routing.journeys,
         origin,
         destination,
