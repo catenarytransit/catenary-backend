@@ -479,7 +479,7 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
             "Geofabrik revision changed during download for {}; retry the manager", region.id);
         let (geometry, boundary_url) = fetch_boundary(client, region)?;
         let status = Command::new(&cfg.osr_extract)
-            .arg("-i").arg(&download).arg("-o").arg(&staging)
+            .arg("-p").arg("-i").arg(&download).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
         // Verify expected files. Actual serializer compatibility is checked
