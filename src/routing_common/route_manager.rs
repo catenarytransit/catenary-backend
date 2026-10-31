@@ -416,8 +416,10 @@ impl Router {
         region: &str,
         point: Coordinates,
         limit: usize,
+        radius_meters: f64,
     ) -> Result<Vec<(LocationIdx, f64)>> {
         let tt = self.timetable_for(region)?;
+        ensure!(radius_meters.is_finite() && radius_meters > 0.0, "invalid access radius");
         let mut stops = Vec::new();
         for (i, coordinate) in tt.coordinates().iter().enumerate() {
             let d = haversine_meters(
@@ -426,7 +428,9 @@ impl Router {
                 f64::from(coordinate.lat),
                 f64::from(coordinate.lon),
             );
-            if d <= self.settings.access_radius_meters {
+            if d <= radius_meters
+                && !tt.routes_at(LocationIdx(i as u32)).is_empty()
+            {
                 stops.push((LocationIdx(i as u32), d));
             }
         }
