@@ -785,6 +785,7 @@ pub(crate) fn optimize_same_trip_endpoint_walks(
     optimize_initial_walk_on_trip(tt, request, journey);
     optimize_final_walk_on_trip(tt, request, journey);
     optimize_initial_departure(journey);
+    crate::routing_common::transfer_optimizer::optimize_internal_transfers(tt, journey);
 }
 
 fn reconstruct(
