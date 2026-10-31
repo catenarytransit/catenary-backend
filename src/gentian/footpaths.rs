@@ -95,7 +95,7 @@ pub fn compute(
         let hint = &metadata[i];
         let routes = hint.route_names.join("\u{1f}");
         let matched = router.match_platform(
-            &coordinate, stop_id, name, &hint.platform_code, &routes, 100.0,
+            &coordinate, stop_id, name, &hint.platform_code, &routes, 25.0,
         )?;
         if matched.found {
             coordinate = ffi::Coordinate::indoor(
