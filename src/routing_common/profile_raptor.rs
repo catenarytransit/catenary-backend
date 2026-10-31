@@ -979,7 +979,7 @@ impl ProfileSearchState {
                 }
             };
             insert_path_label(
-                &mut self.self.rounds[0],
+                &mut self.rounds[0],
                 stop,
                 candidate,
                 leg,
@@ -1032,8 +1032,8 @@ impl ProfileSearchState {
                 self.upper,
                 self.first_anchor,
                 self.last_anchor,
-                first_board_self.lower,
-                first_board_self.upper,
+                first_board_lower,
+                first_board_upper,
                 arrive_by,
                 self.deadline,
                 &mut self.stats,
