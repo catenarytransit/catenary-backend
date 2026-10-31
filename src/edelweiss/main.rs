@@ -3,6 +3,7 @@
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod motis_response;
+mod footpath_debug;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
@@ -39,6 +40,9 @@ struct Args {
     database_url: Option<String>,
     #[arg(long, default_value = "127.0.0.1:40501")]
     osr_worker: String,
+    /// Opt-in, read-only transfer-closure inspection. Disabled in production by default.
+    #[arg(long, env = "EDELWEISS_ENABLE_FOOTPATH_DEBUG")]
+    enable_footpath_debug: bool,
 }
 
 #[derive(Deserialize)]
@@ -607,8 +611,9 @@ async fn main() -> Result<()> {
         database_url,
         osr_worker: args.osr_worker,
     });
+    let enable_footpath_debug = args.enable_footpath_debug;
     HttpServer::new(move || {
-        App::new()
+        let app = App::new()
             .wrap(
                 actix_cors::Cors::default()
                     .allow_any_origin()
@@ -616,7 +621,12 @@ async fn main() -> Result<()> {
                     .allow_any_header(),
             )
             .app_data(state.clone())
-            .route("/v1/route", web::post().to(route))
+            .route("/v1/route", web::post().to(route));
+        if enable_footpath_debug {
+            app.route("/v1/debug/footpaths", web::post().to(footpath_debug::handle))
+        } else {
+            app
+        }
     })
     .bind(&args.listen)?
     .run()

@@ -385,7 +385,7 @@ fn place(tt: &ZeroCopyTimetable<'_>, stop: u32) -> Value {
         .get(index)
         .and_then(|s| tt.get_string(*s))
         .unwrap_or("");
-    json!({"name":name,"stopId":stop_id,"lat":point[1],"lon":point[0]})
+    json!({"name":name,"stopId":stop_id,"stopIndex":stop,"lat":point[1],"lon":point[0]})
 }
 fn coordinate_place(point: Coordinates, name: &str) -> Value {
     json!({"name": name,"lat":point.lat,"lon":point.lon})
