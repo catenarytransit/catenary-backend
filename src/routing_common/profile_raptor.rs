@@ -1086,6 +1086,8 @@ pub(crate) fn route_profile_incremental(
             };
             if !arrive_by {
                 optimize_same_trip_endpoint_walks(tt, request, &mut journey);
+            } else {
+                crate::routing_common::transfer_optimizer::optimize_internal_transfers(tt, &mut journey);
             }
             stats.profile_journeys_reconstructed += 1;
             if valid_journey(tt, request, &journey) {
