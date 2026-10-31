@@ -513,9 +513,15 @@ mod tests {
             "longitude": -118.0,
             "max_seconds": 900,
             "stops": [{"stop": 1, "latitude": 34.01, "longitude": -118.01,
-                       "name": "Expo / Sepulveda"}]
+                       "name": "Expo / Sepulveda",
+                       "gtfs_id": "expo-sepulveda-east",
+                       "platform_code": "1",
+                       "route_names": ["E"]}]
         }))?;
         assert_eq!(modern.stops[0].name, "Expo / Sepulveda");
+        assert_eq!(modern.stops[0].gtfs_id, "expo-sepulveda-east");
+        assert_eq!(modern.stops[0].platform_code, "1");
+        assert_eq!(modern.stops[0].route_names, vec!["E"]);
         Ok(())
     }
 
