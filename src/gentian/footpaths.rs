@@ -65,9 +65,10 @@ pub fn compute(
     let router = graph.as_ref().context("OSR returned null router")?;
     let options = ffi::RoutingOptions {
         max_cost: max_seconds,
-        // MOTIS timetable.max_matching_distance_ defaults to 25 metres.
-        // The general-purpose osr-ffi default is 100 metres.
-        max_match_distance_meters: 25.0,
+        // Match platforms consistently with the live OSR worker and allow
+        // routing to a valid OSM way beyond the strict 25 m fallback.
+        // OSR still checks platform level and walkable endpoint feasibility.
+        max_match_distance_meters: 100.0,
         include_segments: false,
         ..ffi::RoutingOptions::default().profile(Profile::Foot)
     };
@@ -80,7 +81,7 @@ pub fn compute(
     let match_origin = ffi::MatchOptions {
         profile: Profile::Foot as u8,
         reverse: false,
-        max_match_distance_meters: 25.0,
+        max_match_distance_meters: 100.0,
         ..ffi::MatchOptions::default()
     };
     let match_destination = ffi::MatchOptions {
@@ -94,7 +95,7 @@ pub fn compute(
         let hint = &metadata[i];
         let routes = hint.route_names.join("\u{1f}");
         let matched = router.match_platform(
-            &coordinate, stop_id, name, &hint.platform_code, &routes, 25.0,
+            &coordinate, stop_id, name, &hint.platform_code, &routes, 100.0,
         )?;
         if matched.found {
             coordinate = ffi::Coordinate::indoor(
