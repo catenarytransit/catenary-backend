@@ -290,12 +290,18 @@ fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Route
     let reader = BufReader::new(stream.try_clone()?);
     // Enforce the wire budget while reading. Checking after read_line could
     // allocate an unbounded String per concurrent client.
-    let mut limited = reader.take(524_289);
+    // A 4096-stop route search now includes GTFS names, platform codes and
+    // public route labels. A valid request can exceed the former 512 KiB
+    // ceiling; keep a strict bound without rejecting dense urban searches.
+    const MAX_OSR_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
+    let mut limited = reader.take(MAX_OSR_REQUEST_BYTES + 1);
     let mut input = Vec::new();
     let received = limited.read_until(b'\n', &mut input)?;
     ensure!(
-        received > 0 && received <= 524_288 && input.last() == Some(&b'\n'),
-        "OSR request exceeds 512KiB or is not newline terminated"
+        received > 0
+            && received <= MAX_OSR_REQUEST_BYTES as usize
+            && input.last() == Some(&b'\n'),
+        "OSR request exceeds 4 MiB or is not newline terminated"
     );
     let response = match serde_json::from_slice::<Request>(&input) {
         Ok(req) => match run_request(graphs, req) {
@@ -488,6 +494,9 @@ mod tests {
             longitude: 0.0,
             max_seconds: 120,
             direction: 0,
+            mode: StreetMode::Walk,
+            pedestrian_speed: None,
+            cycling_speed: None,
             stops: Vec::new(),
             include_geometry: false,
         };
