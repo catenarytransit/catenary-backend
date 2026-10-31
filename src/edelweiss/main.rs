@@ -160,6 +160,7 @@ struct OsrStop {
     stop: u32,
     latitude: f64,
     longitude: f64,
+    name: String,
 }
 #[derive(Serialize)]
 struct OsrRequest<'a> {
@@ -208,6 +209,10 @@ fn osr_access(
                 stop: id.0,
                 latitude: f64::from(c.lat),
                 longitude: f64::from(c.lon),
+                name: table.location_name().get(id.idx())
+                    .and_then(|r| table.get_string(*r))
+                    .unwrap_or("")
+                    .to_owned(),
             }
         })
         .collect();
@@ -267,6 +272,7 @@ fn direct_osr_seconds(
             stop: 0,
             latitude: to.lat,
             longitude: to.lon,
+            name: String::new(),
         }],
     };
     let mut stream = TcpStream::connect(addr)?;
