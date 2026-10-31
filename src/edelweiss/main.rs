@@ -6,15 +6,14 @@ mod motis_response;
 mod footpath_debug;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::raptor_query::WalkingEndpoint;
 use catenary::routing_common::route_manager::{
-    Coordinates, Router, RouterSettings, RoutingResponse,
+    Coordinates, Router, RouterSettings,
 };
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
-use postgres::{Client, NoTls};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -202,6 +201,11 @@ fn osr_access(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
+    // MOTIS intermodal semantics: OSR one-to-many returns complete access
+    // offsets to traffic-bearing stops. Do not enable start footpaths or
+    // pre-extend these offsets through the timetable transfer graph.
+    // An extra relaxation would double-count walking and could create
+    // bogus first boarding opportunities.
     // MOTIS enumerates traffic-bearing stops in a mode-appropriate search
     // radius before performing one-to-many native street routing.
     let speed = f64::from(match mode {
@@ -259,14 +263,23 @@ fn osr_access(
     if let Some(err) = reply.error {
         anyhow::bail!("OSR query: {err}");
     }
-    Ok(reply
-        .reachable
-        .into_iter()
-        .map(|x| WalkingEndpoint {
-            stop: LocationIdx(x.stop),
-            seconds: x.seconds,
-        })
-        .collect())
+    // The OSR worker must only return destinations actually requested.
+    // Enforce this at the protocol boundary and keep the cheapest offset
+    // per stop before seeding round zero or enumerating profile anchors.
+    let requested: std::collections::HashSet<u32> =
+        request.stops.iter().map(|x| x.stop).collect();
+    let mut best = std::collections::HashMap::<u32, u32>::new();
+    for x in reply.reachable {
+        ensure!(requested.contains(&x.stop), "OSR returned unknown stop index");
+        ensure!(x.seconds <= max_seconds, "OSR returned duration outside access budget");
+        best.entry(x.stop).and_modify(|v| *v = (*v).min(x.seconds))
+            .or_insert(x.seconds);
+    }
+    let mut endpoints: Vec<_> = best.into_iter().map(|(stop, seconds)| WalkingEndpoint {
+        stop: LocationIdx(stop), seconds,
+    }).collect();
+    endpoints.sort_by_key(|x| (x.seconds, x.stop.0));
+    Ok(endpoints)
 }
 
 fn direct_osr_seconds(
@@ -513,6 +526,7 @@ fn run_query(
     let mut response = motis_response::build(
         &timetable,
         index,
+        router.platform_metadata_for(&routing.selection.transit_region)?,
         &routing.journeys,
         origin,
         destination,
@@ -805,9 +819,9 @@ mod tests {
         // Verify the blocking worker is outside the HTTP executor; an
         // unreachable port is sufficient and requires no database fixture.
         let result = web::block(|| {
-            Client::connect(
+            postgres::Client::connect(
                 "host=127.0.0.1 port=1 user=postgres dbname=unavailable connect_timeout=1",
-                NoTls,
+                postgres::NoTls,
             )
             .is_err()
         })

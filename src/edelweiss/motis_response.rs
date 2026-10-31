@@ -399,6 +399,8 @@ struct PathQuery {
     max_seconds: u32,
     include_geometry: bool,
     stops: Vec<PathTarget>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    origin_stop: Option<PlatformPathStop>,
     mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pedestrian_speed: Option<f32>,
@@ -410,6 +412,45 @@ struct PathTarget {
     stop: u32,
     latitude: f64,
     longitude: f64,
+    #[serde(flatten)]
+    platform: PlatformMetadata,
+}
+#[derive(Default, serde::Serialize)]
+struct PlatformMetadata {
+    name: String,
+    gtfs_id: String,
+    platform_code: String,
+    route_names: Vec<String>,
+}
+#[derive(serde::Serialize)]
+struct PlatformPathStop {
+    stop: u32,
+    latitude: f64,
+    longitude: f64,
+    #[serde(flatten)]
+    platform: PlatformMetadata,
+}
+fn platform_metadata(
+    tt: &ZeroCopyTimetable<'_>,
+    all: &[catenary::routing_common::route_manager::PlatformStopMeta],
+    location: &Value,
+) -> Option<PlatformPathStop> {
+    let stop = u32::try_from(location.get("stopIndex")?.as_u64()?).ok()?;
+    let coordinate = tt.coordinates().get(stop as usize)?;
+    let metadata = all.get(stop as usize)?;
+    Some(PlatformPathStop {
+        stop,
+        latitude: f64::from(coordinate.lat),
+        longitude: f64::from(coordinate.lon),
+        platform: PlatformMetadata {
+            name: tt.location_name().get(stop as usize)
+                .and_then(|x| tt.get_string(*x)).unwrap_or("").to_owned(),
+            gtfs_id: tt.location_id().get(stop as usize)
+                .and_then(|x| tt.get_string(*x)).unwrap_or("").to_owned(),
+            platform_code: metadata.platform_code.clone(),
+            route_names: metadata.route_names.clone(),
+        },
+    })
 }
 #[derive(serde::Deserialize)]
 struct PathReply {
@@ -427,6 +468,8 @@ fn street_path(
     region: &str,
     from: [f64; 2],
     to: [f64; 2],
+    origin_stop: Option<PlatformPathStop>,
+    destination_stop: Option<PlatformPathStop>,
     budget: u32,
     mode: &str,
     pedestrian_speed: f32,
@@ -440,6 +483,7 @@ fn street_path(
         longitude: from[0],
         max_seconds: budget.clamp(1, 3600),
         include_geometry: true,
+        origin_stop,
         mode: mode.to_owned(),
         pedestrian_speed: (mode == "WALK").then_some(pedestrian_speed),
         cycling_speed: (mode == "BIKE").then_some(cycling_speed),
@@ -447,6 +491,7 @@ fn street_path(
             stop: 0,
             latitude: to[1],
             longitude: to[0],
+            platform: destination_stop.map(|s| s.platform).unwrap_or_default(),
         }],
     };
     let mut socket = TcpStream::connect(addr)?;
@@ -473,6 +518,8 @@ fn street_leg(
     region: &str,
     from: Value,
     to: Value,
+    tt: &ZeroCopyTimetable<'_>,
+    platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
     start: i64,
     seconds: u32,
     detailed: bool,
@@ -494,6 +541,8 @@ fn street_leg(
             region,
             first,
             last,
+            platform_metadata(tt, platform_stops, &from),
+            platform_metadata(tt, platform_stops, &to),
             seconds.saturating_add(900),
             mode,
             pedestrian_speed,
@@ -675,6 +724,7 @@ fn transit_leg(
 pub fn build(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
+    platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
     journeys: &[Journey],
     from: Coordinates,
     to: Coordinates,
@@ -705,6 +755,8 @@ pub fn build(
                         origin_osr_region,
                         previous,
                         end.clone(),
+                        tt,
+                        platform_stops,
                         cursor,
                         *seconds,
                         detailed,
@@ -727,6 +779,8 @@ pub fn build(
                         origin_osr_region,
                         start,
                         end.clone(),
+                        tt,
+                        platform_stops,
                         cursor,
                         *seconds,
                         detailed,
@@ -753,6 +807,8 @@ pub fn build(
                         destination_osr_region,
                         previous,
                         destination.clone(),
+                        tt,
+                        platform_stops,
                         cursor,
                         *seconds,
                         detailed,
@@ -770,6 +826,8 @@ pub fn build(
                         origin_osr_region,
                         previous,
                         destination.clone(),
+                        tt,
+                        platform_stops,
                         cursor,
                         *seconds,
                         detailed,
@@ -827,6 +885,37 @@ mod tests {
         assert_eq!(transit_mode(None, Some(Clasz::Ship as u8)), "FERRY");
         assert_eq!(transit_mode(None, None), "TRANSIT");
         assert_eq!(transit_mode(Some(3), Some(Clasz::Regional as u8)), "BUS");
+    }
+
+    #[test]
+    fn detailed_platform_endpoints_retain_gtfs_matching_metadata() {
+        let mut owned = catenary::routing_common::timetable::TimetableOwned::empty(0, 1);
+        owned.add_source("test", "metro", "1").unwrap();
+        owned.coordinates.push(catenary::routing_common::timetable::Coordinate {
+            lat: 34.0354, lon: -118.4341,
+        });
+        let stop_id = owned.add_string("metro-e-platform").unwrap();
+        let stop_name = owned.add_string("Expo / Sepulveda").unwrap();
+        owned.location_id.push(stop_id);
+        owned.location_name.push(stop_name);
+        owned.location_source.push(catenary::routing_common::timetable::SourceIdx(0));
+        owned.location_type.push(1);
+        owned.location_parent.push(catenary::routing_common::timetable::LocationIdx::INVALID);
+        owned.location_transfer_seconds.push(120);
+        owned.location_routes_offsets.push(0);
+        owned.footpaths_out_offsets.push(0);
+        owned.footpaths_in_offsets.push(0);
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let hints = [catenary::routing_common::route_manager::PlatformStopMeta {
+            platform_code: "1".into(),
+            route_names: vec!["E".into()],
+        }];
+        let p = platform_metadata(&tt, &hints, &place(&tt, 0)).unwrap();
+        let json = serde_json::to_value(p).unwrap();
+        assert_eq!(json["gtfs_id"], "metro-e-platform");
+        assert_eq!(json["platform_code"], "1");
+        assert_eq!(json["route_names"][0], "E");
     }
 
     #[test]

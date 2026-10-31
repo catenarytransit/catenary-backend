@@ -60,6 +60,8 @@ struct Request {
     latitude: f64,
     longitude: f64,
     max_seconds: u32,
+    #[serde(default)]
+    origin_stop: Option<Stop>,
     /// 0 = forward routing (access), 1 = backward routing (egress).
     #[serde(default)]
     direction: u8,
@@ -198,11 +200,27 @@ fn run_request(
         }
         targets.push(point);
     }
+    // OSM platform metadata also applies to the *source* of a reconstructed
+    // platform-to-platform transfer or stop-to-destination egress. Without it,
+    // a level-separated light-rail stop may snap to a surface road instead.
+    let mut origin = ffi::Coordinate::outdoor(query.latitude, query.longitude);
+    if let Some(x) = &query.origin_stop {
+        ensure!(
+            x.latitude == query.latitude && x.longitude == query.longitude,
+            "origin_stop coordinates must match the request origin"
+        );
+        let routes = x.route_names.join("\u{1f}");
+        let matched = router.match_platform(
+            &origin, &x.gtfs_id, &x.name, &x.platform_code, &routes, 25.0,
+        )?;
+        if matched.found {
+            origin = ffi::Coordinate::indoor(query.latitude, query.longitude, matched.level);
+        }
+    }
     // Use low-level native OSR matching. Access queries start at the user
     // (forward); egress queries search backward from the destination to
     // candidate stops. Destination candidates must be reverse-matched
     // relative to the chosen OSR search direction.
-    let origin = ffi::Coordinate::outdoor(query.latitude, query.longitude);
     let mut source_matches = router.create_match_store();
     let mut target_matches = router.create_match_store();
     let origin_options = ffi::MatchOptions {
@@ -499,6 +517,7 @@ mod tests {
             cycling_speed: None,
             stops: Vec::new(),
             include_geometry: false,
+            origin_stop: None,
         };
         let error = run_request(&BTreeMap::new(), request)
             .err()
@@ -531,6 +550,26 @@ mod tests {
         assert_eq!(modern.stops[0].gtfs_id, "expo-sepulveda-east");
         assert_eq!(modern.stops[0].platform_code, "1");
         assert_eq!(modern.stops[0].route_names, vec!["E"]);
+        Ok(())
+    }
+
+    #[test]
+    fn source_platform_metadata_is_optional_but_preserved() -> Result<()> {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 34.0354,
+            "longitude": -118.4341,
+            "max_seconds": 900,
+            "origin_stop": {
+                "stop": 42, "latitude": 34.0354, "longitude": -118.4341,
+                "name": "Expo / Sepulveda", "gtfs_id": "platform-e",
+                "platform_code": "1", "route_names": ["E"]
+            },
+            "stops": []
+        }))?;
+        let platform = request.origin_stop.expect("platform metadata");
+        assert_eq!(platform.gtfs_id, "platform-e");
+        assert_eq!(platform.route_names, vec!["E"]);
         Ok(())
     }
 
