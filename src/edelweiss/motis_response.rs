@@ -415,6 +415,12 @@ struct PathTarget {
 struct PathReply {
     reachable: Vec<PathReachable>,
     error: Option<String>,
+    #[serde(default)]
+    protocol_version: Option<u32>,
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    applied_speed_meters_per_second: Option<f32>,
 }
 #[derive(serde::Deserialize)]
 struct PathReachable {
@@ -459,6 +465,16 @@ fn street_path(
     let response: PathReply = serde_json::from_str(&line)?;
     if let Some(err) = response.error {
         anyhow::bail!("OSR geometry: {err}");
+    }
+    if mode == "BIKE" {
+        anyhow::ensure!(
+            response.protocol_version.is_some_and(|v| v >= 2)
+                && response.mode.as_deref() == Some("BIKE")
+                && response.applied_speed_meters_per_second.is_some_and(
+                    |v| v.is_finite() && (v - cycling_speed).abs() < 0.001
+                ),
+            "OSR geometry worker did not verify BIKE mode and speed; rebuild/restart osr_worker"
+        );
     }
     Ok(response
         .reachable

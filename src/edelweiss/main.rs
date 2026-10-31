@@ -137,6 +137,35 @@ struct QueryTimings {
     query_total_ms: f64,
 }
 
+#[cfg(test)]
+mod osr_worker_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn outdated_worker_cannot_silently_return_walking_as_cycling() {
+        let requested = 23.5 / 3.6;
+        assert!(ensure_worker_honored_mode(StreetMode::Bike, requested, None, None, None).is_err());
+        assert!(ensure_worker_honored_mode(
+            StreetMode::Bike, requested, Some(2), Some(StreetMode::Walk), Some(1.2)
+        ).is_err());
+        assert!(ensure_worker_honored_mode(
+            StreetMode::Bike, requested, Some(2), Some(StreetMode::Bike), Some(1.2)
+        ).is_err());
+        assert!(ensure_worker_honored_mode(
+            StreetMode::Bike, requested, Some(2), Some(StreetMode::Bike), Some(requested)
+        ).is_ok());
+        // Existing walking-only workers remain usable for legacy walk requests.
+        assert!(ensure_worker_honored_mode(StreetMode::Walk, 1.2, None, None, None).is_ok());
+    }
+
+    #[test]
+    fn worker_mode_is_not_inferred_from_json_request() {
+        let old: OsrResponse = serde_json::from_str(r#"{"reachable":[],"error":null}"#).unwrap();
+        assert!(old.protocol_version.is_none());
+        assert!(old.mode.is_none());
+    }
+}
+
 fn milliseconds(start: Instant) -> f64 {
     start.elapsed().as_secs_f64() * 1000.0
 }
@@ -184,6 +213,39 @@ struct OsrAccess {
 struct OsrResponse {
     reachable: Vec<OsrAccess>,
     error: Option<String>,
+    #[serde(default)]
+    protocol_version: Option<u32>,
+    #[serde(default)]
+    mode: Option<StreetMode>,
+    #[serde(default)]
+    applied_speed_meters_per_second: Option<f32>,
+}
+
+/// Fail rather than presenting walking-speed OSR results as bicycle journeys.
+/// Old osr_worker releases can silently ignore unknown BIKE/cycling_speed
+/// JSON fields, yet still return a syntactically valid walking route.
+fn ensure_worker_honored_mode(
+    mode: StreetMode,
+    expected_speed: f32,
+    protocol_version: Option<u32>,
+    worker_mode: Option<StreetMode>,
+    actual_speed: Option<f32>,
+) -> Result<()> {
+    if mode == StreetMode::Bike {
+        anyhow::ensure!(
+            protocol_version.is_some_and(|v| v >= 2),
+            "OSR worker does not support verified bicycle requests; rebuild/restart osr_worker alongside Edelweiss"
+        );
+        anyhow::ensure!(
+            worker_mode == Some(mode),
+            "OSR worker failed to acknowledge BIKE routing mode"
+        );
+        anyhow::ensure!(
+            actual_speed.is_some_and(|s| s.is_finite() && (s - expected_speed).abs() < 0.001),
+            "OSR worker failed to acknowledge requested bicycle speed"
+        );
+    }
+    Ok(())
 }
 
 fn osr_access(
@@ -234,6 +296,13 @@ fn osr_access(
     if let Some(err) = reply.error {
         anyhow::bail!("OSR query: {err}");
     }
+    ensure_worker_honored_mode(
+        mode,
+        if mode == StreetMode::Bike { cycling_speed } else { pedestrian_speed },
+        reply.protocol_version,
+        reply.mode,
+        reply.applied_speed_meters_per_second,
+    )?;
     Ok(reply
         .reachable
         .into_iter()
@@ -281,6 +350,13 @@ fn direct_osr_seconds(
     if let Some(error) = reply.error {
         anyhow::bail!("OSR direct route: {error}");
     }
+    ensure_worker_honored_mode(
+        mode,
+        if mode == StreetMode::Bike { cycling_speed } else { pedestrian_speed },
+        reply.protocol_version,
+        reply.mode,
+        reply.applied_speed_meters_per_second,
+    )?;
     Ok(reply.reachable.first().map(|x| x.seconds))
 }
 

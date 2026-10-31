@@ -46,7 +46,7 @@ struct WorkerConfig {
     excluded_regions: BTreeSet<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 enum StreetMode {
     #[default]
@@ -86,10 +86,19 @@ struct Access {
     #[serde(skip_serializing_if = "Option::is_none")]
     geometry: Option<Vec<[f64; 2]>>,
 }
+/// A worker without this envelope may be a pre-bike binary that silently
+/// ignores the mode and cycling_speed JSON fields.
+const OSR_WORKER_PROTOCOL_VERSION: u32 = 2;
+
 #[derive(Serialize)]
 struct Response {
     reachable: Vec<Access>,
     error: Option<String>,
+    protocol_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<StreetMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    applied_speed_meters_per_second: Option<f32>,
 }
 
 /// Ordinary cycling minimizes elapsed travel time at the requested speed.
@@ -275,19 +284,27 @@ fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Route
         "OSR request exceeds 512KiB or is not newline terminated"
     );
     let response = match serde_json::from_slice::<Request>(&input) {
-        Ok(req) => match run_request(graphs, req) {
-            Ok(reachable) => Response {
+        Ok(req) => {
+            let mode = req.mode;
+            let applied_speed_meters_per_second = profile_and_speed(&req).ok().map(|(_, s)| s);
+            let (reachable, error) = match run_request(graphs, req) {
+                Ok(reachable) => (reachable, None),
+                Err(e) => (Vec::new(), Some(e.to_string())),
+            };
+            Response {
                 reachable,
-                error: None,
-            },
-            Err(e) => Response {
-                reachable: Vec::new(),
-                error: Some(e.to_string()),
-            },
-        },
+                error,
+                protocol_version: OSR_WORKER_PROTOCOL_VERSION,
+                mode: Some(mode),
+                applied_speed_meters_per_second,
+            }
+        }
         Err(e) => Response {
             reachable: Vec::new(),
             error: Some(e.to_string()),
+            protocol_version: OSR_WORKER_PROTOCOL_VERSION,
+            mode: None,
+            applied_speed_meters_per_second: None,
         },
     };
     let mut writer = BufWriter::new(stream);
@@ -522,6 +539,22 @@ mod tests {
         query.pedestrian_speed = None;
         query.cycling_speed = Some(f32::NAN);
         assert!(profile_and_speed(&query).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn worker_response_acknowledges_effective_bicycle_speed() -> Result<()> {
+        let response = Response {
+            reachable: Vec::new(),
+            error: None,
+            protocol_version: OSR_WORKER_PROTOCOL_VERSION,
+            mode: Some(StreetMode::Bike),
+            applied_speed_meters_per_second: Some(23.5 / 3.6),
+        };
+        let value = serde_json::to_value(response)?;
+        assert_eq!(value["protocol_version"], 2);
+        assert_eq!(value["mode"], "BIKE");
+        assert!((value["applied_speed_meters_per_second"].as_f64().unwrap() - 23.5 / 3.6).abs() < 1e-5);
         Ok(())
     }
 
