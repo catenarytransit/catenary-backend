@@ -522,7 +522,9 @@ pub fn route_profile_with_stats(
     // well-tested point RAPTOR search rather than the former 128 point solves.
     // The incomplete profile remains explicitly visible in debug statistics.
     // Do not silently reduce multi-day journey eligibility on fallback.
-    if transit.is_empty() && !request.access.is_empty() && !request.egress.is_empty() {
+    if transit.is_empty() && !stats.profile_budget_exhausted
+        && Instant::now() < deadline
+        && !request.access.is_empty() && !request.egress.is_empty() {
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
         fallback.max_duration_seconds = options.max_journey_duration_seconds;
