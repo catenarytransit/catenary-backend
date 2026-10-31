@@ -894,8 +894,10 @@ mod tests {
         owned.coordinates.push(catenary::routing_common::timetable::Coordinate {
             lat: 34.0354, lon: -118.4341,
         });
-        owned.location_id.push(owned.add_string("metro-e-platform").unwrap());
-        owned.location_name.push(owned.add_string("Expo / Sepulveda").unwrap());
+        let stop_id = owned.add_string("metro-e-platform").unwrap();
+        let stop_name = owned.add_string("Expo / Sepulveda").unwrap();
+        owned.location_id.push(stop_id);
+        owned.location_name.push(stop_name);
         owned.location_source.push(catenary::routing_common::timetable::SourceIdx(0));
         owned.location_type.push(1);
         owned.location_parent.push(catenary::routing_common::timetable::LocationIdx::INVALID);
