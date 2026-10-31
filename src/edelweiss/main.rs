@@ -161,6 +161,9 @@ struct OsrStop {
     latitude: f64,
     longitude: f64,
     name: String,
+    gtfs_id: String,
+    platform_code: String,
+    route_names: Vec<String>,
 }
 #[derive(Serialize)]
 struct OsrRequest<'a> {
@@ -213,6 +216,12 @@ fn osr_access(
                     .and_then(|r| table.get_string(*r))
                     .unwrap_or("")
                     .to_owned(),
+                gtfs_id: table.location_id().get(id.idx())
+                    .and_then(|r| table.get_string(*r))
+                    .unwrap_or("")
+                    .to_owned(),
+                platform_code: String::new(),
+                route_names: Vec::new(),
             }
         })
         .collect();
@@ -273,6 +282,9 @@ fn direct_osr_seconds(
             latitude: to.lat,
             longitude: to.lon,
             name: String::new(),
+            gtfs_id: String::new(),
+            platform_code: String::new(),
+            route_names: Vec::new(),
         }],
     };
     let mut stream = TcpStream::connect(addr)?;
