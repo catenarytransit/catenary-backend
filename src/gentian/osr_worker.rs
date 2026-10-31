@@ -488,6 +488,28 @@ mod tests {
     }
 
     #[test]
+    fn legacy_stop_requests_without_platform_name_remain_supported() -> Result<()> {
+        let legacy: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 34.0,
+            "longitude": -118.0,
+            "max_seconds": 900,
+            "stops": [{"stop": 1, "latitude": 34.01, "longitude": -118.01}]
+        }))?;
+        assert_eq!(legacy.stops[0].name, "");
+        let modern: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 34.0,
+            "longitude": -118.0,
+            "max_seconds": 900,
+            "stops": [{"stop": 1, "latitude": 34.01, "longitude": -118.01,
+                       "name": "Expo / Sepulveda"}]
+        }))?;
+        assert_eq!(modern.stops[0].name, "Expo / Sepulveda");
+        Ok(())
+    }
+
+    #[test]
     fn cycling_uses_time_optimized_bicycle_profile_at_requested_si_speed() -> Result<()> {
         // The real Edelweiss payload uses metres per second: 23.5 km/h.
         let mut query: Request = serde_json::from_value(serde_json::json!({
