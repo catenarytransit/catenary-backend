@@ -157,7 +157,6 @@ fn ride_identity(
 fn metadata(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
-    platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
     journeys: &[Journey],
     database_url: Option<&str>,
 ) -> Result<BTreeMap<(String, String, String), TripInfo>> {
@@ -725,6 +724,7 @@ fn transit_leg(
 pub fn build(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
+    platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
     journeys: &[Journey],
     from: Coordinates,
     to: Coordinates,
