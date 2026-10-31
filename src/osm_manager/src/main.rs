@@ -78,6 +78,10 @@ struct Manifest {
     /// have no fingerprint and must be regenerated.
     #[serde(default)]
     extractor_md5: Option<String>,
+    /// The OSR -p extraction flag changes the generated graph artifacts even
+    /// when the extractor binary and source PBF are unchanged.
+    #[serde(default)]
+    with_platforms: bool,
 }
 
 struct Lock {
@@ -375,6 +379,23 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
 // Files opened by the pinned MOTIS OSR ways::ways()/ways::routing::read().
 // The graph properties are serialized together in routing.bin; they are NOT
  // written as node_properties.bin / way_properties.bin.
+const REQUIRED_PLATFORM_FILES: &[&str] = &[
+    "node_pos.bin",
+    "node_is_platform.bin",
+    "way_is_platform.bin",
+    "platform_ref_data.bin",
+    "platform_ref_index.bin",
+    "platform_names_idx_0.bin",
+    "platform_names_idx_1.bin",
+    "platform_names_data.bin",
+];
+
+// Some valid platform indexes are empty in areas without mapped platforms.
+// Require the files themselves, not nonzero length, for the optional arrays.
+fn has_platform_data(dir: &Path) -> bool {
+    REQUIRED_PLATFORM_FILES.iter().all(|name| dir.join(name).is_file())
+}
+
 const REQUIRED_OSR_FILES: &[&str] = &[
     "routing.bin",
     "node_to_osm.bin",
@@ -450,12 +471,13 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
     fs::create_dir_all(parent)?;
     let (revision, md5, expected_len) = remote_revision(client, region)?;
     let manifest_path = output.join("manifest.json");
-    if !force && good_output(&output) {
+    if !force && good_output(&output) && has_platform_data(&output) {
         if let Ok(bytes) = fs::read(&manifest_path) {
             if let Ok(previous) = serde_json::from_slice::<Manifest>(&bytes) {
                 if previous.pbf_url == region.pbf_url
                     && previous.revision == revision
                     && previous.extractor_md5.as_deref() == Some(extractor_md5)
+                    && previous.with_platforms
                 {
                     println!("{}: current ({revision}), skipping extract", region.id);
                     return Ok(());
@@ -479,13 +501,18 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
             "Geofabrik revision changed during download for {}; retry the manager", region.id);
         let (geometry, boundary_url) = fetch_boundary(client, region)?;
         let status = Command::new(&cfg.osr_extract)
-            .arg("-i").arg(&download).arg("-o").arg(&staging)
+            .arg("-p").arg("-i").arg(&download).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
         // Verify expected files. Actual serializer compatibility is checked
         // by opening the output with the matching osr-ffi reader in CI.
         validate_osr_output(&staging)
             .with_context(|| format!("validating native OSR output for {}", region.id))?;
+        ensure!(
+            has_platform_data(&staging),
+            "OSR -p output for {} is missing required platform matching files",
+            region.id
+        );
         write_json(&staging.join("boundary.geojson"), &geometry)?;
         let manifest = Manifest {
             id: region.id.clone(),
@@ -496,6 +523,7 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
             generated_unix_seconds: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
             extractor: cfg.osr_extract.to_string_lossy().into_owned(),
             extractor_md5: Some(extractor_md5.to_owned()),
+            with_platforms: true,
         };
         write_json(&staging.join("manifest.json"), &manifest)?;
         publish(&staging, &output)?;
@@ -690,6 +718,20 @@ mod tests {
     }
 
     #[test]
+    fn platform_aware_extract_requires_all_native_index_files() {
+        let root = std::env::temp_dir().join(format!("osm-platform-index-{}", nonce().unwrap()));
+        fs::create_dir_all(&root).unwrap();
+        assert!(!has_platform_data(&root));
+        for file in REQUIRED_PLATFORM_FILES {
+            fs::write(root.join(file), b"").unwrap();
+        }
+        assert!(has_platform_data(&root), "empty platform columns are permitted");
+        fs::remove_file(root.join("platform_ref_index.bin")).unwrap();
+        assert!(!has_platform_data(&root), "partial native indexes must be rebuilt");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn extractor_fingerprint_changes_when_binary_changes() {
         let path = std::env::temp_dir().join(format!("osr-extractor-fingerprint-{}", nonce().unwrap()));
         fs::write(&path, b"extractor-version-a").unwrap();
@@ -708,6 +750,7 @@ mod tests {
                           "generated_unix_seconds":0,"extractor":"./osr-extract"}"#;
         let old: Manifest = serde_json::from_str(source).unwrap();
         assert_eq!(old.extractor_md5, None);
+        assert!(!old.with_platforms, "legacy graphs must be regenerated with -p");
         assert_ne!(old.extractor_md5.as_deref(), Some("md5:new"));
     }
 

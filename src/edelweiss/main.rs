@@ -160,6 +160,10 @@ struct OsrStop {
     stop: u32,
     latitude: f64,
     longitude: f64,
+    name: String,
+    gtfs_id: String,
+    platform_code: String,
+    route_names: Vec<String>,
 }
 #[derive(Serialize)]
 struct OsrRequest<'a> {
@@ -198,8 +202,19 @@ fn osr_access(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
-    let nearest = router.nearest_stops(transit_region, point, 4096)?;
+    // MOTIS enumerates traffic-bearing stops in a mode-appropriate search
+    // radius before performing one-to-many native street routing.
+    let speed = f64::from(match mode {
+        StreetMode::Walk => pedestrian_speed,
+        StreetMode::Bike => cycling_speed,
+    });
+    let search_radius = (speed * f64::from(max_seconds))
+        .max(router.settings.access_radius_meters);
+    let nearest = router.nearest_stops(
+        transit_region, point, 4096, search_radius,
+    )?;
     let table = router.timetable_for(transit_region)?;
+    let platform_metadata = router.platform_metadata_for(transit_region)?;
     let stops = nearest
         .into_iter()
         .map(|(id, _)| {
@@ -208,6 +223,16 @@ fn osr_access(
                 stop: id.0,
                 latitude: f64::from(c.lat),
                 longitude: f64::from(c.lon),
+                name: table.location_name().get(id.idx())
+                    .and_then(|r| table.get_string(*r))
+                    .unwrap_or("")
+                    .to_owned(),
+                gtfs_id: table.location_id().get(id.idx())
+                    .and_then(|r| table.get_string(*r))
+                    .unwrap_or("")
+                    .to_owned(),
+                platform_code: platform_metadata[id.idx()].platform_code.clone(),
+                route_names: platform_metadata[id.idx()].route_names.clone(),
             }
         })
         .collect();
@@ -267,6 +292,10 @@ fn direct_osr_seconds(
             stop: 0,
             latitude: to.lat,
             longitude: to.lon,
+            name: String::new(),
+            gtfs_id: String::new(),
+            platform_code: String::new(),
+            route_names: Vec::new(),
         }],
     };
     let mut stream = TcpStream::connect(addr)?;

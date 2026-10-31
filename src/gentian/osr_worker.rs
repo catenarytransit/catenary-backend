@@ -78,6 +78,14 @@ struct Stop {
     stop: u32,
     latitude: f64,
     longitude: f64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    gtfs_id: String,
+    #[serde(default)]
+    platform_code: String,
+    #[serde(default)]
+    route_names: Vec<String>,
 }
 #[derive(Serialize)]
 struct Access {
@@ -173,7 +181,22 @@ fn run_request(
             x.latitude.is_finite() && x.longitude.is_finite(),
             "invalid target"
         );
-        targets.push(ffi::Coordinate::outdoor(x.latitude, x.longitude));
+        let mut point = ffi::Coordinate::outdoor(x.latitude, x.longitude);
+        // MOTIS derives GTFS stop levels from matched OSM platforms.
+        // Using kNoLevel for an elevated or underground station can shadow
+        // the real pedestrian platform with a road/way on another level.
+        // Only set an explicit level for a conservatively matched platform.
+        if !x.name.is_empty() || !x.gtfs_id.is_empty() || !x.platform_code.is_empty() {
+            let route_names = x.route_names.join("\u{1f}");
+            let matched = router.match_platform(
+                &point, &x.gtfs_id, &x.name, &x.platform_code,
+                &route_names, 25.0,
+            )?;
+            if matched.found {
+                point = ffi::Coordinate::indoor(x.latitude, x.longitude, matched.level);
+            }
+        }
+        targets.push(point);
     }
     // Use low-level native OSR matching. Access queries start at the user
     // (forward); egress queries search backward from the destination to
@@ -267,12 +290,18 @@ fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Route
     let reader = BufReader::new(stream.try_clone()?);
     // Enforce the wire budget while reading. Checking after read_line could
     // allocate an unbounded String per concurrent client.
-    let mut limited = reader.take(524_289);
+    // A 4096-stop route search now includes GTFS names, platform codes and
+    // public route labels. A valid request can exceed the former 512 KiB
+    // ceiling; keep a strict bound without rejecting dense urban searches.
+    const MAX_OSR_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
+    let mut limited = reader.take(MAX_OSR_REQUEST_BYTES + 1);
     let mut input = Vec::new();
     let received = limited.read_until(b'\n', &mut input)?;
     ensure!(
-        received > 0 && received <= 524_288 && input.last() == Some(&b'\n'),
-        "OSR request exceeds 512KiB or is not newline terminated"
+        received > 0
+            && received <= MAX_OSR_REQUEST_BYTES as usize
+            && input.last() == Some(&b'\n'),
+        "OSR request exceeds 4 MiB or is not newline terminated"
     );
     let response = match serde_json::from_slice::<Request>(&input) {
         Ok(req) => match run_request(graphs, req) {
@@ -465,6 +494,9 @@ mod tests {
             longitude: 0.0,
             max_seconds: 120,
             direction: 0,
+            mode: StreetMode::Walk,
+            pedestrian_speed: None,
+            cycling_speed: None,
             stops: Vec::new(),
             include_geometry: false,
         };
@@ -472,6 +504,34 @@ mod tests {
             .err()
             .expect("unknown regions must fail");
         assert!(error.to_string().contains("OSR region is not loaded"));
+    }
+
+    #[test]
+    fn legacy_stop_requests_without_platform_name_remain_supported() -> Result<()> {
+        let legacy: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 34.0,
+            "longitude": -118.0,
+            "max_seconds": 900,
+            "stops": [{"stop": 1, "latitude": 34.01, "longitude": -118.01}]
+        }))?;
+        assert_eq!(legacy.stops[0].name, "");
+        let modern: Request = serde_json::from_value(serde_json::json!({
+            "region": "test",
+            "latitude": 34.0,
+            "longitude": -118.0,
+            "max_seconds": 900,
+            "stops": [{"stop": 1, "latitude": 34.01, "longitude": -118.01,
+                       "name": "Expo / Sepulveda",
+                       "gtfs_id": "expo-sepulveda-east",
+                       "platform_code": "1",
+                       "route_names": ["E"]}]
+        }))?;
+        assert_eq!(modern.stops[0].name, "Expo / Sepulveda");
+        assert_eq!(modern.stops[0].gtfs_id, "expo-sepulveda-east");
+        assert_eq!(modern.stops[0].platform_code, "1");
+        assert_eq!(modern.stops[0].route_names, vec!["E"]);
+        Ok(())
     }
 
     #[test]

@@ -50,7 +50,14 @@ struct LocalConfig {
     osm_manager: StreetManager,
 }
 
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct PlatformStopMeta {
+    pub platform_code: String,
+    pub route_names: Vec<String>,
+}
+
 pub struct TransitRegion {
+    pub platform_metadata: Vec<PlatformStopMeta>,
     pub id: String,
     geometry: Vec<geo::Geometry<f64>>,
     pub timetable: MappedTimetable,
@@ -211,7 +218,23 @@ impl Router {
                 )
             })?;
             let metadata = MetadataIndex::build(&timetable.view()?)?;
+            let sidecar = path.with_extension("platforms.json");
+            let platform_metadata: Vec<PlatformStopMeta> = if sidecar.is_file() {
+                let value = serde_json::from_slice(&fs::read(&sidecar)?)?;
+                ensure!(
+                    {
+                        let records: &Vec<PlatformStopMeta> = &value;
+                        records.len() == timetable.view()?.coordinates().len()
+                    },
+                    "platform metadata length differs from timetable: {}",
+                    sidecar.display()
+                );
+                value
+            } else {
+                vec![PlatformStopMeta::default(); timetable.view()?.coordinates().len()]
+            };
             transit.push(TransitRegion {
+                platform_metadata,
                 id: region.id.clone(),
                 geometry: geometries,
                 timetable,
@@ -381,13 +404,22 @@ impl Router {
         })
     }
 
+    pub fn platform_metadata_for(&self, region: &str) -> Result<&[PlatformStopMeta]> {
+        self.transit.iter()
+            .find(|x| x.id == region)
+            .map(|x| x.platform_metadata.as_slice())
+            .context("no compiled platform metadata for transit region")
+    }
+
     pub fn nearest_stops(
         &self,
         region: &str,
         point: Coordinates,
         limit: usize,
+        radius_meters: f64,
     ) -> Result<Vec<(LocationIdx, f64)>> {
         let tt = self.timetable_for(region)?;
+        ensure!(radius_meters.is_finite() && radius_meters > 0.0, "invalid access radius");
         let mut stops = Vec::new();
         for (i, coordinate) in tt.coordinates().iter().enumerate() {
             let d = haversine_meters(
@@ -396,7 +428,9 @@ impl Router {
                 f64::from(coordinate.lat),
                 f64::from(coordinate.lon),
             );
-            if d <= self.settings.access_radius_meters {
+            if d <= radius_meters
+                && !tt.routes_at(LocationIdx(i as u32)).is_empty()
+            {
                 stops.push((LocationIdx(i as u32), d));
             }
         }

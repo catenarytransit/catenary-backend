@@ -22,7 +22,8 @@ fn meters(a: Coordinate, b: Coordinate) -> f64 {
 /// Each index is the exact LocationIdx produced by Gentian's timetable writer.
 pub fn compute(
     osr_dir: &Path,
-    stops: &[Coordinate],
+    tt: &catenary::routing_common::timetable::TimetableOwned,
+    metadata: &[catenary::routing_common::route_manager::PlatformStopMeta],
     max_seconds: u32,
     candidate_meters: f64,
 ) -> Result<Vec<Vec<(u32, u32)>>> {
@@ -34,10 +35,12 @@ pub fn compute(
         candidate_meters.is_finite() && candidate_meters > 0.0,
         "candidate radius must be positive and finite"
     );
+    let stops = &tt.coordinates;
     ensure!(
         u32::try_from(stops.len()).is_ok(),
         "too many locations for packed indexes"
     );
+    ensure!(metadata.len() == stops.len(), "GTFS platform metadata count mismatch");
     const CELL: f64 = 0.02;
     let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (idx, stop) in stops.iter().enumerate() {
@@ -85,7 +88,19 @@ pub fn compute(
         ..match_origin.clone()
     };
     for (i, stop) in stops.iter().enumerate() {
-        let coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
+        let mut coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
+        let stop_id = tt.location_id.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
+        let name = tt.location_name.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
+        let hint = &metadata[i];
+        let routes = hint.route_names.join("\u{1f}");
+        let matched = router.match_platform(
+            &coordinate, stop_id, name, &hint.platform_code, &routes, 25.0,
+        )?;
+        if matched.found {
+            coordinate = ffi::Coordinate::indoor(
+                f64::from(stop.lat), f64::from(stop.lon), matched.level,
+            );
+        }
         // Profile-independent candidates can be reused for both match roles.
         let raw = router.get_raw_match(&coordinate, 250.0)?;
         let origin_idx =
