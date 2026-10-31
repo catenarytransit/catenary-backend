@@ -115,6 +115,9 @@ fn load_stops(client: &mut Client, source: &ChateauSource) -> Result<Vec<Stop>> 
         FROM gtfs.stops
         WHERE onestop_feed_id = $1 AND attempt_id = $2
           AND point IS NOT NULL
+          -- OSM routes to actual platforms. GTFS entrance (2) and generic
+          -- pathway node (3) locations must not be routing graph vertices.
+          AND location_type NOT IN (2, 3)
         ORDER BY gtfs_id
     ",
         source,
@@ -146,6 +149,11 @@ fn add_locations(
 ) -> Result<HashMap<String, LocationIdx>> {
     let mut ids = HashMap::with_capacity(stops.len());
     for stop in stops {
+        ensure!(
+            !matches!(stop.kind, 2 | 3),
+            "GTFS entrance/generic node {} cannot be a routing location",
+            stop.id
+        );
         let idx = LocationIdx(as_u32(tt.coordinates.len())?);
         ids.insert(stop.id.clone(), idx);
         tt.coordinates.push(Coordinate {
@@ -1113,15 +1121,13 @@ pub fn build(
     }
     assemble_routes(&mut tt, schedules)?;
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
-    let mut transfers =
+    let transfers =
         super::footpaths::compute(
             osr_dir, &tt, &platform_metadata, max_seconds, candidate_meters,
         )?;
-    // Nigiri also connects nearby platforms under one station, where the
-    // street graph often omits indoor passages. Never replace a routed OSR edge.
-    super::footpaths::add_station_links(&tt, &mut transfers)?;
-    // Nigiri-style one-time bounded closure. Running Dijkstra over unbounded
-    // footpaths during every RAPTOR round previously allowed hours of walking.
+    // Every edge must be routed through the OSM pedestrian network. Avoid
+    // parent/child beelines that can jump over tracks or between OSR levels.
+    // Closing the directed, OSR-verified graph preserves this invariant.
     let transfers = super::footpaths::bounded_closure(&transfers, max_seconds)?;
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
@@ -1172,6 +1178,24 @@ mod tests {
             tt.location_parent[lookup["platform"].idx()],
             lookup["station"]
         );
+    }
+
+    #[test]
+    fn entrances_and_generic_pathway_nodes_cannot_be_timetable_locations() {
+        for kind in [2, 3] {
+            let mut tt = TimetableOwned::empty(0, 1);
+            let stops = [Stop {
+                id: "entrance".into(),
+                name: "Station entrance".into(),
+                lat: 34.0354,
+                lon: -118.4341,
+                parent: Some("station".into()),
+                kind,
+            }];
+            let error = add_locations(&mut tt, 0, &stops).err().unwrap();
+            assert!(error.to_string().contains("cannot be a routing location"));
+            assert!(tt.coordinates.is_empty());
+        }
     }
 
     #[test]
