@@ -851,86 +851,99 @@ fn scan_routes(
 /// destination labels improved by the current event. The global scan horizon
 /// is conservative for the entire interval; per-journey duration is checked
 /// after immutable reconstruction, so prior labels never invalidate a query.
-pub(crate) fn route_profile_incremental(
-    tt: &ZeroCopyTimetable<'_>,
-    request: &Query,
-    anchors: &[i64],
+/// Persistent profile search context. The same frontiers, path arena, and
+/// route-dedup epochs are used for every interval extension.
+pub(crate) struct ProfileSearchState {
+    rounds: Vec<Round>,
+    nodes: Vec<PathNode>,
+    stamps: Vec<u32>,
+    epoch: u32,
+    journeys: Vec<Journey>,
+    stats: RaptorStats,
+    deadline: Instant,
+    lower: i64,
+    upper: i64,
+    first_anchor: i64,
+    last_anchor: i64,
+    first_board_lower: i64,
+    first_board_upper: i64,
     arrive_by: bool,
-    budget: Duration,
-) -> Result<(Vec<Journey>, RaptorStats)> {
-    ensure!(
-        request.max_boardings <= 16,
-        "max_boardings exceeds supported query limit"
-    );
-    ensure!(
-        (1..=7 * 86_400).contains(&request.max_duration_seconds),
-        "max_duration_seconds must be between 1 second and 7 days"
-    );
-    ensure!(
-        anchors.windows(2).all(|w| w[0] <= w[1]),
-        "incremental anchors must be ascending"
-    );
-    let n = tt.coordinates().len();
-    for endpoint in request.access.iter().chain(&request.egress) {
-        ensure!(endpoint.stop.idx() < n, "access/egress stop out of range");
-    }
-    let mut stats = RaptorStats::default();
-    if anchors.is_empty() || request.max_boardings == 0 {
-        return Ok((vec![], stats));
-    }
-    stats.profile_searches = 1;
-    let lower = if arrive_by {
-        anchors[0].saturating_sub(i64::from(request.max_duration_seconds))
-    } else {
-        anchors[0]
-    };
-    let upper = if arrive_by {
-        *anchors.last().unwrap()
-    } else {
-        anchors
-            .last()
-            .unwrap()
-            .saturating_add(i64::from(request.max_duration_seconds))
-    };
+    last_processed_anchor: Option<i64>,
+}
 
-    let first_anchor = anchors[0];
-    let last_anchor = *anchors.last().unwrap();
-    let max_offset = if arrive_by {
-        request.egress.iter().map(|ep| ep.seconds).max().unwrap_or(0)
-    } else {
-        request.access.iter().map(|ep| ep.seconds).max().unwrap_or(0)
-    };
-    // Only first vehicle events need to lie near the selected profile anchors.
-    // Subsequent transfers retain the full journey horizon.
-    let first_board_lower = if arrive_by {
-        first_anchor.saturating_sub(i64::from(max_offset))
-    } else {
-        first_anchor
-    };
-    let first_board_upper = if arrive_by {
-        last_anchor
-    } else {
-        last_anchor.saturating_add(i64::from(max_offset))
-    };
-
-    let mut rounds = vec![Round::default(); request.max_boardings + 1];
-    let mut nodes = Vec::new();
-    let mut stamps = vec![0u32; tt.route_transport_ranges().len()];
-    let mut epoch = 0u32;
-    let started = Instant::now();
-    let deadline = started.checked_add(budget).unwrap_or(started);
-    let mut journeys = Vec::new();
-    let ordered: Vec<i64> = if arrive_by {
-        anchors.to_vec()
-    } else {
-        anchors.iter().rev().copied().collect()
-    };
-    for (event_idx, anchor) in ordered.into_iter().enumerate() {
-        if event_idx != 0 && started.elapsed() >= budget {
-            stats.profile_budget_exhausted = true;
-            break;
+impl ProfileSearchState {
+    pub fn new(
+        tt: &ZeroCopyTimetable<'_>, request: &Query,
+        earliest: i64, latest: i64, arrive_by: bool, timeout: Duration,
+    ) -> Result<Self> {
+        ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
+        ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
+            "max_duration_seconds must be between 1 second and 7 days");
+        ensure!(earliest <= latest, "invalid profile interval");
+        let n = tt.coordinates().len();
+        for ep in request.access.iter().chain(request.egress.iter()) {
+            ensure!(ep.stop.idx() < n, "access/egress stop out of range");
         }
-        stats.profile_anchor_events += 1;
+        let max_offset = if arrive_by {
+            request.egress.iter().map(|x| x.seconds).max().unwrap_or(0)
+        } else {
+            request.access.iter().map(|x| x.seconds).max().unwrap_or(0)
+        };
+        let lower = if arrive_by {
+            earliest.saturating_sub(i64::from(request.max_duration_seconds))
+        } else { earliest };
+        let upper = if arrive_by { latest }
+            else { latest.saturating_add(i64::from(request.max_duration_seconds)) };
+        let first_board_lower = if arrive_by {
+            earliest.saturating_sub(i64::from(max_offset))
+        } else { earliest };
+        let first_board_upper = if arrive_by {
+            latest
+        } else { latest.saturating_add(i64::from(max_offset)) };
+        let now = Instant::now();
+        let mut stats = RaptorStats::default();
+        stats.profile_searches = 1;
+        Ok(Self {
+            rounds: vec![Round::default(); request.max_boardings + 1],
+            nodes: Vec::new(),
+            stamps: vec![0; tt.route_transport_ranges().len()],
+            epoch: 0, journeys: Vec::new(), stats,
+            deadline: now.checked_add(timeout).unwrap_or(now),
+            lower, upper, first_anchor: earliest, last_anchor: latest,
+            first_board_lower, first_board_upper, arrive_by,
+            last_processed_anchor: None,
+        })
+    }
+
+    pub fn extend(
+        &mut self, tt: &ZeroCopyTimetable<'_>, request: &Query, anchors: &[i64],
+    ) -> Result<()> {
+        ensure!(anchors.windows(2).all(|w| w[0] <= w[1]),
+            "profile anchors must be sorted");
+        // Process in expansion order. In forward searches new later anchors
+        // can be added after older ones. Arrive-by uses the reverse order.
+        let ordered: Vec<i64> = if self.arrive_by {
+            anchors.iter().rev().copied().collect()
+        } else { anchors.to_vec() };
+        let arrive_by = self.arrive_by;
+        let lower = self.lower;
+        let upper = self.upper;
+        let first_anchor = self.first_anchor;
+        let last_anchor = self.last_anchor;
+        let first_board_lower = self.first_board_lower;
+        let first_board_upper = self.first_board_upper;
+        let deadline = self.deadline;
+        for (event_idx, anchor) in ordered.into_iter().enumerate() {
+            if let Some(last) = self.last_processed_anchor {
+                ensure!(if arrive_by { anchor <= last } else { anchor >= last },
+                    "profile expansion violates incremental search order");
+            }
+            if Instant::now() >= self.deadline {
+                self.stats.profile_budget_exhausted = true;
+                break;
+            }
+            self.last_processed_anchor = Some(anchor);
+            self.stats.profile_anchor_events += 1;
         let mut marked = Vec::new();
         let initial = if arrive_by {
             &request.egress
@@ -944,7 +957,7 @@ pub(crate) fn route_profile_incremental(
             } else {
                 anchor.saturating_add(i64::from(ep.seconds))
             };
-            if time < lower || time > upper {
+            if time < self.lower || time > self.upper {
                 continue;
             }
             let candidate = Label {
@@ -966,14 +979,14 @@ pub(crate) fn route_profile_incremental(
                 }
             };
             insert_path_label(
-                &mut rounds[0],
+                &mut self.rounds[0],
                 stop,
                 candidate,
                 leg,
                 None,
-                &mut nodes,
+                &mut self.nodes,
                 arrive_by,
-                &mut stats,
+                &mut self.stats,
                 &mut marked,
             );
         }
@@ -981,12 +994,12 @@ pub(crate) fn route_profile_incremental(
         marked.dedup();
         let mut changed_ends: Vec<(usize, Label, usize, u32)> = Vec::new();
         for k in 1..=request.max_boardings {
-            if marked.is_empty() || stats.profile_budget_exhausted {
+            if marked.is_empty() || self.stats.profile_budget_exhausted {
                 break;
             }
-            stats.rounds += 1;
-            stats.marked_stops += marked.len() as u64;
-            let (earlier, later) = rounds.split_at_mut(k);
+            self.stats.rounds += 1;
+            self.stats.marked_stops += marked.len() as u64;
+            let (earlier, later) = self.rounds.split_at_mut(k);
             let prev = &earlier[k - 1];
             let curr = &mut later[0];
             let mut changed = Vec::new();
@@ -1000,7 +1013,7 @@ pub(crate) fn route_profile_incremental(
                     }
                 }
             }
-            let routes = marked_routes(tt, &marked, &mut stamps, &mut epoch);
+            let routes = marked_routes(tt, &marked, &mut self.stamps, &mut self.epoch);
             let mut ride_seeds = Vec::new();
             let final_stops: Vec<(usize, u32)> = (if arrive_by {
                 &request.access
@@ -1012,18 +1025,18 @@ pub(crate) fn route_profile_incremental(
                 tt,
                 prev,
                 curr,
-                &mut nodes,
+                &mut self.nodes,
                 &routes,
                 &marked,
-                lower,
-                upper,
-                first_anchor,
-                last_anchor,
+                self.lower,
+                self.upper,
+                self.first_anchor,
+                self.last_anchor,
                 first_board_lower,
                 first_board_upper,
                 arrive_by,
-                deadline,
-                &mut stats,
+                self.deadline,
+                &mut self.stats,
                 &mut changed,
                 &mut ride_seeds,
                 &final_stops,
@@ -1035,7 +1048,7 @@ pub(crate) fn route_profile_incremental(
             // Walk propagation is intentionally one hop: Gentian constructs a
             // transfer closure. Each improved *provenance* remains independent.
             for (stop, source) in ride_seeds {
-                if stats.profile_budget_exhausted {
+                if self.stats.profile_budget_exhausted {
                     break;
                 }
                 let Some(predecessor) = source.path else {
@@ -1047,7 +1060,7 @@ pub(crate) fn route_profile_incremental(
                     tt.footpaths_from(LocationIdx(stop as u32))
                 };
                 for edge in feet {
-                    stats.footpath_edges_examined += 1;
+                    self.stats.footpath_edges_examined += 1;
                     let target = edge.target().idx();
                     let secs = edge.seconds();
                     if secs == 0 {
@@ -1058,7 +1071,7 @@ pub(crate) fn route_profile_incremental(
                     } else {
                         source.time.saturating_add(i64::from(secs))
                     };
-                    if time < lower || time > upper {
+                    if time < self.lower || time > self.upper {
                         continue;
                     }
                     let leg = if arrive_by {
@@ -1084,12 +1097,12 @@ pub(crate) fn route_profile_incremental(
                         },
                         leg,
                         Some(predecessor),
-                        &mut nodes,
+                        &mut self.nodes,
                         arrive_by,
-                        &mut stats,
+                        &mut self.stats,
                         &mut changed,
                     );
-                    if stats.profile_budget_exhausted {
+                    if self.stats.profile_budget_exhausted {
                         break;
                     }
                 }
@@ -1115,9 +1128,9 @@ pub(crate) fn route_profile_incremental(
         }
         for (_round, label, stop, offset) in changed_ends {
             let Some(mut journey) = (if arrive_by {
-                reconstruct_reverse(&nodes, label, stop, offset)
+                reconstruct_reverse(&self.nodes, label, stop, offset)
             } else {
-                reconstruct_forward(&nodes, label, stop, offset)
+                reconstruct_forward(&self.nodes, label, stop, offset)
             }) else {
                 continue;
             };
@@ -1126,21 +1139,42 @@ pub(crate) fn route_profile_incremental(
             } else {
                 crate::routing_common::transfer_optimizer::optimize_internal_transfers(tt, &mut journey);
             }
-            stats.profile_journeys_reconstructed += 1;
+            self.stats.profile_journeys_reconstructed += 1;
             if valid_journey(tt, request, &journey) {
-                journeys.push(journey);
+                self.journeys.push(journey);
             } else {
-                stats.profile_journeys_rejected += 1;
+                self.stats.profile_journeys_rejected += 1;
             }
         }
-        if stats.profile_budget_exhausted {
+        if self.stats.profile_budget_exhausted {
             break;
         }
+
+        }
+        Ok(())
     }
-    Ok((
-        crate::routing_common::profile_search::route_diverse_pareto(journeys),
-        stats,
-    ))
+
+    pub fn result(&self) -> Vec<Journey> {
+        crate::routing_common::profile_search::route_diverse_pareto(self.journeys.clone())
+    }
+
+    pub fn stats(&self) -> &RaptorStats { &self.stats }
+}
+
+pub(crate) fn route_profile_incremental(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, anchors: &[i64],
+    arrive_by: bool, budget: Duration,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    let mut sorted = anchors.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    if sorted.is_empty() || request.max_boardings == 0 {
+        return Ok((vec![], RaptorStats::default()));
+    }
+    let mut state = ProfileSearchState::new(tt, request, sorted[0],
+        *sorted.last().unwrap(), arrive_by, budget)?;
+    state.extend(tt, request, &sorted)?;
+    Ok((state.result(), state.stats().clone()))
 }
 
 #[cfg(test)]

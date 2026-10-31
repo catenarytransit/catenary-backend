@@ -100,6 +100,8 @@ struct Request {
     #[serde(default)]
     min_itineraries: Option<usize>,
     #[serde(default)]
+    timeout_seconds: Option<u32>,
+    #[serde(default)]
     max_journey_duration_seconds: Option<u32>,
     /// Relative duration cutoff for journeys with a faster nearby alternative.
     /// None uses ProfileOptions::default().
@@ -486,6 +488,9 @@ fn run_query(
         min_itineraries: request
             .min_itineraries
             .unwrap_or(profile_defaults.min_itineraries),
+        timeout_seconds: request
+            .timeout_seconds
+            .unwrap_or(profile_defaults.timeout_seconds),
         max_journey_duration_seconds: request
             .max_journey_duration_seconds
             .unwrap_or(profile_defaults.max_journey_duration_seconds),
