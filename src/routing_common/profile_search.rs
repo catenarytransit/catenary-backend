@@ -706,7 +706,7 @@ mod tests {
             base + 2 * 86_400 + 9 * 3_600
         );
         assert!(stats.profile_interval_extensions > 0);
-        assert!(stats.profile_searches >= 2);
+        assert_eq!(stats.profile_searches, 1); // shared state across all expansions
     }
 
     #[test]
