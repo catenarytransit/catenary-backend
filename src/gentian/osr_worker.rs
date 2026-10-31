@@ -209,7 +209,7 @@ fn run_request(
             x.latitude == query.latitude && x.longitude == query.longitude,
             "origin_stop coordinates must match the request origin"
         );
-        let routes = x.route_names.join("\\u{1f}");
+        let routes = x.route_names.join("\u{1f}");
         let matched = router.match_platform(
             &origin, &x.gtfs_id, &x.name, &x.platform_code, &routes, 25.0,
         )?;
