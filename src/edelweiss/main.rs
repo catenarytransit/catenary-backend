@@ -202,7 +202,17 @@ fn osr_access(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
-    let nearest = router.nearest_stops(transit_region, point, 4096)?;
+    // MOTIS enumerates traffic-bearing stops in a mode-appropriate search
+    // radius before performing one-to-many native street routing.
+    let speed = f64::from(match mode {
+        StreetMode::Walk => pedestrian_speed,
+        StreetMode::Bike => cycling_speed,
+    });
+    let search_radius = (speed * f64::from(max_seconds))
+        .max(router.settings.access_radius_meters);
+    let nearest = router.nearest_stops(
+        transit_region, point, 4096, search_radius,
+    )?;
     let table = router.timetable_for(transit_region)?;
     let platform_metadata = router.platform_metadata_for(transit_region)?;
     let stops = nearest
