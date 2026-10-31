@@ -914,8 +914,9 @@ pub fn route_with_stats(
             );
         }
     }
-    // OSR access offsets already encode first-mile reachability.
-    // Do not extend them again via arbitrary station footpaths.
+    // Equivalent to MOTIS/Nigiri intermodal use_start_footpaths_ = false.
+    // OSR has already completed the entire origin-to-platform walk.
+    // Deliberately do not call relax_walks_from on the access-seeded round.
     let mut marked_stops = round0
         .iter()
         .enumerate()
