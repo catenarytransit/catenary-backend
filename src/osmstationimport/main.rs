@@ -970,9 +970,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     fn normalize_name_for_comparison(name: &str) -> String {
         name.to_lowercase()
-            .replace("-", " ")
-            .replace("'", " ")
-            .replace("'", " ")
+            .replace('-', " ")
+            .replace('\'', " ")
             .replace("gare ", "")
             .replace("station ", "")
             .split_whitespace()
