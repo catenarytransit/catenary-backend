@@ -3,8 +3,9 @@
 //! Each (round, stop) has three *scalar* states: ride arrival, physical walk
 //! arrival, and transfer-ready time. The third state enforces GTFS stop-pair
 //! transfer rules without retaining a Pareto vector of arrival histories.
-//! Predecessor slots are overwritten on improvement and only read after a
-//! round has finished. Forward profile anchors are evaluated latest-first.
+//! Accepted predecessor snapshots are immutable, and terminal journey
+//! reconstruction follows the captured boarding/footpath provenance.
+//! Forward profile anchors are evaluated latest-first.
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::raptor_query::{
     Journey, Query, RaptorStats, for_each_route_service_day, transport_event_second,
@@ -162,6 +163,104 @@ struct Onboard {
 struct ActiveDay {
     day: usize,
     onboard: Option<Onboard>,
+    // A route-local calendar index built once per service day when cheaper
+    // than repeated per-stop scans over inactive FIFO transports.
+    active_transports: Option<Vec<u64>>,
+}
+
+/// Nigiri searches the sorted event column and checks the service calendar
+/// after lower_bound. The optional bitset replaces repeated linear skips
+/// through inactive services with a rank/select-style next/previous bit.
+fn timetable_transport_on_day(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize, day: &ActiveDay,
+    ready: i64, reverse: bool, stats: &mut RaptorStats,
+) -> Option<(TransportIdx, i64)> {
+    let Some(bits) = &day.active_transports else {
+        return if reverse {
+            get_latest_transport(tt, route, stop, day.day, ready, stats)
+        } else {
+            get_earliest_transport(tt, route, stop, day.day, ready, stats)
+        };
+    };
+    let range = tt.route_transport_ranges()[route.idx()];
+    let first = range.from as usize;
+    let len = (range.to - range.from) as usize;
+    let midnight = (i64::from(tt.header().first_utc_day)
+        + day.day as i64) * 86_400;
+    let mut lo = 0usize;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        stats.transport_lookup_probes += 1;
+        let time = transport_event_second(
+            tt, route, TransportIdx((first + mid) as u32), stop, reverse, midnight
+        )?;
+        if if reverse { time <= ready } else { time < ready } {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if reverse {
+        // upper_bound: select the previous active transport strictly below lo.
+        let mut end = lo;
+        while end > 0 {
+            let wi = (end - 1) / 64;
+            let limit = (end - 1) % 64;
+            let mask = bits[wi] & (u64::MAX >> (63 - limit));
+            stats.transport_lookup_probes += 1;
+            if mask != 0 {
+                let offset = wi * 64 + (63 - mask.leading_zeros() as usize);
+                let transport = TransportIdx((first + offset) as u32);
+                let time = transport_event_second(
+                    tt, route, transport, stop, true, midnight
+                )?;
+                return Some((transport, time));
+            }
+            end = wi * 64;
+        }
+    } else {
+        // lower_bound: select the next service-active transport >= lo.
+        let mut start = lo;
+        while start < len {
+            let wi = start / 64;
+            let mask = bits[wi] & (u64::MAX << (start % 64));
+            stats.transport_lookup_probes += 1;
+            if mask != 0 {
+                let offset = wi * 64 + mask.trailing_zeros() as usize;
+                let transport = TransportIdx((first + offset) as u32);
+                let time = transport_event_second(
+                    tt, route, transport, stop, false, midnight
+                )?;
+                return Some((transport, time));
+            }
+            start = (wi + 1) * 64;
+        }
+    }
+    None
+}
+
+fn build_active_transport_days(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, day: usize,
+    n_stops: usize,
+) -> Option<Vec<u64>> {
+    let range = tt.route_transport_ranges()[route.idx()];
+    let len = (range.to - range.from) as usize;
+    // For very wide, dense FIFO columns, a binary search plus ordinary
+    // calendar checks is cheaper than indexing thousands of transports.
+    if len > n_stops.saturating_mul(12) {
+        return None;
+    }
+    let mut bits = vec![0u64; len.div_ceil(64)];
+    for offset in 0..len {
+        let transport = TransportIdx(range.from + offset as u32);
+        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
+            .test(day)
+        {
+            bits[offset / 64] |= 1u64 << (offset % 64);
+        }
+    }
+    Some(bits)
 }
 
 /// Immutable optimistic route-duration topology. Build this once per mmap
@@ -599,8 +698,25 @@ impl ProfileSearchState {
                 // Gentian's route traffic-day bitmap is the union of the
                 // transports' calendars. Do not materialize a filtered
                 // transport vector for every route, service day and anchor.
+                // Nigiri does not rescan every inactive transport for every
+                // stop in a route. Use a compact service-day index for shorter
+                // columns; leave long dense columns on the original FIFO
+                // binary-search path. Both paths use identical event times.
                 for_each_route_service_day(tt, route, lower, upper, &mut self.stats,
-                    |day, _| active_days.push(ActiveDay { day, onboard: None }));
+                    |day, _| {
+                        let active_transports = build_active_transport_days(
+                            tt, route, day, stops.len()
+                        );
+                        if active_transports.as_ref()
+                            .is_some_and(|words| words.iter().all(|x| *x == 0))
+                        {
+                            return;
+                        }
+                        active_days.push(ActiveDay {
+                            day, onboard: None, active_transports
+                        });
+                    });
+                if reverse { active_days.reverse(); }
                 if active_days.is_empty() { continue; }
                 for step in 0..stops.len() {
                     self.stats.stop_events_scanned += 1;
@@ -749,13 +865,10 @@ impl ProfileSearchState {
                             continue;
                         };
                         if !(lower..=upper).contains(&ready.time) { continue; }
-                        let next_transport = if reverse {
-                            get_latest_transport(
-                                tt, route, pos, day.day, ready.time, &mut self.stats)
-                        } else {
-                            get_earliest_transport(
-                                tt, route, pos, day.day, ready.time, &mut self.stats)
-                        };
+                        let next_transport = timetable_transport_on_day(
+                            tt, route, pos, day, ready.time, reverse,
+                            &mut self.stats
+                        );
                         let Some((transport, event)) = next_transport else { continue };
                         if !(lower..=upper).contains(&event) { continue; }
                         let better = day.onboard.is_none_or(|old| {
