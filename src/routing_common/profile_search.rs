@@ -818,6 +818,54 @@ mod tests {
     }
 
     #[test]
+    fn near_term_point_seed_returns_a_route_and_bounds_the_profile() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut q = request();
+        q.departure_unix_seconds = base + 8 * 3_600;
+        let (journeys, stats) = route_profile_with_stats(
+            &tt,
+            &q,
+            ProfileOptions {
+                min_itineraries: 1,
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            },
+            false,
+        ).unwrap();
+        assert_eq!(stats.profile_point_seed_searches, 1);
+        assert!(stats.profile_point_seed_ms >= 0.0);
+        assert!(journeys.iter().any(|j| j.boardings == 1
+            && j.arrival_unix_seconds == base + 17 * 3_600),
+            "point and profile should retain today's service: {stats:?}");
+    }
+
+    #[test]
+    fn point_seed_does_not_limit_long_or_sparse_profile_journeys() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        // Departing at 18:00, tomorrow's 09:00 service is more than 12 h
+        // away. The quick point seed must not narrow the full timetable scan
+        // or suppress the next-day long-distance journey.
+        let q = request();
+        let (journeys, stats) = route_profile_with_stats(
+            &tt,
+            &q,
+            ProfileOptions {
+                min_itineraries: 1,
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            },
+            false,
+        ).unwrap();
+        assert_eq!(stats.profile_point_seed_searches, 1);
+        assert!(stats.profile_interval_extensions > 0);
+        assert!(journeys.iter().any(|j| j.boardings == 1
+            && j.departure_unix_seconds >= q.departure_unix_seconds + 12 * 3_600));
+    }
+
+    #[test]
     fn faster_direct_journey_bounds_slow_transit_search() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
