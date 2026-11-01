@@ -1078,15 +1078,34 @@ mod profile_bound_tests {
     use super::*;
 
     #[test]
-    fn destination_bound_respects_slack_and_direction() {
+    fn destination_bound_is_loose_but_has_no_arbitrary_extra_slack() {
         let lb = [30_u32];
         assert!(can_reach(&lb, 0, 100, 100, 1000, false, INF));
         assert!(can_reach(&lb, 0, 100, 100, 1000, false, 130));
-        assert!(can_reach(&lb, 0, 100, 100, 1000, false, 129));
+        assert!(!can_reach(&lb, 0, 100, 100, 1000, false, 129));
         assert!(!can_reach(&lb, 0, 100, 100, 1000, false, -2000));
         assert!(can_reach(&lb, 0, 900, 900, 1000, true, NEG_INF));
         assert!(can_reach(&lb, 0, 900, 900, 1000, true, 870));
+        assert!(!can_reach(&lb, 0, 900, 900, 1000, true, 871));
         assert!(!can_reach(&lb, 0, 900, 900, 1000, true, 4000));
+    }
+
+    #[test]
+    fn initial_nigiri_destination_bound_does_not_cap_long_distance_without_direct() {
+        use crate::routing_common::raptor_query::WalkingEndpoint;
+        let mut q = Query {
+            departure_unix_seconds: 1000,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![],
+            direct_walk_seconds: None,
+            max_boardings: 6,
+            max_duration_seconds: 4 * 86_400,
+        };
+        assert_eq!(initial_destination_bound(1000, &q, false), 1000 + 4 * 86_400 + 1);
+        assert_eq!(initial_destination_bound(1000, &q, true), 1000 - 4 * 86_400 - 1);
+        q.direct_walk_seconds = Some(900);
+        assert_eq!(initial_destination_bound(1000, &q, false), 1901);
+        assert_eq!(initial_destination_bound(1000, &q, true), 99);
     }
 
     #[test]
