@@ -35,6 +35,30 @@ behavior of opening all registered regions. The worker fails at startup if
 no enabled regions remain. Rebuild and restart `osr_worker` after changing
 the configuration.
 
+## Choose OSR graph loading by region
+
+By default, `osr_worker` uses OSR's original heap-backed reader for
+`routing.bin` and `rtree_meta.bin`. Override selected regions with a
+copy-on-write mmap mode in `catenaryconfig.toml`:
+
+```toml
+[osr_worker]
+excluded_regions = []
+
+[osr_worker.region_load_modes]
+"asia/japan" = "mmap"
+"europe/germany" = "read"
+```
+
+Supported values are `read` (default) and `mmap`. Region IDs match
+`properties.id` in `[osm_manager].data_dir/regions.geojson` exactly.
+Omitted regions use `read`, and excluded regions remain excluded. The
+mapping is private because cista relocates raw pointers during loading.
+The choice does not change any of OSR's other existing mmap-backed files.
+After changing modes, restart the worker. Gentian **always uses `mmap`**
+when opening an OSR graph for footpath compilation, independently of these
+worker settings.
+
 ## Compile a timetable and walking footpaths together
 
 ```sh

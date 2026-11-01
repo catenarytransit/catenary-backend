@@ -44,6 +44,26 @@ struct Manager {
 struct WorkerConfig {
     #[serde(default)]
     excluded_regions: BTreeSet<String>,
+    /// Per-region overrides using exact IDs from regions.geojson.
+    #[serde(default)]
+    region_load_modes: BTreeMap<String, RegionLoadMode>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RegionLoadMode {
+    #[default]
+    Read,
+    Mmap,
+}
+
+impl RegionLoadMode {
+    fn ffi_mode(self) -> ffi::MetadataLoadMode {
+        match self {
+            Self::Read => ffi::MetadataLoadMode::ReadIntoMemory,
+            Self::Mmap => ffi::MetadataLoadMode::MmapPrivate,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize)]
@@ -399,16 +419,25 @@ fn region_paths_from_registry(
     Ok(paths)
 }
 
-/// Eagerly open exactly one immutable native router per configured region.
-/// Match stores and all routing search state remain local to each request.
+/// Open one shared router per registered, non-excluded region. The selection
+/// controls routing.bin and rtree_meta.bin, leaving OSR's other mmaps intact.
 fn open_graphs(
     paths: &BTreeMap<String, PathBuf>,
+    region_load_modes: &BTreeMap<String, RegionLoadMode>,
 ) -> Result<BTreeMap<String, cxx::SharedPtr<ffi::Router>>> {
     let mut graphs = BTreeMap::new();
     for (id, dir) in paths {
-        let router = ffi::open_shared_router(dir.to_str().context("non-UTF8 OSR path")?)?;
+        let mode = region_load_modes.get(id).copied().unwrap_or_default();
+        let options = ffi::RouterOpenOptions {
+            metadata_load_mode: mode.ffi_mode(),
+        };
+        let router = ffi::open_shared_router_with_options(
+            dir.to_str().context("non-UTF8 OSR path")?,
+            &options,
+        )
+        .with_context(|| format!("opening OSR graph {id} with {mode:?} metadata"))?;
         ensure!(!router.is_null(), "OSR graph is null: {id}");
-        eprintln!("Opened native OSR mmap: {id}");
+        eprintln!("Opened native OSR {mode:?} metadata: {id}");
         graphs.insert(id.clone(), router);
     }
     Ok(graphs)
@@ -423,7 +452,7 @@ fn main() -> Result<()> {
     let cfg: Config = toml::from_str(&fs::read_to_string(&args.config)?)?;
     let paths = region_paths(&cfg.osm_manager.data_dir, &cfg.osr_worker.excluded_regions)?;
     // Open each graph once before accepting connections or spawning query threads.
-    let graphs = Arc::new(open_graphs(&paths)?);
+    let graphs = Arc::new(open_graphs(&paths, &cfg.osr_worker.region_load_modes)?);
     let listener = TcpListener::bind(&args.listen)?;
 
     // Bounded queue provides backpressure under load. Workers share immutable
@@ -470,11 +499,28 @@ mod tests {
     fn exclusions_default_to_empty_for_existing_configs() -> Result<()> {
         let config: Config = toml::from_str("[osm_manager]\ndata_dir = '/tmp/osr-data'\n")?;
         assert!(config.osr_worker.excluded_regions.is_empty());
+        assert!(config.osr_worker.region_load_modes.is_empty());
+        assert_eq!(RegionLoadMode::default().ffi_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
         Ok(())
     }
 
     #[test]
-    fn excluded_regions_are_not_selected_for_mmap() -> Result<()> {
+    fn per_region_metadata_load_modes_are_parsed() -> Result<()> {
+        let config: Config = toml::from_str(
+            "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker.region_load_modes]\n'asia/japan' = 'mmap'\n'europe/germany' = 'read'\n",
+        )?;
+        assert_eq!(config.osr_worker.region_load_modes["asia/japan"], RegionLoadMode::Mmap);
+        assert_eq!(config.osr_worker.region_load_modes["europe/germany"], RegionLoadMode::Read);
+        assert_eq!(config.osr_worker.region_load_modes["asia/japan"].ffi_mode(), ffi::MetadataLoadMode::MmapPrivate);
+        assert_eq!(config.osr_worker.region_load_modes["europe/germany"].ffi_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
+        assert!(toml::from_str::<Config>(
+            "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker.region_load_modes]\n'asia/japan' = 'invalid'\n",
+        ).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn excluded_regions_are_not_selected_for_loading() -> Result<()> {
         let config: Config = toml::from_str(
             "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker]\nexcluded_regions = ['asia/japan']\n",
         )?;
@@ -639,10 +685,18 @@ mod tests {
         };
         let mut paths = BTreeMap::new();
         paths.insert("test".to_owned(), PathBuf::from(data_dir));
-        let graphs = Arc::new(open_graphs(&paths)?);
+        let graphs = Arc::new(open_graphs(&paths, &BTreeMap::new())?);
         let original = graphs["test"].as_ref().context("null test router")?;
         let expected_nodes = original.node_count();
         ensure!(expected_nodes > 0, "test graph has no nodes");
+        assert_eq!(original.metadata_load_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
+
+        let mapped_modes = BTreeMap::from([("test".to_owned(), RegionLoadMode::Mmap)]);
+        let mapped = open_graphs(&paths, &mapped_modes)?;
+        let mmap_router = mapped["test"].as_ref().context("null mapped router")?;
+        assert_eq!(mmap_router.metadata_load_mode(), ffi::MetadataLoadMode::MmapPrivate);
+        assert_eq!(mmap_router.node_count(), expected_nodes);
+        assert_eq!(mmap_router.way_count(), original.way_count());
 
         thread::scope(|scope| {
             for _ in 0..4 {

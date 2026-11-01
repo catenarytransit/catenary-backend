@@ -63,8 +63,16 @@ pub fn compute(
             .or_default()
             .push(idx);
     }
-    let graph = ffi::open_router(osr_dir.to_str().context("non-UTF8 OSR directory")?)
-        .with_context(|| format!("opening OSR graph {}", osr_dir.display()))?;
+    // Gentian always uses a private copy-on-write mapping of routing.bin and
+    // rtree_meta.bin to reduce heap-backed graph memory during compilation.
+    let open_options = ffi::RouterOpenOptions {
+        metadata_load_mode: ffi::MetadataLoadMode::MmapPrivate,
+    };
+    let graph = ffi::open_router_with_options(
+        osr_dir.to_str().context("non-UTF8 OSR directory")?,
+        &open_options,
+    )
+    .with_context(|| format!("opening mmap-backed OSR graph {}", osr_dir.display()))?;
     let router = graph.as_ref().context("OSR returned null router")?;
     let options = ffi::RoutingOptions {
         max_cost: max_seconds,
