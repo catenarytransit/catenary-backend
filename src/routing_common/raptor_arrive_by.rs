@@ -369,7 +369,9 @@ pub fn route_arrive_by_with_stats(
 }
 
 pub(crate) fn route_arrive_by_with_stats_deadline(
-    tt: &ZeroCopyTimetable<'_>, request: &Query, deadline: Instant,
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    deadline: Instant,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     route_arrive_by_with_stats_impl(tt, request, Some(deadline))
 }
@@ -453,7 +455,9 @@ fn route_arrive_by_with_stats_impl(
         if routes.is_empty() {
             break;
         }
-        reverse_scan(tt, prev, &mut curr, &routes, min_time, deadline, &mut stats, stop_at);
+        reverse_scan(
+            tt, prev, &mut curr, &routes, min_time, deadline, &mut stats, stop_at,
+        );
         let seeds: Vec<usize> = curr
             .iter()
             .zip(prev)
@@ -489,15 +493,26 @@ fn route_arrive_by_with_stats_impl(
     const MAX_POST_DEADLINE_RECONSTRUCTIONS: usize = 64;
     let mut post_deadline_attempts = 0usize;
     'terminals: for (round, layer) in layers.iter().enumerate() {
-        let mut candidates = request.access.iter()
-            .filter(|ep| layer[ep.stop.idx()].time
-                .saturating_sub(i64::from(ep.seconds)) >= min_time)
+        let mut candidates = request
+            .access
+            .iter()
+            .filter(|ep| {
+                layer[ep.stop.idx()]
+                    .time
+                    .saturating_sub(i64::from(ep.seconds))
+                    >= min_time
+            })
             .collect::<Vec<_>>();
-        candidates.sort_unstable_by_key(|ep| (
-            std::cmp::Reverse(layer[ep.stop.idx()].time
-                .saturating_sub(i64::from(ep.seconds))),
-            ep.stop.idx(),
-        ));
+        candidates.sort_unstable_by_key(|ep| {
+            (
+                std::cmp::Reverse(
+                    layer[ep.stop.idx()]
+                        .time
+                        .saturating_sub(i64::from(ep.seconds)),
+                ),
+                ep.stop.idx(),
+            )
+        });
         for start in candidates {
             if stop_at.is_some_and(|limit| Instant::now() >= limit) {
                 stats.profile_budget_exhausted = true;
@@ -528,7 +543,6 @@ fn route_arrive_by_with_stats_impl(
     crate::routing_common::profile_search::sort_journeys_for_response(&mut journeys, true);
     Ok((journeys, stats))
 }
-
 
 #[cfg(test)]
 mod deadline_tests {

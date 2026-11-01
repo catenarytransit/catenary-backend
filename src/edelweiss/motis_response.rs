@@ -900,7 +900,8 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             let mut line = String::new();
             BufReader::new(stream.try_clone().unwrap())
-                .read_line(&mut line).unwrap();
+                .read_line(&mut line)
+                .unwrap();
             assert!(line.contains("\"include_geometry\":true"));
             assert!(line.contains("\"mode\":\"WALK\""));
             stream.write_all(
@@ -911,15 +912,35 @@ mod tests {
         let from = [-118.5, 34.0];
         let to = [-118.49, 34.01];
         let first = street_path(
-            &mut cache, &addr, "southern-california", from, to,
-            None, None, 900, "WALK", 1.19, 4.0,
-        ).unwrap();
+            &mut cache,
+            &addr,
+            "southern-california",
+            from,
+            to,
+            None,
+            None,
+            900,
+            "WALK",
+            1.19,
+            4.0,
+        )
+        .unwrap();
         server.join().unwrap();
         // The server has exited; a second network request would fail.
         let second = street_path(
-            &mut cache, &addr, "southern-california", from, to,
-            None, None, 900, "WALK", 1.19, 4.0,
-        ).unwrap();
+            &mut cache,
+            &addr,
+            "southern-california",
+            from,
+            to,
+            None,
+            None,
+            900,
+            "WALK",
+            1.19,
+            4.0,
+        )
+        .unwrap();
         assert_eq!(first, second);
         assert_eq!(cache.len(), 1);
         assert_eq!(first.len(), 2);

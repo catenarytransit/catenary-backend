@@ -219,13 +219,20 @@ impl Router {
                 )
             })?;
             crate::routing_common::feed_policy::validate_routing_sources(&timetable.view()?)
-                .with_context(|| format!("validating routing region {} from {}", region.id, path.display()))?;
+                .with_context(|| {
+                    format!(
+                        "validating routing region {} from {}",
+                        region.id,
+                        path.display()
+                    )
+                })?;
             let metadata = MetadataIndex::build(&timetable.view()?)?;
             // Compiled transit segment minima are invariant across queries.
             // Build the optimistic topology once at timetable load time.
             let lower_bound_topology =
                 crate::routing_common::profile_compact::LowerBoundTopology::build(
-                    &timetable.view()?);
+                    &timetable.view()?,
+                );
             let sidecar = path.with_extension("platforms.json");
             let platform_metadata: Vec<PlatformStopMeta> = if sidecar.is_file() {
                 let value = serde_json::from_slice(&fs::read(&sidecar)?)?;
@@ -364,7 +371,9 @@ impl Router {
         options: ProfileOptions,
     ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
-        let precomputed = self.transit.iter()
+        let precomputed = self
+            .transit
+            .iter()
             .find(|region| region.id == selection.transit_region)
             .context("routing region disappeared")?;
         let (journeys, raptor_stats) = profile_search::route_profile_with_stats_precomputed(

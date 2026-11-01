@@ -6,8 +6,8 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
-use catenary::routing_common::routing_regions::{RegionSelection, RoutingRegionsConfig, resolve};
 use catenary::routing_common::feed_policy::{excluded_routing_source, validate_routing_sources};
+use catenary::routing_common::routing_regions::{RegionSelection, RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use chrono::Utc;
 use clap::Parser;
@@ -119,24 +119,33 @@ fn inspect_timetable(path: &Path) -> Result<()> {
     use catenary::routing_common::timetable_mmap::MappedTimetable;
     let mapped = MappedTimetable::open(path)?;
     let tt = mapped.view()?;
-    let sources = tt.sources().iter().map(|source| {
-        Ok(serde_json::json!({
-            "chateau": tt.get_string(source.chateau).context("invalid chateau")?,
-            "feed_id": tt.get_string(source.onestop_feed_id).context("invalid feed id")?,
-            "attempt_id": tt.get_string(source.attempt_id).context("invalid attempt id")?,
-        }))
-    }).collect::<Result<Vec<_>>>()?;
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
-        "path": path.display().to_string(),
-        "source_count": tt.sources().len(),
-        "route_count": tt.route_transport_ranges().len(),
-        "sources": sources,
-    }))?);
+    let sources = tt
+        .sources()
+        .iter()
+        .map(|source| {
+            Ok(serde_json::json!({
+                "chateau": tt.get_string(source.chateau).context("invalid chateau")?,
+                "feed_id": tt.get_string(source.onestop_feed_id).context("invalid feed id")?,
+                "attempt_id": tt.get_string(source.attempt_id).context("invalid attempt id")?,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "path": path.display().to_string(),
+            "source_count": tt.sources().len(),
+            "route_count": tt.route_transport_ranges().len(),
+            "sources": sources,
+        }))?
+    );
     validate_routing_sources(&tt)
 }
 
 fn exclude_chateaux(selection: &mut RegionSelection) {
-    selection.chateaux.retain(|chateau| !excluded_chateau(chateau));
+    selection
+        .chateaux
+        .retain(|chateau| !excluded_chateau(chateau));
     selection
         .sources
         .retain(|source| !excluded_routing_source(&source.chateau, &source.onestop_feed_id));
@@ -375,8 +384,16 @@ mod tests {
             name: "US".into(),
             chateaux: vec!["other".into()],
             sources: vec![
-                ChateauSource { chateau: "other".into(), onestop_feed_id: "f-flixbus~us".into(), attempt_id: "a".into() },
-                ChateauSource { chateau: "other".into(), onestop_feed_id: "regular".into(), attempt_id: "a".into() },
+                ChateauSource {
+                    chateau: "other".into(),
+                    onestop_feed_id: "f-flixbus~us".into(),
+                    attempt_id: "a".into(),
+                },
+                ChateauSource {
+                    chateau: "other".into(),
+                    onestop_feed_id: "regular".into(),
+                    attempt_id: "a".into(),
+                },
             ],
         };
         exclude_chateaux(&mut selection);

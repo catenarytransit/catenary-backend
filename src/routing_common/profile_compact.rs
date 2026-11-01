@@ -8,9 +8,8 @@
 //! Forward profile anchors are evaluated latest-first.
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::raptor_query::{
-    Journey, Query, RaptorStats, for_each_route_service_day, transport_event_second,
-    get_earliest_transport, get_latest_transport,
-    optimize_same_trip_endpoint_walks,
+    Journey, Query, RaptorStats, for_each_route_service_day, get_earliest_transport,
+    get_latest_transport, optimize_same_trip_endpoint_walks, transport_event_second,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
@@ -29,40 +28,73 @@ const MAX_TERMINAL_PATHS_PER_STOP: usize = 12;
 const MAX_TERMINAL_PATHS_PER_ROUND: usize = 4096;
 
 fn better(candidate: i64, incumbent: i64, reverse: bool) -> bool {
-    if reverse { candidate > incumbent } else { candidate < incumbent }
+    if reverse {
+        candidate > incumbent
+    } else {
+        candidate < incumbent
+    }
 }
 
 /// A stop state with no fewer boardings and a no-better time is dominated.
 fn dominated_by_lower_round(
-    prior: &[Round], stage: Stage, at: usize, time: i64,
-    generation: u32, reverse: bool,
+    prior: &[Round],
+    stage: Stage,
+    at: usize,
+    time: i64,
+    generation: u32,
+    reverse: bool,
 ) -> bool {
-    prior.iter().any(|round| round.get(stage, at, generation)
-        .is_some_and(|state| !better(time, state.time, reverse)))
+    prior.iter().any(|round| {
+        round
+            .get(stage, at, generation)
+            .is_some_and(|state| !better(time, state.time, reverse))
+    })
 }
 
 /// Nigiri-style persistent profile arrival comparisons. This history only
 /// contains anchors solved in monotone profile order and is invalidated when
 /// an interval extension breaks that order.
 fn dominated_by_profile(
-    profile: &[Vec<i64>], k: usize, at: usize, time: i64, reverse: bool,
+    profile: &[Vec<i64>],
+    k: usize,
+    at: usize,
+    time: i64,
+    reverse: bool,
 ) -> bool {
-    profile.iter().take(k + 1).any(|row|
-        !better(time, row[at], reverse))
+    profile
+        .iter()
+        .take(k + 1)
+        .any(|row| !better(time, row[at], reverse))
 }
 
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum Stage { Ride, Walk, Ready }
+pub(super) enum Stage {
+    Ride,
+    Walk,
+    Ready,
+}
 
 #[derive(Clone, Copy)]
 pub(super) enum Parent {
-    Root { seconds: u32 },
-    Ride {
-        from: usize, to: usize, route: u32, transport: u32, day: u16,
-        board_pos: usize, alight_pos: usize, departure: i64, arrival: i64,
+    Root {
+        seconds: u32,
     },
-    Walk { from: usize, to: usize, seconds: u32 },
+    Ride {
+        from: usize,
+        to: usize,
+        route: u32,
+        transport: u32,
+        day: u16,
+        board_pos: usize,
+        alight_pos: usize,
+        departure: i64,
+        arrival: i64,
+    },
+    Walk {
+        from: usize,
+        to: usize,
+        seconds: u32,
+    },
     ReadyRide,
 }
 
@@ -88,9 +120,11 @@ pub(super) struct Round {
 }
 impl Round {
     fn new(n: usize) -> Self {
-        Self { ride: vec![Cell::default(); n],
-               walk: vec![Cell::default(); n],
-               ready: vec![Cell::default(); n] }
+        Self {
+            ride: vec![Cell::default(); n],
+            walk: vec![Cell::default(); n],
+            ready: vec![Cell::default(); n],
+        }
     }
     fn cells(&self, stage: Stage) -> &[Cell] {
         match stage {
@@ -107,26 +141,47 @@ impl Round {
         }
     }
     pub(super) fn get(&self, stage: Stage, stop: usize, generation: u32) -> Option<&Cell> {
-        self.cells(stage).get(stop).filter(|c| c.generation == generation)
+        self.cells(stage)
+            .get(stop)
+            .filter(|c| c.generation == generation)
     }
     #[cfg(test)]
     fn put(
-        &mut self, stage: Stage, stop: usize, time: i64, parent: Parent,
-        generation: u32, reverse: bool, parents: &mut Vec<PathLink>,
+        &mut self,
+        stage: Stage,
+        stop: usize,
+        time: i64,
+        parent: Parent,
+        generation: u32,
+        reverse: bool,
+        parents: &mut Vec<PathLink>,
         stats: &mut RaptorStats,
     ) -> bool {
-        self.put_linked(stage, stop, time, parent, None, generation, reverse, parents, stats)
+        self.put_linked(
+            stage, stop, time, parent, None, generation, reverse, parents, stats,
+        )
     }
 
     fn put_linked(
-        &mut self, stage: Stage, stop: usize, time: i64, parent: Parent,
+        &mut self,
+        stage: Stage,
+        stop: usize,
+        time: i64,
+        parent: Parent,
         previous: Option<u32>,
-        generation: u32, reverse: bool, parents: &mut Vec<PathLink>,
+        generation: u32,
+        reverse: bool,
+        parents: &mut Vec<PathLink>,
         stats: &mut RaptorStats,
     ) -> bool {
         let c = &mut self.cells_mut(stage)[stop];
-        if c.generation == generation &&
-            if reverse { c.time >= time } else { c.time <= time } {
+        if c.generation == generation
+            && if reverse {
+                c.time >= time
+            } else {
+                c.time <= time
+            }
+        {
             stats.labels_dominated += 1;
             return false;
         }
@@ -138,7 +193,10 @@ impl Round {
         // silently changed previously selected walking/ride paths and could
         // invalidate journeys already discovered at another stop.
         c.parent = parents.len() as u32;
-        parents.push(PathLink { step: parent, previous });
+        parents.push(PathLink {
+            step: parent,
+            previous,
+        });
         c.time = time;
         c.generation = generation;
         stats.labels_improved += 1;
@@ -172,8 +230,13 @@ struct ActiveDay {
 /// after lower_bound. The optional bitset replaces repeated linear skips
 /// through inactive services with a rank/select-style next/previous bit.
 fn timetable_transport_on_day(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize, day: &ActiveDay,
-    ready: i64, reverse: bool, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    stop: usize,
+    day: &ActiveDay,
+    ready: i64,
+    reverse: bool,
+    stats: &mut RaptorStats,
 ) -> Option<(TransportIdx, i64)> {
     let Some(bits) = &day.active_transports else {
         return if reverse {
@@ -185,15 +248,19 @@ fn timetable_transport_on_day(
     let range = tt.route_transport_ranges()[route.idx()];
     let first = range.from as usize;
     let len = (range.to - range.from) as usize;
-    let midnight = (i64::from(tt.header().first_utc_day)
-        + day.day as i64) * 86_400;
+    let midnight = (i64::from(tt.header().first_utc_day) + day.day as i64) * 86_400;
     let mut lo = 0usize;
     let mut hi = len;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         stats.transport_lookup_probes += 1;
         let time = transport_event_second(
-            tt, route, TransportIdx((first + mid) as u32), stop, reverse, midnight
+            tt,
+            route,
+            TransportIdx((first + mid) as u32),
+            stop,
+            reverse,
+            midnight,
         )?;
         if if reverse { time <= ready } else { time < ready } {
             lo = mid + 1;
@@ -212,9 +279,7 @@ fn timetable_transport_on_day(
             if mask != 0 {
                 let offset = wi * 64 + (63 - mask.leading_zeros() as usize);
                 let transport = TransportIdx((first + offset) as u32);
-                let time = transport_event_second(
-                    tt, route, transport, stop, true, midnight
-                )?;
+                let time = transport_event_second(tt, route, transport, stop, true, midnight)?;
                 return Some((transport, time));
             }
             end = wi * 64;
@@ -229,9 +294,7 @@ fn timetable_transport_on_day(
             if mask != 0 {
                 let offset = wi * 64 + mask.trailing_zeros() as usize;
                 let transport = TransportIdx((first + offset) as u32);
-                let time = transport_event_second(
-                    tt, route, transport, stop, false, midnight
-                )?;
+                let time = transport_event_second(tt, route, transport, stop, false, midnight)?;
                 return Some((transport, time));
             }
             start = (wi + 1) * 64;
@@ -241,7 +304,9 @@ fn timetable_transport_on_day(
 }
 
 fn build_active_transport_days(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, day: usize,
+    tt: &ZeroCopyTimetable<'_>,
+    route: RouteIdx,
+    day: usize,
     n_stops: usize,
 ) -> Option<Vec<u64>> {
     let range = tt.route_transport_ranges()[route.idx()];
@@ -254,9 +319,7 @@ fn build_active_transport_days(
     let mut bits = vec![0u64; len.div_ceil(64)];
     for offset in 0..len {
         let transport = TransportIdx(range.from + offset as u32);
-        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
-            .test(day)
-        {
+        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()].test(day) {
             bits[offset / 64] |= 1u64 << (offset % 64);
         }
     }
@@ -278,7 +341,7 @@ struct CsrGraph {
     edges: Vec<(u32, u32)>,
 }
 impl CsrGraph {
-    fn from_edges(n: usize, edge_iter: impl IntoIterator<Item=(u32,u32,u32)>) -> Self {
+    fn from_edges(n: usize, edge_iter: impl IntoIterator<Item = (u32, u32, u32)>) -> Self {
         let edges = edge_iter.into_iter().collect::<Vec<_>>();
         let mut offsets = vec![0usize; n + 1];
         for &(from, _, _) in &edges {
@@ -294,9 +357,12 @@ impl CsrGraph {
             compressed[*cursor] = (to, cost);
             *cursor += 1;
         }
-        Self { offsets, edges: compressed }
+        Self {
+            offsets,
+            edges: compressed,
+        }
     }
-    fn successors(&self, stop: usize) -> &[(u32,u32)] {
+    fn successors(&self, stop: usize) -> &[(u32, u32)] {
         &self.edges[self.offsets[stop]..self.offsets[stop + 1]]
     }
 }
@@ -307,7 +373,9 @@ impl LowerBoundTopology {
         for route_id in 0..tt.route_transport_ranges().len() {
             let route = RouteIdx(route_id as u32);
             let stops = tt.stops_on(route);
-            if stops.len() < 2 { continue; }
+            if stops.len() < 2 {
+                continue;
+            }
             let mut minimum = vec![u32::MAX; stops.len() - 1];
             let mut seen_patterns = HashSet::new();
             let range = tt.route_transport_ranges()[route_id];
@@ -316,25 +384,31 @@ impl LowerBoundTopology {
                 let Some(profile) = tt.transport_timing_profile().get(t.idx()) else {
                     continue;
                 };
-                if !seen_patterns.insert(profile.idx()) { continue; }
-                let Some(events) = tt.events_for_transport(t) else { continue; };
+                if !seen_patterns.insert(profile.idx()) {
+                    continue;
+                }
+                let Some(events) = tt.events_for_transport(t) else {
+                    continue;
+                };
                 for pos in 0..minimum.len() {
-                    if let (Some(dep), Some(arr)) =
-                        (events.get(pos * 2), events.get(pos * 2 + 1))
-                    {
-                        minimum[pos] = minimum[pos]
-                            .min(arr.seconds().saturating_sub(dep.seconds()));
+                    if let (Some(dep), Some(arr)) = (events.get(pos * 2), events.get(pos * 2 + 1)) {
+                        minimum[pos] =
+                            minimum[pos].min(arr.seconds().saturating_sub(dep.seconds()));
                     }
                 }
             }
             for (pos, pair) in stops.windows(2).enumerate() {
-                let cost = if minimum[pos] == u32::MAX { 0 } else { minimum[pos] };
+                let cost = if minimum[pos] == u32::MAX {
+                    0
+                } else {
+                    minimum[pos]
+                };
                 edges.push((pair[0].location().0, pair[1].location().0, cost));
             }
         }
         let forward = CsrGraph::from_edges(n, edges.iter().copied());
-        let reverse = CsrGraph::from_edges(n, edges.iter().map(
-            |&(from, to, cost)| (to, from, cost)));
+        let reverse =
+            CsrGraph::from_edges(n, edges.iter().map(|&(from, to, cost)| (to, from, cost)));
         Self { forward, reverse }
     }
 }
@@ -345,8 +419,11 @@ impl LowerBoundTopology {
 /// If the precomputation deadline expires, all-zero distances disable only
 /// pruning; they never make an otherwise valid itinerary unreachable.
 fn lower_bounds(
-    tt: &ZeroCopyTimetable<'_>, request: &Query, reverse: bool,
-    topology: &LowerBoundTopology, deadline: Instant,
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    reverse: bool,
+    topology: &LowerBoundTopology,
+    deadline: Instant,
 ) -> Vec<u32> {
     let n = tt.coordinates().len();
     if Instant::now() >= deadline {
@@ -354,10 +431,18 @@ fn lower_bounds(
         // unreachable labels or reject a valid timetable journey.
         return vec![0; n];
     }
-    let graph = if reverse { &topology.forward } else { &topology.reverse };
+    let graph = if reverse {
+        &topology.forward
+    } else {
+        &topology.reverse
+    };
     let mut dist = vec![u32::MAX; n];
     let mut heap = BinaryHeap::<Reverse<(u32, usize)>>::new();
-    let terminals = if reverse { &request.access } else { &request.egress };
+    let terminals = if reverse {
+        &request.access
+    } else {
+        &request.egress
+    };
     for ep in terminals {
         let stop = ep.stop.idx();
         if ep.seconds < dist[stop] {
@@ -370,12 +455,16 @@ fn lower_bounds(
         // Nigiri's duration limit also bounds useful destination labels.
         // Dijkstra is monotone: no stop with an optimistic distance already
         // greater than the entire allowed journey can improve a legal route.
-        if weight > request.max_duration_seconds { break; }
+        if weight > request.max_duration_seconds {
+            break;
+        }
         visited += 1;
         if (visited & 4095) == 0 && Instant::now() >= deadline {
             return vec![0; n];
         }
-        if weight != dist[at] { continue; }
+        if weight != dist[at] {
+            continue;
+        }
         for &(next, cost) in graph.successors(at) {
             let next = next as usize;
             let candidate = weight.saturating_add(cost);
@@ -408,16 +497,28 @@ fn initial_destination_bound(anchor: i64, q: &Query, reverse: bool) -> i64 {
     let maximum = i64::from(q.max_duration_seconds);
     let direct = q.direct_walk_seconds.map(i64::from).unwrap_or(maximum);
     let budget = maximum.min(direct).saturating_add(1);
-    if reverse { anchor.saturating_sub(budget) }
-    else { anchor.saturating_add(budget) }
+    if reverse {
+        anchor.saturating_sub(budget)
+    } else {
+        anchor.saturating_add(budget)
+    }
 }
 
 fn can_reach(
-    bound: &[u32], stop: usize, time: i64,
-    anchor: i64, duration: u32, reverse: bool, best_dest: i64,
+    bound: &[u32],
+    stop: usize,
+    time: i64,
+    anchor: i64,
+    duration: u32,
+    reverse: bool,
+    best_dest: i64,
 ) -> bool {
-    let Some(&lb) = bound.get(stop) else { return false };
-    if lb == u32::MAX { return false; }
+    let Some(&lb) = bound.get(stop) else {
+        return false;
+    };
+    if lb == u32::MAX {
+        return false;
+    }
     let possible_dest = if reverse {
         time.saturating_sub(i64::from(lb))
     } else {
@@ -443,23 +544,29 @@ fn can_reach(
     within_max_duration && competitive
 }
 
-fn change_seconds(tt: &ZeroCopyTimetable<'_>, from: usize, to: usize)
-    -> Option<u32>
-{
-    let rule = tt.station_transfer_rule(
-        LocationIdx(from as u32), LocationIdx(to as u32));
-    if rule.is_some_and(|x| x.prohibited()) { return None; }
-    Some(tt.location_transfer_seconds()[from]
-        .max(tt.location_transfer_seconds()[to])
-        .max(rule.map_or(0, |x| x.min_seconds)))
+fn change_seconds(tt: &ZeroCopyTimetable<'_>, from: usize, to: usize) -> Option<u32> {
+    let rule = tt.station_transfer_rule(LocationIdx(from as u32), LocationIdx(to as u32));
+    if rule.is_some_and(|x| x.prohibited()) {
+        return None;
+    }
+    Some(
+        tt.location_transfer_seconds()[from]
+            .max(tt.location_transfer_seconds()[to])
+            .max(rule.map_or(0, |x| x.min_seconds)),
+    )
 }
 
 fn routes_from_marked(
-    tt: &ZeroCopyTimetable<'_>, marked: &[usize],
-    stamps: &mut [u32], stamp: &mut u32,
+    tt: &ZeroCopyTimetable<'_>,
+    marked: &[usize],
+    stamps: &mut [u32],
+    stamp: &mut u32,
 ) -> Vec<RouteIdx> {
     *stamp = stamp.wrapping_add(1);
-    if *stamp == 0 { stamps.fill(0); *stamp = 1; }
+    if *stamp == 0 {
+        stamps.fill(0);
+        *stamp = 1;
+    }
     let mut routes = Vec::new();
     for &stop in marked {
         for &route in tt.routes_at(LocationIdx(stop as u32)) {
@@ -504,21 +611,31 @@ pub(crate) struct ProfileSearchState {
 impl ProfileSearchState {
     #[cfg(test)]
     pub fn new(
-        tt: &ZeroCopyTimetable<'_>, q: &Query,
-        earliest: i64, latest: i64, reverse: bool, timeout: Duration,
+        tt: &ZeroCopyTimetable<'_>,
+        q: &Query,
+        earliest: i64,
+        latest: i64,
+        reverse: bool,
+        timeout: Duration,
     ) -> Result<Self> {
         Self::new_with_topology(tt, q, earliest, latest, reverse, timeout, None)
     }
 
     pub fn new_with_topology(
-        tt: &ZeroCopyTimetable<'_>, q: &Query,
-        earliest: i64, latest: i64, reverse: bool, timeout: Duration,
+        tt: &ZeroCopyTimetable<'_>,
+        q: &Query,
+        earliest: i64,
+        latest: i64,
+        reverse: bool,
+        timeout: Duration,
         precomputed: Option<&LowerBoundTopology>,
     ) -> Result<Self> {
         ensure!(earliest <= latest, "invalid profile interval");
         ensure!(q.max_boardings <= 16, "max_boardings exceeds 16");
-        ensure!((1..=7 * 86_400).contains(&q.max_duration_seconds),
-            "max_duration_seconds is outside 1 second to 7 days");
+        ensure!(
+            (1..=7 * 86_400).contains(&q.max_duration_seconds),
+            "max_duration_seconds is outside 1 second to 7 days"
+        );
         let n = tt.coordinates().len();
         for ep in q.access.iter().chain(q.egress.iter()) {
             ensure!(ep.stop.idx() < n, "OSR endpoint index out of bounds");
@@ -529,7 +646,8 @@ impl ProfileSearchState {
         stats.profile_searches = 1;
         let bounds_started = Instant::now();
         let owned = precomputed.is_none().then(|| LowerBoundTopology::build(tt));
-        let topology = precomputed.or(owned.as_ref())
+        let topology = precomputed
+            .or(owned.as_ref())
             .expect("topology must be supplied or constructed");
         let bounds = lower_bounds(tt, q, reverse, topology, deadline);
         stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
@@ -560,16 +678,18 @@ impl ProfileSearchState {
         })
     }
 
-    pub fn extend(
-        &mut self, tt: &ZeroCopyTimetable<'_>, q: &Query, anchors: &[i64],
-    ) -> Result<()> {
-        ensure!(anchors.windows(2).all(|w| w[0] <= w[1]),
-            "profile anchors must be sorted ascending");
+    pub fn extend(&mut self, tt: &ZeroCopyTimetable<'_>, q: &Query, anchors: &[i64]) -> Result<()> {
+        ensure!(
+            anchors.windows(2).all(|w| w[0] <= w[1]),
+            "profile anchors must be sorted ascending"
+        );
         // Nigiri scans forward profiles from the latest departure backwards.
         // Every event is independent, so expanding the profile interval later
         // never invalidates arrival states from an earlier event.
         let mut ordered = anchors.to_vec();
-        if !self.reverse { ordered.reverse(); }
+        if !self.reverse {
+            ordered.reverse();
+        }
         for anchor in ordered {
             if Instant::now() >= self.deadline {
                 self.stats.profile_budget_exhausted = true;
@@ -580,17 +700,27 @@ impl ProfileSearchState {
             // previously solved anchors. Nigiri resets persisted round arrivals
             // at this boundary too, while retaining already found journeys.
             if self.last_anchor.is_some_and(|last| {
-                if self.reverse { anchor < last } else { anchor > last }
+                if self.reverse {
+                    anchor < last
+                } else {
+                    anchor > last
+                }
             }) {
                 let invalid = if self.reverse { NEG_INF } else { INF };
-                for row in &mut self.profile_ride { row.fill(invalid); }
-                for row in &mut self.profile_ready { row.fill(invalid); }
+                for row in &mut self.profile_ride {
+                    row.fill(invalid);
+                }
+                for row in &mut self.profile_ready {
+                    row.fill(invalid);
+                }
                 self.time_at_dest.fill(invalid);
             }
             self.last_anchor = Some(anchor);
             self.stats.profile_anchor_events += 1;
             self.solve(tt, q, anchor);
-            if self.stats.profile_budget_exhausted { break; }
+            if self.stats.profile_budget_exhausted {
+                break;
+            }
         }
         Ok(())
     }
@@ -598,7 +728,9 @@ impl ProfileSearchState {
     fn solve(&mut self, tt: &ZeroCopyTimetable<'_>, q: &Query, anchor: i64) {
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
-            for r in &mut self.rounds { r.invalidate(); }
+            for r in &mut self.rounds {
+                r.invalidate();
+            }
             self.generation = 1;
         }
         self.parents.clear();
@@ -609,7 +741,9 @@ impl ProfileSearchState {
         // before updating it from transit and walking relaxations.
         let worst = initial_destination_bound(anchor, q, reverse);
         for bound in &mut self.time_at_dest {
-            if better(worst, *bound, reverse) { *bound = worst; }
+            if better(worst, *bound, reverse) {
+                *bound = worst;
+            }
         }
         // Nigiri retains round arrival times independently of whether a
         // journey to the destination was found at this particular anchor.
@@ -632,16 +766,31 @@ impl ProfileSearchState {
                 anchor.saturating_add(i64::from(ep.seconds))
             };
             if (lower..=upper).contains(&t)
-                && can_reach(&self.bounds, ep.stop.idx(), t, anchor,
-                    q.max_duration_seconds, reverse, self.time_at_dest[0])
+                && can_reach(
+                    &self.bounds,
+                    ep.stop.idx(),
+                    t,
+                    anchor,
+                    q.max_duration_seconds,
+                    reverse,
+                    self.time_at_dest[0],
+                )
                 && (self.transfer_sensitive[ep.stop.idx()]
-                    || !dominated_by_profile(
-                        &self.profile_ready, 0, ep.stop.idx(), t, reverse))
+                    || !dominated_by_profile(&self.profile_ready, 0, ep.stop.idx(), t, reverse))
                 && self.rounds[0].put_linked(
-                    Stage::Ready, ep.stop.idx(), t,
-                    Parent::Root { seconds: ep.seconds }, None,
-                    generation, reverse, &mut self.parents, &mut self.stats,
-                ) {
+                    Stage::Ready,
+                    ep.stop.idx(),
+                    t,
+                    Parent::Root {
+                        seconds: ep.seconds,
+                    },
+                    None,
+                    generation,
+                    reverse,
+                    &mut self.parents,
+                    &mut self.stats,
+                )
+            {
                 marked.push(ep.stop.idx());
             }
         }
@@ -651,7 +800,8 @@ impl ProfileSearchState {
         let destination_endpoints = if reverse { &q.access } else { &q.egress };
         let mut terminal_seconds = HashMap::<usize, u32>::new();
         for ep in destination_endpoints {
-            terminal_seconds.entry(ep.stop.idx())
+            terminal_seconds
+                .entry(ep.stop.idx())
                 .and_modify(|current| *current = (*current).min(ep.seconds))
                 .or_insert(ep.seconds);
         }
@@ -669,7 +819,9 @@ impl ProfileSearchState {
                 self.stop_stamps.fill(0);
                 self.stop_stamp = 1;
             }
-            for &stop in &marked { self.stop_stamps[stop] = self.stop_stamp; }
+            for &stop in &marked {
+                self.stop_stamps[stop] = self.stop_stamp;
+            }
             let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp);
             let mut improved_rides = Vec::new();
             // Independent snapshot paths are required for route-distinct
@@ -682,141 +834,200 @@ impl ProfileSearchState {
             // Finish route scanning before taking immutable references to
             // round predecessors for timetable-validated destination updates.
             {
-            let (before, after) = self.rounds.split_at_mut(k);
-            let previous = &before[k-1];
-            let current = &mut after[0];
-            let started = Instant::now();
-            for route in routes {
-                if Instant::now() >= self.deadline {
-                    self.stats.profile_budget_exhausted = true;
-                    break;
-                }
-                self.stats.routes_scanned += 1;
-                let stops = tt.stops_on(route);
-                if stops.len() < 2 { continue; }
-                let mut active_days = Vec::<ActiveDay>::new();
-                // Gentian's route traffic-day bitmap is the union of the
-                // transports' calendars. Do not materialize a filtered
-                // transport vector for every route, service day and anchor.
-                // Nigiri does not rescan every inactive transport for every
-                // stop in a route. Use a compact service-day index for shorter
-                // columns; leave long dense columns on the original FIFO
-                // binary-search path. Both paths use identical event times.
-                // Nigiri bounds each transport scan by the best destination
-                // time known so far. A vehicle boarding/arrival outside this
-                // absolute time range cannot improve a feasible destination.
-                let (day_lower, day_upper) = if reverse {
-                    (lower.max(self.time_at_dest[k]), upper)
-                } else {
-                    (lower, upper.min(self.time_at_dest[k]))
-                };
-                if day_lower > day_upper { continue; }
-                for_each_route_service_day(tt, route, day_lower, day_upper, &mut self.stats,
-                    |day, _| {
-                        let active_transports = build_active_transport_days(
-                            tt, route, day, stops.len()
-                        );
-                        if active_transports.as_ref()
-                            .is_some_and(|words| words.iter().all(|x| *x == 0))
-                        {
-                            return;
-                        }
-                        active_days.push(ActiveDay {
-                            day, onboard: None, active_transports
-                        });
-                    });
-                if reverse { active_days.reverse(); }
-                if active_days.is_empty() { continue; }
-                for step in 0..stops.len() {
-                    self.stats.stop_events_scanned += 1;
-                    if (self.stats.stop_events_scanned & 255) == 0
-                        && Instant::now() >= self.deadline
-                    {
+                let (before, after) = self.rounds.split_at_mut(k);
+                let previous = &before[k - 1];
+                let current = &mut after[0];
+                let started = Instant::now();
+                for route in routes {
+                    if Instant::now() >= self.deadline {
                         self.stats.profile_budget_exhausted = true;
                         break;
                     }
-                    let pos = if reverse { stops.len() - step - 1 } else { step };
-                    let stop = stops[pos];
-                    let loc = stop.location().idx();
-                    let can_finish = if reverse {
-                        stop.outbound() && pos + 1 < stops.len()
+                    self.stats.routes_scanned += 1;
+                    let stops = tt.stops_on(route);
+                    if stops.len() < 2 {
+                        continue;
+                    }
+                    let mut active_days = Vec::<ActiveDay>::new();
+                    // Gentian's route traffic-day bitmap is the union of the
+                    // transports' calendars. Do not materialize a filtered
+                    // transport vector for every route, service day and anchor.
+                    // Nigiri does not rescan every inactive transport for every
+                    // stop in a route. Use a compact service-day index for shorter
+                    // columns; leave long dense columns on the original FIFO
+                    // binary-search path. Both paths use identical event times.
+                    // Nigiri bounds each transport scan by the best destination
+                    // time known so far. A vehicle boarding/arrival outside this
+                    // absolute time range cannot improve a feasible destination.
+                    let (day_lower, day_upper) = if reverse {
+                        (lower.max(self.time_at_dest[k]), upper)
                     } else {
-                        stop.inbound() && pos > 0
+                        (lower, upper.min(self.time_at_dest[k]))
                     };
-                    let can_start = if reverse {
-                        stop.inbound() && pos > 0
-                    } else {
-                        stop.outbound() && pos + 1 < stops.len()
-                    };
-                    for day in &mut active_days {
-                        let midnight = (i64::from(tt.header().first_utc_day)
-                            + day.day as i64) * 86_400;
-                        if can_finish {
-                            if let Some(onboard) = day.onboard {
-                                let Some(event) = transport_event_second(
-                                    tt, route, onboard.transport, pos, !reverse, midnight
-                                ) else { continue };
-                                if (lower..=upper).contains(&event)
-                                    && can_reach(&self.bounds, loc, event, anchor,
-                                        q.max_duration_seconds, reverse, self.time_at_dest[k])
-                                {
-                                    let (from, to, board_pos, alight_pos, dep, arr) =
-                                        if reverse {
-                                            (loc, onboard.from, pos, onboard.pos,
-                                             event, onboard.event)
-                                        } else {
-                                            (onboard.from, loc, onboard.pos, pos,
-                                             onboard.event, event)
-                                        };
-                                    let leg_parent = Parent::Ride {
-                                        from, to, route: route.0,
-                                        transport: onboard.transport.0,
-                                        day: onboard.day as u16,
-                                        board_pos, alight_pos,
-                                        departure: dep, arrival: arr,
+                    if day_lower > day_upper {
+                        continue;
+                    }
+                    for_each_route_service_day(
+                        tt,
+                        route,
+                        day_lower,
+                        day_upper,
+                        &mut self.stats,
+                        |day, _| {
+                            let active_transports =
+                                build_active_transport_days(tt, route, day, stops.len());
+                            if active_transports
+                                .as_ref()
+                                .is_some_and(|words| words.iter().all(|x| *x == 0))
+                            {
+                                return;
+                            }
+                            active_days.push(ActiveDay {
+                                day,
+                                onboard: None,
+                                active_transports,
+                            });
+                        },
+                    );
+                    if reverse {
+                        active_days.reverse();
+                    }
+                    if active_days.is_empty() {
+                        continue;
+                    }
+                    for step in 0..stops.len() {
+                        self.stats.stop_events_scanned += 1;
+                        if (self.stats.stop_events_scanned & 255) == 0
+                            && Instant::now() >= self.deadline
+                        {
+                            self.stats.profile_budget_exhausted = true;
+                            break;
+                        }
+                        let pos = if reverse {
+                            stops.len() - step - 1
+                        } else {
+                            step
+                        };
+                        let stop = stops[pos];
+                        let loc = stop.location().idx();
+                        let can_finish = if reverse {
+                            stop.outbound() && pos + 1 < stops.len()
+                        } else {
+                            stop.inbound() && pos > 0
+                        };
+                        let can_start = if reverse {
+                            stop.inbound() && pos > 0
+                        } else {
+                            stop.outbound() && pos + 1 < stops.len()
+                        };
+                        for day in &mut active_days {
+                            let midnight =
+                                (i64::from(tt.header().first_utc_day) + day.day as i64) * 86_400;
+                            if can_finish {
+                                if let Some(onboard) = day.onboard {
+                                    let Some(event) = transport_event_second(
+                                        tt,
+                                        route,
+                                        onboard.transport,
+                                        pos,
+                                        !reverse,
+                                        midnight,
+                                    ) else {
+                                        continue;
                                     };
-                                    // Capture distinct terminal paths even if a
-                                    // faster service has already won this cell.
-                                    // Use a bounded top-K per stop to retain
-                                    // equivalent-time route alternatives.
-                                    if let Some(&seconds) = terminal_seconds.get(&loc) {
-                                        let score = if reverse {
-                                            event.saturating_sub(i64::from(seconds))
-                                        } else {
-                                            event.saturating_add(i64::from(seconds))
-                                        };
-                                        let slots = candidate_slots.entry(loc).or_default();
-                                        let insertion = if slots.len() < MAX_TERMINAL_PATHS_PER_STOP
-                                            && ride_terminal_paths.len() < MAX_TERMINAL_PATHS_PER_ROUND
+                                    if (lower..=upper).contains(&event)
+                                        && can_reach(
+                                            &self.bounds,
+                                            loc,
+                                            event,
+                                            anchor,
+                                            q.max_duration_seconds,
+                                            reverse,
+                                            self.time_at_dest[k],
+                                        )
+                                    {
+                                        let (from, to, board_pos, alight_pos, dep, arr) = if reverse
                                         {
-                                            Some(None)
+                                            (
+                                                loc,
+                                                onboard.from,
+                                                pos,
+                                                onboard.pos,
+                                                event,
+                                                onboard.event,
+                                            )
                                         } else {
-                                            let worst = slots.iter().copied()
-                                                .max_by_key(|&idx| {
-                                                    let v = ride_terminal_paths[idx].0;
-                                                    if reverse { v.saturating_neg() } else { v }
-                                                });
-                                            worst.filter(|&idx| {
-                                                let old = ride_terminal_paths[idx].0;
-                                                if reverse { score > old } else { score < old }
-                                            }).map(Some)
+                                            (
+                                                onboard.from,
+                                                loc,
+                                                onboard.pos,
+                                                pos,
+                                                onboard.event,
+                                                event,
+                                            )
                                         };
-                                        if let Some(replace) = insertion {
-                                            if self.parents.len() < u32::MAX as usize {
-                                                let snapshot = self.parents.len() as u32;
-                                                self.parents.push(PathLink {
-                                                    step: leg_parent,
-                                                    previous: Some(onboard.predecessor),
-                                                });
-                                                // Nigiri updates time_at_dest_ as soon as a
-                                                // destination label improves, during route
-                                                // relaxation, not after scanning every route
-                                                // and service day in the round. Validate the
-                                                // predecessor chain before using it as a
-                                                // pruning bound: GTFS pair-specific transfers
-                                                // make unvalidated scalar bounds unsafe here.
-                                                if better(score, self.time_at_dest[k], reverse) {
-                                                    if let Some(mut journey) =
+                                        let leg_parent = Parent::Ride {
+                                            from,
+                                            to,
+                                            route: route.0,
+                                            transport: onboard.transport.0,
+                                            day: onboard.day as u16,
+                                            board_pos,
+                                            alight_pos,
+                                            departure: dep,
+                                            arrival: arr,
+                                        };
+                                        // Capture distinct terminal paths even if a
+                                        // faster service has already won this cell.
+                                        // Use a bounded top-K per stop to retain
+                                        // equivalent-time route alternatives.
+                                        if let Some(&seconds) = terminal_seconds.get(&loc) {
+                                            let score = if reverse {
+                                                event.saturating_sub(i64::from(seconds))
+                                            } else {
+                                                event.saturating_add(i64::from(seconds))
+                                            };
+                                            let slots = candidate_slots.entry(loc).or_default();
+                                            let insertion = if slots.len()
+                                                < MAX_TERMINAL_PATHS_PER_STOP
+                                                && ride_terminal_paths.len()
+                                                    < MAX_TERMINAL_PATHS_PER_ROUND
+                                            {
+                                                Some(None)
+                                            } else {
+                                                let worst =
+                                                    slots.iter().copied().max_by_key(|&idx| {
+                                                        let v = ride_terminal_paths[idx].0;
+                                                        if reverse { v.saturating_neg() } else { v }
+                                                    });
+                                                worst
+                                                    .filter(|&idx| {
+                                                        let old = ride_terminal_paths[idx].0;
+                                                        if reverse {
+                                                            score > old
+                                                        } else {
+                                                            score < old
+                                                        }
+                                                    })
+                                                    .map(Some)
+                                            };
+                                            if let Some(replace) = insertion {
+                                                if self.parents.len() < u32::MAX as usize {
+                                                    let snapshot = self.parents.len() as u32;
+                                                    self.parents.push(PathLink {
+                                                        step: leg_parent,
+                                                        previous: Some(onboard.predecessor),
+                                                    });
+                                                    // Nigiri updates time_at_dest_ as soon as a
+                                                    // destination label improves, during route
+                                                    // relaxation, not after scanning every route
+                                                    // and service day in the round. Validate the
+                                                    // predecessor chain before using it as a
+                                                    // pruning bound: GTFS pair-specific transfers
+                                                    // make unvalidated scalar bounds unsafe here.
+                                                    if better(score, self.time_at_dest[k], reverse)
+                                                    {
+                                                        if let Some(mut journey) =
                                                         crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
                                                             &self.parents, snapshot, event,
                                                             loc, reverse, seconds,
@@ -840,69 +1051,111 @@ impl ProfileSearchState {
                                                             }
                                                         }
                                                     }
-                                                }
-                                                let item = (score, loc, seconds, snapshot);
-                                                if let Some(idx) = replace {
-                                                    ride_terminal_paths[idx] = item;
-                                                } else {
-                                                    slots.push(ride_terminal_paths.len());
-                                                    ride_terminal_paths.push(item);
+                                                    }
+                                                    let item = (score, loc, seconds, snapshot);
+                                                    if let Some(idx) = replace {
+                                                        ride_terminal_paths[idx] = item;
+                                                    } else {
+                                                        slots.push(ride_terminal_paths.len());
+                                                        ride_terminal_paths.push(item);
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                    if (self.transfer_sensitive[loc] ||
-                                        !dominated_by_profile(
-                                            &self.profile_ride, k, loc, event, reverse))
-                                        && !dominated_by_lower_round(
-                                            before, Stage::Ride, loc, event, generation, reverse)
-                                        && current.put_linked(
-                                            Stage::Ride, loc, event, leg_parent,
-                                            Some(onboard.predecessor),
-                                            generation, reverse, &mut self.parents,
-                                            &mut self.stats,
-                                        ) {
+                                        if (self.transfer_sensitive[loc]
+                                            || !dominated_by_profile(
+                                                &self.profile_ride,
+                                                k,
+                                                loc,
+                                                event,
+                                                reverse,
+                                            ))
+                                            && !dominated_by_lower_round(
+                                                before,
+                                                Stage::Ride,
+                                                loc,
+                                                event,
+                                                generation,
+                                                reverse,
+                                            )
+                                            && current.put_linked(
+                                                Stage::Ride,
+                                                loc,
+                                                event,
+                                                leg_parent,
+                                                Some(onboard.predecessor),
+                                                generation,
+                                                reverse,
+                                                &mut self.parents,
+                                                &mut self.stats,
+                                            )
+                                        {
                                             improved_rides.push(loc);
                                         }
+                                    }
                                 }
                             }
-                        }
-                        if !can_start || self.stop_stamps[loc] != self.stop_stamp {
-                            continue;
-                        }
-                        let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
-                            continue;
-                        };
-                        if !(lower..=upper).contains(&ready.time)
-                            || !can_reach(
-                                &self.bounds, loc, ready.time, anchor,
-                                q.max_duration_seconds, reverse, self.time_at_dest[k]
-                            )
-                        { continue; }
-                        // Avoid binary-searching a service day when this
-                        // boarding-ready stop cannot reach the destination
-                        // within Nigiri's current dynamic bound.
-                        let next_transport = timetable_transport_on_day(
-                            tt, route, pos, day, ready.time, reverse,
-                            &mut self.stats
-                        );
-                        let Some((transport, event)) = next_transport else { continue };
-                        if !(lower..=upper).contains(&event) { continue; }
-                        let better = day.onboard.is_none_or(|old| {
-                            if reverse { transport.0 > old.transport.0 }
-                            else { transport.0 < old.transport.0 }
-                        });
-                        if better {
-                            day.onboard = Some(Onboard {
-                                transport, day: day.day, from: loc, pos, event,
-                                predecessor: ready.parent,
+                            if !can_start || self.stop_stamps[loc] != self.stop_stamp {
+                                continue;
+                            }
+                            let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
+                                continue;
+                            };
+                            if !(lower..=upper).contains(&ready.time)
+                                || !can_reach(
+                                    &self.bounds,
+                                    loc,
+                                    ready.time,
+                                    anchor,
+                                    q.max_duration_seconds,
+                                    reverse,
+                                    self.time_at_dest[k],
+                                )
+                            {
+                                continue;
+                            }
+                            // Avoid binary-searching a service day when this
+                            // boarding-ready stop cannot reach the destination
+                            // within Nigiri's current dynamic bound.
+                            let next_transport = timetable_transport_on_day(
+                                tt,
+                                route,
+                                pos,
+                                day,
+                                ready.time,
+                                reverse,
+                                &mut self.stats,
+                            );
+                            let Some((transport, event)) = next_transport else {
+                                continue;
+                            };
+                            if !(lower..=upper).contains(&event) {
+                                continue;
+                            }
+                            let better = day.onboard.is_none_or(|old| {
+                                if reverse {
+                                    transport.0 > old.transport.0
+                                } else {
+                                    transport.0 < old.transport.0
+                                }
                             });
+                            if better {
+                                day.onboard = Some(Onboard {
+                                    transport,
+                                    day: day.day,
+                                    from: loc,
+                                    pos,
+                                    event,
+                                    predecessor: ready.parent,
+                                });
+                            }
                         }
                     }
+                    if self.stats.profile_budget_exhausted {
+                        break;
+                    }
                 }
-                if self.stats.profile_budget_exhausted { break; }
-            }
-            self.stats.route_scan_ms += started.elapsed().as_secs_f64() * 1_000.0;
+                self.stats.route_scan_ms += started.elapsed().as_secs_f64() * 1_000.0;
             }
             improved_rides.sort_unstable();
             improved_rides.dedup();
@@ -914,18 +1167,34 @@ impl ProfileSearchState {
             // vehicle path and validate the GTFS service days and predecessor
             // transfer restrictions before tightening the deadline. Unsafe
             // provisional paths never suppress later valid alternatives.
-            ride_terminal_paths.sort_unstable_by_key(|(time, stop, seconds, _)| (
-                if reverse { Reverse(*time) }
-                else { Reverse(time.saturating_neg()) },
-                *stop, *seconds,
-            ));
+            ride_terminal_paths.sort_unstable_by_key(|(time, stop, seconds, _)| {
+                (
+                    if reverse {
+                        Reverse(*time)
+                    } else {
+                        Reverse(time.saturating_neg())
+                    },
+                    *stop,
+                    *seconds,
+                )
+            });
             for (arrival, stop, seconds, snapshot) in ride_terminal_paths {
-                let Some(mut journey) = crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
-                    &self.parents, snapshot,
-                    if reverse { arrival.saturating_add(i64::from(seconds)) }
-                    else { arrival.saturating_sub(i64::from(seconds)) },
-                    stop, reverse, seconds,
-                ) else { continue };
+                let Some(mut journey) =
+                    crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
+                        &self.parents,
+                        snapshot,
+                        if reverse {
+                            arrival.saturating_add(i64::from(seconds))
+                        } else {
+                            arrival.saturating_sub(i64::from(seconds))
+                        },
+                        stop,
+                        reverse,
+                        seconds,
+                    )
+                else {
+                    continue;
+                };
                 self.stats.profile_journeys_reconstructed += 1;
                 optimize_same_trip_endpoint_walks(tt, q, &mut journey);
                 if valid_journey(tt, q, &journey) {
@@ -935,7 +1204,9 @@ impl ProfileSearchState {
                         journey.arrival_unix_seconds
                     };
                     for bound in self.time_at_dest.iter_mut().skip(k) {
-                        if better(metric, *bound, reverse) { *bound = metric; }
+                        if better(metric, *bound, reverse) {
+                            *bound = metric;
+                        }
                     }
                     self.journeys.push(journey);
                 } else {
@@ -961,18 +1232,37 @@ impl ProfileSearchState {
                         t.saturating_add(i64::from(change))
                     };
                     if (lower..=upper).contains(&ready)
-                        && can_reach(&self.bounds, from, ready, anchor,
-                            q.max_duration_seconds, reverse, self.time_at_dest[k])
-                        && (self.transfer_sensitive[from] ||
-                            !dominated_by_profile(
-                                &self.profile_ready, k, from, ready, reverse))
+                        && can_reach(
+                            &self.bounds,
+                            from,
+                            ready,
+                            anchor,
+                            q.max_duration_seconds,
+                            reverse,
+                            self.time_at_dest[k],
+                        )
+                        && (self.transfer_sensitive[from]
+                            || !dominated_by_profile(&self.profile_ready, k, from, ready, reverse))
                         && !dominated_by_lower_round(
-                            before, Stage::Ready, from, ready, generation, reverse)
+                            before,
+                            Stage::Ready,
+                            from,
+                            ready,
+                            generation,
+                            reverse,
+                        )
                         && current.put_linked(
-                            Stage::Ready, from, ready, Parent::ReadyRide,
+                            Stage::Ready,
+                            from,
+                            ready,
+                            Parent::ReadyRide,
                             Some(ride.parent),
-                            generation, reverse, &mut self.parents, &mut self.stats
-                        ) {
+                            generation,
+                            reverse,
+                            &mut self.parents,
+                            &mut self.stats,
+                        )
+                    {
                         changed_ready.push(from);
                     }
                 }
@@ -985,47 +1275,90 @@ impl ProfileSearchState {
                     self.stats.footpath_edges_examined += 1;
                     let to = fp.target().idx();
                     let seconds = fp.seconds();
-                    if seconds == 0 { continue; }
+                    if seconds == 0 {
+                        continue;
+                    }
                     let at = if reverse {
                         t.saturating_sub(i64::from(seconds))
                     } else {
                         t.saturating_add(i64::from(seconds))
                     };
                     if !(lower..=upper).contains(&at)
-                        || !can_reach(&self.bounds, to, at, anchor,
-                            q.max_duration_seconds, reverse, self.time_at_dest[k])
-                    { continue; }
+                        || !can_reach(
+                            &self.bounds,
+                            to,
+                            at,
+                            anchor,
+                            q.max_duration_seconds,
+                            reverse,
+                            self.time_at_dest[k],
+                        )
+                    {
+                        continue;
+                    }
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
                     // Physical arrival and boarding readiness are different
                     // dimensions: minimum change times do not extend a walk.
                     current.put_linked(
-                        Stage::Walk, to, at,
-                        Parent::Walk { from: walk_from, to: walk_to, seconds },
+                        Stage::Walk,
+                        to,
+                        at,
+                        Parent::Walk {
+                            from: walk_from,
+                            to: walk_to,
+                            seconds,
+                        },
                         Some(ride.parent),
-                        generation, reverse, &mut self.parents, &mut self.stats
+                        generation,
+                        reverse,
+                        &mut self.parents,
+                        &mut self.stats,
                     );
                     let (rule_from, rule_to) = (walk_from, walk_to);
-                    let Some(change) = change_seconds(tt, rule_from, rule_to)
-                    else { continue };
+                    let Some(change) = change_seconds(tt, rule_from, rule_to) else {
+                        continue;
+                    };
                     let ready = if reverse {
                         at.min(t.saturating_sub(i64::from(change)))
                     } else {
                         at.max(t.saturating_add(i64::from(change)))
                     };
                     if (lower..=upper).contains(&ready)
-                        && can_reach(&self.bounds, to, ready, anchor,
-                            q.max_duration_seconds, reverse, self.time_at_dest[k])
-                        && (self.transfer_sensitive[to] ||
-                            !dominated_by_profile(
-                                &self.profile_ready, k, to, ready, reverse))
+                        && can_reach(
+                            &self.bounds,
+                            to,
+                            ready,
+                            anchor,
+                            q.max_duration_seconds,
+                            reverse,
+                            self.time_at_dest[k],
+                        )
+                        && (self.transfer_sensitive[to]
+                            || !dominated_by_profile(&self.profile_ready, k, to, ready, reverse))
                         && !dominated_by_lower_round(
-                            before, Stage::Ready, to, ready, generation, reverse)
+                            before,
+                            Stage::Ready,
+                            to,
+                            ready,
+                            generation,
+                            reverse,
+                        )
                         && current.put_linked(
-                            Stage::Ready, to, ready,
-                            Parent::Walk { from: walk_from, to: walk_to, seconds },
+                            Stage::Ready,
+                            to,
+                            ready,
+                            Parent::Walk {
+                                from: walk_from,
+                                to: walk_to,
+                                seconds,
+                            },
                             Some(ride.parent),
-                            generation, reverse, &mut self.parents, &mut self.stats
-                        ) {
+                            generation,
+                            reverse,
+                            &mut self.parents,
+                            &mut self.stats,
+                        )
+                    {
                         changed_ready.push(to);
                     }
                 }
@@ -1050,18 +1383,27 @@ impl ProfileSearchState {
                         } else {
                             cell.time.saturating_add(i64::from(ep.seconds))
                         };
-                        terminal_candidates.push(
-                            (at_dest, ep.stop.idx(), stage, ep.seconds));
+                        terminal_candidates.push((at_dest, ep.stop.idx(), stage, ep.seconds));
                     }
                 }
             }
             // Ordering is deterministic, regardless of OSR's endpoint order.
-            terminal_candidates.sort_unstable_by_key(|(time, stop, stage, offset)| (
-                if reverse { Reverse(*time) } else { Reverse(time.saturating_neg()) },
-                *stop,
-                match stage { Stage::Ride => 0u8, Stage::Walk => 1, Stage::Ready => 2 },
-                *offset,
-            ));
+            terminal_candidates.sort_unstable_by_key(|(time, stop, stage, offset)| {
+                (
+                    if reverse {
+                        Reverse(*time)
+                    } else {
+                        Reverse(time.saturating_neg())
+                    },
+                    *stop,
+                    match stage {
+                        Stage::Ride => 0u8,
+                        Stage::Walk => 1,
+                        Stage::Ready => 2,
+                    },
+                    *offset,
+                )
+            });
             for (at_dest, terminal_stop, stage, terminal_seconds) in terminal_candidates {
                 let current_best = self.time_at_dest[k];
                 let too_slow = if reverse {
@@ -1069,11 +1411,21 @@ impl ProfileSearchState {
                 } else {
                     current_best != INF && at_dest > current_best
                 };
-                if too_slow { continue; }
+                if too_slow {
+                    continue;
+                }
                 let Some(mut journey) = reconstruct(
-                    &self.rounds, &self.parents, generation, reverse,
-                    k, terminal_stop, stage, terminal_seconds,
-                ) else { continue };
+                    &self.rounds,
+                    &self.parents,
+                    generation,
+                    reverse,
+                    k,
+                    terminal_stop,
+                    stage,
+                    terminal_seconds,
+                ) else {
+                    continue;
+                };
                 self.stats.profile_journeys_reconstructed += 1;
                 // Optimize the same timetable vehicles first, as Nigiri's
                 // separate reconstruction phase does. Validate optimized
@@ -1087,7 +1439,9 @@ impl ProfileSearchState {
                         journey.arrival_unix_seconds
                     };
                     for bound in self.time_at_dest.iter_mut().skip(k) {
-                        if better(metric, *bound, reverse) { *bound = metric; }
+                        if better(metric, *bound, reverse) {
+                            *bound = metric;
+                        }
                     }
                     self.journeys.push(journey);
                 } else {
@@ -1098,7 +1452,9 @@ impl ProfileSearchState {
             changed_ready.dedup();
             reached_ready[k] = changed_ready.clone();
             marked = changed_ready;
-            if self.stats.profile_budget_exhausted { break; }
+            if self.stats.profile_budget_exhausted {
+                break;
+            }
         }
         // Preserve the compact arrival skyline across monotone profile
         // anchors exactly as Nigiri's round_times_ does. The current
@@ -1108,13 +1464,17 @@ impl ProfileSearchState {
                 for &stop in &reached_ready[k] {
                     if let Some(value) = self.rounds[k].get(Stage::Ready, stop, generation) {
                         let current = &mut self.profile_ready[k][stop];
-                        if better(value.time, *current, reverse) { *current = value.time; }
+                        if better(value.time, *current, reverse) {
+                            *current = value.time;
+                        }
                     }
                 }
                 for &stop in &reached_rides[k] {
                     if let Some(value) = self.rounds[k].get(Stage::Ride, stop, generation) {
                         let current = &mut self.profile_ride[k][stop];
-                        if better(value.time, *current, reverse) { *current = value.time; }
+                        if better(value.time, *current, reverse) {
+                            *current = value.time;
+                        }
                     }
                 }
             }
@@ -1124,23 +1484,35 @@ impl ProfileSearchState {
     pub fn result(&self) -> Vec<Journey> {
         crate::routing_common::profile_search::route_diverse_pareto(self.journeys.clone())
     }
-    pub fn stats(&self) -> &RaptorStats { &self.stats }
+    pub fn stats(&self) -> &RaptorStats {
+        &self.stats
+    }
 }
 
 #[cfg(test)]
 pub(crate) fn route_profile_incremental(
-    tt: &ZeroCopyTimetable<'_>, q: &Query, anchors: &[i64],
-    reverse: bool, timeout: Duration,
+    tt: &ZeroCopyTimetable<'_>,
+    q: &Query,
+    anchors: &[i64],
+    reverse: bool,
+    timeout: Duration,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
-    let earliest = anchors.iter().copied().min().unwrap_or(q.departure_unix_seconds);
-    let latest = anchors.iter().copied().max().unwrap_or(q.departure_unix_seconds);
+    let earliest = anchors
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(q.departure_unix_seconds);
+    let latest = anchors
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(q.departure_unix_seconds);
     let mut state = ProfileSearchState::new(tt, q, earliest, latest, reverse, timeout)?;
     let mut sorted = anchors.to_vec();
     sorted.sort_unstable();
     state.extend(tt, q, &sorted)?;
     Ok((state.result(), state.stats().clone()))
 }
-
 
 #[cfg(test)]
 mod compact_reconstruction_tests {
@@ -1157,26 +1529,80 @@ mod compact_reconstruction_tests {
         let mut rounds = vec![Round::new(4), Round::new(4)];
         let mut parents = Vec::new();
         let mut stats = RaptorStats::default();
-        assert!(rounds[0].put(Stage::Ready, 0, 1_000,
-            Parent::Root { seconds: 0 }, 1, false, &mut parents, &mut stats));
+        assert!(rounds[0].put(
+            Stage::Ready,
+            0,
+            1_000,
+            Parent::Root { seconds: 0 },
+            1,
+            false,
+            &mut parents,
+            &mut stats
+        ));
         let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
-        assert!(rounds[1].put_linked(Stage::Ride, 1, 1_100,
-            Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
-                board_pos: 0, alight_pos: 1, departure: 1_020, arrival: 1_100 },
-            Some(root), 1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put_linked(
+            Stage::Ride,
+            1,
+            1_100,
+            Parent::Ride {
+                from: 0,
+                to: 1,
+                route: 0,
+                transport: 0,
+                day: 0,
+                board_pos: 0,
+                alight_pos: 1,
+                departure: 1_020,
+                arrival: 1_100
+            },
+            Some(root),
+            1,
+            false,
+            &mut parents,
+            &mut stats
+        ));
         let ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
-        assert!(rounds[1].put_linked(Stage::Ready, 2, 1_140,
-            Parent::Walk { from: 1, to: 2, seconds: 40 },
-            Some(ride), 1, false, &mut parents, &mut stats));
-        assert!(rounds[1].put_linked(Stage::Walk, 2, 1_120,
-            Parent::Walk { from: 3, to: 2, seconds: 20 },
-            Some(ride), 1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put_linked(
+            Stage::Ready,
+            2,
+            1_140,
+            Parent::Walk {
+                from: 1,
+                to: 2,
+                seconds: 40
+            },
+            Some(ride),
+            1,
+            false,
+            &mut parents,
+            &mut stats
+        ));
+        assert!(rounds[1].put_linked(
+            Stage::Walk,
+            2,
+            1_120,
+            Parent::Walk {
+                from: 3,
+                to: 2,
+                seconds: 20
+            },
+            Some(ride),
+            1,
+            false,
+            &mut parents,
+            &mut stats
+        ));
         let result = reconstruct(&rounds, &parents, 1, false, 1, 2, Stage::Ready, 0)
             .expect("exact ready-state predecessor must reconstruct");
         assert_eq!(result.boardings, 1);
-        assert!(matches!(result.legs[2], Leg::Transfer {
-            from_stop: 1, to_stop: 2, seconds: 40
-        }));
+        assert!(matches!(
+            result.legs[2],
+            Leg::Transfer {
+                from_stop: 1,
+                to_stop: 2,
+                seconds: 40
+            }
+        ));
         assert_eq!(result.arrival_unix_seconds, 1_140);
     }
 
@@ -1185,23 +1611,56 @@ mod compact_reconstruction_tests {
         let mut rounds = vec![Round::new(2), Round::new(2)];
         let mut parents = Vec::new();
         let mut stats = RaptorStats::default();
-        rounds[0].put(Stage::Ready, 0, 0, Parent::Root { seconds: 0 },
-            1, false, &mut parents, &mut stats);
+        rounds[0].put(
+            Stage::Ready,
+            0,
+            0,
+            Parent::Root { seconds: 0 },
+            1,
+            false,
+            &mut parents,
+            &mut stats,
+        );
         let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
-        rounds[1].put_linked(Stage::Ride, 1, 100,
-            Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
-                board_pos: 0, alight_pos: 1, departure: 10, arrival: 100 },
-            Some(root), 1, false, &mut parents, &mut stats);
+        rounds[1].put_linked(
+            Stage::Ride,
+            1,
+            100,
+            Parent::Ride {
+                from: 0,
+                to: 1,
+                route: 0,
+                transport: 0,
+                day: 0,
+                board_pos: 0,
+                alight_pos: 1,
+                departure: 10,
+                arrival: 100,
+            },
+            Some(root),
+            1,
+            false,
+            &mut parents,
+            &mut stats,
+        );
         let ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
-        rounds[1].put_linked(Stage::Ready, 1, 130, Parent::ReadyRide,
-            Some(ride), 1, false, &mut parents, &mut stats);
+        rounds[1].put_linked(
+            Stage::Ready,
+            1,
+            130,
+            Parent::ReadyRide,
+            Some(ride),
+            1,
+            false,
+            &mut parents,
+            &mut stats,
+        );
         let result = reconstruct(&rounds, &parents, 1, false, 1, 1, Stage::Ready, 0)
             .expect("self-transfer readiness should reference the same ride");
         assert_eq!(result.boardings, 1);
         assert_eq!(result.legs.len(), 3);
     }
 }
-
 
 #[cfg(test)]
 mod profile_bound_tests {
@@ -1225,14 +1684,23 @@ mod profile_bound_tests {
         use crate::routing_common::raptor_query::WalkingEndpoint;
         let mut q = Query {
             departure_unix_seconds: 1000,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
             egress: vec![],
             direct_walk_seconds: None,
             max_boardings: 6,
             max_duration_seconds: 4 * 86_400,
         };
-        assert_eq!(initial_destination_bound(1000, &q, false), 1000 + 4 * 86_400 + 1);
-        assert_eq!(initial_destination_bound(1000, &q, true), 1000 - 4 * 86_400 - 1);
+        assert_eq!(
+            initial_destination_bound(1000, &q, false),
+            1000 + 4 * 86_400 + 1
+        );
+        assert_eq!(
+            initial_destination_bound(1000, &q, true),
+            1000 - 4 * 86_400 - 1
+        );
         q.direct_walk_seconds = Some(900);
         assert_eq!(initial_destination_bound(1000, &q, false), 1901);
         assert_eq!(initial_destination_bound(1000, &q, true), 99);
@@ -1251,14 +1719,13 @@ mod profile_bound_tests {
     }
 }
 
-
 #[cfg(test)]
 mod compressed_timetable_profile_tests {
     use super::*;
     use crate::routing_common::raptor_query::WalkingEndpoint;
     use crate::routing_common::timetable::{
-        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, TimingProfileIdx,
-        TimetableOwned, TrafficDays,
+        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, TimetableOwned, TimingProfileIdx,
+        TrafficDays,
     };
 
     // A genuine encoded Gentian timetable fixture: one 8-hour daily train
@@ -1274,7 +1741,8 @@ mod compressed_timetable_profile_tests {
             tt.location_parent.push(LocationIdx::INVALID);
             tt.location_type.push(1);
             tt.location_transfer_seconds.push(0);
-            tt.location_routes_offsets.push(tt.location_routes_offsets.len() as u32);
+            tt.location_routes_offsets
+                .push(tt.location_routes_offsets.len() as u32);
             tt.location_routes.push(RouteIdx(0));
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
@@ -1293,10 +1761,13 @@ mod compressed_timetable_profile_tests {
         tt.route_clasz.push(2);
         tt.transport_route.push(RouteIdx(0));
         tt.transport_timing_profile.push(TimingProfileIdx(0));
-        tt.transport_first_dep_offset.push(Delta::from_seconds(9 * 3_600).unwrap());
+        tt.transport_first_dep_offset
+            .push(Delta::from_seconds(9 * 3_600).unwrap());
         tt.transport_initial_day_offset.push(0);
         let mut days = TrafficDays::default();
-        for day in 0..4 { days.set(day, true).unwrap(); }
+        for day in 0..4 {
+            days.set(day, true).unwrap();
+        }
         tt.bitfields.push(days);
         tt.transport_traffic_days.push(BitfieldIdx(1));
         tt.route_traffic_days.push(BitfieldIdx(1));
@@ -1309,8 +1780,14 @@ mod compressed_timetable_profile_tests {
     fn query() -> Query {
         Query {
             departure_unix_seconds: 20_000_i64 * 86_400 + 18 * 3_600,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(1),
+                seconds: 0,
+            }],
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 36 * 3_600,
@@ -1325,7 +1802,10 @@ mod compressed_timetable_profile_tests {
         let mut q = query();
         q.max_duration_seconds = 5 * 60;
         let bounds = lower_bounds(
-            &tt, &q, false, &graph,
+            &tt,
+            &q,
+            false,
+            &graph,
             Instant::now() + Duration::from_secs(5),
         );
         // The first stop is eight hours from the destination by rail,
@@ -1343,24 +1823,35 @@ mod compressed_timetable_profile_tests {
         let base = 20_000_i64 * 86_400;
         for (reverse, anchor) in [
             (false, base + 86_400 + 9 * 3600),
-            (true, base + 86_400 + 17 * 3600)
+            (true, base + 86_400 + 17 * 3600),
         ] {
-            let mut uncached = ProfileSearchState::new(
-                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5)
-            ).unwrap();
+            let mut uncached =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
             let mut cached = ProfileSearchState::new_with_topology(
-                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
+                &tt,
+                &q,
+                anchor,
+                anchor,
+                reverse,
+                Duration::from_secs(5),
                 Some(&topology),
-            ).unwrap();
+            )
+            .unwrap();
             assert_eq!(uncached.bounds, cached.bounds);
             uncached.extend(&tt, &q, &[anchor]).unwrap();
             cached.extend(&tt, &q, &[anchor]).unwrap();
             let signature = |s: &ProfileSearchState| {
-                s.result().iter().map(|j| (
-                    j.departure_unix_seconds,
-                    j.arrival_unix_seconds,
-                    j.boardings,
-                )).collect::<Vec<_>>()
+                s.result()
+                    .iter()
+                    .map(|j| {
+                        (
+                            j.departure_unix_seconds,
+                            j.arrival_unix_seconds,
+                            j.boardings,
+                        )
+                    })
+                    .collect::<Vec<_>>()
             };
             assert_eq!(signature(&uncached), signature(&cached));
             assert!(!cached.result().is_empty());
@@ -1388,10 +1879,11 @@ mod compressed_timetable_profile_tests {
             let bits = build_active_transport_days(&tt, RouteIdx(0), day, 2)
                 .expect("single-transport route should use the bitset lookup");
             let active = ActiveDay {
-                day, onboard: None, active_transports: Some(bits),
+                day,
+                onboard: None,
+                active_transports: Some(bits),
             };
-            let midnight = (i64::from(tt.header().first_utc_day)
-                + day as i64) * 86_400;
+            let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
             for (reverse, time) in [
                 (false, midnight + 8 * 3_600),
                 (false, midnight + 10 * 3_600),
@@ -1400,18 +1892,23 @@ mod compressed_timetable_profile_tests {
             ] {
                 let mut original_stats = RaptorStats::default();
                 let original = if reverse {
-                    get_latest_transport(&tt, RouteIdx(0), 0, day, time,
-                        &mut original_stats)
+                    get_latest_transport(&tt, RouteIdx(0), 0, day, time, &mut original_stats)
                 } else {
-                    get_earliest_transport(&tt, RouteIdx(0), 0, day, time,
-                        &mut original_stats)
+                    get_earliest_transport(&tt, RouteIdx(0), 0, day, time, &mut original_stats)
                 };
                 let actual = timetable_transport_on_day(
-                    &tt, RouteIdx(0), 0, &active, time, reverse,
+                    &tt,
+                    RouteIdx(0),
+                    0,
+                    &active,
+                    time,
+                    reverse,
                     &mut RaptorStats::default(),
                 );
-                assert_eq!(actual, original,
-                    "calendar index mismatch on day {day}, reverse={reverse}");
+                assert_eq!(
+                    actual, original,
+                    "calendar index mismatch on day {day}, reverse={reverse}"
+                );
             }
         }
     }
@@ -1427,15 +1924,21 @@ mod compressed_timetable_profile_tests {
         q.max_duration_seconds = 4 * 86_400;
         let next_day_departure = base + 86_400 + 9 * 3_600;
         let mut state = ProfileSearchState::new(
-            &tt, &q, requested_departure,
-            base + 3 * 86_400, false, Duration::from_secs(5)
-        ).unwrap();
+            &tt,
+            &q,
+            requested_departure,
+            base + 3 * 86_400,
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         state.extend(&tt, &q, &[next_day_departure]).unwrap();
-        assert!(state.result().iter().any(|j|
-            j.boardings == 1
+        assert!(
+            state.result().iter().any(|j| j.boardings == 1
                 && j.departure_unix_seconds == next_day_departure
-                && j.arrival_unix_seconds == next_day_departure + 8 * 3_600
-        ), "long-distance route must survive without a 12-hour seed");
+                && j.arrival_unix_seconds == next_day_departure + 8 * 3_600),
+            "long-distance route must survive without a 12-hour seed"
+        );
         assert_eq!(
             state.time_at_dest[1],
             next_day_departure + 8 * 3_600,
@@ -1448,18 +1951,28 @@ mod compressed_timetable_profile_tests {
         let bytes = daily_train().encode().unwrap();
         let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
-        let departures = [base + 86_400 + 9 * 3_600,
-                          base + 2 * 86_400 + 9 * 3_600];
+        let departures = [base + 86_400 + 9 * 3_600, base + 2 * 86_400 + 9 * 3_600];
         let (journeys, stats) = route_profile_incremental(
-            &timetable, &query(), &departures, false, Duration::from_secs(5)
-        ).unwrap();
-        assert!(!stats.profile_budget_exhausted, "timed out on tiny timetable: {stats:?}");
+            &timetable,
+            &query(),
+            &departures,
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            !stats.profile_budget_exhausted,
+            "timed out on tiny timetable: {stats:?}"
+        );
         for departure in departures {
-            assert!(journeys.iter().any(|j|
-                j.departure_unix_seconds == departure
-                && j.arrival_unix_seconds == departure + 8 * 3_600
-                && j.boardings == 1
-            ), "missing train at {departure}: {journeys:?}");
+            assert!(
+                journeys
+                    .iter()
+                    .any(|j| j.departure_unix_seconds == departure
+                        && j.arrival_unix_seconds == departure + 8 * 3_600
+                        && j.boardings == 1),
+                "missing train at {departure}: {journeys:?}"
+            );
         }
         assert_eq!(stats.profile_anchor_events, 2);
     }
@@ -1469,18 +1982,26 @@ mod compressed_timetable_profile_tests {
         let bytes = daily_train().encode().unwrap();
         let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
-        let arrivals = [base + 86_400 + 17 * 3_600,
-                        base + 2 * 86_400 + 17 * 3_600];
+        let arrivals = [base + 86_400 + 17 * 3_600, base + 2 * 86_400 + 17 * 3_600];
         let (journeys, stats) = route_profile_incremental(
-            &timetable, &query(), &arrivals, true, Duration::from_secs(5)
-        ).unwrap();
-        assert!(!stats.profile_budget_exhausted, "timed out on tiny timetable: {stats:?}");
+            &timetable,
+            &query(),
+            &arrivals,
+            true,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            !stats.profile_budget_exhausted,
+            "timed out on tiny timetable: {stats:?}"
+        );
         for arrival in arrivals {
-            assert!(journeys.iter().any(|j|
-                j.arrival_unix_seconds == arrival
-                && j.departure_unix_seconds == arrival - 8 * 3_600
-                && j.boardings == 1
-            ), "missing arrival at {arrival}: {journeys:?}");
+            assert!(
+                journeys.iter().any(|j| j.arrival_unix_seconds == arrival
+                    && j.departure_unix_seconds == arrival - 8 * 3_600
+                    && j.boardings == 1),
+                "missing arrival at {arrival}: {journeys:?}"
+            );
         }
         assert_eq!(stats.profile_anchor_events, 2);
     }
@@ -1493,26 +2014,30 @@ mod compressed_timetable_profile_tests {
         let early = base + 86_400 + 9 * 3_600;
         let late = base + 2 * 86_400 + 9 * 3_600;
         let q = query();
-        let mut state = ProfileSearchState::new(
-            &timetable, &q, early, late, false, Duration::from_secs(5)
-        ).unwrap();
+        let mut state =
+            ProfileSearchState::new(&timetable, &q, early, late, false, Duration::from_secs(5))
+                .unwrap();
         state.extend(&timetable, &q, &[early]).unwrap();
         assert_eq!(state.last_anchor, Some(early));
         state.extend(&timetable, &q, &[late]).unwrap();
         assert_eq!(state.last_anchor, Some(late));
         assert_eq!(state.stats().profile_anchor_events, 2);
-        assert!(state.result().iter().any(|j| j.departure_unix_seconds == late));
+        assert!(
+            state
+                .result()
+                .iter()
+                .any(|j| j.departure_unix_seconds == late)
+        );
     }
 }
-
 
 #[cfg(test)]
 mod transfer_round_regressions {
     use super::*;
     use crate::routing_common::raptor_query::{Leg, WalkingEndpoint};
     use crate::routing_common::timetable::{
-        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, StationTransferRule,
-        TimetableOwned, TimingProfileIdx, TrafficDays,
+        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, StationTransferRule, TimetableOwned,
+        TimingProfileIdx, TrafficDays,
     };
 
     fn two_leg_timetable(prohibit_change: bool) -> TimetableOwned {
@@ -1528,9 +2053,7 @@ mod transfer_round_regressions {
             tt.location_transfer_seconds.push(0);
         }
         tt.location_routes_offsets = vec![0, 1, 3, 4];
-        tt.location_routes = vec![
-            RouteIdx(0), RouteIdx(0), RouteIdx(1), RouteIdx(1)
-        ];
+        tt.location_routes = vec![RouteIdx(0), RouteIdx(0), RouteIdx(1), RouteIdx(1)];
         tt.footpaths_out_offsets = vec![0; 4];
         tt.footpaths_in_offsets = vec![0; 4];
         for (from, to) in [(0, 1), (1, 2)] {
@@ -1540,9 +2063,8 @@ mod transfer_round_regressions {
             ]);
         }
         tt.route_stop_offsets.extend([2, 4]);
-        tt.route_transport_ranges.extend([
-            Range { from: 0, to: 1 }, Range { from: 1, to: 2 }
-        ]);
+        tt.route_transport_ranges
+            .extend([Range { from: 0, to: 1 }, Range { from: 1, to: 2 }]);
         tt.timing_profile_offsets.extend([2, 4]);
         tt.timing_profile_events.extend([
             Delta::from_seconds(0).unwrap(),
@@ -1552,9 +2074,8 @@ mod transfer_round_regressions {
         ]);
         tt.route_clasz.extend([2, 2]);
         tt.transport_route.extend([RouteIdx(0), RouteIdx(1)]);
-        tt.transport_timing_profile.extend([
-            TimingProfileIdx(0), TimingProfileIdx(1)
-        ]);
+        tt.transport_timing_profile
+            .extend([TimingProfileIdx(0), TimingProfileIdx(1)]);
         tt.transport_first_dep_offset.extend([
             Delta::from_seconds(8 * 3600).unwrap(),
             Delta::from_seconds(8 * 3600 + 15 * 60).unwrap(),
@@ -1564,8 +2085,10 @@ mod transfer_round_regressions {
         days.set(0, true).unwrap();
         days.set(1, true).unwrap();
         tt.bitfields.push(days);
-        tt.transport_traffic_days.extend([BitfieldIdx(1), BitfieldIdx(1)]);
-        tt.route_traffic_days.extend([BitfieldIdx(1), BitfieldIdx(1)]);
+        tt.transport_traffic_days
+            .extend([BitfieldIdx(1), BitfieldIdx(1)]);
+        tt.route_traffic_days
+            .extend([BitfieldIdx(1), BitfieldIdx(1)]);
         tt.route_section_clasz_offsets.extend([0, 0]);
         tt.section_flag_offsets.extend([0, 0]);
         tt.transport_to_trip_section_offsets.extend([0, 0]);
@@ -1583,8 +2106,14 @@ mod transfer_round_regressions {
     fn request() -> Query {
         Query {
             departure_unix_seconds: 20_000_i64 * 86400 + 8 * 3600,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 0,
+            }],
             direct_walk_seconds: None,
             max_boardings: 2,
             max_duration_seconds: 2 * 3600,
@@ -1597,7 +2126,8 @@ mod transfer_round_regressions {
     fn competing_transfer_timetable(prohibited: bool) -> TimetableOwned {
         use crate::routing_common::timetable::PackedFootpath;
         let mut tt = TimetableOwned::empty(20_000, 2);
-        tt.add_source("test", "competing-transfers", "attempt").unwrap();
+        tt.add_source("test", "competing-transfers", "attempt")
+            .unwrap();
         for _ in 0..5 {
             tt.coordinates.push(Default::default());
             tt.location_id.push(Default::default());
@@ -1610,8 +2140,12 @@ mod transfer_round_regressions {
         // 0 -> 1, 0 -> 2, 3 -> 4. Both 1 and 2 can walk to 3.
         tt.location_routes_offsets = vec![0, 2, 3, 4, 5, 6];
         tt.location_routes = vec![
-            RouteIdx(0), RouteIdx(1), RouteIdx(0), RouteIdx(1),
-            RouteIdx(2), RouteIdx(2),
+            RouteIdx(0),
+            RouteIdx(1),
+            RouteIdx(0),
+            RouteIdx(1),
+            RouteIdx(2),
+            RouteIdx(2),
         ];
         tt.footpaths_out_offsets = vec![0, 0, 1, 2, 2, 2];
         tt.footpaths_out.extend([
@@ -1645,9 +2179,12 @@ mod transfer_round_regressions {
             Delta::from_seconds(15 * 60).unwrap(),
         ]);
         tt.route_clasz.extend([2, 2, 2]);
-        tt.transport_route.extend([RouteIdx(0), RouteIdx(1), RouteIdx(2)]);
+        tt.transport_route
+            .extend([RouteIdx(0), RouteIdx(1), RouteIdx(2)]);
         tt.transport_timing_profile.extend([
-            TimingProfileIdx(0), TimingProfileIdx(1), TimingProfileIdx(2),
+            TimingProfileIdx(0),
+            TimingProfileIdx(1),
+            TimingProfileIdx(2),
         ]);
         tt.transport_first_dep_offset.extend([
             Delta::from_seconds(8 * 3600).unwrap(),
@@ -1665,7 +2202,8 @@ mod transfer_round_regressions {
         tt.section_flag_offsets.extend([0; 3]);
         tt.transport_to_trip_section_offsets.extend([0; 3]);
         tt.station_transfer_rules.push(StationTransferRule {
-            from: LocationIdx(1), to: LocationIdx(3),
+            from: LocationIdx(1),
+            to: LocationIdx(3),
             min_seconds: if prohibited { 0 } else { 20 * 60 },
             flags: if prohibited { 1 } else { 0 },
         });
@@ -1681,23 +2219,34 @@ mod transfer_round_regressions {
         let next_day = start + 86_400;
         let mut q = request();
         q.departure_unix_seconds = start;
-        q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
+        q.egress = vec![WalkingEndpoint {
+            stop: LocationIdx(4),
+            seconds: 0,
+        }];
         for reverse in [false, true] {
             let offset = if reverse { 35 * 60 } else { 0 };
             let anchors = [start + offset, next_day + offset];
-            let (journeys, stats) = route_profile_incremental(
-                &tt, &q, &anchors, reverse, Duration::from_secs(5)
-            ).unwrap();
+            let (journeys, stats) =
+                route_profile_incremental(&tt, &q, &anchors, reverse, Duration::from_secs(5))
+                    .unwrap();
             assert_eq!(stats.profile_anchor_events, 2);
             for day in [0, 1] {
                 let target_arrival = start + day * 86_400 + 35 * 60;
-                assert!(journeys.iter().any(|j|
-                    j.arrival_unix_seconds == target_arrival
-                    && j.boardings == 2
-                    && j.legs.iter().any(|leg| matches!(
-                        leg, Leg::Transfer { from_stop: 2, to_stop: 3, .. }
-                    ))
-                ), "legal connection on day {day} lost under persistent dominance: {journeys:?}");
+                assert!(
+                    journeys
+                        .iter()
+                        .any(|j| j.arrival_unix_seconds == target_arrival
+                            && j.boardings == 2
+                            && j.legs.iter().any(|leg| matches!(
+                                leg,
+                                Leg::Transfer {
+                                    from_stop: 2,
+                                    to_stop: 3,
+                                    ..
+                                }
+                            ))),
+                    "legal connection on day {day} lost under persistent dominance: {journeys:?}"
+                );
             }
         }
     }
@@ -1709,23 +2258,44 @@ mod transfer_round_regressions {
         let base = 20_000_i64 * 86_400;
         for (reverse, event) in [
             (false, base + 8 * 3_600),
-            (true, base + 8 * 3_600 + 35 * 60)
+            (true, base + 8 * 3_600 + 35 * 60),
         ] {
             let mut q = request();
             q.departure_unix_seconds = event;
-            q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
-            let (journeys, stats) = route_profile_incremental(
-                &tt, &q, &[event], reverse, Duration::from_secs(5)
-            ).unwrap();
-            assert!(!journeys.is_empty(),
-                "lost legal later-platform connection in reverse={reverse}: {stats:?}");
-            let j = journeys.iter().find(|j| j.boardings == 2)
+            q.egress = vec![WalkingEndpoint {
+                stop: LocationIdx(4),
+                seconds: 0,
+            }];
+            let (journeys, stats) =
+                route_profile_incremental(&tt, &q, &[event], reverse, Duration::from_secs(5))
+                    .unwrap();
+            assert!(
+                !journeys.is_empty(),
+                "lost legal later-platform connection in reverse={reverse}: {stats:?}"
+            );
+            let j = journeys
+                .iter()
+                .find(|j| j.boardings == 2)
                 .expect("two-boardings path must be preserved");
-            assert!(j.legs.iter().any(|leg| matches!(
-                leg, Leg::Transfer { from_stop: 2, to_stop: 3, seconds: 60 }
-            )), "the legal platform 2 -> 3 transfer must win: {:?}", j.legs);
+            assert!(
+                j.legs.iter().any(|leg| matches!(
+                    leg,
+                    Leg::Transfer {
+                        from_stop: 2,
+                        to_stop: 3,
+                        seconds: 60
+                    }
+                )),
+                "the legal platform 2 -> 3 transfer must win: {:?}",
+                j.legs
+            );
             assert!(!j.legs.iter().any(|leg| matches!(
-                leg, Leg::Transfer { from_stop: 1, to_stop: 3, .. }
+                leg,
+                Leg::Transfer {
+                    from_stop: 1,
+                    to_stop: 3,
+                    ..
+                }
             )));
         }
     }
@@ -1738,16 +2308,28 @@ mod transfer_round_regressions {
         let anchor = base + 8 * 3600;
         let mut q = request();
         q.departure_unix_seconds = anchor;
-        q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
-        let (journeys, stats) = route_profile_incremental(
-            &tt, &q, &[anchor], false, Duration::from_secs(5)
-        ).unwrap();
-        assert!(!journeys.is_empty(),
-            "a slower physical walk with a shorter GTFS change must survive: {stats:?}");
+        q.egress = vec![WalkingEndpoint {
+            stop: LocationIdx(4),
+            seconds: 0,
+        }];
+        let (journeys, stats) =
+            route_profile_incremental(&tt, &q, &[anchor], false, Duration::from_secs(5)).unwrap();
+        assert!(
+            !journeys.is_empty(),
+            "a slower physical walk with a shorter GTFS change must survive: {stats:?}"
+        );
         assert!(journeys.iter().any(|j| {
-            j.boardings == 2 && j.legs.iter().any(|leg| matches!(
-                leg, Leg::Transfer { from_stop: 2, to_stop: 3, seconds: 60 }
-            ))
+            j.boardings == 2
+                && j.legs.iter().any(|leg| {
+                    matches!(
+                        leg,
+                        Leg::Transfer {
+                            from_stop: 2,
+                            to_stop: 3,
+                            seconds: 60
+                        }
+                    )
+                })
         }));
     }
 
@@ -1756,33 +2338,44 @@ mod transfer_round_regressions {
         let mut tt = two_leg_timetable(false);
         // Two independent services with the exact same 0 -> 1 schedule.
         // Neither should overwrite the other's immutable destination path.
-        tt.route_stops[2] =
-            PackedStop::new(LocationIdx(0), true, true, true, true).unwrap();
-        tt.route_stops[3] =
-            PackedStop::new(LocationIdx(1), true, true, true, true).unwrap();
+        tt.route_stops[2] = PackedStop::new(LocationIdx(0), true, true, true, true).unwrap();
+        tt.route_stops[3] = PackedStop::new(LocationIdx(1), true, true, true, true).unwrap();
         tt.location_routes_offsets = vec![0, 2, 4, 4];
         tt.location_routes = vec![RouteIdx(0), RouteIdx(1), RouteIdx(0), RouteIdx(1)];
         tt.timing_profile_events[3] = Delta::from_seconds(10 * 60).unwrap();
-        tt.transport_first_dep_offset[1] =
-            Delta::from_seconds(8 * 3600).unwrap();
+        tt.transport_first_dep_offset[1] = Delta::from_seconds(8 * 3600).unwrap();
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let mut q = request();
-        q.egress = vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }];
+        q.egress = vec![WalkingEndpoint {
+            stop: LocationIdx(1),
+            seconds: 0,
+        }];
         q.max_boardings = 1;
         let (journeys, stats) = route_profile_incremental(
-            &view, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
-        ).unwrap();
-        let mut routes: Vec<u32> = journeys.iter().flat_map(|j|
-            j.legs.iter().filter_map(|leg| match leg {
-                Leg::Ride { route, .. } => Some(*route),
-                _ => None,
+            &view,
+            &q,
+            &[q.departure_unix_seconds],
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        let mut routes: Vec<u32> = journeys
+            .iter()
+            .flat_map(|j| {
+                j.legs.iter().filter_map(|leg| match leg {
+                    Leg::Ride { route, .. } => Some(*route),
+                    _ => None,
+                })
             })
-        ).collect();
+            .collect();
         routes.sort_unstable();
         routes.dedup();
-        assert_eq!(routes, vec![0, 1],
-            "equal-time route alternatives were lost: {journeys:?}; {stats:?}");
+        assert_eq!(
+            routes,
+            vec![0, 1],
+            "equal-time route alternatives were lost: {journeys:?}; {stats:?}"
+        );
     }
 
     #[test]
@@ -1797,26 +2390,35 @@ mod transfer_round_regressions {
             let mut query = q.clone();
             query.departure_unix_seconds = instant;
             let (profile, stats) = route_profile_incremental(
-                &tt, &query, &[instant], arrive_by, Duration::from_secs(5)
-            ).unwrap();
+                &tt,
+                &query,
+                &[instant],
+                arrive_by,
+                Duration::from_secs(5),
+            )
+            .unwrap();
             let point = if arrive_by {
-                crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(
-                    &tt, &query
-                ).unwrap().0
+                crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(&tt, &query)
+                    .unwrap()
+                    .0
             } else {
-                crate::routing_common::raptor_query::route_with_stats(
-                    &tt, &query
-                ).unwrap().0
+                crate::routing_common::raptor_query::route_with_stats(&tt, &query)
+                    .unwrap()
+                    .0
             };
-            let transit = |j: &Vec<Journey>| j.iter()
-                .filter(|x| x.boardings == 2)
-                .map(|x| (x.departure_unix_seconds, x.arrival_unix_seconds))
-                .collect::<Vec<_>>();
+            let transit = |j: &Vec<Journey>| {
+                j.iter()
+                    .filter(|x| x.boardings == 2)
+                    .map(|x| (x.departure_unix_seconds, x.arrival_unix_seconds))
+                    .collect::<Vec<_>>()
+            };
             let expected = transit(&point);
             assert!(!expected.is_empty(), "point RAPTOR fixture is invalid");
             let actual = transit(&profile);
-            assert!(expected.iter().all(|x| actual.contains(x)),
-                "compact profile missed point solver journey: reverse={arrive_by} expected={expected:?} actual={actual:?} stats={stats:?}");
+            assert!(
+                expected.iter().all(|x| actual.contains(x)),
+                "compact profile missed point solver journey: reverse={arrive_by} expected={expected:?} actual={actual:?} stats={stats:?}"
+            );
         }
     }
 
@@ -1826,8 +2428,13 @@ mod transfer_round_regressions {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = request();
         let (journeys, stats) = route_profile_incremental(
-            &tt, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
-        ).unwrap();
+            &tt,
+            &q,
+            &[q.departure_unix_seconds],
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert!(!journeys.is_empty(), "two-ride forward missing: {stats:?}");
         assert!(journeys.iter().any(|j| j.boardings == 2
             && j.departure_unix_seconds == q.departure_unix_seconds
@@ -1841,8 +2448,13 @@ mod transfer_round_regressions {
         let mut q = request();
         q.departure_unix_seconds += 30 * 60;
         let (journeys, stats) = route_profile_incremental(
-            &tt, &q, &[q.departure_unix_seconds], true, Duration::from_secs(5)
-        ).unwrap();
+            &tt,
+            &q,
+            &[q.departure_unix_seconds],
+            true,
+            Duration::from_secs(5),
+        )
+        .unwrap();
         assert!(!journeys.is_empty(), "two-ride reverse missing: {stats:?}");
         assert!(journeys.iter().any(|j| j.boardings == 2
             && j.departure_unix_seconds == q.departure_unix_seconds - 30 * 60
@@ -1855,19 +2467,33 @@ mod transfer_round_regressions {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = request();
         let (forward, _) = route_profile_incremental(
-            &tt, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
-        ).unwrap();
-        assert!(forward.is_empty(), "blocked change produced a route: {forward:?}");
+            &tt,
+            &q,
+            &[q.departure_unix_seconds],
+            false,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            forward.is_empty(),
+            "blocked change produced a route: {forward:?}"
+        );
         let mut reverse_q = q;
         reverse_q.departure_unix_seconds += 30 * 60;
         let (backward, _) = route_profile_incremental(
-            &tt, &reverse_q, &[reverse_q.departure_unix_seconds], true,
-            Duration::from_secs(5)
-        ).unwrap();
-        assert!(backward.is_empty(), "reverse blocked change produced route: {backward:?}");
+            &tt,
+            &reverse_q,
+            &[reverse_q.departure_unix_seconds],
+            true,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(
+            backward.is_empty(),
+            "reverse blocked change produced route: {backward:?}"
+        );
     }
 }
-
 
 #[cfg(test)]
 mod immutable_path_tests {
@@ -1879,25 +2505,80 @@ mod immutable_path_tests {
         let mut rounds = vec![Round::new(3), Round::new(3)];
         let mut links = Vec::new();
         let mut stats = RaptorStats::default();
-        rounds[0].put(Stage::Ready, 0, 0, Parent::Root { seconds: 0 },
-            1, false, &mut links, &mut stats);
+        rounds[0].put(
+            Stage::Ready,
+            0,
+            0,
+            Parent::Root { seconds: 0 },
+            1,
+            false,
+            &mut links,
+            &mut stats,
+        );
         let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
-        rounds[1].put_linked(Stage::Ride, 1, 60, Parent::Ride {
-            from: 0, to: 1, route: 11, transport: 0, day: 0,
-            board_pos: 0, alight_pos: 1, departure: 10, arrival: 60,
-        }, Some(root), 1, false, &mut links, &mut stats);
+        rounds[1].put_linked(
+            Stage::Ride,
+            1,
+            60,
+            Parent::Ride {
+                from: 0,
+                to: 1,
+                route: 11,
+                transport: 0,
+                day: 0,
+                board_pos: 0,
+                alight_pos: 1,
+                departure: 10,
+                arrival: 60,
+            },
+            Some(root),
+            1,
+            false,
+            &mut links,
+            &mut stats,
+        );
         let first_ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
-        rounds[1].put_linked(Stage::Walk, 2, 70,
-            Parent::Walk { from: 1, to: 2, seconds: 10 },
-            Some(first_ride), 1, false, &mut links, &mut stats);
-        rounds[1].put_linked(Stage::Ride, 1, 50, Parent::Ride {
-            from: 0, to: 1, route: 22, transport: 1, day: 0,
-            board_pos: 0, alight_pos: 1, departure: 10, arrival: 50,
-        }, Some(root), 1, false, &mut links, &mut stats);
+        rounds[1].put_linked(
+            Stage::Walk,
+            2,
+            70,
+            Parent::Walk {
+                from: 1,
+                to: 2,
+                seconds: 10,
+            },
+            Some(first_ride),
+            1,
+            false,
+            &mut links,
+            &mut stats,
+        );
+        rounds[1].put_linked(
+            Stage::Ride,
+            1,
+            50,
+            Parent::Ride {
+                from: 0,
+                to: 1,
+                route: 22,
+                transport: 1,
+                day: 0,
+                board_pos: 0,
+                alight_pos: 1,
+                departure: 10,
+                arrival: 50,
+            },
+            Some(root),
+            1,
+            false,
+            &mut links,
+            &mut stats,
+        );
         let old_walk = reconstruct(&rounds, &links, 1, false, 1, 2, Stage::Walk, 0)
             .expect("earlier walk must retain the route 11 parent");
         assert!(old_walk.legs.iter().any(|leg| matches!(
-            leg, crate::routing_common::raptor_query::Leg::Ride { route: 11, .. }
+            leg,
+            crate::routing_common::raptor_query::Leg::Ride { route: 11, .. }
         )));
     }
 }

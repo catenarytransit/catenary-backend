@@ -1109,9 +1109,13 @@ pub fn build(
     ensure!((1..=512).contains(&day_count), "invalid timetable horizon");
     for source in sources {
         ensure!(
-            !catenary::routing_common::feed_policy::excluded_routing_source(&source.chateau, &source.onestop_feed_id),
+            !catenary::routing_common::feed_policy::excluded_routing_source(
+                &source.chateau,
+                &source.onestop_feed_id
+            ),
             "Gentian refuses excluded routing source {}/{}",
-            source.chateau, source.onestop_feed_id
+            source.chateau,
+            source.onestop_feed_id
         );
     }
     let mut tt = TimetableOwned::empty(first_utc_day, day_count);

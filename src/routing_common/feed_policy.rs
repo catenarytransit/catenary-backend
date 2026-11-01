@@ -45,7 +45,9 @@ mod tests {
     #[test]
     fn validates_serialized_source_records() {
         let mut allowed = TimetableOwned::empty(20_000, 1);
-        allowed.add_source("other", "other-feed", "attempt").unwrap();
+        allowed
+            .add_source("other", "other-feed", "attempt")
+            .unwrap();
         let encoded = allowed.encode().unwrap();
         let timetable = ZeroCopyTimetable::new(&encoded).unwrap();
         validate_routing_sources(&timetable).unwrap();

@@ -405,9 +405,7 @@ fn timetable_start_events(
                             }
                         }
                         for transport_idx in lo..range.to {
-                            if (stats.stop_events_scanned & 255) == 0
-                                && Instant::now() >= stop_at
-                            {
+                            if (stats.stop_events_scanned & 255) == 0 && Instant::now() >= stop_at {
                                 stats.profile_budget_exhausted = true;
                                 break;
                             }
@@ -490,8 +488,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     // Reserve a fixed fraction of the full request wall budget before even
     // enumerating initial timetable events. Otherwise a dense route column
     // can starve both the profile scan and its point-RAPTOR fallback.
-    let fallback_reserve =
-        Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
+    let fallback_reserve = Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
     let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
 
     // Nigiri expands the interval only when the current search needs more
@@ -516,8 +513,13 @@ pub(crate) fn route_profile_with_stats_precomputed(
     };
     let mut interval = estimator.initial(initial);
     let mut events = timetable_start_events(
-        tt, request, interval.from, interval.to, arrive_by,
-        &mut stats, profile_deadline,
+        tt,
+        request,
+        interval.from,
+        interval.to,
+        arrive_by,
+        &mut stats,
+        profile_deadline,
     );
     let mut examined = 0usize;
     let mut batches = 0usize;
@@ -537,7 +539,13 @@ pub(crate) fn route_profile_with_stats_precomputed(
     // the 20% fallback reserve remains available even on a dense timetable.
     let compact_budget = profile_deadline.saturating_duration_since(Instant::now());
     let mut state = ProfileSearchState::new_with_topology(
-        tt, &q, first, last, arrive_by, compact_budget, topology
+        tt,
+        &q,
+        first,
+        last,
+        arrive_by,
+        compact_budget,
+        topology,
     )?;
     let mut transit = Vec::new();
     loop {
@@ -604,8 +612,13 @@ pub(crate) fn route_profile_with_stats_precomputed(
             (interval.to, next.to)
         };
         let new_events = timetable_start_events(
-            tt, request, new_from, new_to, arrive_by,
-            &mut stats, profile_deadline,
+            tt,
+            request,
+            new_from,
+            new_to,
+            arrive_by,
+            &mut stats,
+            profile_deadline,
         );
         for event in new_events {
             if events.last().copied() != Some(event) {
@@ -635,8 +648,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
         // bypasses the competitiveness check already used by the profile.
         fallback.max_duration_seconds = q.max_duration_seconds;
         if let Some(direct) = request.direct_walk_seconds {
-            fallback.max_duration_seconds =
-                fallback.max_duration_seconds.min(direct.max(1));
+            fallback.max_duration_seconds = fallback.max_duration_seconds.min(direct.max(1));
         }
         // Nigiri's on-trip fallback searches from the requested reference
         // instant. The first enumerated start event may be hours later or
@@ -670,11 +682,12 @@ pub(crate) fn route_profile_with_stats_precomputed(
     // take at least as long as the fastest direct journey. Applying the
     // condition here also covers independently recovered point-RAPTOR paths.
     if let Some(direct) = request.direct_walk_seconds {
-        transit.retain(|j|
-            j.boardings == 0 ||
-            j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds)
-                < i64::from(direct)
-        );
+        transit.retain(|j| {
+            j.boardings == 0
+                || j.arrival_unix_seconds
+                    .saturating_sub(j.departure_unix_seconds)
+                    < i64::from(direct)
+        });
     }
     stats.profile_duration_filtered = (total_before_filter - transit.len()) as u64;
 
@@ -777,17 +790,24 @@ mod tests {
         let mut request = request();
         request.direct_walk_seconds = Some(90);
         let (journeys, _) = route_profile_with_stats(
-            &tt, &request,
+            &tt,
+            &request,
             ProfileOptions {
                 max_journey_duration_seconds: 36 * 3_600,
                 ..ProfileOptions::default()
-            }, false,
-        ).unwrap();
-        assert!(journeys.iter().any(|j| matches!(
-            j.legs.as_slice(), [Leg::DirectWalk { seconds: 90 }]
-        )));
-        assert!(journeys.iter().all(|j| j.boardings == 0),
-            "eight-hour train cannot compete with a 90-second direct journey");
+            },
+            false,
+        )
+        .unwrap();
+        assert!(
+            journeys
+                .iter()
+                .any(|j| matches!(j.legs.as_slice(), [Leg::DirectWalk { seconds: 90 }]))
+        );
+        assert!(
+            journeys.iter().all(|j| j.boardings == 0),
+            "eight-hour train cannot compete with a 90-second direct journey"
+        );
     }
 
     #[test]
@@ -797,10 +817,13 @@ mod tests {
         let mut stats = RaptorStats::default();
         let request = request();
         let events = timetable_start_events(
-            &tt, &request,
+            &tt,
+            &request,
             request.departure_unix_seconds,
             request.departure_unix_seconds + 86_400,
-            false, &mut stats, Instant::now(),
+            false,
+            &mut stats,
+            Instant::now(),
         );
         assert!(stats.profile_budget_exhausted);
         assert!(events.is_empty());
@@ -833,16 +856,22 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = request();
         let (journeys, stats) = route_profile_with_stats(
-            &tt, &q,
+            &tt,
+            &q,
             ProfileOptions {
                 search_window_seconds: 15 * 60,
                 max_search_window_seconds: 48 * 3_600,
                 max_journey_duration_seconds: 36 * 3_600,
                 min_itineraries: 1,
                 ..ProfileOptions::default()
-            }, false,
-        ).unwrap();
-        assert!(!journeys.is_empty(), "sparse first service was lost: {stats:?}");
+            },
+            false,
+        )
+        .unwrap();
+        assert!(
+            !journeys.is_empty(),
+            "sparse first service was lost: {stats:?}"
+        );
         assert!(stats.profile_interval_extensions > 0);
         // The train two days after the requested time is outside the
         // successfully completed search interval. Nigiri does not enumerate
