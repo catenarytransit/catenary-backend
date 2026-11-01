@@ -370,6 +370,10 @@ pub(crate) struct ProfileSearchState {
     // Entries are usable only while anchors are processed monotonically.
     profile_ride: Vec<Vec<i64>>,
     profile_ready: Vec<Vec<i64>>,
+    // GTFS restricted stop-pair transfers make provenance significant.
+    // Suppressing an event-local route solely from a previous anchor's time
+    // is unsafe at those stops unless the prior path is also carried.
+    transfer_sensitive: Vec<bool>,
     last_anchor: Option<i64>,
     // Best fully validated destination arrival/departure for <= k boardings.
     // This is Nigiri's time_at_dest_ analogue.
@@ -419,12 +423,18 @@ impl ProfileSearchState {
         let bounds = lower_bounds(tt, q, reverse, topology, deadline);
         stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
         let invalid = if reverse { NEG_INF } else { INF };
+        let mut transfer_sensitive = vec![false; n];
+        for rule in tt.station_transfer_rules() {
+            transfer_sensitive[rule.from.idx()] = true;
+            transfer_sensitive[rule.to.idx()] = true;
+        }
         Ok(Self {
             rounds: (0..=q.max_boardings).map(|_| Round::new(n)).collect(),
             parents: Vec::new(),
             bounds,
             profile_ride: vec![vec![invalid; n]; q.max_boardings + 1],
             profile_ready: vec![vec![invalid; n]; q.max_boardings + 1],
+            transfer_sensitive,
             last_anchor: None,
             time_at_dest: vec![invalid; q.max_boardings + 1],
             stamps: vec![0; tt.route_transport_ranges().len()],
@@ -506,8 +516,9 @@ impl ProfileSearchState {
             if (lower..=upper).contains(&t)
                 && can_reach(&self.bounds, ep.stop.idx(), t, anchor,
                     q.max_duration_seconds, reverse, self.time_at_dest[0])
-                && !dominated_by_profile(
-                    &self.profile_ready, 0, ep.stop.idx(), t, reverse)
+                && (self.transfer_sensitive[ep.stop.idx()]
+                    || !dominated_by_profile(
+                        &self.profile_ready, 0, ep.stop.idx(), t, reverse))
                 && self.rounds[0].put_linked(
                     Stage::Ready, ep.stop.idx(), t,
                     Parent::Root { seconds: ep.seconds }, None,
@@ -663,8 +674,9 @@ impl ProfileSearchState {
                                             }
                                         }
                                     }
-                                    if !dominated_by_profile(
-                                        &self.profile_ride, k, loc, event, reverse)
+                                    if (self.transfer_sensitive[loc] ||
+                                        !dominated_by_profile(
+                                            &self.profile_ride, k, loc, event, reverse))
                                         && !dominated_by_lower_round(
                                             before, Stage::Ride, loc, event, generation, reverse)
                                         && current.put_linked(
@@ -769,8 +781,9 @@ impl ProfileSearchState {
                     if (lower..=upper).contains(&ready)
                         && can_reach(&self.bounds, from, ready, anchor,
                             q.max_duration_seconds, reverse, self.time_at_dest[k])
-                        && !dominated_by_profile(
-                            &self.profile_ready, k, from, ready, reverse)
+                        && (self.transfer_sensitive[from] ||
+                            !dominated_by_profile(
+                                &self.profile_ready, k, from, ready, reverse))
                         && !dominated_by_lower_round(
                             before, Stage::Ready, from, ready, generation, reverse)
                         && current.put_linked(
@@ -820,8 +833,9 @@ impl ProfileSearchState {
                     if (lower..=upper).contains(&ready)
                         && can_reach(&self.bounds, to, ready, anchor,
                             q.max_duration_seconds, reverse, self.time_at_dest[k])
-                        && !dominated_by_profile(
-                            &self.profile_ready, k, to, ready, reverse)
+                        && (self.transfer_sensitive[to] ||
+                            !dominated_by_profile(
+                                &self.profile_ready, k, to, ready, reverse))
                         && !dominated_by_lower_round(
                             before, Stage::Ready, to, ready, generation, reverse)
                         && current.put_linked(
