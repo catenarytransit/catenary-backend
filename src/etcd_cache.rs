@@ -88,7 +88,7 @@ impl<T: DeserializeOwned + Send + Sync + 'static + Clone> EtcdCache<T> {
                             let mut decoded = Vec::with_capacity(res.kvs().len());
                             let mut decode_ok = true;
                             for kv in res.kvs() {
-                                if let Some(key_str) = kv.key_str().ok() {
+                                if let Ok(key_str) = kv.key_str() {
                                     if let Some(id) = key_str.strip_prefix(prefix_str.as_str()) {
                                         match crate::bincode_deserialize::<T>(kv.value()) {
                                             Ok(value) => {
@@ -144,7 +144,7 @@ impl<T: DeserializeOwned + Send + Sync + 'static + Clone> EtcdCache<T> {
                             Ok(Some(resp)) => {
                                 for event in resp.events() {
                                     if let Some(kv) = event.kv() {
-                                        if let Some(key_str) = kv.key_str().ok() {
+                                        if let Ok(key_str) = kv.key_str() {
                                             if let Some(id) =
                                                 key_str.strip_prefix(prefix_str.as_str())
                                             {
