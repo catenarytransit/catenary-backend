@@ -8,6 +8,7 @@
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::raptor_query::{
     Journey, Query, RaptorStats, for_each_route_service_day, transport_event_second,
+    get_earliest_transport, get_latest_transport,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
@@ -134,35 +135,7 @@ struct Onboard {
 }
 struct ActiveDay {
     day: usize,
-    transports: Vec<TransportIdx>,
     onboard: Option<Onboard>,
-}
-
-fn latest_or_earliest(
-    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop_pos: usize,
-    day: usize, ready: i64, reverse: bool,
-    active: &[TransportIdx], stats: &mut RaptorStats,
-) -> Option<(TransportIdx, i64)> {
-    let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
-    let (mut lo, mut hi) = (0, active.len());
-    while lo < hi {
-        let mid = lo + (hi - lo) / 2;
-        stats.transport_lookup_probes += 1;
-        let event = transport_event_second(
-            tt, route, active[mid], stop_pos, reverse, midnight,
-        )?;
-        if if reverse { event <= ready } else { event < ready } {
-            lo = mid + 1;
-        } else {
-            hi = mid;
-        }
-    }
-    let idx = if reverse { lo.checked_sub(1)? } else { lo };
-    let transport = *active.get(idx)?;
-    let event = transport_event_second(
-        tt, route, transport, stop_pos, reverse, midnight,
-    )?;
-    Some((transport, event))
 }
 
 /// Optimistic section durations are the minimum over all compressed timing
@@ -458,21 +431,12 @@ impl ProfileSearchState {
                 self.stats.routes_scanned += 1;
                 let stops = tt.stops_on(route);
                 if stops.len() < 2 { continue; }
-                let range = tt.route_transport_ranges()[route.idx()];
                 let mut active_days = Vec::<ActiveDay>::new();
+                // Gentian's route traffic-day bitmap is the union of the
+                // transports' calendars. Do not materialize a filtered
+                // transport vector for every route, service day and anchor.
                 for_each_route_service_day(tt, route, lower, upper, &mut self.stats,
-                    |day, _| {
-                        let transports = (range.from..range.to)
-                            .map(TransportIdx)
-                            .filter(|t| tt.bitfields()[
-                                tt.transport_traffic_days()[t.idx()].idx()
-                            ].test(day)).collect::<Vec<_>>();
-                        if !transports.is_empty() {
-                            active_days.push(ActiveDay {
-                                day, transports, onboard: None,
-                            });
-                        }
-                    });
+                    |day, _| active_days.push(ActiveDay { day, onboard: None }));
                 if active_days.is_empty() { continue; }
                 for step in 0..stops.len() {
                     self.stats.stop_events_scanned += 1;
@@ -543,10 +507,14 @@ impl ProfileSearchState {
                             continue;
                         };
                         if !(lower..=upper).contains(&ready.time) { continue; }
-                        let Some((transport, event)) = latest_or_earliest(
-                            tt, route, pos, day.day, ready.time, reverse,
-                            &day.transports, &mut self.stats
-                        ) else { continue };
+                        let next_transport = if reverse {
+                            get_latest_transport(
+                                tt, route, pos, day.day, ready.time, &mut self.stats)
+                        } else {
+                            get_earliest_transport(
+                                tt, route, pos, day.day, ready.time, &mut self.stats)
+                        };
+                        let Some((transport, event)) = next_transport else { continue };
                         if !(lower..=upper).contains(&event) { continue; }
                         let better = day.onboard.is_none_or(|old| {
                             if reverse { transport.0 > old.transport.0 }
