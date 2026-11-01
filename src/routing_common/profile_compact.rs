@@ -1176,6 +1176,114 @@ mod transfer_round_regressions {
         }
     }
 
+    /// Competing incoming services reach different platforms. The earlier
+    /// physical footpath is prohibited as a GTFS connection; the later one
+    /// must remain eligible for the onward train in both search directions.
+    fn competing_transfer_timetable() -> TimetableOwned {
+        use crate::routing_common::timetable::PackedFootpath;
+        let mut tt = TimetableOwned::empty(20_000, 2);
+        tt.add_source("test", "competing-transfers", "attempt").unwrap();
+        for _ in 0..5 {
+            tt.coordinates.push(Default::default());
+            tt.location_id.push(Default::default());
+            tt.location_name.push(Default::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(1);
+            tt.location_transfer_seconds.push(0);
+        }
+        // 0 -> 1, 0 -> 2, 3 -> 4. Both 1 and 2 can walk to 3.
+        tt.location_routes_offsets = vec![0, 2, 3, 4, 5, 6];
+        tt.location_routes = vec![
+            RouteIdx(0), RouteIdx(1), RouteIdx(0), RouteIdx(1),
+            RouteIdx(2), RouteIdx(2),
+        ];
+        tt.footpaths_out_offsets = vec![0, 0, 1, 2, 2, 2];
+        tt.footpaths_out.extend([
+            PackedFootpath::new(LocationIdx(3), 60).unwrap(),
+            PackedFootpath::new(LocationIdx(3), 60).unwrap(),
+        ]);
+        tt.footpaths_in_offsets = vec![0, 0, 0, 0, 2, 2];
+        tt.footpaths_in.extend([
+            PackedFootpath::new(LocationIdx(1), 60).unwrap(),
+            PackedFootpath::new(LocationIdx(2), 60).unwrap(),
+        ]);
+        for (from, to) in [(0, 1), (0, 2), (3, 4)] {
+            tt.route_stops.extend([
+                PackedStop::new(LocationIdx(from), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(to), true, true, true, true).unwrap(),
+            ]);
+        }
+        tt.route_stop_offsets.extend([2, 4, 6]);
+        tt.route_transport_ranges.extend([
+            Range { from: 0, to: 1 },
+            Range { from: 1, to: 2 },
+            Range { from: 2, to: 3 },
+        ]);
+        tt.timing_profile_offsets.extend([2, 4, 6]);
+        tt.timing_profile_events.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(10 * 60).unwrap(),
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(12 * 60).unwrap(),
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(15 * 60).unwrap(),
+        ]);
+        tt.route_clasz.extend([2, 2, 2]);
+        tt.transport_route.extend([RouteIdx(0), RouteIdx(1), RouteIdx(2)]);
+        tt.transport_timing_profile.extend([
+            TimingProfileIdx(0), TimingProfileIdx(1), TimingProfileIdx(2),
+        ]);
+        tt.transport_first_dep_offset.extend([
+            Delta::from_seconds(8 * 3600).unwrap(),
+            Delta::from_seconds(8 * 3600).unwrap(),
+            Delta::from_seconds(8 * 3600 + 20 * 60).unwrap(),
+        ]);
+        tt.transport_initial_day_offset.extend([0, 0, 0]);
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        days.set(1, true).unwrap();
+        tt.bitfields.push(days);
+        tt.transport_traffic_days.extend([BitfieldIdx(1); 3]);
+        tt.route_traffic_days.extend([BitfieldIdx(1); 3]);
+        tt.route_section_clasz_offsets.extend([0; 3]);
+        tt.section_flag_offsets.extend([0; 3]);
+        tt.transport_to_trip_section_offsets.extend([0; 3]);
+        tt.station_transfer_rules.push(StationTransferRule {
+            from: LocationIdx(1), to: LocationIdx(3),
+            min_seconds: 0, flags: 1,
+        });
+        tt
+    }
+
+    #[test]
+    fn prohibited_early_walk_keeps_valid_later_transfer_forward_and_reverse() {
+        let bytes = competing_transfer_timetable().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        for (reverse, event) in [
+            (false, base + 8 * 3_600),
+            (true, base + 8 * 3_600 + 35 * 60)
+        ] {
+            let mut q = request();
+            q.departure_unix_seconds = event;
+            q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
+            let (journeys, stats) = route_profile_incremental(
+                &tt, &q, &[event], reverse, Duration::from_secs(5)
+            ).unwrap();
+            assert!(!journeys.is_empty(),
+                "lost legal later-platform connection in reverse={reverse}: {stats:?}");
+            let j = journeys.iter().find(|j| j.boardings == 2)
+                .expect("two-boardings path must be preserved");
+            assert!(j.legs.iter().any(|leg| matches!(
+                leg, Leg::Transfer { from_stop: 2, to_stop: 3, seconds: 60 }
+            )), "the legal platform 2 -> 3 transfer must win: {:?}", j.legs);
+            assert!(!j.legs.iter().any(|leg| matches!(
+                leg, Leg::Transfer { from_stop: 1, to_stop: 3, .. }
+            )));
+        }
+    }
+
     #[test]
     fn two_ride_forward_reconstructs_after_compact_scan() {
         let bytes = two_leg_timetable(false).encode().unwrap();
