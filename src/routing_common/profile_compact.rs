@@ -698,45 +698,68 @@ impl ProfileSearchState {
                 }
             }
             self.stats.walking_ms += walking_started.elapsed().as_secs_f64() * 1_000.0;
-            // Gather terminal candidates while the current round is mutable.
-            // Reconstruction reads immutable snapshots of *all* rounds, and
-            // must happen after this scan's mutable borrow has ended.
+            // Nigiri collects destination times before reconstructing
+            // Pareto-competitive candidates. Sort the scalar destination
+            // states by actual endpoint time so the first valid journey
+            // tightens time_at_dest for all following candidates.
+            //
+            // Invalid predecessors NEVER tighten the bound: this is crucial
+            // when several transfer-ready states share an arrival timestamp.
             let terminals = if reverse { &q.access } else { &q.egress };
             let mut terminal_candidates = Vec::new();
             for ep in terminals {
                 for stage in [Stage::Ride, Stage::Walk] {
-                    if current.get(stage, ep.stop.idx(), generation).is_some() {
-                        terminal_candidates.push((ep.stop.idx(), stage, ep.seconds));
+                    if let Some(cell) = current.get(stage, ep.stop.idx(), generation) {
+                        let at_dest = if reverse {
+                            cell.time.saturating_sub(i64::from(ep.seconds))
+                        } else {
+                            cell.time.saturating_add(i64::from(ep.seconds))
+                        };
+                        terminal_candidates.push(
+                            (at_dest, ep.stop.idx(), stage, ep.seconds));
                     }
                 }
             }
-            for (terminal_stop, stage, terminal_seconds) in terminal_candidates {
-                    let Some(mut journey) = reconstruct(
-                        &self.rounds, &self.parents, generation, reverse,
-                        k, terminal_stop, stage, terminal_seconds,
-                    ) else { continue };
-                    self.stats.profile_journeys_reconstructed += 1;
-                    // Nigiri performs endpoint and transfer optimization
-                    // during reconstruction. Preserve Catenary's established
-                    // same-vehicle access/egress and transfer optimizer before
-                    // validating the final sequence.
-                    optimize_same_trip_endpoint_walks(tt, q, &mut journey);
-                    if valid_journey(tt, q, &journey) {
-                        // Persistent destination-time bounds are indexed by
-                        // a maximum boarding count. A result with k rides
-                        // also bounds searches permitting more boardings.
-                        let metric = if reverse {
-                            journey.departure_unix_seconds
-                        } else {
-                            journey.arrival_unix_seconds
-                        };
-                        for bound in self.time_at_dest.iter_mut().skip(k) {
-                            if better(metric, *bound, reverse) { *bound = metric; }
-                        }
-                        self.journeys.push(journey);
+            // Ordering is deterministic, regardless of OSR's endpoint order.
+            terminal_candidates.sort_unstable_by_key(|(time, stop, stage, offset)| (
+                if reverse { Reverse(*time) } else { Reverse(time.saturating_neg()) },
+                *stop,
+                match stage { Stage::Ride => 0u8, Stage::Walk => 1, Stage::Ready => 2 },
+                *offset,
+            ));
+            for (at_dest, terminal_stop, stage, terminal_seconds) in terminal_candidates {
+                let current_best = self.time_at_dest[k];
+                let too_slow = if reverse {
+                    current_best != NEG_INF &&
+                        at_dest < current_best.saturating_sub(DESTINATION_SLACK_SECONDS)
+                } else {
+                    current_best != INF &&
+                        at_dest > current_best.saturating_add(DESTINATION_SLACK_SECONDS)
+                };
+                if too_slow { continue; }
+                let Some(mut journey) = reconstruct(
+                    &self.rounds, &self.parents, generation, reverse,
+                    k, terminal_stop, stage, terminal_seconds,
+                ) else { continue };
+                self.stats.profile_journeys_reconstructed += 1;
+                // Optimize the same timetable vehicles first, as Nigiri's
+                // separate reconstruction phase does. Validate optimized
+                // service days and GTFS transfer constraints before recording
+                // a destination bound or returning the journey.
+                optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+                if valid_journey(tt, q, &journey) {
+                    let metric = if reverse {
+                        journey.departure_unix_seconds
                     } else {
-                        self.stats.profile_journeys_rejected += 1;
+                        journey.arrival_unix_seconds
+                    };
+                    for bound in self.time_at_dest.iter_mut().skip(k) {
+                        if better(metric, *bound, reverse) { *bound = metric; }
                     }
+                    self.journeys.push(journey);
+                } else {
+                    self.stats.profile_journeys_rejected += 1;
+                }
             }
             changed_ready.sort_unstable();
             changed_ready.dedup();
