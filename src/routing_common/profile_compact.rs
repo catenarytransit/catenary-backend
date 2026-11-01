@@ -970,6 +970,23 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
+    fn optimistic_distance_greater_than_journey_horizon_is_unreachable() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let graph = LowerBoundTopology::build(&tt);
+        let mut q = query();
+        q.max_duration_seconds = 5 * 60;
+        let bounds = lower_bounds(
+            &tt, &q, false, &graph,
+            Instant::now() + Duration::from_secs(5),
+        );
+        // The first stop is eight hours from the destination by rail,
+        // and a five-minute query cannot possibly use that connection.
+        assert_eq!(bounds[0], u32::MAX);
+        assert_eq!(bounds[1], 0);
+    }
+
+    #[test]
     fn cached_lower_bound_topology_matches_uncached_in_both_directions() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
