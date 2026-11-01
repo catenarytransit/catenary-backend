@@ -581,8 +581,25 @@ pub(crate) fn route_profile_with_stats_precomputed(
                     } else {
                         j.departure_unix_seconds
                     };
-                    t >= interval.from
-                        && t <= interval.to
+                    // Nigiri's on-trip label is anchored at the requested
+                    // time, even when the first actual vehicle boards much
+                    // later. Our reconstruction optimizes the origin departure
+                    // forward to that boarding time, so testing only the
+                    // reconstructed departure against the search interval
+                    // would throw away long-distance on-trip solutions.
+                    let inside_interval = t >= interval.from && t <= interval.to;
+                    let from_ontrip_window = ontrip_synthetic && {
+                        if arrive_by {
+                            j.arrival_unix_seconds <= reference
+                                && reference.saturating_sub(j.departure_unix_seconds)
+                                    <= i64::from(options.max_journey_duration_seconds)
+                        } else {
+                            j.departure_unix_seconds >= reference
+                                && j.arrival_unix_seconds.saturating_sub(reference)
+                                    <= i64::from(options.max_journey_duration_seconds)
+                        }
+                    };
+                    (inside_interval || from_ontrip_window)
                         && j.arrival_unix_seconds
                             .saturating_sub(j.departure_unix_seconds)
                             <= i64::from(options.max_journey_duration_seconds)
@@ -838,6 +855,32 @@ mod tests {
         assert!(!events.contains(&reference));
         assert!(!events.is_empty());
         assert!(events[0] > reference + 15 * 60);
+    }
+
+    #[test]
+    fn ontrip_search_preserves_distant_boardings_outside_short_start_window() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        // There is no first boarding in the following five minutes. The
+        // requested-time on-trip start must still find tomorrow's train,
+        // as Nigiri's add_ontrip start does, when max travel time allows it.
+        let (journeys, stats) = route_profile_with_stats(
+            &tt, &q,
+            ProfileOptions {
+                search_window_seconds: 5 * 60,
+                max_search_window_seconds: 5 * 60,
+                max_journey_duration_seconds: 36 * 3_600,
+                min_itineraries: 1,
+                ..ProfileOptions::default()
+            }, false,
+        ).unwrap();
+        assert!(journeys.iter().any(|j|
+            j.boardings == 1
+                && j.departure_unix_seconds > q.departure_unix_seconds + 12 * 3_600
+        ), "on-trip start lost the next-day train: {stats:?}");
+        assert_eq!(stats.profile_events_enumerated, 0,
+            "on-trip start must not be counted as a GTFS boarding event");
     }
 
     #[test]
