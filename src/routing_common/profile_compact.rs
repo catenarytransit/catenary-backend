@@ -9,6 +9,7 @@ use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_jour
 use crate::routing_common::raptor_query::{
     Journey, Query, RaptorStats, for_each_route_service_day, transport_event_second,
     get_earliest_transport, get_latest_transport,
+    optimize_same_trip_endpoint_walks,
 };
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
@@ -643,11 +644,16 @@ impl ProfileSearchState {
                 }
             }
             for (terminal_stop, stage, terminal_seconds) in terminal_candidates {
-                    let Some(journey) = reconstruct(
+                    let Some(mut journey) = reconstruct(
                         &self.rounds, &self.parents, generation, reverse,
                         k, terminal_stop, stage, terminal_seconds,
                     ) else { continue };
                     self.stats.profile_journeys_reconstructed += 1;
+                    // Nigiri performs endpoint and transfer optimization
+                    // during reconstruction. Preserve Catenary's established
+                    // same-vehicle access/egress and transfer optimizer before
+                    // validating the final sequence.
+                    optimize_same_trip_endpoint_walks(tt, q, &mut journey);
                     if valid_journey(tt, q, &journey) {
                         // Persistent destination-time bounds are indexed by
                         // a maximum boarding count. A result with k rides
