@@ -1,5 +1,6 @@
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
+use std::time::Instant;
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -23,6 +24,9 @@ pub struct RaptorStats {
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
+    /// Time spent constructing the destination-directed admissible lower
+    /// bounds from Gentian's compressed route timing profiles and footpaths.
+    pub profile_lower_bounds_ms: f64,
     /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
     /// Shared-state timetable events processed (not full point searches).
@@ -185,6 +189,7 @@ fn relax_walks_from(
     seeds: &[usize],
     max_time: i64,
     stats: &mut RaptorStats,
+    stop_at: Option<Instant>,
 ) {
     let started = std::time::Instant::now();
     let updates: Vec<_> = seeds
@@ -199,8 +204,18 @@ fn relax_walks_from(
         })
         .collect();
     for (from, t, last_alight) in updates {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
             stats.footpath_edges_examined += 1;
+            if (stats.footpath_edges_examined & 1023) == 0
+                && stop_at.is_some_and(|limit| Instant::now() >= limit)
+            {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             let to = edge.target().idx();
             let seconds = edge.seconds();
             if seconds == 0 {
@@ -234,7 +249,7 @@ fn relax_walks_profiled(
         .enumerate()
         .filter_map(|(i, label)| (label.time < INF).then_some(i))
         .collect();
-    relax_walks_from(tt, labels, &seeds, max_time, stats);
+    relax_walks_from(tt, labels, &seeds, max_time, stats, None);
 }
 
 #[cfg(test)]
@@ -447,9 +462,14 @@ fn traverse_routes_profiled(
     departure: i64,
     max_time: i64,
     stats: &mut RaptorStats,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     for &route in marked_routes {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
         if stops.len() < 2 {
@@ -460,6 +480,12 @@ fn traverse_routes_profiled(
             let mut onboard: Option<(TransportIdx, usize, i64, usize)> = None;
             for (position, stop) in stops.iter().enumerate() {
                 stats.stop_events_scanned += 1;
+                if (stats.stop_events_scanned & 127) == 0
+                    && deadline.is_some_and(|limit| Instant::now() >= limit)
+                {
+                    stats.profile_budget_exhausted = true;
+                    break;
+                }
                 let loc = stop.location().idx();
                 if let Some((transport, from, board_time, board_index)) = onboard {
                     if stop.inbound() {
@@ -531,6 +557,7 @@ fn traverse_routes(
         departure,
         max_time,
         &mut RaptorStats::default(),
+        None,
     )
 }
 
@@ -874,6 +901,21 @@ pub fn route_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_with_stats_impl(tt, request, None)
+}
+
+/// Point-RAPTOR recovery within the remaining profile-search wall budget.
+/// Returns validated partial results if the deadline is exceeded.
+pub(crate) fn route_with_stats_deadline(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, deadline: Instant,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_with_stats_impl(tt, request, Some(deadline))
+}
+fn route_with_stats_impl(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    deadline: Option<Instant>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
     let mut stats = RaptorStats::default();
     ensure!(
         request.max_boardings <= 16,
@@ -927,6 +969,10 @@ pub fn route_with_stats(
     // Rounds are limited to 16, so a u8 epoch never wraps.
     let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.rounds += 1;
         stats.marked_stops += marked_stops.len() as u64;
         let prev = &labels[round - 1];
@@ -950,7 +996,7 @@ pub fn route_with_stats(
             break;
         }
         traverse_routes_profiled(
-            tt, prev, &mut curr, &routes, departure, max_time, &mut stats,
+            tt, prev, &mut curr, &routes, departure, max_time, &mut stats, deadline,
         )?;
         let transit_seeds: Vec<usize> = curr
             .iter()
@@ -958,7 +1004,7 @@ pub fn route_with_stats(
             .enumerate()
             .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
             .collect();
-        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats);
+        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats, deadline);
         marked_stops = curr
             .iter()
             .zip(prev)
@@ -983,11 +1029,19 @@ pub fn route_with_stats(
         }
     }
     for (round, layer) in labels.iter().enumerate() {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for dest in request
             .egress
             .iter()
             .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
         {
+            if deadline.is_some_and(|limit| Instant::now() >= limit) {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             if let Some(journey) =
                 reconstruct(&labels, round, dest.stop.idx(), dest.seconds, departure)
             {
@@ -1013,6 +1067,25 @@ mod tests {
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TrafficDays,
     };
+
+
+    #[test]
+    fn deadline_already_expired_does_not_scan_all_point_routes() {
+        let bytes = fixture().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = Query {
+            departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 5,
+            max_duration_seconds: 3 * 3600,
+        };
+        let (journeys, stats) = route_with_stats_deadline(&tt, &q, Instant::now()).unwrap();
+        assert!(stats.profile_budget_exhausted);
+        assert_eq!(stats.routes_scanned, 0);
+        assert!(journeys.is_empty());
+    }
 
     #[test]
     fn delays_origin_walk_until_first_boarding_including_initial_footpaths() {

@@ -62,6 +62,7 @@ pub struct TransitRegion {
     geometry: Vec<geo::Geometry<f64>>,
     pub timetable: MappedTimetable,
     pub metadata: MetadataIndex,
+    pub(crate) lower_bound_topology: crate::routing_common::profile_compact::LowerBoundTopology,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -220,6 +221,11 @@ impl Router {
             crate::routing_common::feed_policy::validate_routing_sources(&timetable.view()?)
                 .with_context(|| format!("validating routing region {} from {}", region.id, path.display()))?;
             let metadata = MetadataIndex::build(&timetable.view()?)?;
+            // Compiled transit segment minima are invariant across queries.
+            // Build the optimistic topology once at timetable load time.
+            let lower_bound_topology =
+                crate::routing_common::profile_compact::LowerBoundTopology::build(
+                    &timetable.view()?);
             let sidecar = path.with_extension("platforms.json");
             let platform_metadata: Vec<PlatformStopMeta> = if sidecar.is_file() {
                 let value = serde_json::from_slice(&fs::read(&sidecar)?)?;
@@ -241,6 +247,7 @@ impl Router {
                 geometry: geometries,
                 timetable,
                 metadata,
+                lower_bound_topology,
             });
         }
         ensure!(
@@ -357,7 +364,10 @@ impl Router {
         options: ProfileOptions,
     ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
-        let (journeys, raptor_stats) = profile_search::route_profile_with_stats(
+        let precomputed = self.transit.iter()
+            .find(|region| region.id == selection.transit_region)
+            .context("routing region disappeared")?;
+        let (journeys, raptor_stats) = profile_search::route_profile_with_stats_precomputed(
             &tt,
             &Query {
                 departure_unix_seconds: unix_seconds,
@@ -369,6 +379,7 @@ impl Router {
             },
             options,
             arrive_by,
+            Some(&precomputed.lower_bound_topology),
         )?;
         Ok(RoutingResponse {
             selection,
