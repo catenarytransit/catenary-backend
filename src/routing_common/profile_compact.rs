@@ -30,7 +30,6 @@ pub(super) enum Parent {
     },
     Walk { from: usize, to: usize, seconds: u32 },
     ReadyRide,
-    ReadyWalk,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -550,7 +549,11 @@ impl ProfileSearchState {
                         && can_reach(&self.bounds, to, ready, anchor,
                             q.max_duration_seconds, reverse)
                         && current.put(
-                            Stage::Ready, to, ready, Parent::ReadyWalk,
+                            Stage::Ready, to, ready,
+                            // Keep the exact footpath that produced this
+                            // transfer-ready time. The best physical-walk
+                            // cell can come from a different alighting stop.
+                            Parent::Walk { from: walk_from, to: walk_to, seconds },
                             generation, reverse, &mut self.parents, &mut self.stats
                         ) {
                         changed_ready.push(to);
@@ -600,4 +603,61 @@ pub(crate) fn route_profile_incremental(
     sorted.sort_unstable();
     state.extend(tt, q, &sorted)?;
     Ok((state.result(), state.stats().clone()))
+}
+
+
+#[cfg(test)]
+mod compact_reconstruction_tests {
+    use super::*;
+    use crate::routing_common::profile_compact_reconstruct::reconstruct;
+    use crate::routing_common::raptor_query::Leg;
+    use crate::routing_common::raptor_query::RaptorStats;
+
+    #[test]
+    fn boarding_ready_uses_its_own_walk_predecessor() {
+        // Two footpaths arrive at stop 2: walking from stop 3 is physically
+        // earlier, but the path from stop 1 is the one that is boardable first.
+        // Following the Stage::Walk predecessor would create an invalid path.
+        let mut rounds = vec![Round::new(4), Round::new(4)];
+        let mut parents = Vec::new();
+        let mut stats = RaptorStats::default();
+        assert!(rounds[0].put(Stage::Ready, 0, 1_000,
+            Parent::Root { seconds: 0 }, 1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put(Stage::Ride, 1, 1_100,
+            Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
+                board_pos: 0, alight_pos: 1, departure: 1_020, arrival: 1_100 },
+            1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put(Stage::Ready, 2, 1_140,
+            Parent::Walk { from: 1, to: 2, seconds: 40 },
+            1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put(Stage::Walk, 2, 1_120,
+            Parent::Walk { from: 3, to: 2, seconds: 20 },
+            1, false, &mut parents, &mut stats));
+        let result = reconstruct(&rounds, &parents, 1, false, 1, 2, Stage::Ready, 0)
+            .expect("exact ready-state predecessor must reconstruct");
+        assert_eq!(result.boardings, 1);
+        assert!(matches!(result.legs[2], Leg::Transfer {
+            from_stop: 1, to_stop: 2, seconds: 40
+        }));
+        assert_eq!(result.arrival_unix_seconds, 1_140);
+    }
+
+    #[test]
+    fn ready_from_ride_needs_no_footpath() {
+        let mut rounds = vec![Round::new(2), Round::new(2)];
+        let mut parents = Vec::new();
+        let mut stats = RaptorStats::default();
+        rounds[0].put(Stage::Ready, 0, 0, Parent::Root { seconds: 0 },
+            1, false, &mut parents, &mut stats);
+        rounds[1].put(Stage::Ride, 1, 100,
+            Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
+                board_pos: 0, alight_pos: 1, departure: 10, arrival: 100 },
+            1, false, &mut parents, &mut stats);
+        rounds[1].put(Stage::Ready, 1, 130, Parent::ReadyRide,
+            1, false, &mut parents, &mut stats);
+        let result = reconstruct(&rounds, &parents, 1, false, 1, 1, Stage::Ready, 0)
+            .expect("self-transfer readiness should reference the same ride");
+        assert_eq!(result.boardings, 1);
+        assert_eq!(result.legs.len(), 3);
+    }
 }

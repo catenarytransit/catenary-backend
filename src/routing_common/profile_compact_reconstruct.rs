@@ -105,7 +105,7 @@ pub(super) fn reconstruct(
                 k -= 1;
             }
             Parent::Walk { from, to, seconds }
-                if stage == Stage::Walk && k > 0 =>
+                if (stage == Stage::Walk || stage == Stage::Ready) && k > 0 =>
             {
                 legs.push(Leg::Transfer {
                     from_stop: from as u32,
@@ -117,9 +117,6 @@ pub(super) fn reconstruct(
             }
             Parent::ReadyRide if stage == Stage::Ready && k > 0 => {
                 stage = Stage::Ride;
-            }
-            Parent::ReadyWalk if stage == Stage::Ready && k > 0 => {
-                stage = Stage::Walk;
             }
             _ => return None,
         }
@@ -135,7 +132,7 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
     let mut previous_alight: Option<(usize, i64)> = None;
     let mut rides = 0;
     for (i, leg) in j.legs.iter().enumerate() {
-        match *leg {
+        match leg.clone() {
             Leg::Access { to_stop, seconds } if i == 0 => {
                 if !q.access.iter().any(|ep| ep.stop.0 == to_stop && ep.seconds == seconds) {
                     return false;

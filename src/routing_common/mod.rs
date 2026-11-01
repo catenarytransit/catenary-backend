@@ -20,6 +20,8 @@ mod graph_tests;
 pub(crate) mod interval_estimate;
 pub(crate) mod profile_raptor;
 pub(crate) mod profile_reconstruct;
+pub(crate) mod profile_compact;
+pub(crate) mod profile_compact_reconstruct;
 pub mod profile_search;
 pub mod raptor_arrive_by;
 pub mod raptor_query;
