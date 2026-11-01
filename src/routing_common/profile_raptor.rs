@@ -566,6 +566,8 @@ fn scan_routes(
     last_anchor: i64,
     first_board_lower: i64,
     first_board_upper: i64,
+    event_anchor: i64,
+    max_duration_seconds: u32,
     arrive_by: bool,
     deadline: Instant,
     stats: &mut RaptorStats,
@@ -605,6 +607,12 @@ fn scan_routes(
             }
             if let Some(labels) = previous.get(&loc) {
                 for &label in labels {
+                    // Nigiri processes one timetable start at a time. A new
+                    // event must not rescan old profile labels or board first
+                    // vehicles belonging to a different origin start.
+                    if label.anchor != event_anchor {
+                        continue;
+                    }
                     let ready = if arrive_by {
                         reverse_ready(tt, label, loc)
                     } else {
@@ -623,8 +631,19 @@ fn scan_routes(
         if earliest_ready == i64::MAX {
             continue;
         }
-        let mut day_lower = lower;
-        let mut day_upper = upper;
+        let horizon = i64::from(max_duration_seconds);
+        let anchor_lower = if arrive_by {
+            event_anchor.saturating_sub(horizon)
+        } else {
+            event_anchor
+        };
+        let anchor_upper = if arrive_by {
+            event_anchor
+        } else {
+            event_anchor.saturating_add(horizon)
+        };
+        let mut day_lower = lower.max(anchor_lower);
+        let mut day_upper = upper.min(anchor_upper);
         if arrive_by {
             day_upper = day_upper.min(latest_ready);
             if !has_transfer_boarding {
@@ -688,7 +707,9 @@ fn scan_routes(
                     let Some(event) = transport_event_second(
                         tt, route, riding.transport, pos, !arrive_by, midnight,
                     ) else { continue };
-                    if event < lower || event > upper {
+                    if event < lower || event > upper
+                        || (arrive_by && event < event_anchor.saturating_sub(i64::from(max_duration_seconds)))
+                        || (!arrive_by && event > event_anchor.saturating_add(i64::from(max_duration_seconds))) {
                         continue;
                     }
                     let leg = if arrive_by {
@@ -790,6 +811,12 @@ fn scan_routes(
             }
             if let Some(labels) = previous.get(&loc) {
                 for &label in labels {
+                    // Nigiri processes one timetable start at a time. A new
+                    // event must not rescan old profile labels or board first
+                    // vehicles belonging to a different origin start.
+                    if label.anchor != event_anchor {
+                        continue;
+                    }
                     let ready = if arrive_by {
                         reverse_ready(tt, label, loc)
                     } else {
@@ -819,6 +846,12 @@ fn scan_routes(
                         let Some(anchor) =
                             first_vehicle_anchor(nodes, predecessor, label, event_time, arrive_by)
                         else { continue };
+                        if label.rides == 0 && anchor != event_anchor {
+                            // The only legal first boarding for this start
+                            // has exact origin departure == event_anchor.
+                            // Later services are processed as separate starts.
+                            continue;
+                        }
                         if label.rides == 0
                             && (anchor < first_anchor || anchor > last_anchor)
                         {
@@ -1006,6 +1039,9 @@ impl ProfileSearchState {
             for &stop in &marked {
                 if let Some(labels) = prev.get(&stop) {
                     for &label in labels {
+                        if label.anchor != anchor {
+                            continue;
+                        }
                         // Carrying an earlier label does not create a new
                         // boarding opportunity. Only genuine ride/footpath
                         // improvements may mark the next RAPTOR round.
@@ -1034,6 +1070,8 @@ impl ProfileSearchState {
                 self.last_anchor,
                 first_board_lower,
                 first_board_upper,
+                anchor,
+                request.max_duration_seconds,
                 arrive_by,
                 self.deadline,
                 &mut self.stats,
@@ -1120,6 +1158,9 @@ impl ProfileSearchState {
                 }
                 if let Some(labels) = curr.get(&ep.stop.idx()) {
                     for &label in labels {
+                        if label.anchor != anchor {
+                            continue;
+                        }
                         changed_ends.push((k, label, ep.stop.idx(), ep.seconds));
                     }
                 }
@@ -1249,6 +1290,29 @@ mod tests {
             &tt, RouteIdx(0), 0, day, midnight + 3_001, false, &active,
             &mut stats,
         ).is_none());
+    }
+
+    #[test]
+    fn first_vehicle_anchor_requires_matching_profile_start() {
+        let mut nodes = Vec::new();
+        let access = append_path(&mut nodes, Leg::Access {
+            to_stop: 0, seconds: 120,
+        }, None);
+        let root = Label {
+            time: 1_120, path: Some(access), transit: None,
+            anchor: 1_000, rides: 0,
+        };
+        // The vehicle at 1_200 is the requested first boarding.
+        assert_eq!(
+            first_vehicle_anchor(&nodes, access, root, 1_200, false),
+            Some(1_080)
+        );
+        // Its actual origin departure (1_080) must be processed by
+        // a different profile event than anchor 1_000.
+        assert_ne!(
+            first_vehicle_anchor(&nodes, access, root, 1_200, false),
+            Some(root.anchor)
+        );
     }
 
     #[test]
