@@ -1,17 +1,14 @@
 //! Departure-event timetable profile search for Edelweiss.
 //!
-//! A point-time RAPTOR search alone loses later departures when earlier arrival
-//! labels win. Enumerate *actual* reachable first-boarding events (or final
-//! alighting events for arrive-by) across the requested interval, and merge the
-//! resulting Pareto frontiers. The enumeration is complete up to an explicit
-//! work/time budget; partial results are marked in RaptorStats.
-//!
-//! This is an event-complete interval search, not yet Nigiri's incremental
-//! shared-state RAPTOR. OSR offsets and the mmap timetable are reused, while
-//! each event is still a point solve. The work budget is therefore essential.
+//! Enumerate reachable first-boarding/final-alighting anchors and scan their
+//! compact round-arrival arrays, processing forward anchors latest-first and
+//! backward anchors earliest-first, as in Nigiri. Persist scalar arrivals
+//! across ordered anchors; reset them when an interval extension reverses
+//! traversal order. Reconstruct selected journey candidates only after
+//! the corresponding round's state has been finalized.
 
 use crate::routing_common::interval_estimate::{Interval, IntervalEstimator};
-use crate::routing_common::profile_raptor::ProfileSearchState;
+use crate::routing_common::profile_compact::ProfileSearchState;
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{
     self, Journey, Leg, Query, RaptorStats, for_each_route_service_day, transport_event_second,
@@ -483,8 +480,8 @@ pub fn route_profile_with_stats(
     let mut q = request.clone();
     q.direct_walk_seconds = None;
     q.max_duration_seconds = options.max_journey_duration_seconds;
-    // Set a conservative global time horizon once: every expansion must be
-    // evaluated against the same frontier and immutable predecessor paths.
+    // Reuse compact round-state buffers and persistent monotone-arrival bounds
+    // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
     let last = reference.max(boundary);
     let remaining = deadline.saturating_duration_since(Instant::now());
@@ -551,13 +548,10 @@ pub fn route_profile_with_stats(
     accumulate_stats(&mut stats, accumulated.clone());
     stats.profile_anchor_events += accumulated.profile_anchor_events;
     stats.profile_budget_exhausted |= accumulated.profile_budget_exhausted;
-    // Recover a usable candidate when the incremental provenance skyline is
-    // interrupted before any valid journey. This invokes *one* bounded,
-    // well-tested point RAPTOR search rather than the former 128 point solves.
-    // The incomplete profile remains explicitly visible in debug statistics.
-    // Do not silently reduce multi-day journey eligibility on fallback.
+    // Always allow a bounded point-RAPTOR recovery if a compact search found
+    // no valid journey, even when the compact search reports exhaustion.
+    // Never silently drop a usable timetable result on a path-work limit.
     if transit.is_empty()
-        && !stats.profile_budget_exhausted
         && Instant::now() < deadline
         && !request.access.is_empty()
         && !request.egress.is_empty()
@@ -765,7 +759,7 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         let tomorrow = base + 86_400 + 9 * 3_600;
         let later = base + 2 * 86_400 + 9 * 3_600;
-        let (journeys, stats) = crate::routing_common::profile_raptor::route_profile_incremental(
+        let (journeys, stats) = crate::routing_common::profile_compact::route_profile_incremental(
             &tt,
             &q,
             &[tomorrow, later],
@@ -800,7 +794,7 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         let first_arrival = base + 86_400 + 17 * 3_600;
         let second_arrival = base + 2 * 86_400 + 17 * 3_600;
-        let (journeys, stats) = crate::routing_common::profile_raptor::route_profile_incremental(
+        let (journeys, stats) = crate::routing_common::profile_compact::route_profile_incremental(
             &tt,
             &q,
             &[first_arrival, second_arrival],
