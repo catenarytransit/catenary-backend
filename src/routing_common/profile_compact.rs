@@ -3,8 +3,9 @@
 //! Each (round, stop) has three *scalar* states: ride arrival, physical walk
 //! arrival, and transfer-ready time. The third state enforces GTFS stop-pair
 //! transfer rules without retaining a Pareto vector of arrival histories.
-//! Predecessor slots are overwritten on improvement and only read after a
-//! round has finished. Forward profile anchors are evaluated latest-first.
+//! Accepted predecessor snapshots are immutable, and terminal journey
+//! reconstruction follows the captured boarding/footpath provenance.
+//! Forward profile anchors are evaluated latest-first.
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::raptor_query::{
     Journey, Query, RaptorStats, for_each_route_service_day, transport_event_second,
@@ -21,7 +22,6 @@ const INF: i64 = i64::MAX / 4;
 const NEG_INF: i64 = i64::MIN / 4;
 /// Keep a bounded set of near-optimal route alternatives, even after a
 /// competitive destination arrival has been found.
-const DESTINATION_SLACK_SECONDS: i64 = 20 * 60;
 // Bound alternatives only at the destination, not at every intermediate
 // station. The six route-distinct display options require at least six
 // independently reconstructable destination snapshots.
@@ -163,6 +163,104 @@ struct Onboard {
 struct ActiveDay {
     day: usize,
     onboard: Option<Onboard>,
+    // A route-local calendar index built once per service day when cheaper
+    // than repeated per-stop scans over inactive FIFO transports.
+    active_transports: Option<Vec<u64>>,
+}
+
+/// Nigiri searches the sorted event column and checks the service calendar
+/// after lower_bound. The optional bitset replaces repeated linear skips
+/// through inactive services with a rank/select-style next/previous bit.
+fn timetable_transport_on_day(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, stop: usize, day: &ActiveDay,
+    ready: i64, reverse: bool, stats: &mut RaptorStats,
+) -> Option<(TransportIdx, i64)> {
+    let Some(bits) = &day.active_transports else {
+        return if reverse {
+            get_latest_transport(tt, route, stop, day.day, ready, stats)
+        } else {
+            get_earliest_transport(tt, route, stop, day.day, ready, stats)
+        };
+    };
+    let range = tt.route_transport_ranges()[route.idx()];
+    let first = range.from as usize;
+    let len = (range.to - range.from) as usize;
+    let midnight = (i64::from(tt.header().first_utc_day)
+        + day.day as i64) * 86_400;
+    let mut lo = 0usize;
+    let mut hi = len;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        stats.transport_lookup_probes += 1;
+        let time = transport_event_second(
+            tt, route, TransportIdx((first + mid) as u32), stop, reverse, midnight
+        )?;
+        if if reverse { time <= ready } else { time < ready } {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if reverse {
+        // upper_bound: select the previous active transport strictly below lo.
+        let mut end = lo;
+        while end > 0 {
+            let wi = (end - 1) / 64;
+            let limit = (end - 1) % 64;
+            let mask = bits[wi] & (u64::MAX >> (63 - limit));
+            stats.transport_lookup_probes += 1;
+            if mask != 0 {
+                let offset = wi * 64 + (63 - mask.leading_zeros() as usize);
+                let transport = TransportIdx((first + offset) as u32);
+                let time = transport_event_second(
+                    tt, route, transport, stop, true, midnight
+                )?;
+                return Some((transport, time));
+            }
+            end = wi * 64;
+        }
+    } else {
+        // lower_bound: select the next service-active transport >= lo.
+        let mut start = lo;
+        while start < len {
+            let wi = start / 64;
+            let mask = bits[wi] & (u64::MAX << (start % 64));
+            stats.transport_lookup_probes += 1;
+            if mask != 0 {
+                let offset = wi * 64 + mask.trailing_zeros() as usize;
+                let transport = TransportIdx((first + offset) as u32);
+                let time = transport_event_second(
+                    tt, route, transport, stop, false, midnight
+                )?;
+                return Some((transport, time));
+            }
+            start = (wi + 1) * 64;
+        }
+    }
+    None
+}
+
+fn build_active_transport_days(
+    tt: &ZeroCopyTimetable<'_>, route: RouteIdx, day: usize,
+    n_stops: usize,
+) -> Option<Vec<u64>> {
+    let range = tt.route_transport_ranges()[route.idx()];
+    let len = (range.to - range.from) as usize;
+    // For very wide, dense FIFO columns, a binary search plus ordinary
+    // calendar checks is cheaper than indexing thousands of transports.
+    if len > n_stops.saturating_mul(12) {
+        return None;
+    }
+    let mut bits = vec![0u64; len.div_ceil(64)];
+    for offset in 0..len {
+        let transport = TransportIdx(range.from + offset as u32);
+        if tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
+            .test(day)
+        {
+            bits[offset / 64] |= 1u64 << (offset % 64);
+        }
+    }
+    Some(bits)
 }
 
 /// Immutable optimistic route-duration topology. Build this once per mmap
@@ -303,6 +401,17 @@ fn lower_bounds(
     dist
 }
 
+fn initial_destination_bound(anchor: i64, q: &Query, reverse: bool) -> i64 {
+    // Nigiri search.h: worst_time_at_dest = start_time +/- min(
+    //   fastest_direct, max_travel_time) + one unit for loose comparison.
+    // This is a bound, not a preceding point-RAPTOR search.
+    let maximum = i64::from(q.max_duration_seconds);
+    let direct = q.direct_walk_seconds.map(i64::from).unwrap_or(maximum);
+    let budget = maximum.min(direct).saturating_add(1);
+    if reverse { anchor.saturating_sub(budget) }
+    else { anchor.saturating_add(budget) }
+}
+
 fn can_reach(
     bound: &[u32], stop: usize, time: i64,
     anchor: i64, duration: u32, reverse: bool, best_dest: i64,
@@ -322,12 +431,14 @@ fn can_reach(
     // Destination-time bounds are tightened only after a timetable-validated
     // journey. Preserve <= (Nigiri's loose comparison) and a small diversity
     // allowance, never pruning an equal-time candidate outright.
+    // Nigiri uses a loose (inclusive) destination bound. The previous
+    // additive slack allowed walking and vehicle states outside the current
+    // competitive horizon to propagate, particularly costly for long-distance
+    // queries with many service days.
     let competitive = if reverse {
-        best_dest == NEG_INF ||
-            possible_dest >= best_dest.saturating_sub(DESTINATION_SLACK_SECONDS)
+        best_dest == NEG_INF || possible_dest >= best_dest
     } else {
-        best_dest == INF ||
-            possible_dest <= best_dest.saturating_add(DESTINATION_SLACK_SECONDS)
+        best_dest == INF || possible_dest <= best_dest
     };
     within_max_duration && competitive
 }
@@ -493,6 +604,13 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
+        // Reset only the per-start competitiveness limit, not the arrival
+        // matrix. Nigiri executes every start with a worst destination time
+        // before updating it from transit and walking relaxations.
+        let worst = initial_destination_bound(anchor, q, reverse);
+        for bound in &mut self.time_at_dest {
+            if better(worst, *bound, reverse) { *bound = worst; }
+        }
         // Nigiri retains round arrival times independently of whether a
         // journey to the destination was found at this particular anchor.
         // They remain valid dominance bounds for earlier forward starts and
@@ -580,8 +698,34 @@ impl ProfileSearchState {
                 // Gentian's route traffic-day bitmap is the union of the
                 // transports' calendars. Do not materialize a filtered
                 // transport vector for every route, service day and anchor.
-                for_each_route_service_day(tt, route, lower, upper, &mut self.stats,
-                    |day, _| active_days.push(ActiveDay { day, onboard: None }));
+                // Nigiri does not rescan every inactive transport for every
+                // stop in a route. Use a compact service-day index for shorter
+                // columns; leave long dense columns on the original FIFO
+                // binary-search path. Both paths use identical event times.
+                // Nigiri bounds each transport scan by the best destination
+                // time known so far. A vehicle boarding/arrival outside this
+                // absolute time range cannot improve a feasible destination.
+                let (day_lower, day_upper) = if reverse {
+                    (lower.max(self.time_at_dest[k]), upper)
+                } else {
+                    (lower, upper.min(self.time_at_dest[k]))
+                };
+                if day_lower > day_upper { continue; }
+                for_each_route_service_day(tt, route, day_lower, day_upper, &mut self.stats,
+                    |day, _| {
+                        let active_transports = build_active_transport_days(
+                            tt, route, day, stops.len()
+                        );
+                        if active_transports.as_ref()
+                            .is_some_and(|words| words.iter().all(|x| *x == 0))
+                        {
+                            return;
+                        }
+                        active_days.push(ActiveDay {
+                            day, onboard: None, active_transports
+                        });
+                    });
+                if reverse { active_days.reverse(); }
                 if active_days.is_empty() { continue; }
                 for step in 0..stops.len() {
                     self.stats.stop_events_scanned += 1;
@@ -664,6 +808,39 @@ impl ProfileSearchState {
                                                     step: leg_parent,
                                                     previous: Some(onboard.predecessor),
                                                 });
+                                                // Nigiri updates time_at_dest_ as soon as a
+                                                // destination label improves, during route
+                                                // relaxation, not after scanning every route
+                                                // and service day in the round. Validate the
+                                                // predecessor chain before using it as a
+                                                // pruning bound: GTFS pair-specific transfers
+                                                // make unvalidated scalar bounds unsafe here.
+                                                if better(score, self.time_at_dest[k], reverse) {
+                                                    if let Some(mut journey) =
+                                                        crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
+                                                            &self.parents, snapshot, event,
+                                                            loc, reverse, seconds,
+                                                        )
+                                                    {
+                                                        optimize_same_trip_endpoint_walks(
+                                                            tt, q, &mut journey
+                                                        );
+                                                        if valid_journey(tt, q, &journey) {
+                                                            let actual = if reverse {
+                                                                journey.departure_unix_seconds
+                                                            } else {
+                                                                journey.arrival_unix_seconds
+                                                            };
+                                                            for bound in self.time_at_dest
+                                                                .iter_mut().skip(k)
+                                                            {
+                                                                if better(actual, *bound, reverse) {
+                                                                    *bound = actual;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 let item = (score, loc, seconds, snapshot);
                                                 if let Some(idx) = replace {
                                                     ride_terminal_paths[idx] = item;
@@ -696,14 +873,19 @@ impl ProfileSearchState {
                         let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
                             continue;
                         };
-                        if !(lower..=upper).contains(&ready.time) { continue; }
-                        let next_transport = if reverse {
-                            get_latest_transport(
-                                tt, route, pos, day.day, ready.time, &mut self.stats)
-                        } else {
-                            get_earliest_transport(
-                                tt, route, pos, day.day, ready.time, &mut self.stats)
-                        };
+                        if !(lower..=upper).contains(&ready.time)
+                            || !can_reach(
+                                &self.bounds, loc, ready.time, anchor,
+                                q.max_duration_seconds, reverse, self.time_at_dest[k]
+                            )
+                        { continue; }
+                        // Avoid binary-searching a service day when this
+                        // boarding-ready stop cannot reach the destination
+                        // within Nigiri's current dynamic bound.
+                        let next_transport = timetable_transport_on_day(
+                            tt, route, pos, day, ready.time, reverse,
+                            &mut self.stats
+                        );
                         let Some((transport, event)) = next_transport else { continue };
                         if !(lower..=upper).contains(&event) { continue; }
                         let better = day.onboard.is_none_or(|old| {
@@ -883,11 +1065,9 @@ impl ProfileSearchState {
             for (at_dest, terminal_stop, stage, terminal_seconds) in terminal_candidates {
                 let current_best = self.time_at_dest[k];
                 let too_slow = if reverse {
-                    current_best != NEG_INF &&
-                        at_dest < current_best.saturating_sub(DESTINATION_SLACK_SECONDS)
+                    current_best != NEG_INF && at_dest < current_best
                 } else {
-                    current_best != INF &&
-                        at_dest > current_best.saturating_add(DESTINATION_SLACK_SECONDS)
+                    current_best != INF && at_dest > current_best
                 };
                 if too_slow { continue; }
                 let Some(mut journey) = reconstruct(
@@ -1028,15 +1208,34 @@ mod profile_bound_tests {
     use super::*;
 
     #[test]
-    fn destination_bound_respects_slack_and_direction() {
+    fn destination_bound_is_loose_but_has_no_arbitrary_extra_slack() {
         let lb = [30_u32];
         assert!(can_reach(&lb, 0, 100, 100, 1000, false, INF));
         assert!(can_reach(&lb, 0, 100, 100, 1000, false, 130));
-        assert!(can_reach(&lb, 0, 100, 100, 1000, false, 129));
+        assert!(!can_reach(&lb, 0, 100, 100, 1000, false, 129));
         assert!(!can_reach(&lb, 0, 100, 100, 1000, false, -2000));
         assert!(can_reach(&lb, 0, 900, 900, 1000, true, NEG_INF));
         assert!(can_reach(&lb, 0, 900, 900, 1000, true, 870));
+        assert!(!can_reach(&lb, 0, 900, 900, 1000, true, 871));
         assert!(!can_reach(&lb, 0, 900, 900, 1000, true, 4000));
+    }
+
+    #[test]
+    fn initial_nigiri_destination_bound_does_not_cap_long_distance_without_direct() {
+        use crate::routing_common::raptor_query::WalkingEndpoint;
+        let mut q = Query {
+            departure_unix_seconds: 1000,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![],
+            direct_walk_seconds: None,
+            max_boardings: 6,
+            max_duration_seconds: 4 * 86_400,
+        };
+        assert_eq!(initial_destination_bound(1000, &q, false), 1000 + 4 * 86_400 + 1);
+        assert_eq!(initial_destination_bound(1000, &q, true), 1000 - 4 * 86_400 - 1);
+        q.direct_walk_seconds = Some(900);
+        assert_eq!(initial_destination_bound(1000, &q, false), 1901);
+        assert_eq!(initial_destination_bound(1000, &q, true), 99);
     }
 
     #[test]
@@ -1175,6 +1374,73 @@ mod compressed_timetable_profile_tests {
         let graph = LowerBoundTopology::build(&tt);
         let bounds = lower_bounds(&tt, &query(), false, &graph, Instant::now());
         assert!(bounds.iter().all(|&d| d == 0));
+    }
+
+    #[test]
+    fn service_day_calendar_bitsets_match_fifo_lookup_across_days() {
+        let mut owned = daily_train();
+        // Active on day 0 and day 2, with gaps on day 1/day 3.
+        owned.bitfields[1].set(1, false).unwrap();
+        owned.bitfields[1].set(3, false).unwrap();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        for day in 0..4usize {
+            let bits = build_active_transport_days(&tt, RouteIdx(0), day, 2)
+                .expect("single-transport route should use the bitset lookup");
+            let active = ActiveDay {
+                day, onboard: None, active_transports: Some(bits),
+            };
+            let midnight = (i64::from(tt.header().first_utc_day)
+                + day as i64) * 86_400;
+            for (reverse, time) in [
+                (false, midnight + 8 * 3_600),
+                (false, midnight + 10 * 3_600),
+                (true, midnight + 8 * 3_600),
+                (true, midnight + 19 * 3_600),
+            ] {
+                let mut original_stats = RaptorStats::default();
+                let original = if reverse {
+                    get_latest_transport(&tt, RouteIdx(0), 0, day, time,
+                        &mut original_stats)
+                } else {
+                    get_earliest_transport(&tt, RouteIdx(0), 0, day, time,
+                        &mut original_stats)
+                };
+                let actual = timetable_transport_on_day(
+                    &tt, RouteIdx(0), 0, &active, time, reverse,
+                    &mut RaptorStats::default(),
+                );
+                assert_eq!(actual, original,
+                    "calendar index mismatch on day {day}, reverse={reverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn four_day_transit_horizon_is_preserved_without_direct_journey() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut q = query();
+        let requested_departure = base + 18 * 3_600;
+        q.departure_unix_seconds = requested_departure;
+        q.max_duration_seconds = 4 * 86_400;
+        let next_day_departure = base + 86_400 + 9 * 3_600;
+        let mut state = ProfileSearchState::new(
+            &tt, &q, requested_departure,
+            base + 3 * 86_400, false, Duration::from_secs(5)
+        ).unwrap();
+        state.extend(&tt, &q, &[next_day_departure]).unwrap();
+        assert!(state.result().iter().any(|j|
+            j.boardings == 1
+                && j.departure_unix_seconds == next_day_departure
+                && j.arrival_unix_seconds == next_day_departure + 8 * 3_600
+        ), "long-distance route must survive without a 12-hour seed");
+        assert_eq!(
+            state.time_at_dest[1],
+            next_day_departure + 8 * 3_600,
+            "validated transit arrival should tighten the destination bound"
+        );
     }
 
     #[test]

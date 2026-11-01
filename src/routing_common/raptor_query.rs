@@ -1028,19 +1028,28 @@ fn route_with_stats_impl(
             });
         }
     }
-    for (round, layer) in labels.iter().enumerate() {
-        if deadline.is_some_and(|limit| Instant::now() >= limit) {
-            stats.profile_budget_exhausted = true;
-            break;
-        }
-        for dest in request
-            .egress
-            .iter()
-            .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
-        {
+    // The previous deadline check exited before reconstructing ANY destination
+    // when route scanning used the allotted time. Nigiri retains journeys
+    // already reached at the destination on bounded searches. Always inspect
+    // the best reachable terminal cells, but cap post-deadline reconstruction.
+    const MAX_POST_DEADLINE_RECONSTRUCTIONS: usize = 64;
+    let mut post_deadline_attempts = 0usize;
+    'terminals: for (round, layer) in labels.iter().enumerate() {
+        let mut candidates = request.egress.iter()
+            .filter(|ep| layer[ep.stop.idx()].time
+                .saturating_add(i64::from(ep.seconds)) <= max_time)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by_key(|ep| (
+            layer[ep.stop.idx()].time.saturating_add(i64::from(ep.seconds)),
+            ep.stop.idx(),
+        ));
+        for dest in candidates {
             if deadline.is_some_and(|limit| Instant::now() >= limit) {
                 stats.profile_budget_exhausted = true;
-                break;
+                if post_deadline_attempts >= MAX_POST_DEADLINE_RECONSTRUCTIONS {
+                    break 'terminals;
+                }
+                post_deadline_attempts += 1;
             }
             if let Some(journey) =
                 reconstruct(&labels, round, dest.stop.idx(), dest.seconds, departure)

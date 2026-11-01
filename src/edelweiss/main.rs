@@ -561,6 +561,13 @@ fn run_query(
         "raptor": routing.raptor_stats,
         "timetableView": request.timetable_view,
         "arriveBy": arrive_by,
+        // A stable routing implementation marker distinguishes the Nigiri-
+        // inspired compact solver from older deployed label-vector binaries.
+        "routingEngine": if request.timetable_view {
+            "compact-raptor-nigiri-dest-bound-v3"
+        } else {
+            "point-raptor"
+        },
     });
     timings.metadata_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);

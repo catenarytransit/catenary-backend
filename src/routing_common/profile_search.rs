@@ -493,6 +493,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let fallback_reserve =
         Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
     let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
+
     // Nigiri expands the interval only when the current search needs more
     // connections. Enumerating the full 48-hour window up front can consume
     // almost the entire request budget before RAPTOR scans a single route.
@@ -523,17 +524,11 @@ pub(crate) fn route_profile_with_stats_precomputed(
     stats.profile_events_enumerated = events.len() as u64;
 
     let mut q = request.clone();
-    q.direct_walk_seconds = None;
+    // Nigiri keeps the full max_travel_time for long-distance searches and
+    // applies the fastest-direct limit to each anchor's destination bound.
+    // Do NOT infer a global max-duration from a point seed's first journey.
+    // A later departure may have a different Pareto-optimal duration.
     q.max_duration_seconds = options.max_journey_duration_seconds;
-    // MOTIS applies fastest_direct as an upper bound on competitive transit
-    // journeys. Retain a bounded 20-minute alternative allowance so a
-    // slightly slower public-transit journey is still available by choice.
-    // This reduces long, pointless searches when direct walking/cycling
-    // reaches the destination much sooner.
-    if let Some(direct) = request.direct_walk_seconds {
-        q.max_duration_seconds = q.max_duration_seconds
-            .min(direct.saturating_add(20 * 60).max(1));
-    }
     // Reuse compact round-state buffers and persistent monotone-arrival bounds
     // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
@@ -635,7 +630,14 @@ pub(crate) fn route_profile_with_stats_precomputed(
     {
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
+        // Keep point recovery's horizon consistent with the pre-trip RAPTOR
+        // worst-time-at-destination bound. Otherwise a slow fallback journey
+        // bypasses the competitiveness check already used by the profile.
         fallback.max_duration_seconds = q.max_duration_seconds;
+        if let Some(direct) = request.direct_walk_seconds {
+            fallback.max_duration_seconds =
+                fallback.max_duration_seconds.min(direct.max(1));
+        }
         // Nigiri's on-trip fallback searches from the requested reference
         // instant. The first enumerated start event may be hours later or
         // earlier and is not a valid replacement for the user's query time.
@@ -664,6 +666,16 @@ pub(crate) fn route_profile_with_stats_precomputed(
 
     let total_before_filter = transit.len();
     transit = filter_extreme_durations(transit, options, arrive_by);
+    // Nigiri search.h finalization discards pre-trip transit journeys that
+    // take at least as long as the fastest direct journey. Applying the
+    // condition here also covers independently recovered point-RAPTOR paths.
+    if let Some(direct) = request.direct_walk_seconds {
+        transit.retain(|j|
+            j.boardings == 0 ||
+            j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds)
+                < i64::from(direct)
+        );
+    }
     stats.profile_duration_filtered = (total_before_filter - transit.len()) as u64;
 
     if let Some(seconds) = request.direct_walk_seconds {
