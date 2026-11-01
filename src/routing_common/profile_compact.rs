@@ -286,6 +286,10 @@ pub(crate) struct ProfileSearchState {
     time_at_dest: Vec<i64>,
     stamps: Vec<u32>,
     stamp: u32,
+    // Bitset-equivalent O(1) membership in the previous-round frontier;
+    // generation tags avoid clearing a large continental-sized array.
+    stop_stamps: Vec<u32>,
+    stop_stamp: u32,
     generation: u32,
     journeys: Vec<Journey>,
     stats: RaptorStats,
@@ -321,6 +325,8 @@ impl ProfileSearchState {
             time_at_dest: vec![invalid; q.max_boardings + 1],
             stamps: vec![0; tt.route_transport_ranges().len()],
             stamp: 0,
+            stop_stamps: vec![0; n],
+            stop_stamp: 0,
             generation: 0,
             journeys: Vec::new(),
             stats,
@@ -418,6 +424,12 @@ impl ProfileSearchState {
             }
             self.stats.rounds += 1;
             self.stats.marked_stops += marked.len() as u64;
+            self.stop_stamp = self.stop_stamp.wrapping_add(1);
+            if self.stop_stamp == 0 {
+                self.stop_stamps.fill(0);
+                self.stop_stamp = 1;
+            }
+            for &stop in &marked { self.stop_stamps[stop] = self.stop_stamp; }
             let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp);
             let (before, after) = self.rounds.split_at_mut(k);
             let previous = &before[k-1];
@@ -501,7 +513,7 @@ impl ProfileSearchState {
                                 }
                             }
                         }
-                        if !can_start || marked.binary_search(&loc).is_err() {
+                        if !can_start || self.stop_stamps[loc] != self.stop_stamp {
                             continue;
                         }
                         let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
