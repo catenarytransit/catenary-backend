@@ -189,6 +189,7 @@ fn relax_walks_from(
     seeds: &[usize],
     max_time: i64,
     stats: &mut RaptorStats,
+    stop_at: Option<Instant>,
 ) {
     let started = std::time::Instant::now();
     let updates: Vec<_> = seeds
@@ -203,8 +204,18 @@ fn relax_walks_from(
         })
         .collect();
     for (from, t, last_alight) in updates {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for edge in tt.footpaths_from(LocationIdx(from as u32)) {
             stats.footpath_edges_examined += 1;
+            if (stats.footpath_edges_examined & 1023) == 0
+                && stop_at.is_some_and(|limit| Instant::now() >= limit)
+            {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             let to = edge.target().idx();
             let seconds = edge.seconds();
             if seconds == 0 {
@@ -238,7 +249,7 @@ fn relax_walks_profiled(
         .enumerate()
         .filter_map(|(i, label)| (label.time < INF).then_some(i))
         .collect();
-    relax_walks_from(tt, labels, &seeds, max_time, stats);
+    relax_walks_from(tt, labels, &seeds, max_time, stats, None);
 }
 
 #[cfg(test)]
@@ -993,7 +1004,7 @@ fn route_with_stats_impl(
             .enumerate()
             .filter_map(|(idx, (new, old))| (new.time < old.time).then_some(idx))
             .collect();
-        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats);
+        relax_walks_from(tt, &mut curr, &transit_seeds, max_time, &mut stats, deadline);
         marked_stops = curr
             .iter()
             .zip(prev)

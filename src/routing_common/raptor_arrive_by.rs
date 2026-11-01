@@ -89,6 +89,7 @@ fn relax_reverse_walks(
     seeds: &[usize],
     min_time: i64,
     stats: &mut RaptorStats,
+    stop_at: Option<Instant>,
 ) {
     let started = std::time::Instant::now();
     let updates: Vec<_> = seeds
@@ -99,8 +100,18 @@ fn relax_reverse_walks(
         })
         .collect();
     for (to, time, next_board) in updates {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for edge in tt.footpaths_to(LocationIdx(to as u32)) {
             stats.footpath_edges_examined += 1;
+            if (stats.footpath_edges_examined & 1023) == 0
+                && stop_at.is_some_and(|limit| Instant::now() >= limit)
+            {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             let from = edge.target().idx();
             let seconds = edge.seconds();
             if seconds == 0 {
@@ -449,7 +460,7 @@ fn route_arrive_by_with_stats_impl(
             .enumerate()
             .filter_map(|(i, (new, old))| (new.time > old.time).then_some(i))
             .collect();
-        relax_reverse_walks(tt, &mut curr, &seeds, min_time, &mut stats);
+        relax_reverse_walks(tt, &mut curr, &seeds, min_time, &mut stats, stop_at);
         marked = curr
             .iter()
             .zip(prev)
