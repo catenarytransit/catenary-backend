@@ -564,7 +564,7 @@ fn run_query(
         // A stable routing implementation marker distinguishes the Nigiri-
         // inspired compact solver from older deployed label-vector binaries.
         "routingEngine": if request.timetable_view {
-            "compact-raptor-point-seed-v2"
+            "compact-raptor-nigiri-dest-bound-v3"
         } else {
             "point-raptor"
         },
