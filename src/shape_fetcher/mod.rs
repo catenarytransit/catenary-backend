@@ -92,7 +92,7 @@ pub async fn wipe_all_relevant_tiles_for_bbox(
     bbox: &BBox,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for z in 4u8..=11u8 {
-        let _ = delete_tile_storage_for_bbox_and_category_zoom(
+        delete_tile_storage_for_bbox_and_category_zoom(
             conn,
             bbox,
             &Category::IntercityRailOriginal,
@@ -100,9 +100,8 @@ pub async fn wipe_all_relevant_tiles_for_bbox(
         )
         .await?;
 
-        let _ =
-            delete_tile_storage_for_bbox_and_category_zoom(conn, bbox, &Category::BusOriginal, z)
-                .await?;
+        delete_tile_storage_for_bbox_and_category_zoom(conn, bbox, &Category::BusOriginal, z)
+            .await?;
     }
 
     Ok(())

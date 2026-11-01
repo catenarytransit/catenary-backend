@@ -310,9 +310,9 @@ pub async fn connections_lookup(
         }
 
         // Remove this route itself from transfer connections
-        for (_stop_id, per_chateau) in connections_per_stop.iter_mut() {
+        for per_chateau in connections_per_stop.values_mut() {
             if let Some(routes) = per_chateau.get_mut(input_chateau) {
-                routes.retain(|rid| rid != &input_route);
+                routes.retain(|rid| rid.as_str() != input_route);
             }
         }
 

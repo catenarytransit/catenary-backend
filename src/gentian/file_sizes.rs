@@ -169,7 +169,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gentian-sizes-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&dir).unwrap();
         fs::create_dir(dir.join("alpha.bin")).unwrap();
-        assert!(configured_sizes(&config(), &dir).is_err());
+        assert!(configured_sizes(&config(), Path::new("routing_regions.toml"), Some(&dir)).is_err());
         fs::remove_dir_all(dir).unwrap();
     }
 }

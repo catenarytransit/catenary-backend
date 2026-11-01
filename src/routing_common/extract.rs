@@ -128,7 +128,7 @@ impl OsmTags {
                 },
                 "maxspeed" => t.max_speed = Some(val.to_string()),
                 "toll" => t.toll = val == "yes",
-                "incline" => t.is_incline_down = val == "down" || val.starts_with("-"),
+                "incline" => t.is_incline_down = val == "down" || val.starts_with('-'),
                 "route" => t.is_ferry_route |= val == "ferry",
                 _ => {}
             }
@@ -432,6 +432,7 @@ pub fn extract_osm_graph(path: &str, out_path: &std::path::Path) {
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(&map_path)
         .expect("Failed to create node map sparse file");
 
