@@ -266,6 +266,7 @@ pub fn fix_foreground_colour_rgb_feed(
 ) -> RGB<u8> {
     match feed_id {
         "f-9q5b-longbeachtransit" => WHITE_RGB,
+        "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle" => WHITE_RGB,
         _ => fix_foreground_colour_rgb(background, foreground),
     }
 }
