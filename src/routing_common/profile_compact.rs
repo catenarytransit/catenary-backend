@@ -1152,7 +1152,7 @@ mod compressed_timetable_profile_tests {
 #[cfg(test)]
 mod transfer_round_regressions {
     use super::*;
-    use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::raptor_query::{Leg, WalkingEndpoint};
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, SourceIdx, StationTransferRule,
         TimetableOwned, TimingProfileIdx, TrafficDays,
