@@ -493,6 +493,51 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let fallback_reserve =
         Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
     let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
+
+    // Nigiri obtains an initial competitive destination time as soon as the
+    // first on-trip RAPTOR search reaches the destination. Our continental
+    // profile has a four-day default horizon; searching every active service
+    // day before finding that first bound is prohibitively expensive for local
+    // journeys. Obtain a bounded single-query seed before profiling. Keep the
+    // independently returned seed even if the subsequent profile exhausts its
+    // wall budget. A missing seed is never proof that the destination is
+    // unreachable, so the full-horizon profile remains available.
+    const POINT_SEED_HORIZON_SECONDS: u32 = 12 * 3_600;
+    let mut point_request = request.clone();
+    point_request.direct_walk_seconds = None;
+    point_request.max_duration_seconds =
+        options.max_journey_duration_seconds.min(POINT_SEED_HORIZON_SECONDS);
+    let point_budget = (Duration::from_secs(u64::from(options.timeout_seconds)) / 5)
+        .min(Duration::from_millis(750));
+    let point_deadline = Instant::now()
+        .checked_add(point_budget)
+        .unwrap_or(profile_deadline)
+        .min(profile_deadline);
+    let point_started = Instant::now();
+    let (point_seed, point_stats) = if arrive_by {
+        raptor_arrive_by::route_arrive_by_with_stats_deadline(
+            tt, &point_request, point_deadline,
+        )?
+    } else {
+        raptor_query::route_with_stats_deadline(
+            tt, &point_request, point_deadline,
+        )?
+    };
+    stats.profile_point_seed_searches += 1;
+    stats.profile_point_seed_ms += point_started.elapsed().as_secs_f64() * 1_000.0;
+    stats.profile_point_seed_timed_out = point_stats.profile_budget_exhausted;
+    accumulate_stats(&mut stats, point_stats);
+    // Once a feasible route exists, its elapsed time is an admissible
+    // destination-directed upper bound. Keep one hour of extra time to retain
+    // slower but potentially useful route-diverse alternatives.
+    let seed_duration_bound = point_seed.iter()
+        .filter(|j| j.boardings > 0)
+        .map(|j| j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds))
+        .filter(|&d| d >= 0)
+        .min()
+        .and_then(|duration| u32::try_from(duration).ok())
+        .map(|duration| duration.saturating_add(3_600));
+
     // Nigiri expands the interval only when the current search needs more
     // connections. Enumerating the full 48-hour window up front can consume
     // almost the entire request budget before RAPTOR scans a single route.
@@ -525,6 +570,9 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let mut q = request.clone();
     q.direct_walk_seconds = None;
     q.max_duration_seconds = options.max_journey_duration_seconds;
+    if let Some(duration) = seed_duration_bound {
+        q.max_duration_seconds = q.max_duration_seconds.min(duration);
+    }
     // MOTIS applies fastest_direct as an upper bound on competitive transit
     // journeys. Retain a bounded 20-minute alternative allowance so a
     // slightly slower public-transit journey is still available by choice.
@@ -544,7 +592,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let mut state = ProfileSearchState::new_with_topology(
         tt, &q, first, last, arrive_by, compact_budget, topology
     )?;
-    let mut transit = Vec::new();
+    let mut transit = point_seed.clone();
     loop {
         if Instant::now() >= profile_deadline || batches >= MAX_PROFILE_BATCHES {
             stats.profile_budget_exhausted = true;
@@ -568,6 +616,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
             state
                 .result()
                 .into_iter()
+                .chain(point_seed.iter().cloned())
                 .filter(|j| {
                     let t = if arrive_by {
                         j.arrival_unix_seconds

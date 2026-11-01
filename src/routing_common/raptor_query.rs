@@ -27,6 +27,13 @@ pub struct RaptorStats {
     /// Time spent constructing the destination-directed admissible lower
     /// bounds from Gentian's compressed route timing profiles and footpaths.
     pub profile_lower_bounds_ms: f64,
+    /// Number of bounded point-RAPTOR seeds attempted before interval search.
+    pub profile_point_seed_searches: u64,
+    /// Duration of the initial point search, in milliseconds.
+    pub profile_point_seed_ms: f64,
+    /// True when the initial point seed exhausted its reserved subdeadline;
+    /// the profile search and recovery may still complete successfully.
+    pub profile_point_seed_timed_out: bool,
     /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
     /// Shared-state timetable events processed (not full point searches).
