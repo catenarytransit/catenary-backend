@@ -1,6 +1,7 @@
 pub mod api;
 pub mod dijkstra;
 pub mod extract;
+pub mod feed_policy;
 pub mod graph_loader;
 pub mod lookup;
 pub mod metadata_index;

@@ -217,6 +217,8 @@ impl Router {
                     path.display()
                 )
             })?;
+            crate::routing_common::feed_policy::validate_routing_sources(&timetable.view()?)
+                .with_context(|| format!("validating routing region {} from {}", region.id, path.display()))?;
             let metadata = MetadataIndex::build(&timetable.view()?)?;
             let sidecar = path.with_extension("platforms.json");
             let platform_metadata: Vec<PlatformStopMeta> = if sidecar.is_file() {

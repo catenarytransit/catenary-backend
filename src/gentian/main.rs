@@ -3,10 +3,11 @@
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use catenary::routing_common::routing_regions::{RegionSelection, RoutingRegionsConfig, resolve};
+use catenary::routing_common::feed_policy::{excluded_routing_source, validate_routing_sources};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use chrono::Utc;
 use clap::Parser;
@@ -85,6 +86,10 @@ struct Args {
     #[arg(long, requires = "region")]
     list_chateaux: bool,
 
+    /// Inspect source IDs embedded in a compiled binary; fails on excluded FlixBus.
+    #[arg(long, value_name = "PATH", conflicts_with_all = ["region", "sources", "build", "list_chateaux", "list_timetable_sizes", "output"])]
+    inspect_timetable: Option<PathBuf>,
+
     /// Print the actual file size of every configured region timetable.
     /// Does not require a database connection.
     #[arg(long, conflicts_with_all = ["region", "sources", "build", "list_chateaux"])]
@@ -105,16 +110,36 @@ struct Args {
 const DEFAULT_SERVICE_DAYS: u32 = 365;
 const LOOKBACK_DAYS: i32 = 7;
 
-// Exclude FlixBus from Gentian without changing the shared region resolver.
 fn excluded_chateau(chateau: &str) -> bool {
-    matches!(chateau, "flixbus~america" | "flixbus~europe")
+    excluded_routing_source(chateau, "")
+}
+
+/// Inspect the actual compiled sources, not the region resolver output.
+fn inspect_timetable(path: &Path) -> Result<()> {
+    use catenary::routing_common::timetable_mmap::MappedTimetable;
+    let mapped = MappedTimetable::open(path)?;
+    let tt = mapped.view()?;
+    let sources = tt.sources().iter().map(|source| {
+        Ok(serde_json::json!({
+            "chateau": tt.get_string(source.chateau).context("invalid chateau")?,
+            "feed_id": tt.get_string(source.onestop_feed_id).context("invalid feed id")?,
+            "attempt_id": tt.get_string(source.attempt_id).context("invalid attempt id")?,
+        }))
+    }).collect::<Result<Vec<_>>>()?;
+    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+        "path": path.display().to_string(),
+        "source_count": tt.sources().len(),
+        "route_count": tt.route_transport_ranges().len(),
+        "sources": sources,
+    }))?);
+    validate_routing_sources(&tt)
 }
 
 fn exclude_chateaux(selection: &mut RegionSelection) {
     selection.chateaux.retain(|chateau| !excluded_chateau(chateau));
     selection
         .sources
-        .retain(|source| !excluded_chateau(&source.chateau));
+        .retain(|source| !excluded_routing_source(&source.chateau, &source.onestop_feed_id));
 }
 
 fn add_explicit_sources(tt: &mut TimetableOwned, sources: &[String]) -> Result<()> {
@@ -124,7 +149,7 @@ fn add_explicit_sources(tt: &mut TimetableOwned, sources: &[String]) -> Result<(
             components.len() == 3 && components.iter().all(|x| !x.is_empty()),
             "invalid --source: expected CHATEAU,FEED,ATTEMPT"
         );
-        if excluded_chateau(components[0]) {
+        if excluded_routing_source(components[0], components[1]) {
             eprintln!("Gentian: skipping excluded chateau {}", components[0]);
             continue;
         }
@@ -167,6 +192,9 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(path) = args.inspect_timetable.as_deref() {
+        return inspect_timetable(path);
+    }
     if args.list_timetable_sizes {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
         return file_sizes::print_configured(
@@ -330,11 +358,30 @@ mod tests {
                 "flixbus~america,feed-us,attempt".into(),
                 "other,feed-other,attempt".into(),
                 "flixbus~europe,feed-eu,attempt".into(),
+                "remapped,f-flixbus~us,attempt".into(),
+                "remapped,f-flixbus~eu,attempt".into(),
             ],
         )
         .unwrap();
         assert_eq!(tt.sources.len(), 1);
         assert!(add_explicit_sources(&mut tt, &["invalid".into()]).is_err());
+    }
+
+    #[test]
+    fn renamed_flixbus_feeds_cannot_enter_us_region() {
+        use catenary::routing_common::routing_regions::ChateauSource;
+        let mut selection = RegionSelection {
+            id: "us".into(),
+            name: "US".into(),
+            chateaux: vec!["other".into()],
+            sources: vec![
+                ChateauSource { chateau: "other".into(), onestop_feed_id: "f-flixbus~us".into(), attempt_id: "a".into() },
+                ChateauSource { chateau: "other".into(), onestop_feed_id: "regular".into(), attempt_id: "a".into() },
+            ],
+        };
+        exclude_chateaux(&mut selection);
+        assert_eq!(selection.sources.len(), 1);
+        assert_eq!(selection.sources[0].onestop_feed_id, "regular");
     }
 
     #[test]
