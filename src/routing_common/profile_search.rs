@@ -477,7 +477,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let started = Instant::now();
     let reference = request.departure_unix_seconds;
     let max_window = i64::from(options.max_search_window_seconds);
-    let _boundary = if arrive_by {
+    let boundary = if arrive_by {
         reference.checked_sub(max_window)
     } else {
         reference.checked_add(max_window)
