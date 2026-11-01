@@ -484,19 +484,27 @@ fn route_arrive_by_with_stats_impl(
             });
         }
     }
-    for (round, layer) in layers.iter().enumerate() {
-        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
-            stats.profile_budget_exhausted = true;
-            break;
-        }
-        for start in request
-            .access
-            .iter()
-            .filter(|ep| layer[ep.stop.idx()].time - i64::from(ep.seconds) >= min_time)
-        {
+    // Preserve terminal routes reached before the wall deadline instead of
+    // discarding all of them when an incomplete scan runs out of time.
+    const MAX_POST_DEADLINE_RECONSTRUCTIONS: usize = 64;
+    let mut post_deadline_attempts = 0usize;
+    'terminals: for (round, layer) in layers.iter().enumerate() {
+        let mut candidates = request.access.iter()
+            .filter(|ep| layer[ep.stop.idx()].time
+                .saturating_sub(i64::from(ep.seconds)) >= min_time)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable_by_key(|ep| (
+            std::cmp::Reverse(layer[ep.stop.idx()].time
+                .saturating_sub(i64::from(ep.seconds))),
+            ep.stop.idx(),
+        ));
+        for start in candidates {
             if stop_at.is_some_and(|limit| Instant::now() >= limit) {
                 stats.profile_budget_exhausted = true;
-                break;
+                if post_deadline_attempts >= MAX_POST_DEADLINE_RECONSTRUCTIONS {
+                    break 'terminals;
+                }
+                post_deadline_attempts += 1;
             }
             if let Some(journey) = reconstruct(
                 &layers,
