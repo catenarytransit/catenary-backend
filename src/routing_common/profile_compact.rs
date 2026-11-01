@@ -702,7 +702,16 @@ impl ProfileSearchState {
                 // stop in a route. Use a compact service-day index for shorter
                 // columns; leave long dense columns on the original FIFO
                 // binary-search path. Both paths use identical event times.
-                for_each_route_service_day(tt, route, lower, upper, &mut self.stats,
+                // Nigiri bounds each transport scan by the best destination
+                // time known so far. A vehicle boarding/arrival outside this
+                // absolute time range cannot improve a feasible destination.
+                let (day_lower, day_upper) = if reverse {
+                    (lower.max(self.time_at_dest[k]), upper)
+                } else {
+                    (lower, upper.min(self.time_at_dest[k]))
+                };
+                if day_lower > day_upper { continue; }
+                for_each_route_service_day(tt, route, day_lower, day_upper, &mut self.stats,
                     |day, _| {
                         let active_transports = build_active_transport_days(
                             tt, route, day, stops.len()
@@ -864,7 +873,15 @@ impl ProfileSearchState {
                         let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
                             continue;
                         };
-                        if !(lower..=upper).contains(&ready.time) { continue; }
+                        if !(lower..=upper).contains(&ready.time)
+                            || !can_reach(
+                                &self.bounds, loc, ready.time, anchor,
+                                q.max_duration_seconds, reverse, self.time_at_dest[k]
+                            )
+                        { continue; }
+                        // Avoid binary-searching a service day when this
+                        // boarding-ready stop cannot reach the destination
+                        // within Nigiri's current dynamic bound.
                         let next_transport = timetable_transport_on_day(
                             tt, route, pos, day, ready.time, reverse,
                             &mut self.stats
