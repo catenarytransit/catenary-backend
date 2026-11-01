@@ -493,6 +493,15 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let mut q = request.clone();
     q.direct_walk_seconds = None;
     q.max_duration_seconds = options.max_journey_duration_seconds;
+    // MOTIS applies fastest_direct as an upper bound on competitive transit
+    // journeys. Retain a bounded 20-minute alternative allowance so a
+    // slightly slower public-transit journey is still available by choice.
+    // This reduces long, pointless searches when direct walking/cycling
+    // reaches the destination much sooner.
+    if let Some(direct) = request.direct_walk_seconds {
+        q.max_duration_seconds = q.max_duration_seconds
+            .min(direct.saturating_add(20 * 60).max(1));
+    }
     // Reuse compact round-state buffers and persistent monotone-arrival bounds
     // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
@@ -579,7 +588,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     {
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
-        fallback.max_duration_seconds = options.max_journey_duration_seconds;
+        fallback.max_duration_seconds = q.max_duration_seconds;
         // The event list is sorted by requested travel direction, so this
         // reference is never a synthetic timetable start. If there are no
         // initial events, use the actual requested time instead.
