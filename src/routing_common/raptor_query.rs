@@ -1,5 +1,6 @@
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
+use std::time::Instant;
 use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -450,9 +451,14 @@ fn traverse_routes_profiled(
     departure: i64,
     max_time: i64,
     stats: &mut RaptorStats,
+    deadline: Option<Instant>,
 ) -> Result<()> {
     let started = std::time::Instant::now();
     for &route in marked_routes {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
         if stops.len() < 2 {
@@ -463,6 +469,12 @@ fn traverse_routes_profiled(
             let mut onboard: Option<(TransportIdx, usize, i64, usize)> = None;
             for (position, stop) in stops.iter().enumerate() {
                 stats.stop_events_scanned += 1;
+                if (stats.stop_events_scanned & 127) == 0
+                    && deadline.is_some_and(|limit| Instant::now() >= limit)
+                {
+                    stats.profile_budget_exhausted = true;
+                    break;
+                }
                 let loc = stop.location().idx();
                 if let Some((transport, from, board_time, board_index)) = onboard {
                     if stop.inbound() {
@@ -534,6 +546,7 @@ fn traverse_routes(
         departure,
         max_time,
         &mut RaptorStats::default(),
+        None,
     )
 }
 
@@ -877,6 +890,21 @@ pub fn route_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_with_stats_impl(tt, request, None)
+}
+
+/// Point-RAPTOR recovery within the remaining profile-search wall budget.
+/// Returns validated partial results if the deadline is exceeded.
+pub(crate) fn route_with_stats_deadline(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, deadline: Instant,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_with_stats_impl(tt, request, Some(deadline))
+}
+fn route_with_stats_impl(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    deadline: Option<Instant>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
     let mut stats = RaptorStats::default();
     ensure!(
         request.max_boardings <= 16,
@@ -930,6 +958,10 @@ pub fn route_with_stats(
     // Rounds are limited to 16, so a u8 epoch never wraps.
     let mut seen_epoch = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.rounds += 1;
         stats.marked_stops += marked_stops.len() as u64;
         let prev = &labels[round - 1];
@@ -953,7 +985,7 @@ pub fn route_with_stats(
             break;
         }
         traverse_routes_profiled(
-            tt, prev, &mut curr, &routes, departure, max_time, &mut stats,
+            tt, prev, &mut curr, &routes, departure, max_time, &mut stats, deadline,
         )?;
         let transit_seeds: Vec<usize> = curr
             .iter()

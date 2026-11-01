@@ -7,6 +7,7 @@ use crate::routing_common::raptor_query::{Journey, Leg, Query, RaptorStats};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
 use std::collections::BinaryHeap;
+use std::time::Instant;
 
 const NEG_INF: i64 = i64::MIN / 4;
 
@@ -170,12 +171,17 @@ fn reverse_scan(
     min_time: i64,
     deadline: i64,
     stats: &mut RaptorStats,
+    stop_at: Option<Instant>,
 ) {
     use crate::routing_common::raptor_query::{
         for_each_route_service_day, get_latest_transport, transport_event_second,
     };
     let started = std::time::Instant::now();
     for &route in routes {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.routes_scanned += 1;
         let stops = tt.stops_on(route);
         if stops.len() < 2 {
@@ -186,6 +192,12 @@ fn reverse_scan(
             let mut alighting: Option<(TransportIdx, usize, i64, usize)> = None;
             for (position, stop) in stops.iter().enumerate().rev() {
                 stats.stop_events_scanned += 1;
+                if (stats.stop_events_scanned & 127) == 0
+                    && stop_at.is_some_and(|limit| Instant::now() >= limit)
+                {
+                    stats.profile_budget_exhausted = true;
+                    break;
+                }
                 let loc = stop.location().idx();
                 if let Some((transport, to, arrival, alight_index)) = alighting {
                     if stop.outbound() && position + 1 < stops.len() {
@@ -342,6 +354,19 @@ pub fn route_arrive_by_with_stats(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_arrive_by_with_stats_impl(tt, request, None)
+}
+
+pub(crate) fn route_arrive_by_with_stats_deadline(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, deadline: Instant,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_arrive_by_with_stats_impl(tt, request, Some(deadline))
+}
+fn route_arrive_by_with_stats_impl(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    stop_at: Option<Instant>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
     ensure!(
         request.max_boardings <= 16,
         "max_boardings exceeds supported query limit"
@@ -391,6 +416,10 @@ pub fn route_arrive_by_with_stats(
     let mut layers = vec![first];
     let mut seen = vec![0u8; tt.route_transport_ranges().len()];
     for round in 1..=request.max_boardings {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         stats.rounds += 1;
         stats.marked_stops += marked.len() as u64;
         let prev = &layers[round - 1];
@@ -413,7 +442,7 @@ pub fn route_arrive_by_with_stats(
         if routes.is_empty() {
             break;
         }
-        reverse_scan(tt, prev, &mut curr, &routes, min_time, deadline, &mut stats);
+        reverse_scan(tt, prev, &mut curr, &routes, min_time, deadline, &mut stats, stop_at);
         let seeds: Vec<usize> = curr
             .iter()
             .zip(prev)

@@ -585,11 +585,12 @@ pub(crate) fn route_profile_with_stats_precomputed(
         // initial events, use the actual requested time instead.
         fallback.departure_unix_seconds = events.first().copied().unwrap_or(reference);
         let (candidates, one) = if arrive_by {
-            raptor_arrive_by::route_arrive_by_with_stats(tt, &fallback)?
+            raptor_arrive_by::route_arrive_by_with_stats_deadline(tt, &fallback, deadline)?
         } else {
-            raptor_query::route_with_stats(tt, &fallback)?
+            raptor_query::route_with_stats_deadline(tt, &fallback, deadline)?
         };
         stats.profile_fallback_searches += 1;
+        stats.profile_budget_exhausted |= one.profile_budget_exhausted;
         accumulate_stats(&mut stats, one);
         transit.extend(candidates.into_iter().filter(|j| {
             let t = if arrive_by {
