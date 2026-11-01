@@ -17,6 +17,33 @@ use std::time::{Duration, Instant};
 
 const INF: i64 = i64::MAX / 4;
 const NEG_INF: i64 = i64::MIN / 4;
+/// Keep a bounded set of near-optimal route alternatives, even after a
+/// competitive destination arrival has been found.
+const DESTINATION_SLACK_SECONDS: i64 = 20 * 60;
+
+fn better(candidate: i64, incumbent: i64, reverse: bool) -> bool {
+    if reverse { candidate > incumbent } else { candidate < incumbent }
+}
+
+/// A stop state with no fewer boardings and a no-better time is dominated.
+fn dominated_by_lower_round(
+    prior: &[Round], stage: Stage, at: usize, time: i64,
+    generation: u32, reverse: bool,
+) -> bool {
+    prior.iter().any(|round| round.get(stage, at, generation)
+        .is_some_and(|state| !better(time, state.time, reverse)))
+}
+
+/// Nigiri-style persistent profile arrival comparisons. This history only
+/// contains anchors solved in monotone profile order and is invalidated when
+/// an interval extension breaks that order.
+fn dominated_by_profile(
+    profile: &[Vec<i64>], k: usize, at: usize, time: i64, reverse: bool,
+) -> bool {
+    profile.iter().take(k + 1).any(|row|
+        !better(time, row[at], reverse))
+}
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Stage { Ride, Walk, Ready }
@@ -215,17 +242,31 @@ fn lower_bounds(
 
 fn can_reach(
     bound: &[u32], stop: usize, time: i64,
-    anchor: i64, duration: u32, reverse: bool,
+    anchor: i64, duration: u32, reverse: bool, best_dest: i64,
 ) -> bool {
     let Some(&lb) = bound.get(stop) else { return false };
     if lb == u32::MAX { return false; }
-    if reverse {
+    let possible_dest = if reverse {
         time.saturating_sub(i64::from(lb))
-            >= anchor.saturating_sub(i64::from(duration))
     } else {
         time.saturating_add(i64::from(lb))
-            <= anchor.saturating_add(i64::from(duration))
-    }
+    };
+    let within_max_duration = if reverse {
+        possible_dest >= anchor.saturating_sub(i64::from(duration))
+    } else {
+        possible_dest <= anchor.saturating_add(i64::from(duration))
+    };
+    // Destination-time bounds are tightened only after a timetable-validated
+    // journey. Preserve <= (Nigiri's loose comparison) and a small diversity
+    // allowance, never pruning an equal-time candidate outright.
+    let competitive = if reverse {
+        best_dest == NEG_INF ||
+            possible_dest >= best_dest.saturating_sub(DESTINATION_SLACK_SECONDS)
+    } else {
+        best_dest == INF ||
+            possible_dest <= best_dest.saturating_add(DESTINATION_SLACK_SECONDS)
+    };
+    within_max_duration && competitive
 }
 
 fn change_seconds(tt: &ZeroCopyTimetable<'_>, from: usize, to: usize)
@@ -262,6 +303,14 @@ pub(crate) struct ProfileSearchState {
     rounds: Vec<Round>,
     parents: Vec<Parent>,
     bounds: Vec<u32>,
+    // Persistent scalar profile arrivals; these never own parent pointers.
+    // Entries are usable only while anchors are processed monotonically.
+    profile_ride: Vec<Vec<i64>>,
+    profile_ready: Vec<Vec<i64>>,
+    last_anchor: Option<i64>,
+    // Best fully validated destination arrival/departure for <= k boardings.
+    // This is Nigiri's time_at_dest_ analogue.
+    time_at_dest: Vec<i64>,
     stamps: Vec<u32>,
     stamp: u32,
     generation: u32,
@@ -288,10 +337,15 @@ impl ProfileSearchState {
         let mut stats = RaptorStats::default();
         stats.profile_searches = 1;
         let bounds = lower_bounds(tt, q, reverse);
+        let invalid = if reverse { NEG_INF } else { INF };
         Ok(Self {
             rounds: (0..=q.max_boardings).map(|_| Round::new(n)).collect(),
             parents: Vec::new(),
             bounds,
+            profile_ride: vec![vec![invalid; n]; q.max_boardings + 1],
+            profile_ready: vec![vec![invalid; n]; q.max_boardings + 1],
+            last_anchor: None,
+            time_at_dest: vec![invalid; q.max_boardings + 1],
             stamps: vec![0; tt.route_transport_ranges().len()],
             stamp: 0,
             generation: 0,
@@ -317,6 +371,19 @@ impl ProfileSearchState {
                 self.stats.profile_budget_exhausted = true;
                 break;
             }
+            // Extending an interval toward later forward departures (or
+            // earlier backward arrivals) invalidates profile dominance from
+            // previously solved anchors. Nigiri resets persisted round arrivals
+            // at this boundary too, while retaining already found journeys.
+            if self.last_anchor.is_some_and(|last| {
+                if self.reverse { anchor < last } else { anchor > last }
+            }) {
+                let invalid = if self.reverse { NEG_INF } else { INF };
+                for row in &mut self.profile_ride { row.fill(invalid); }
+                for row in &mut self.profile_ready { row.fill(invalid); }
+                self.time_at_dest.fill(invalid);
+            }
+            self.last_anchor = Some(anchor);
             self.stats.profile_anchor_events += 1;
             self.solve(tt, q, anchor);
             if self.stats.profile_budget_exhausted { break; }
@@ -333,6 +400,11 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
+        let prior_valid_journeys = self.journeys.len();
+        // Only commit this anchor's station arrivals to the persistent
+        // profile after it yields a fully valid destination journey.
+        let mut reached_rides = vec![Vec::<usize>::new(); q.max_boardings + 1];
+        let mut reached_ready = vec![Vec::<usize>::new(); q.max_boardings + 1];
         let horizon = i64::from(q.max_duration_seconds);
         let (lower, upper) = if reverse {
             (anchor.saturating_sub(horizon), anchor)
@@ -349,7 +421,9 @@ impl ProfileSearchState {
             };
             if (lower..=upper).contains(&t)
                 && can_reach(&self.bounds, ep.stop.idx(), t, anchor,
-                    q.max_duration_seconds, reverse)
+                    q.max_duration_seconds, reverse, self.time_at_dest[0])
+                && !dominated_by_profile(
+                    &self.profile_ready, 0, ep.stop.idx(), t, reverse)
                 && self.rounds[0].put(
                     Stage::Ready, ep.stop.idx(), t,
                     Parent::Root { seconds: ep.seconds },
@@ -360,6 +434,7 @@ impl ProfileSearchState {
         }
         marked.sort_unstable();
         marked.dedup();
+        reached_ready[0] = marked.clone();
         for k in 1..=q.max_boardings {
             if marked.is_empty() || Instant::now() >= self.deadline {
                 if Instant::now() >= self.deadline {
@@ -430,7 +505,11 @@ impl ProfileSearchState {
                                 ) else { continue };
                                 if (lower..=upper).contains(&event)
                                     && can_reach(&self.bounds, loc, event, anchor,
-                                        q.max_duration_seconds, reverse)
+                                        q.max_duration_seconds, reverse, self.time_at_dest[k])
+                                    && !dominated_by_profile(
+                                        &self.profile_ride, k, loc, event, reverse)
+                                    && !dominated_by_lower_round(
+                                        before, Stage::Ride, loc, event, generation, reverse)
                                 {
                                     let (from, to, board_pos, alight_pos, dep, arr) =
                                         if reverse {
@@ -485,6 +564,7 @@ impl ProfileSearchState {
             self.stats.route_scan_ms += started.elapsed().as_secs_f64() * 1_000.0;
             improved_rides.sort_unstable();
             improved_rides.dedup();
+            reached_rides[k] = improved_rides.clone();
             let mut changed_ready = Vec::new();
             let walking_started = Instant::now();
             // Only the final best ride state at each stop is expanded; the
@@ -502,7 +582,11 @@ impl ProfileSearchState {
                     };
                     if (lower..=upper).contains(&ready)
                         && can_reach(&self.bounds, from, ready, anchor,
-                            q.max_duration_seconds, reverse)
+                            q.max_duration_seconds, reverse, self.time_at_dest[k])
+                        && !dominated_by_profile(
+                            &self.profile_ready, k, from, ready, reverse)
+                        && !dominated_by_lower_round(
+                            before, Stage::Ready, from, ready, generation, reverse)
                         && current.put(
                             Stage::Ready, from, ready, Parent::ReadyRide,
                             generation, reverse, &mut self.parents, &mut self.stats
@@ -527,7 +611,7 @@ impl ProfileSearchState {
                     };
                     if !(lower..=upper).contains(&at)
                         || !can_reach(&self.bounds, to, at, anchor,
-                            q.max_duration_seconds, reverse)
+                            q.max_duration_seconds, reverse, self.time_at_dest[k])
                     { continue; }
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
                     // Physical arrival and boarding readiness are different
@@ -547,7 +631,11 @@ impl ProfileSearchState {
                     };
                     if (lower..=upper).contains(&ready)
                         && can_reach(&self.bounds, to, ready, anchor,
-                            q.max_duration_seconds, reverse)
+                            q.max_duration_seconds, reverse, self.time_at_dest[k])
+                        && !dominated_by_profile(
+                            &self.profile_ready, k, to, ready, reverse)
+                        && !dominated_by_lower_round(
+                            before, Stage::Ready, to, ready, generation, reverse)
                         && current.put(
                             Stage::Ready, to, ready,
                             // Keep the exact footpath that produced this
@@ -573,6 +661,17 @@ impl ProfileSearchState {
                     ) else { continue };
                     self.stats.profile_journeys_reconstructed += 1;
                     if valid_journey(tt, q, &journey) {
+                        // Persistent destination-time bounds are indexed by
+                        // a maximum boarding count. A result with k rides
+                        // also bounds searches permitting more boardings.
+                        let metric = if reverse {
+                            journey.departure_unix_seconds
+                        } else {
+                            journey.arrival_unix_seconds
+                        };
+                        for bound in self.time_at_dest.iter_mut().skip(k) {
+                            if better(metric, *bound, reverse) { *bound = metric; }
+                        }
                         self.journeys.push(journey);
                     } else {
                         self.stats.profile_journeys_rejected += 1;
@@ -581,8 +680,25 @@ impl ProfileSearchState {
             }
             changed_ready.sort_unstable();
             changed_ready.dedup();
+            reached_ready[k] = changed_ready.clone();
             marked = changed_ready;
             if self.stats.profile_budget_exhausted { break; }
+        }
+        if self.journeys.len() > prior_valid_journeys {
+            for k in 0..self.rounds.len() {
+                for &stop in &reached_ready[k] {
+                    if let Some(value) = self.rounds[k].get(Stage::Ready, stop, generation) {
+                        let current = &mut self.profile_ready[k][stop];
+                        if better(value.time, *current, reverse) { *current = value.time; }
+                    }
+                }
+                for &stop in &reached_rides[k] {
+                    if let Some(value) = self.rounds[k].get(Stage::Ride, stop, generation) {
+                        let current = &mut self.profile_ride[k][stop];
+                        if better(value.time, *current, reverse) { *current = value.time; }
+                    }
+                }
+            }
         }
     }
 
@@ -659,5 +775,35 @@ mod compact_reconstruction_tests {
             .expect("self-transfer readiness should reference the same ride");
         assert_eq!(result.boardings, 1);
         assert_eq!(result.legs.len(), 3);
+    }
+}
+
+
+#[cfg(test)]
+mod profile_bound_tests {
+    use super::*;
+
+    #[test]
+    fn destination_bound_respects_slack_and_direction() {
+        let lb = [30_u32];
+        assert!(can_reach(&lb, 0, 100, 100, 1000, false, INF));
+        assert!(can_reach(&lb, 0, 100, 100, 1000, false, 130));
+        assert!(can_reach(&lb, 0, 100, 100, 1000, false, 129));
+        assert!(!can_reach(&lb, 0, 100, 100, 1000, false, -2000));
+        assert!(can_reach(&lb, 0, 900, 900, 1000, true, NEG_INF));
+        assert!(can_reach(&lb, 0, 900, 900, 1000, true, 870));
+        assert!(!can_reach(&lb, 0, 900, 900, 1000, true, 4000));
+    }
+
+    #[test]
+    fn profile_dominance_rejects_equal_or_worse_times_at_no_more_rides() {
+        let profile = vec![vec![100, INF], vec![80, 100]];
+        assert!(dominated_by_profile(&profile, 1, 0, 110, false));
+        assert!(dominated_by_profile(&profile, 1, 0, 100, false));
+        assert!(!dominated_by_profile(&profile, 1, 0, 79, false));
+        assert!(!dominated_by_profile(&profile, 0, 1, 99, false));
+        let reverse_profile = vec![vec![100, NEG_INF], vec![120, 200]];
+        assert!(dominated_by_profile(&reverse_profile, 1, 0, 119, true));
+        assert!(!dominated_by_profile(&reverse_profile, 1, 0, 121, true));
     }
 }
