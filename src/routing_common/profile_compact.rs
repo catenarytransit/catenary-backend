@@ -775,3 +775,131 @@ mod profile_bound_tests {
         assert!(!dominated_by_profile(&reverse_profile, 1, 0, 121, true));
     }
 }
+
+
+#[cfg(test)]
+mod compressed_timetable_profile_tests {
+    use super::*;
+    use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::timetable::{
+        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, TimingProfileIdx,
+        TimetableOwned, TrafficDays,
+    };
+
+    // A genuine encoded Gentian timetable fixture: one 8-hour daily train
+    // crossing two stops, active across four consecutive service days.
+    fn daily_train() -> TimetableOwned {
+        let mut tt = TimetableOwned::empty(20_000, 4);
+        tt.add_source("test", "amtrak", "attempt").unwrap();
+        for _ in 0..2 {
+            tt.coordinates.push(Default::default());
+            tt.location_id.push(Default::default());
+            tt.location_name.push(Default::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(1);
+            tt.location_transfer_seconds.push(0);
+            tt.location_routes_offsets.push(tt.location_routes_offsets.len() as u32);
+            tt.location_routes.push(RouteIdx(0));
+            tt.footpaths_out_offsets.push(0);
+            tt.footpaths_in_offsets.push(0);
+        }
+        tt.route_stops.extend([
+            PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+            PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+        ]);
+        tt.route_stop_offsets.push(2);
+        tt.route_transport_ranges.push(Range { from: 0, to: 1 });
+        tt.timing_profile_offsets.push(2);
+        tt.timing_profile_events = vec![
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(8 * 3_600).unwrap(),
+        ];
+        tt.route_clasz.push(2);
+        tt.transport_route.push(RouteIdx(0));
+        tt.transport_timing_profile.push(TimingProfileIdx(0));
+        tt.transport_first_dep_offset.push(Delta::from_seconds(9 * 3_600).unwrap());
+        tt.transport_initial_day_offset.push(0);
+        let mut days = TrafficDays::default();
+        for day in 0..4 { days.set(day, true).unwrap(); }
+        tt.bitfields.push(days);
+        tt.transport_traffic_days.push(BitfieldIdx(1));
+        tt.route_traffic_days.push(BitfieldIdx(1));
+        tt.route_section_clasz_offsets.push(0);
+        tt.section_flag_offsets.push(0);
+        tt.transport_to_trip_section_offsets.push(0);
+        tt
+    }
+
+    fn query() -> Query {
+        Query {
+            departure_unix_seconds: 20_000_i64 * 86_400 + 18 * 3_600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 36 * 3_600,
+        }
+    }
+
+    #[test]
+    fn latest_first_forward_anchors_find_both_daily_trains() {
+        let bytes = daily_train().encode().unwrap();
+        let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let departures = [base + 86_400 + 9 * 3_600,
+                          base + 2 * 86_400 + 9 * 3_600];
+        let (journeys, stats) = route_profile_incremental(
+            &timetable, &query(), &departures, false, Duration::from_secs(5)
+        ).unwrap();
+        assert!(!stats.profile_budget_exhausted, "timed out on tiny timetable: {stats:?}");
+        for departure in departures {
+            assert!(journeys.iter().any(|j|
+                j.departure_unix_seconds == departure
+                && j.arrival_unix_seconds == departure + 8 * 3_600
+                && j.boardings == 1
+            ), "missing train at {departure}: {journeys:?}");
+        }
+        assert_eq!(stats.profile_anchor_events, 2);
+    }
+
+    #[test]
+    fn ascending_reverse_anchors_find_both_daily_trains() {
+        let bytes = daily_train().encode().unwrap();
+        let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let arrivals = [base + 86_400 + 17 * 3_600,
+                        base + 2 * 86_400 + 17 * 3_600];
+        let (journeys, stats) = route_profile_incremental(
+            &timetable, &query(), &arrivals, true, Duration::from_secs(5)
+        ).unwrap();
+        assert!(!stats.profile_budget_exhausted, "timed out on tiny timetable: {stats:?}");
+        for arrival in arrivals {
+            assert!(journeys.iter().any(|j|
+                j.arrival_unix_seconds == arrival
+                && j.departure_unix_seconds == arrival - 8 * 3_600
+                && j.boardings == 1
+            ), "missing arrival at {arrival}: {journeys:?}");
+        }
+        assert_eq!(stats.profile_anchor_events, 2);
+    }
+
+    #[test]
+    fn extension_in_nonmonotone_direction_resets_persistent_bounds() {
+        let bytes = daily_train().encode().unwrap();
+        let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let early = base + 86_400 + 9 * 3_600;
+        let late = base + 2 * 86_400 + 9 * 3_600;
+        let q = query();
+        let mut state = ProfileSearchState::new(
+            &timetable, &q, early, late, false, Duration::from_secs(5)
+        ).unwrap();
+        state.extend(&timetable, &q, &[early]).unwrap();
+        assert_eq!(state.last_anchor, Some(early));
+        state.extend(&timetable, &q, &[late]).unwrap();
+        assert_eq!(state.last_anchor, Some(late));
+        assert_eq!(state.stats().profile_anchor_events, 2);
+        assert!(state.result().iter().any(|j| j.departure_unix_seconds == late));
+    }
+}
