@@ -243,6 +243,10 @@ fn lower_bounds(
     }
     let mut visited = 0usize;
     while let Some(Reverse((weight, at))) = heap.pop() {
+        // Nigiri's duration limit also bounds useful destination labels.
+        // Dijkstra is monotone: no stop with an optimistic distance already
+        // greater than the entire allowed journey can improve a legal route.
+        if weight > request.max_duration_seconds { break; }
         visited += 1;
         if (visited & 4095) == 0 && Instant::now() >= deadline {
             return vec![0; n];
@@ -251,7 +255,7 @@ fn lower_bounds(
         for &(next, cost) in graph.successors(at) {
             let next = next as usize;
             let candidate = weight.saturating_add(cost);
-            if candidate < dist[next] {
+            if candidate <= request.max_duration_seconds && candidate < dist[next] {
                 dist[next] = candidate;
                 heap.push(Reverse((candidate, next)));
             }
@@ -264,7 +268,7 @@ fn lower_bounds(
         for fp in footpaths {
             let next = fp.target().idx();
             let candidate = weight.saturating_add(fp.seconds());
-            if candidate < dist[next] {
+            if candidate <= request.max_duration_seconds && candidate < dist[next] {
                 dist[next] = candidate;
                 heap.push(Reverse((candidate, next)));
             }
