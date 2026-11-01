@@ -70,3 +70,12 @@ urls = ["http://localhost:9200"]
 [postgres]
 database_url = "postgres://user:pass@localhost:5432/catenary"
 max_connections = 128
+
+# Worker metadata read modes for routing.bin and rtree_meta.bin only.
+# Unlisted regions default to ordinary in-memory reads.
+[osr_worker]
+excluded_regions = []
+
+[osr_worker.region_load_modes]
+# "asia/japan" = "mmap"
+# "europe/germany" = "read"
