@@ -21,7 +21,6 @@ const INF: i64 = i64::MAX / 4;
 const NEG_INF: i64 = i64::MIN / 4;
 /// Keep a bounded set of near-optimal route alternatives, even after a
 /// competitive destination arrival has been found.
-const DESTINATION_SLACK_SECONDS: i64 = 20 * 60;
 // Bound alternatives only at the destination, not at every intermediate
 // station. The six route-distinct display options require at least six
 // independently reconstructable destination snapshots.
@@ -684,6 +683,39 @@ impl ProfileSearchState {
                                                     step: leg_parent,
                                                     previous: Some(onboard.predecessor),
                                                 });
+                                                // Nigiri updates time_at_dest_ as soon as a
+                                                // destination label improves, during route
+                                                // relaxation, not after scanning every route
+                                                // and service day in the round. Validate the
+                                                // predecessor chain before using it as a
+                                                // pruning bound: GTFS pair-specific transfers
+                                                // make unvalidated scalar bounds unsafe here.
+                                                if better(score, self.time_at_dest[k], reverse) {
+                                                    if let Some(mut journey) =
+                                                        crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
+                                                            &self.parents, snapshot, event,
+                                                            loc, reverse, seconds,
+                                                        )
+                                                    {
+                                                        optimize_same_trip_endpoint_walks(
+                                                            tt, q, &mut journey
+                                                        );
+                                                        if valid_journey(tt, q, &journey) {
+                                                            let actual = if reverse {
+                                                                journey.departure_unix_seconds
+                                                            } else {
+                                                                journey.arrival_unix_seconds
+                                                            };
+                                                            for bound in self.time_at_dest
+                                                                .iter_mut().skip(k)
+                                                            {
+                                                                if better(actual, *bound, reverse) {
+                                                                    *bound = actual;
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
                                                 let item = (score, loc, seconds, snapshot);
                                                 if let Some(idx) = replace {
                                                     ride_terminal_paths[idx] = item;
@@ -903,11 +935,9 @@ impl ProfileSearchState {
             for (at_dest, terminal_stop, stage, terminal_seconds) in terminal_candidates {
                 let current_best = self.time_at_dest[k];
                 let too_slow = if reverse {
-                    current_best != NEG_INF &&
-                        at_dest < current_best.saturating_sub(DESTINATION_SLACK_SECONDS)
+                    current_best != NEG_INF && at_dest < current_best
                 } else {
-                    current_best != INF &&
-                        at_dest > current_best.saturating_add(DESTINATION_SLACK_SECONDS)
+                    current_best != INF && at_dest > current_best
                 };
                 if too_slow { continue; }
                 let Some(mut journey) = reconstruct(
