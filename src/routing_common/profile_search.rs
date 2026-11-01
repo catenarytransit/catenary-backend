@@ -739,6 +739,42 @@ mod tests {
     }
 
     #[test]
+    fn faster_direct_journey_bounds_slow_transit_search() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut request = request();
+        request.direct_walk_seconds = Some(90);
+        let (journeys, _) = route_profile_with_stats(
+            &tt, &request,
+            ProfileOptions {
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            }, false,
+        ).unwrap();
+        assert!(journeys.iter().any(|j| matches!(
+            j.legs.as_slice(), [Leg::DirectWalk { seconds: 90 }]
+        )));
+        assert!(journeys.iter().all(|j| j.boardings == 0),
+            "eight-hour train cannot compete with a 90-second direct journey");
+    }
+
+    #[test]
+    fn expired_event_enumeration_returns_partial_and_sets_budget_flag() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut stats = RaptorStats::default();
+        let request = request();
+        let events = timetable_start_events(
+            &tt, &request,
+            request.departure_unix_seconds,
+            request.departure_unix_seconds + 86_400,
+            false, &mut stats, Instant::now(),
+        );
+        assert!(stats.profile_budget_exhausted);
+        assert!(events.is_empty());
+    }
+
+    #[test]
     fn first_real_event_is_not_a_fake_requested_departure() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
