@@ -866,6 +866,30 @@ mod tests {
     }
 
     #[test]
+    fn point_seed_does_not_leak_an_uncompetitive_transit_journey() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut q = request();
+        q.departure_unix_seconds = base + 8 * 3_600;
+        q.direct_walk_seconds = Some(90);
+        let (journeys, stats) = route_profile_with_stats(
+            &tt, &q,
+            ProfileOptions {
+                min_itineraries: 1,
+                max_journey_duration_seconds: 36 * 3_600,
+                ..ProfileOptions::default()
+            }, false,
+        ).unwrap();
+        assert_eq!(stats.profile_point_seed_searches, 1);
+        assert_eq!(journeys.len(), 1,
+            "point seed must not resurrect a train slower than direct walking");
+        assert!(matches!(
+            journeys[0].legs.as_slice(), [Leg::DirectWalk { seconds: 90 }]
+        ));
+    }
+
+    #[test]
     fn faster_direct_journey_bounds_slow_transit_search() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
