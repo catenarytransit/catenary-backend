@@ -76,30 +76,14 @@ pub fn include_only_route_types(
 
     // remove data that are not needed
 
-    gtfs.routes = gtfs
-        .routes
-        .into_iter()
-        .filter(|(route_id, route)| route_ids_to_keep.contains(route_id))
-        .collect();
+    gtfs.routes.retain(|route_id, _| route_ids_to_keep.contains(route_id));
 
-    gtfs.trips = gtfs
-        .trips
-        .into_iter()
-        .filter(|(trip_id, trip)| trips_to_keep.contains(trip_id))
-        .collect();
+    gtfs.trips.retain(|trip_id, _| trips_to_keep.contains(trip_id));
 
     if (delete_shapes_and_stops) {
-        gtfs.stops = gtfs
-            .stops
-            .into_iter()
-            .filter(|(stop_id, stop)| keep_stop_ids.contains(stop_id))
-            .collect();
+        gtfs.stops.retain(|stop_id, _| keep_stop_ids.contains(stop_id));
 
-        gtfs.shapes = gtfs
-            .shapes
-            .into_iter()
-            .filter(|(shape_id, shape)| keep_shapes.contains(shape_id))
-            .collect();
+        gtfs.shapes.retain(|shape_id, _| keep_shapes.contains(shape_id));
     }
 
     gtfs
@@ -206,7 +190,7 @@ pub fn minimum_day_filter(gtfs: Gtfs, naive_date: chrono::NaiveDate) -> Gtfs {
     let mut shapes_to_remove = BTreeSet::new();
     let mut shape_trip_counts: AHashMap<String, usize> = AHashMap::new();
 
-    for (_, trip) in &gtfs.trips {
+    for trip in gtfs.trips.values() {
         if let Some(shape_id) = &trip.shape_id {
             *shape_trip_counts.entry(shape_id.clone()).or_insert(0) += 1;
         }
