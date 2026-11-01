@@ -6,7 +6,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use catenary::routing_common::routing_regions::{RoutingRegionsConfig, resolve};
+use catenary::routing_common::routing_regions::{RegionSelection, RoutingRegionsConfig, resolve};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use chrono::Utc;
 use clap::Parser;
@@ -105,6 +105,34 @@ struct Args {
 const DEFAULT_SERVICE_DAYS: u32 = 365;
 const LOOKBACK_DAYS: i32 = 7;
 
+// Exclude FlixBus from Gentian without changing the shared region resolver.
+fn excluded_chateau(chateau: &str) -> bool {
+    matches!(chateau, "flixbus~america" | "flixbus~europe")
+}
+
+fn exclude_chateaux(selection: &mut RegionSelection) {
+    selection.chateaux.retain(|chateau| !excluded_chateau(chateau));
+    selection
+        .sources
+        .retain(|source| !excluded_chateau(&source.chateau));
+}
+
+fn add_explicit_sources(tt: &mut TimetableOwned, sources: &[String]) -> Result<()> {
+    for value in sources {
+        let components: Vec<_> = value.splitn(3, ',').collect();
+        ensure!(
+            components.len() == 3 && components.iter().all(|x| !x.is_empty()),
+            "invalid --source: expected CHATEAU,FEED,ATTEMPT"
+        );
+        if excluded_chateau(components[0]) {
+            eprintln!("Gentian: skipping excluded chateau {}", components[0]);
+            continue;
+        }
+        tt.add_source(components[0], components[1], components[2])?;
+    }
+    Ok(())
+}
+
 fn resolve_horizon(
     first_day_override: Option<i32>,
     day_count_override: Option<u32>,
@@ -147,7 +175,7 @@ fn main() -> Result<()> {
             args.data_dir.as_deref(),
         );
     }
-    let selection = if let Some(id) = &args.region {
+    let mut selection = if let Some(id) = &args.region {
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
         let url = args
             .database_url
@@ -159,6 +187,9 @@ fn main() -> Result<()> {
     } else {
         None
     };
+    if let Some(selection) = selection.as_mut() {
+        exclude_chateaux(selection);
+    }
 
     if args.list_chateaux {
         let selection = selection.as_ref().context("--region is required")?;
@@ -186,6 +217,11 @@ fn main() -> Result<()> {
 
     if args.build {
         let selection = selection.as_ref().context("--region is required")?;
+        ensure!(
+            !selection.sources.is_empty(),
+            "routing region {} has no eligible GTFS sources after excluding FlixBus",
+            selection.id
+        );
         let url = args
             .database_url
             .as_deref()
@@ -242,14 +278,7 @@ fn main() -> Result<()> {
             tt.add_source(&source.chateau, &source.onestop_feed_id, &source.attempt_id)?;
         }
     } else {
-        for value in &args.sources {
-            let components: Vec<_> = value.splitn(3, ',').collect();
-            ensure!(
-                components.len() == 3 && components.iter().all(|x| !x.is_empty()),
-                "invalid --source: expected CHATEAU,FEED,ATTEMPT"
-            );
-            tt.add_source(components[0], components[1], components[2])?;
-        }
+        add_explicit_sources(&mut tt, &args.sources)?;
     }
 
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, &output)?;
@@ -267,6 +296,46 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flixbus_chateaux_are_excluded_from_region_selection() {
+        use catenary::routing_common::routing_regions::ChateauSource;
+
+        let chateaux = ["flixbus~america", "other", "flixbus~europe"];
+        let mut selection = RegionSelection {
+            id: "test".into(),
+            name: "Test".into(),
+            chateaux: chateaux.iter().map(|chateau| (*chateau).into()).collect(),
+            sources: chateaux
+                .iter()
+                .map(|chateau| ChateauSource {
+                    chateau: (*chateau).into(),
+                    onestop_feed_id: format!("feed-{chateau}"),
+                    attempt_id: "attempt".into(),
+                })
+                .collect(),
+        };
+        exclude_chateaux(&mut selection);
+        assert_eq!(selection.chateaux, vec!["other".to_string()]);
+        assert_eq!(selection.sources.len(), 1);
+        assert_eq!(selection.sources[0].chateau, "other");
+    }
+
+    #[test]
+    fn explicit_sources_skip_flixbus_but_validate_source_syntax() {
+        let mut tt = TimetableOwned::empty(0, 1);
+        add_explicit_sources(
+            &mut tt,
+            &[
+                "flixbus~america,feed-us,attempt".into(),
+                "other,feed-other,attempt".into(),
+                "flixbus~europe,feed-eu,attempt".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(tt.sources.len(), 1);
+        assert!(add_explicit_sources(&mut tt, &["invalid".into()]).is_err());
+    }
 
     #[test]
     fn default_horizon_is_today_with_one_lookback_day_and_365_service_days() {
