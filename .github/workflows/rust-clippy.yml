@@ -19,11 +19,12 @@ jobs:
             gcc-14 g++-14 build-essential binutils libtbb-dev pkg-config coinor-libcbc-dev libcoinutils-dev
 
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
+      # The nightly compiler encountered a recursive async-drop query
+      # failure in sqlx-core 0.8.6 before Clippy could inspect this crate.
+      # Use the stable toolchain pinned by rust-toolchain.toml.
+      - uses: dtolnay/rust-toolchain@stable
         with:
-            toolchain: nightly
-            components: clippy
-            override: true
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           cache-on-failure: true
