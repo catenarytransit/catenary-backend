@@ -527,6 +527,16 @@ pub(crate) fn route_profile_with_stats_precomputed(
     stats.profile_point_seed_ms += point_started.elapsed().as_secs_f64() * 1_000.0;
     stats.profile_point_seed_timed_out = point_stats.profile_budget_exhausted;
     accumulate_stats(&mut stats, point_stats);
+    // A fast direct walk/cycle is a valid competitive travel-time bound.
+    // Without this filter, a long point seed could survive even though the
+    // profile would reject it, violating the existing direct-mode contract.
+    let point_seed = point_seed.into_iter().filter(|j| {
+        request.direct_walk_seconds.is_none_or(|seconds| {
+            let duration = j.arrival_unix_seconds
+                .saturating_sub(j.departure_unix_seconds);
+            duration <= i64::from(seconds.saturating_add(20 * 60))
+        })
+    }).collect::<Vec<_>>();
     // Once a feasible route exists, its elapsed time is an admissible
     // destination-directed upper bound. Keep one hour of extra time to retain
     // slower but potentially useful route-diverse alternatives.
