@@ -361,6 +361,7 @@ pub(crate) struct ProfileSearchState {
     reverse: bool,
 }
 impl ProfileSearchState {
+    #[cfg(test)]
     pub fn new(
         tt: &ZeroCopyTimetable<'_>, q: &Query,
         earliest: i64, latest: i64, reverse: bool, timeout: Duration,
@@ -803,6 +804,7 @@ impl ProfileSearchState {
     pub fn stats(&self) -> &RaptorStats { &self.stats }
 }
 
+#[cfg(test)]
 pub(crate) fn route_profile_incremental(
     tt: &ZeroCopyTimetable<'_>, q: &Query, anchors: &[i64],
     reverse: bool, timeout: Duration,

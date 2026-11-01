@@ -62,7 +62,7 @@ pub struct TransitRegion {
     geometry: Vec<geo::Geometry<f64>>,
     pub timetable: MappedTimetable,
     pub metadata: MetadataIndex,
-    pub lower_bound_topology: crate::routing_common::profile_compact::LowerBoundTopology,
+    pub(crate) lower_bound_topology: crate::routing_common::profile_compact::LowerBoundTopology,
 }
 
 #[derive(Clone, Debug, Serialize)]
