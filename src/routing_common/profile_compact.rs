@@ -509,10 +509,13 @@ impl ProfileSearchState {
             }
             for &stop in &marked { self.stop_stamps[stop] = self.stop_stamp; }
             let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp);
+            let mut improved_rides = Vec::new();
+            // Finish route scanning before taking immutable references to
+            // round predecessors for timetable-validated destination updates.
+            {
             let (before, after) = self.rounds.split_at_mut(k);
             let previous = &before[k-1];
             let current = &mut after[0];
-            let mut improved_rides = Vec::new();
             let started = Instant::now();
             for route in routes {
                 if Instant::now() >= self.deadline {
@@ -621,9 +624,60 @@ impl ProfileSearchState {
                 if self.stats.profile_budget_exhausted { break; }
             }
             self.stats.route_scan_ms += started.elapsed().as_secs_f64() * 1_000.0;
+            }
             improved_rides.sort_unstable();
             improved_rides.dedup();
             reached_rides[k] = improved_rides.clone();
+
+            // Nigiri's time_at_dest_ is updated on vehicle arrivals before
+            // it relaxes same-station transfers and footpaths. Recover this
+            // safe subset of its early bound updates: materialize the complete
+            // vehicle path and validate the GTFS service days and predecessor
+            // transfer restrictions before tightening the deadline. Unsafe
+            // provisional paths never suppress later valid alternatives.
+            let terminal_endpoints = if reverse { &q.access } else { &q.egress };
+            let mut ride_terminals = Vec::new();
+            for ep in terminal_endpoints {
+                if let Some(ride) = self.rounds[k].get(
+                    Stage::Ride, ep.stop.idx(), generation)
+                {
+                    let possible_time = if reverse {
+                        ride.time.saturating_sub(i64::from(ep.seconds))
+                    } else {
+                        ride.time.saturating_add(i64::from(ep.seconds))
+                    };
+                    ride_terminals.push((possible_time, ep.stop.idx(), ep.seconds));
+                }
+            }
+            ride_terminals.sort_unstable_by_key(|(time, stop, seconds)| (
+                if reverse { Reverse(*time) }
+                else { Reverse(time.saturating_neg()) },
+                *stop, *seconds,
+            ));
+            for (_, stop, seconds) in ride_terminals {
+                let Some(mut journey) = reconstruct(
+                    &self.rounds, &self.parents, generation, reverse,
+                    k, stop, Stage::Ride, seconds,
+                ) else { continue };
+                self.stats.profile_journeys_reconstructed += 1;
+                optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+                if valid_journey(tt, q, &journey) {
+                    let metric = if reverse {
+                        journey.departure_unix_seconds
+                    } else {
+                        journey.arrival_unix_seconds
+                    };
+                    for bound in self.time_at_dest.iter_mut().skip(k) {
+                        if better(metric, *bound, reverse) { *bound = metric; }
+                    }
+                    self.journeys.push(journey);
+                } else {
+                    self.stats.profile_journeys_rejected += 1;
+                }
+            }
+
+            let (before, after) = self.rounds.split_at_mut(k);
+            let current = &mut after[0];
             let mut changed_ready = Vec::new();
             let walking_started = Instant::now();
             // Only the final best ride state at each stop is expanded; the
@@ -718,7 +772,9 @@ impl ProfileSearchState {
             let terminals = if reverse { &q.access } else { &q.egress };
             let mut terminal_candidates = Vec::new();
             for ep in terminals {
-                for stage in [Stage::Ride, Stage::Walk] {
+                // Ride destinations have already been validated above, so
+                // now only new walking-terminal candidates need extraction.
+                for stage in [Stage::Walk] {
                     if let Some(cell) = current.get(stage, ep.stop.idx(), generation) {
                         let at_dest = if reverse {
                             cell.time.saturating_sub(i64::from(ep.seconds))
