@@ -691,7 +691,7 @@ pub async fn fetch_trip_information(
                     let last_stop_name = stop_times
                         .iter()
                         .filter(|stu| stu.schedule_relationship != Some(1))
-                        .last()
+                        .next_back()
                         .map(|x| x.name.clone())
                         .flatten();
 
