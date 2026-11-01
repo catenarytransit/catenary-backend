@@ -537,9 +537,11 @@ pub(crate) fn route_profile_with_stats_precomputed(
             duration <= i64::from(seconds.saturating_add(20 * 60))
         })
     }).collect::<Vec<_>>();
-    // Once a feasible route exists, its elapsed time is an admissible
-    // destination-directed upper bound. Keep one hour of extra time to retain
-    // slower but potentially useful route-diverse alternatives.
+    // Once a feasible route exists, its elapsed time is a useful
+    // competitiveness horizon for subsequent profile work. This is NOT an
+    // admissible bound for every Pareto journey: a slower journey can leave
+    // later or use fewer vehicles. Retain one hour of slack for route diversity.
+    // The initial point result remains available if the profile is incomplete.
     let seed_duration_bound = point_seed.iter()
         .filter(|j| j.boardings > 0)
         .map(|j| j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds))
