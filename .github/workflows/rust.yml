@@ -29,3 +29,5 @@ jobs:
       run: cargo build --verbose
     - name: Test compact RAPTOR and profile-search regressions
       run: cargo test --lib routing_common::profile -- --nocapture
+    - name: Test Edelweiss walking geometry memoization
+      run: cargo test --bin edelweiss identical_street_paths_share_one_osr_request -- --nocapture
