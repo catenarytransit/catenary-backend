@@ -146,7 +146,10 @@ fn lower_bounds(
     tt: &ZeroCopyTimetable<'_>, request: &Query, reverse: bool,
 ) -> Vec<u32> {
     let n = tt.coordinates().len();
-    let mut graph: Vec<Vec<(usize, u32)>> = vec![Vec::new(); n];
+    // Flat edge storage avoids allocating an individual Vec for every stop
+    // (hundreds of thousands of tiny heap objects for regional timetables).
+    // The condensed CSR also gives the Dijkstra scan sequential cache access.
+    let mut edges: Vec<(u32, u32, u32)> = Vec::new();
     for route_id in 0..tt.route_transport_ranges().len() {
         let route = RouteIdx(route_id as u32);
         let stops = tt.stops_on(route);
@@ -174,10 +177,24 @@ fn lower_bounds(
             let cost = if minimum[pos] == u32::MAX { 0 } else { minimum[pos] };
             // Lower-bound graph is deliberately optimistic: even a nonboarding
             // intermediate stop remains reachable while riding through it.
-            if reverse { graph[from].push((to, cost)); }
-            else { graph[to].push((from, cost)); }
+            if reverse {
+                edges.push((from as u32, to as u32, cost));
+            } else {
+                edges.push((to as u32, from as u32, cost));
+            }
         }
     }
+    let mut offsets = vec![0usize; n + 1];
+    for &(from, _, _) in &edges { offsets[from as usize + 1] += 1; }
+    for i in 1..offsets.len() { offsets[i] += offsets[i - 1]; }
+    let mut next_offset = offsets[..n].to_vec();
+    let mut neighbors = vec![(0u32, 0u32); edges.len()];
+    for (from, to, cost) in edges {
+        let cursor = &mut next_offset[from as usize];
+        neighbors[*cursor] = (to, cost);
+        *cursor += 1;
+    }
+    drop(next_offset);
     let mut dist = vec![u32::MAX; n];
     let mut heap = BinaryHeap::<Reverse<(u32, usize)>>::new();
     let terminals = if reverse { &request.access } else { &request.egress };
@@ -190,7 +207,8 @@ fn lower_bounds(
     }
     while let Some(Reverse((weight, at))) = heap.pop() {
         if weight != dist[at] { continue; }
-        for &(next, cost) in &graph[at] {
+        for &(next, cost) in &neighbors[offsets[at]..offsets[at + 1]] {
+            let next = next as usize;
             let candidate = weight.saturating_add(cost);
             if candidate < dist[next] {
                 dist[next] = candidate;
