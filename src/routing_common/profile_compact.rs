@@ -303,6 +303,17 @@ fn lower_bounds(
     dist
 }
 
+fn initial_destination_bound(anchor: i64, q: &Query, reverse: bool) -> i64 {
+    // Nigiri search.h: worst_time_at_dest = start_time +/- min(
+    //   fastest_direct, max_travel_time) + one unit for loose comparison.
+    // This is a bound, not a preceding point-RAPTOR search.
+    let maximum = i64::from(q.max_duration_seconds);
+    let direct = q.direct_walk_seconds.map(i64::from).unwrap_or(maximum);
+    let budget = maximum.min(direct).saturating_add(1);
+    if reverse { anchor.saturating_sub(budget) }
+    else { anchor.saturating_add(budget) }
+}
+
 fn can_reach(
     bound: &[u32], stop: usize, time: i64,
     anchor: i64, duration: u32, reverse: bool, best_dest: i64,
@@ -322,12 +333,14 @@ fn can_reach(
     // Destination-time bounds are tightened only after a timetable-validated
     // journey. Preserve <= (Nigiri's loose comparison) and a small diversity
     // allowance, never pruning an equal-time candidate outright.
+    // Nigiri uses a loose (inclusive) destination bound. The previous
+    // additive slack allowed walking and vehicle states outside the current
+    // competitive horizon to propagate, particularly costly for long-distance
+    // queries with many service days.
     let competitive = if reverse {
-        best_dest == NEG_INF ||
-            possible_dest >= best_dest.saturating_sub(DESTINATION_SLACK_SECONDS)
+        best_dest == NEG_INF || possible_dest >= best_dest
     } else {
-        best_dest == INF ||
-            possible_dest <= best_dest.saturating_add(DESTINATION_SLACK_SECONDS)
+        best_dest == INF || possible_dest <= best_dest
     };
     within_max_duration && competitive
 }
@@ -493,6 +506,13 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
+        // Reset only the per-start competitiveness limit, not the arrival
+        // matrix. Nigiri executes every start with a worst destination time
+        // before updating it from transit and walking relaxations.
+        let worst = initial_destination_bound(anchor, q, reverse);
+        for bound in &mut self.time_at_dest {
+            if better(worst, *bound, reverse) { *bound = worst; }
+        }
         // Nigiri retains round arrival times independently of whether a
         // journey to the destination was found at this particular anchor.
         // They remain valid dominance bounds for earlier forward starts and

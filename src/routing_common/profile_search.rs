@@ -494,62 +494,6 @@ pub(crate) fn route_profile_with_stats_precomputed(
         Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
     let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
 
-    // Nigiri obtains an initial competitive destination time as soon as the
-    // first on-trip RAPTOR search reaches the destination. Our continental
-    // profile has a four-day default horizon; searching every active service
-    // day before finding that first bound is prohibitively expensive for local
-    // journeys. Obtain a bounded single-query seed before profiling. Keep the
-    // independently returned seed even if the subsequent profile exhausts its
-    // wall budget. A missing seed is never proof that the destination is
-    // unreachable, so the full-horizon profile remains available.
-    const POINT_SEED_HORIZON_SECONDS: u32 = 12 * 3_600;
-    let mut point_request = request.clone();
-    point_request.direct_walk_seconds = None;
-    point_request.max_duration_seconds =
-        options.max_journey_duration_seconds.min(POINT_SEED_HORIZON_SECONDS);
-    let point_budget = (Duration::from_secs(u64::from(options.timeout_seconds)) / 5)
-        .min(Duration::from_millis(750));
-    let point_deadline = Instant::now()
-        .checked_add(point_budget)
-        .unwrap_or(profile_deadline)
-        .min(profile_deadline);
-    let point_started = Instant::now();
-    let (point_seed, point_stats) = if arrive_by {
-        raptor_arrive_by::route_arrive_by_with_stats_deadline(
-            tt, &point_request, point_deadline,
-        )?
-    } else {
-        raptor_query::route_with_stats_deadline(
-            tt, &point_request, point_deadline,
-        )?
-    };
-    stats.profile_point_seed_searches += 1;
-    stats.profile_point_seed_ms += point_started.elapsed().as_secs_f64() * 1_000.0;
-    stats.profile_point_seed_timed_out = point_stats.profile_budget_exhausted;
-    accumulate_stats(&mut stats, point_stats);
-    // A fast direct walk/cycle is a valid competitive travel-time bound.
-    // Without this filter, a long point seed could survive even though the
-    // profile would reject it, violating the existing direct-mode contract.
-    let point_seed = point_seed.into_iter().filter(|j| {
-        request.direct_walk_seconds.is_none_or(|seconds| {
-            let duration = j.arrival_unix_seconds
-                .saturating_sub(j.departure_unix_seconds);
-            duration <= i64::from(seconds.saturating_add(20 * 60))
-        })
-    }).collect::<Vec<_>>();
-    // Once a feasible route exists, its elapsed time is a useful
-    // competitiveness horizon for subsequent profile work. This is NOT an
-    // admissible bound for every Pareto journey: a slower journey can leave
-    // later or use fewer vehicles. Retain one hour of slack for route diversity.
-    // The initial point result remains available if the profile is incomplete.
-    let seed_duration_bound = point_seed.iter()
-        .filter(|j| j.boardings > 0)
-        .map(|j| j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds))
-        .filter(|&d| d >= 0)
-        .min()
-        .and_then(|duration| u32::try_from(duration).ok())
-        .map(|duration| duration.saturating_add(3_600));
-
     // Nigiri expands the interval only when the current search needs more
     // connections. Enumerating the full 48-hour window up front can consume
     // almost the entire request budget before RAPTOR scans a single route.
@@ -580,20 +524,11 @@ pub(crate) fn route_profile_with_stats_precomputed(
     stats.profile_events_enumerated = events.len() as u64;
 
     let mut q = request.clone();
-    q.direct_walk_seconds = None;
+    // Nigiri keeps the full max_travel_time for long-distance searches and
+    // applies the fastest-direct limit to each anchor's destination bound.
+    // Do NOT infer a global max-duration from a point seed's first journey.
+    // A later departure may have a different Pareto-optimal duration.
     q.max_duration_seconds = options.max_journey_duration_seconds;
-    if let Some(duration) = seed_duration_bound {
-        q.max_duration_seconds = q.max_duration_seconds.min(duration);
-    }
-    // MOTIS applies fastest_direct as an upper bound on competitive transit
-    // journeys. Retain a bounded 20-minute alternative allowance so a
-    // slightly slower public-transit journey is still available by choice.
-    // This reduces long, pointless searches when direct walking/cycling
-    // reaches the destination much sooner.
-    if let Some(direct) = request.direct_walk_seconds {
-        q.max_duration_seconds = q.max_duration_seconds
-            .min(direct.saturating_add(20 * 60).max(1));
-    }
     // Reuse compact round-state buffers and persistent monotone-arrival bounds
     // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
@@ -604,7 +539,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let mut state = ProfileSearchState::new_with_topology(
         tt, &q, first, last, arrive_by, compact_budget, topology
     )?;
-    let mut transit = point_seed.clone();
+    let mut transit = Vec::new();
     loop {
         if Instant::now() >= profile_deadline || batches >= MAX_PROFILE_BATCHES {
             stats.profile_budget_exhausted = true;
@@ -628,7 +563,6 @@ pub(crate) fn route_profile_with_stats_precomputed(
             state
                 .result()
                 .into_iter()
-                .chain(point_seed.iter().cloned())
                 .filter(|j| {
                     let t = if arrive_by {
                         j.arrival_unix_seconds
@@ -817,78 +751,6 @@ mod tests {
             max_boardings: 1,
             max_duration_seconds: 6 * 3_600,
         }
-    }
-
-    #[test]
-    fn near_term_point_seed_returns_a_route_and_bounds_the_profile() {
-        let bytes = daily_train().encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let base = 20_000_i64 * 86_400;
-        let mut q = request();
-        q.departure_unix_seconds = base + 8 * 3_600;
-        let (journeys, stats) = route_profile_with_stats(
-            &tt,
-            &q,
-            ProfileOptions {
-                min_itineraries: 1,
-                max_journey_duration_seconds: 36 * 3_600,
-                ..ProfileOptions::default()
-            },
-            false,
-        ).unwrap();
-        assert_eq!(stats.profile_point_seed_searches, 1);
-        assert!(stats.profile_point_seed_ms >= 0.0);
-        assert!(journeys.iter().any(|j| j.boardings == 1
-            && j.arrival_unix_seconds == base + 17 * 3_600),
-            "point and profile should retain today's service: {stats:?}");
-    }
-
-    #[test]
-    fn point_seed_does_not_limit_long_or_sparse_profile_journeys() {
-        let bytes = daily_train().encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        // Departing at 18:00, tomorrow's 09:00 service is more than 12 h
-        // away. The quick point seed must not narrow the full timetable scan
-        // or suppress the next-day long-distance journey.
-        let q = request();
-        let (journeys, stats) = route_profile_with_stats(
-            &tt,
-            &q,
-            ProfileOptions {
-                min_itineraries: 1,
-                max_journey_duration_seconds: 36 * 3_600,
-                ..ProfileOptions::default()
-            },
-            false,
-        ).unwrap();
-        assert_eq!(stats.profile_point_seed_searches, 1);
-        assert!(stats.profile_interval_extensions > 0);
-        assert!(journeys.iter().any(|j| j.boardings == 1
-            && j.departure_unix_seconds >= q.departure_unix_seconds + 12 * 3_600));
-    }
-
-    #[test]
-    fn point_seed_does_not_leak_an_uncompetitive_transit_journey() {
-        let bytes = daily_train().encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let base = 20_000_i64 * 86_400;
-        let mut q = request();
-        q.departure_unix_seconds = base + 8 * 3_600;
-        q.direct_walk_seconds = Some(90);
-        let (journeys, stats) = route_profile_with_stats(
-            &tt, &q,
-            ProfileOptions {
-                min_itineraries: 1,
-                max_journey_duration_seconds: 36 * 3_600,
-                ..ProfileOptions::default()
-            }, false,
-        ).unwrap();
-        assert_eq!(stats.profile_point_seed_searches, 1);
-        assert_eq!(journeys.len(), 1,
-            "point seed must not resurrect a train slower than direct walking");
-        assert!(matches!(
-            journeys[0].legs.as_slice(), [Leg::DirectWalk { seconds: 90 }]
-        ));
     }
 
     #[test]
