@@ -752,6 +752,7 @@ mod tests {
             reference + 2 * 86_400,
             false,
             &mut stats,
+            Instant::now() + Duration::from_secs(5),
         );
         assert!(!events.contains(&reference));
         assert!(!events.is_empty());
