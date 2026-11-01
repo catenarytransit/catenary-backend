@@ -636,10 +636,10 @@ pub(crate) fn route_profile_with_stats_precomputed(
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
         fallback.max_duration_seconds = q.max_duration_seconds;
-        // The event list is sorted by requested travel direction, so this
-        // reference is never a synthetic timetable start. If there are no
-        // initial events, use the actual requested time instead.
-        fallback.departure_unix_seconds = events.first().copied().unwrap_or(reference);
+        // Nigiri's on-trip fallback searches from the requested reference
+        // instant. The first enumerated start event may be hours later or
+        // earlier and is not a valid replacement for the user's query time.
+        fallback.departure_unix_seconds = reference;
         let (candidates, one) = if arrive_by {
             raptor_arrive_by::route_arrive_by_with_stats_deadline(tt, &fallback, deadline)?
         } else {
