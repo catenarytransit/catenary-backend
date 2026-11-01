@@ -9,7 +9,7 @@ use catenary::routing_common::{
 };
 use postgres::{Client, NoTls};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 const METADATA_SQL: &str = r#"
 SELECT wanted.feed, wanted.attempt, wanted.trip,
@@ -472,6 +472,7 @@ struct PathReachable {
 
 /// Separate reconstruction phase, only for the small number of selected legs.
 fn street_path(
+    geometry_cache: &mut HashMap<String, Vec<[f64; 2]>>,
     addr: &str,
     region: &str,
     from: [f64; 2],
@@ -502,10 +503,16 @@ fn street_path(
             platform: destination_stop.map(|s| s.platform).unwrap_or_default(),
         }],
     };
+    // Cache exactly matching OSR requests within this HTTP response.
+    // The serialized key includes platform metadata, mode, speeds and budget.
+    let key = serde_json::to_string(&q)?;
+    if let Some(geometry) = geometry_cache.get(&key) {
+        return Ok(geometry.clone());
+    }
     let mut socket = TcpStream::connect(addr)?;
     socket.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
     socket.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    serde_json::to_writer(&mut socket, &q)?;
+    socket.write_all(key.as_bytes())?;
     socket.write_all(b"\n")?;
     let mut line = String::new();
     BufReader::new(socket).read_line(&mut line)?;
@@ -513,15 +520,18 @@ fn street_path(
     if let Some(err) = response.error {
         anyhow::bail!("OSR geometry: {err}");
     }
-    Ok(response
+    let coordinates = response
         .reachable
         .into_iter()
         .next()
         .and_then(|x| x.geometry)
-        .unwrap_or_default())
+        .unwrap_or_default();
+    geometry_cache.insert(key, coordinates.clone());
+    Ok(coordinates)
 }
 
 fn street_leg(
+    geometry_cache: &mut HashMap<String, Vec<[f64; 2]>>,
     addr: &str,
     region: &str,
     from: Value,
@@ -545,6 +555,7 @@ fn street_leg(
     ];
     let coordinates = if detailed {
         street_path(
+            geometry_cache,
             addr,
             region,
             first,
@@ -750,6 +761,7 @@ pub fn build(
     let info = metadata(tt, index, journeys, database_url)?;
     let mut itineraries = Vec::new();
     let mut direct = Vec::new();
+    let mut geometry_cache = HashMap::new();
     for journey in journeys {
         let mut cursor = journey.departure_unix_seconds;
         let mut previous = coordinate_place(from, "Origin");
@@ -759,6 +771,7 @@ pub fn build(
                 Leg::Access { to_stop, seconds } => {
                     let end = place(tt, *to_stop);
                     legs.push(street_leg(
+                        &mut geometry_cache,
                         osr_worker,
                         origin_osr_region,
                         previous,
@@ -783,6 +796,7 @@ pub fn build(
                     let start = place(tt, *from_stop);
                     let end = place(tt, *to_stop);
                     legs.push(street_leg(
+                        &mut geometry_cache,
                         osr_worker,
                         origin_osr_region,
                         start,
@@ -811,6 +825,7 @@ pub fn build(
                 Leg::Egress { seconds, .. } => {
                     let destination = coordinate_place(to, "Destination");
                     legs.push(street_leg(
+                        &mut geometry_cache,
                         osr_worker,
                         destination_osr_region,
                         previous,
@@ -830,6 +845,7 @@ pub fn build(
                 Leg::DirectWalk { seconds } => {
                     let destination = coordinate_place(to, "Destination");
                     legs.push(street_leg(
+                        &mut geometry_cache,
                         osr_worker,
                         origin_osr_region,
                         previous,
@@ -874,6 +890,41 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn identical_street_paths_share_one_osr_request() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line).unwrap();
+            assert!(line.contains("\"include_geometry\":true"));
+            assert!(line.contains("\"mode\":\"WALK\""));
+            stream.write_all(
+                b"{\"reachable\":[{\"geometry\":[[-118.5,34.0],[-118.49,34.01]]}],\"error\":null}\n"
+            ).unwrap();
+        });
+        let mut cache = HashMap::new();
+        let from = [-118.5, 34.0];
+        let to = [-118.49, 34.01];
+        let first = street_path(
+            &mut cache, &addr, "southern-california", from, to,
+            None, None, 900, "WALK", 1.19, 4.0,
+        ).unwrap();
+        server.join().unwrap();
+        // The server has exited; a second network request would fail.
+        let second = street_path(
+            &mut cache, &addr, "southern-california", from, to,
+            None, None, 900, "WALK", 1.19, 4.0,
+        ).unwrap();
+        assert_eq!(first, second);
+        assert_eq!(cache.len(), 1);
+        assert_eq!(first.len(), 2);
+    }
+
     #[test]
     fn metadata_lookups_do_not_filter_on_compiled_attempts() {
         assert!(METADATA_SQL.contains("AS wanted(chateau, feed, attempt, trip, route_id)"));
