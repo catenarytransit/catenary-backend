@@ -27,3 +27,5 @@ jobs:
         cache-workspace-crates: true
     - name: Build
       run: cargo build --verbose
+    - name: Test compact RAPTOR and profile-search regressions
+      run: cargo test --lib routing_common::profile -- --nocapture
