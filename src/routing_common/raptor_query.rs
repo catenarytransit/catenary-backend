@@ -1060,6 +1060,25 @@ mod tests {
         BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TrafficDays,
     };
 
+
+    #[test]
+    fn deadline_already_expired_does_not_scan_all_point_routes() {
+        let bytes = fixture().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = Query {
+            departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 5,
+            max_duration_seconds: 3 * 3600,
+        };
+        let (journeys, stats) = route_with_stats_deadline(&tt, &q, Instant::now()).unwrap();
+        assert!(stats.profile_budget_exhausted);
+        assert_eq!(stats.routes_scanned, 0);
+        assert!(journeys.is_empty());
+    }
+
     #[test]
     fn delays_origin_walk_until_first_boarding_including_initial_footpaths() {
         let searched_at = 86_400 - 1_000;

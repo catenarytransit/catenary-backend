@@ -225,6 +225,11 @@ fn lower_bounds(
     topology: &LowerBoundTopology, deadline: Instant,
 ) -> Vec<u32> {
     let n = tt.coordinates().len();
+    if Instant::now() >= deadline {
+        // Deadline expiration can disable pruning but must not manufacture
+        // unreachable labels or reject a valid timetable journey.
+        return vec![0; n];
+    }
     let graph = if reverse { &topology.forward } else { &topology.reverse };
     let mut dist = vec![u32::MAX; n];
     let mut heap = BinaryHeap::<Reverse<(u32, usize)>>::new();
@@ -958,6 +963,48 @@ mod compressed_timetable_profile_tests {
             max_boardings: 1,
             max_duration_seconds: 36 * 3_600,
         }
+    }
+
+    #[test]
+    fn cached_lower_bound_topology_matches_uncached_in_both_directions() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let topology = LowerBoundTopology::build(&tt);
+        let q = query();
+        let base = 20_000_i64 * 86_400;
+        for (reverse, anchor) in [
+            (false, base + 86_400 + 9 * 3600),
+            (true, base + 86_400 + 17 * 3600)
+        ] {
+            let mut uncached = ProfileSearchState::new(
+                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5)
+            ).unwrap();
+            let mut cached = ProfileSearchState::new_with_topology(
+                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
+                Some(&topology),
+            ).unwrap();
+            assert_eq!(uncached.bounds, cached.bounds);
+            uncached.extend(&tt, &q, &[anchor]).unwrap();
+            cached.extend(&tt, &q, &[anchor]).unwrap();
+            let signature = |s: &ProfileSearchState| {
+                s.result().iter().map(|j| (
+                    j.departure_unix_seconds,
+                    j.arrival_unix_seconds,
+                    j.boardings,
+                )).collect::<Vec<_>>()
+            };
+            assert_eq!(signature(&uncached), signature(&cached));
+            assert!(!cached.result().is_empty());
+        }
+    }
+
+    #[test]
+    fn expired_lower_bound_deadline_disables_only_pruning() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let graph = LowerBoundTopology::build(&tt);
+        let bounds = lower_bounds(&tt, &query(), false, &graph, Instant::now());
+        assert!(bounds.iter().all(|&d| d == 0));
     }
 
     #[test]

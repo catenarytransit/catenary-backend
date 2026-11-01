@@ -512,3 +512,29 @@ fn route_arrive_by_with_stats_impl(
     crate::routing_common::profile_search::sort_journeys_for_response(&mut journeys, true);
     Ok((journeys, stats))
 }
+
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    #[test]
+    fn expiration_before_reverse_rounds_returns_no_journeys() {
+        let tt = crate::routing_common::timetable::TimetableOwned::empty(20_000, 1);
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = Query {
+            departure_unix_seconds: 20_000_i64 * 86_400,
+            access: vec![],
+            egress: vec![],
+            direct_walk_seconds: None,
+            max_boardings: 5,
+            max_duration_seconds: 3600,
+        };
+        let (journeys, stats) =
+            route_arrive_by_with_stats_deadline(&view, &q, Instant::now()).unwrap();
+        assert!(stats.profile_budget_exhausted);
+        assert!(journeys.is_empty());
+        assert_eq!(stats.routes_scanned, 0);
+    }
+}
