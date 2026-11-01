@@ -14,7 +14,7 @@ use crate::routing_common::raptor_query::{
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 const INF: i64 = i64::MAX / 4;
@@ -22,6 +22,11 @@ const NEG_INF: i64 = i64::MIN / 4;
 /// Keep a bounded set of near-optimal route alternatives, even after a
 /// competitive destination arrival has been found.
 const DESTINATION_SLACK_SECONDS: i64 = 20 * 60;
+// Bound alternatives only at the destination, not at every intermediate
+// station. The six route-distinct display options require at least six
+// independently reconstructable destination snapshots.
+const MAX_TERMINAL_PATHS_PER_STOP: usize = 12;
+const MAX_TERMINAL_PATHS_PER_ROUND: usize = 4096;
 
 fn better(candidate: i64, incumbent: i64, reverse: bool) -> bool {
     if reverse { candidate > incumbent } else { candidate < incumbent }
@@ -514,6 +519,13 @@ impl ProfileSearchState {
         marked.sort_unstable();
         marked.dedup();
         reached_ready[0] = marked.clone();
+        let destination_endpoints = if reverse { &q.access } else { &q.egress };
+        let mut terminal_seconds = HashMap::<usize, u32>::new();
+        for ep in destination_endpoints {
+            terminal_seconds.entry(ep.stop.idx())
+                .and_modify(|current| *current = (*current).min(ep.seconds))
+                .or_insert(ep.seconds);
+        }
         for k in 1..=q.max_boardings {
             if marked.is_empty() || Instant::now() >= self.deadline {
                 if Instant::now() >= self.deadline {
@@ -531,6 +543,13 @@ impl ProfileSearchState {
             for &stop in &marked { self.stop_stamps[stop] = self.stop_stamp; }
             let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp);
             let mut improved_rides = Vec::new();
+            // Independent snapshot paths are required for route-distinct
+            // terminal journeys even when their arrival cells tie. Nigiri
+            // selects destinations using a Pareto frontier before extracting
+            // journeys; these bounded snapshots provide the corresponding
+            // invariant for the Gentian compact solver.
+            let mut ride_terminal_paths = Vec::<(i64, usize, u32, u32)>::new();
+            let mut candidate_slots = HashMap::<usize, Vec<usize>>::new();
             // Finish route scanning before taking immutable references to
             // round predecessors for timetable-validated destination updates.
             {
@@ -585,10 +604,6 @@ impl ProfileSearchState {
                                 if (lower..=upper).contains(&event)
                                     && can_reach(&self.bounds, loc, event, anchor,
                                         q.max_duration_seconds, reverse, self.time_at_dest[k])
-                                    && !dominated_by_profile(
-                                        &self.profile_ride, k, loc, event, reverse)
-                                    && !dominated_by_lower_round(
-                                        before, Stage::Ride, loc, event, generation, reverse)
                                 {
                                     let (from, to, board_pos, alight_pos, dep, arr) =
                                         if reverse {
@@ -598,20 +613,68 @@ impl ProfileSearchState {
                                             (onboard.from, loc, onboard.pos, pos,
                                              onboard.event, event)
                                         };
-                                    if current.put_linked(
-                                        Stage::Ride, loc, event,
-                                        Parent::Ride {
-                                            from, to, route: route.0,
-                                            transport: onboard.transport.0,
-                                            day: onboard.day as u16,
-                                            board_pos, alight_pos,
-                                            departure: dep, arrival: arr,
-                                        }, Some(onboard.predecessor),
-                                        generation, reverse, &mut self.parents,
-                                        &mut self.stats,
-                                    ) {
-                                        improved_rides.push(loc);
+                                    let leg_parent = Parent::Ride {
+                                        from, to, route: route.0,
+                                        transport: onboard.transport.0,
+                                        day: onboard.day as u16,
+                                        board_pos, alight_pos,
+                                        departure: dep, arrival: arr,
+                                    };
+                                    // Capture distinct terminal paths even if a
+                                    // faster service has already won this cell.
+                                    // Use a bounded top-K per stop to retain
+                                    // equivalent-time route alternatives.
+                                    if let Some(&seconds) = terminal_seconds.get(&loc) {
+                                        let score = if reverse {
+                                            event.saturating_sub(i64::from(seconds))
+                                        } else {
+                                            event.saturating_add(i64::from(seconds))
+                                        };
+                                        let slots = candidate_slots.entry(loc).or_default();
+                                        let insertion = if slots.len() < MAX_TERMINAL_PATHS_PER_STOP
+                                            && ride_terminal_paths.len() < MAX_TERMINAL_PATHS_PER_ROUND
+                                        {
+                                            Some(None)
+                                        } else {
+                                            let worst = slots.iter().copied()
+                                                .max_by_key(|&idx| {
+                                                    let v = ride_terminal_paths[idx].0;
+                                                    if reverse { v.saturating_neg() } else { v }
+                                                });
+                                            worst.filter(|&idx| {
+                                                let old = ride_terminal_paths[idx].0;
+                                                if reverse { score > old } else { score < old }
+                                            }).map(Some)
+                                        };
+                                        if let Some(replace) = insertion {
+                                            if self.parents.len() < u32::MAX as usize {
+                                                let snapshot = self.parents.len() as u32;
+                                                self.parents.push(PathLink {
+                                                    step: leg_parent,
+                                                    previous: Some(onboard.predecessor),
+                                                });
+                                                let item = (score, loc, seconds, snapshot);
+                                                if let Some(idx) = replace {
+                                                    ride_terminal_paths[idx] = item;
+                                                } else {
+                                                    slots.push(ride_terminal_paths.len());
+                                                    ride_terminal_paths.push(item);
+                                                }
+                                            }
+                                        }
                                     }
+                                    if !dominated_by_profile(
+                                        &self.profile_ride, k, loc, event, reverse)
+                                        && !dominated_by_lower_round(
+                                            before, Stage::Ride, loc, event, generation, reverse)
+                                        && current.put_linked(
+                                            Stage::Ride, loc, event, leg_parent,
+                                            Some(onboard.predecessor),
+                                            generation, reverse, &mut self.parents,
+                                            &mut self.stats,
+                                        ) {
+                                            improved_rides.push(loc);
+                                        }
                                 }
                             }
                         }
@@ -657,29 +720,17 @@ impl ProfileSearchState {
             // vehicle path and validate the GTFS service days and predecessor
             // transfer restrictions before tightening the deadline. Unsafe
             // provisional paths never suppress later valid alternatives.
-            let terminal_endpoints = if reverse { &q.access } else { &q.egress };
-            let mut ride_terminals = Vec::new();
-            for ep in terminal_endpoints {
-                if let Some(ride) = self.rounds[k].get(
-                    Stage::Ride, ep.stop.idx(), generation)
-                {
-                    let possible_time = if reverse {
-                        ride.time.saturating_sub(i64::from(ep.seconds))
-                    } else {
-                        ride.time.saturating_add(i64::from(ep.seconds))
-                    };
-                    ride_terminals.push((possible_time, ep.stop.idx(), ep.seconds));
-                }
-            }
-            ride_terminals.sort_unstable_by_key(|(time, stop, seconds)| (
+            ride_terminal_paths.sort_unstable_by_key(|(time, stop, seconds, _)| (
                 if reverse { Reverse(*time) }
                 else { Reverse(time.saturating_neg()) },
                 *stop, *seconds,
             ));
-            for (_, stop, seconds) in ride_terminals {
-                let Some(mut journey) = reconstruct(
-                    &self.rounds, &self.parents, generation, reverse,
-                    k, stop, Stage::Ride, seconds,
+            for (arrival, stop, seconds, snapshot) in ride_terminal_paths {
+                let Some(mut journey) = crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
+                    &self.parents, snapshot,
+                    if reverse { arrival.saturating_add(i64::from(seconds)) }
+                    else { arrival.saturating_sub(i64::from(seconds)) },
+                    stop, reverse, seconds,
                 ) else { continue };
                 self.stats.profile_journeys_reconstructed += 1;
                 optimize_same_trip_endpoint_walks(tt, q, &mut journey);
