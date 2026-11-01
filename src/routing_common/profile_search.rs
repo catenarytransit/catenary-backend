@@ -816,6 +816,30 @@ mod tests {
     }
 
     #[test]
+    fn sparse_services_are_enumerated_only_as_search_interval_extends() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        let (journeys, stats) = route_profile_with_stats(
+            &tt, &q,
+            ProfileOptions {
+                search_window_seconds: 15 * 60,
+                max_search_window_seconds: 48 * 3_600,
+                max_journey_duration_seconds: 36 * 3_600,
+                min_itineraries: 1,
+                ..ProfileOptions::default()
+            }, false,
+        ).unwrap();
+        assert!(!journeys.is_empty(), "sparse first service was lost: {stats:?}");
+        assert!(stats.profile_interval_extensions > 0);
+        // The train two days after the requested time is outside the
+        // successfully completed search interval. Nigiri does not enumerate
+        // that later service when the first valid result already suffices.
+        assert_eq!(stats.profile_events_enumerated, 1);
+        assert!(journeys.iter().any(|j| j.boardings == 1));
+    }
+
+    #[test]
     fn a_late_first_service_is_not_lost_before_interval_expansion() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
