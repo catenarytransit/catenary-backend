@@ -332,7 +332,9 @@ impl ProfileSearchState {
         let deadline = start.checked_add(timeout).unwrap_or(start);
         let mut stats = RaptorStats::default();
         stats.profile_searches = 1;
+        let bounds_started = Instant::now();
         let bounds = lower_bounds(tt, q, reverse);
+        stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
         let invalid = if reverse { NEG_INF } else { INF };
         Ok(Self {
             rounds: (0..=q.max_boardings).map(|_| Round::new(n)).collect(),

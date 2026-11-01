@@ -23,6 +23,9 @@ pub struct RaptorStats {
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
     pub walking_ms: f64,
+    /// Time spent constructing the destination-directed admissible lower
+    /// bounds from Gentian's compressed route timing profiles and footpaths.
+    pub profile_lower_bounds_ms: f64,
     /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
     /// Shared-state timetable events processed (not full point searches).
