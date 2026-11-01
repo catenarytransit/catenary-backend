@@ -1360,6 +1360,73 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
+    fn service_day_calendar_bitsets_match_fifo_lookup_across_days() {
+        let mut owned = daily_train();
+        // Active on day 0 and day 2, with gaps on day 1/day 3.
+        owned.bitfields[1].set(1, false).unwrap();
+        owned.bitfields[1].set(3, false).unwrap();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        for day in 0..4usize {
+            let bits = build_active_transport_days(&tt, RouteIdx(0), day, 2)
+                .expect("single-transport route should use the bitset lookup");
+            let active = ActiveDay {
+                day, onboard: None, active_transports: Some(bits),
+            };
+            let midnight = (i64::from(tt.header().first_utc_day)
+                + day as i64) * 86_400;
+            for (reverse, time) in [
+                (false, midnight + 8 * 3_600),
+                (false, midnight + 10 * 3_600),
+                (true, midnight + 8 * 3_600),
+                (true, midnight + 19 * 3_600),
+            ] {
+                let mut original_stats = RaptorStats::default();
+                let original = if reverse {
+                    get_latest_transport(&tt, RouteIdx(0), 0, day, time,
+                        &mut original_stats)
+                } else {
+                    get_earliest_transport(&tt, RouteIdx(0), 0, day, time,
+                        &mut original_stats)
+                };
+                let actual = timetable_transport_on_day(
+                    &tt, RouteIdx(0), 0, &active, time, reverse,
+                    &mut RaptorStats::default(),
+                );
+                assert_eq!(actual, original,
+                    "calendar index mismatch on day {day}, reverse={reverse}");
+            }
+        }
+    }
+
+    #[test]
+    fn four_day_transit_horizon_is_preserved_without_direct_journey() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut q = query();
+        let requested_departure = base + 18 * 3_600;
+        q.departure_unix_seconds = requested_departure;
+        q.max_duration_seconds = 4 * 86_400;
+        let next_day_departure = base + 86_400 + 9 * 3_600;
+        let mut state = ProfileSearchState::new(
+            &tt, &q, requested_departure,
+            base + 3 * 86_400, false, Duration::from_secs(5)
+        ).unwrap();
+        state.extend(&tt, &q, &[next_day_departure]).unwrap();
+        assert!(state.result().iter().any(|j|
+            j.boardings == 1
+                && j.departure_unix_seconds == next_day_departure
+                && j.arrival_unix_seconds == next_day_departure + 8 * 3_600
+        ), "long-distance route must survive without a 12-hour seed");
+        assert_eq!(
+            state.time_at_dest[1],
+            next_day_departure + 8 * 3_600,
+            "validated transit arrival should tighten the destination bound"
+        );
+    }
+
+    #[test]
     fn latest_first_forward_anchors_find_both_daily_trains() {
         let bytes = daily_train().encode().unwrap();
         let timetable = ZeroCopyTimetable::new(&bytes).unwrap();
