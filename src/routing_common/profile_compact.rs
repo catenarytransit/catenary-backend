@@ -617,15 +617,22 @@ impl ProfileSearchState {
                 }
             }
             self.stats.walking_ms += walking_started.elapsed().as_secs_f64() * 1_000.0;
+            // Gather terminal candidates while the current round is mutable.
+            // Reconstruction reads immutable snapshots of *all* rounds, and
+            // must happen after this scan's mutable borrow has ended.
             let terminals = if reverse { &q.access } else { &q.egress };
+            let mut terminal_candidates = Vec::new();
             for ep in terminals {
                 for stage in [Stage::Ride, Stage::Walk] {
-                    if current.get(stage, ep.stop.idx(), generation).is_none() {
-                        continue;
+                    if current.get(stage, ep.stop.idx(), generation).is_some() {
+                        terminal_candidates.push((ep.stop.idx(), stage, ep.seconds));
                     }
+                }
+            }
+            for (terminal_stop, stage, terminal_seconds) in terminal_candidates {
                     let Some(journey) = reconstruct(
                         &self.rounds, &self.parents, generation, reverse,
-                        k, ep.stop.idx(), stage, ep.seconds,
+                        k, terminal_stop, stage, terminal_seconds,
                     ) else { continue };
                     self.stats.profile_journeys_reconstructed += 1;
                     if valid_journey(tt, q, &journey) {
@@ -644,7 +651,6 @@ impl ProfileSearchState {
                     } else {
                         self.stats.profile_journeys_rejected += 1;
                     }
-                }
             }
             changed_ready.sort_unstable();
             changed_ready.dedup();
