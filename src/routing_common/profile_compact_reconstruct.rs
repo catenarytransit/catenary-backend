@@ -2,43 +2,55 @@
 //!
 //! Every cell contains an arrival/boarding-ready time and one predecessor
 //! index. Route scanning never allocates a node for a dominated alternative.
-use crate::routing_common::profile_compact::{Cell, Parent, Round, Stage};
+use crate::routing_common::profile_compact::{Parent, PathLink, Round, Stage};
 use crate::routing_common::raptor_query::{Journey, Leg, Query, transport_event_second};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 
 pub(super) fn reconstruct(
     rounds: &[Round],
-    parents: &[Parent],
+    parents: &[PathLink],
     generation: u32,
     arrive_by: bool,
-    mut k: usize,
-    mut at: usize,
-    mut stage: Stage,
+    k: usize,
+    at: usize,
+    stage: Stage,
     last_seconds: u32,
 ) -> Option<Journey> {
-    let terminal = rounds.get(k)?.get(stage, at, generation)?.time;
+    let cell = rounds.get(k)?.get(stage, at, generation)?;
+    reconstruct_snapshot(parents, cell.parent, cell.time, at, arrive_by, last_seconds)
+}
+
+/// Follow immutable predecessor snapshots; no lookup of a mutable round cell
+/// is allowed after the terminal snapshot is selected. This is the essential
+/// correctness property of Nigiri's deferred journey reconstruction.
+pub(super) fn reconstruct_snapshot(
+    parents: &[PathLink],
+    mut cursor: u32,
+    terminal_time: i64,
+    terminal_stop: usize,
+    arrive_by: bool,
+    last_seconds: u32,
+) -> Option<Journey> {
     let mut legs = vec![if arrive_by {
-        Leg::Access { to_stop: at as u32, seconds: last_seconds }
+        Leg::Access { to_stop: terminal_stop as u32, seconds: last_seconds }
     } else {
-        Leg::Egress { from_stop: at as u32, seconds: last_seconds }
+        Leg::Egress { from_stop: terminal_stop as u32, seconds: last_seconds }
     }];
-    // One ride and one transfer per round, plus a ready-state transition.
-    for _ in 0..(rounds.len() * 4 + 2) {
-        let Cell { parent, .. } = *rounds.get(k)?.get(stage, at, generation)?;
-        match *parents.get(parent as usize)? {
-            Parent::Root { seconds } if stage == Stage::Ready && k == 0 => {
+    for _ in 0..parents.len().min(256) {
+        let node = *parents.get(cursor as usize)?;
+        match node.step {
+            Parent::Root { seconds } => {
                 legs.push(if arrive_by {
-                    Leg::Egress { from_stop: at as u32, seconds }
+                    Leg::Egress { from_stop: parent_root_stop(&legs, arrive_by)?, seconds }
                 } else {
-                    Leg::Access { to_stop: at as u32, seconds }
+                    Leg::Access { to_stop: parent_root_stop(&legs, arrive_by)?, seconds }
                 });
                 if !arrive_by { legs.reverse(); }
                 let departure = if arrive_by {
-                    terminal.checked_sub(i64::from(last_seconds))?
+                    terminal_time.checked_sub(i64::from(last_seconds))?
                 } else {
                     let first_boarding = legs.iter().find_map(|leg| match leg {
-                        Leg::Ride { departure_unix_seconds, .. } =>
-                            Some(*departure_unix_seconds),
+                        Leg::Ride { departure_unix_seconds, .. } => Some(*departure_unix_seconds),
                         _ => None,
                     })?;
                     let access = match legs.first()? {
@@ -76,8 +88,7 @@ pub(super) fn reconstruct(
                         Leg::DirectWalk { .. } => return None,
                     }
                 }
-                let boardings = legs.iter()
-                    .filter(|leg| matches!(leg, Leg::Ride { .. })).count();
+                let boardings = legs.iter().filter(|l| matches!(l, Leg::Ride { .. })).count();
                 return (boardings > 0).then_some(Journey {
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: time,
@@ -86,42 +97,36 @@ pub(super) fn reconstruct(
                 });
             }
             Parent::Ride { from, to, route, transport, day,
-                           board_pos, alight_pos, departure, arrival }
-                if stage == Stage::Ride && k > 0 =>
-            {
+                           board_pos, alight_pos, departure, arrival } => {
                 legs.push(Leg::Ride {
-                    from_stop: from as u32,
-                    to_stop: to as u32,
-                    route,
-                    transport,
-                    service_day: day,
-                    board_stop_index: board_pos,
-                    alight_stop_index: alight_pos,
-                    departure_unix_seconds: departure,
-                    arrival_unix_seconds: arrival,
+                    from_stop: from as u32, to_stop: to as u32,
+                    route, transport, service_day: day,
+                    board_stop_index: board_pos, alight_stop_index: alight_pos,
+                    departure_unix_seconds: departure, arrival_unix_seconds: arrival,
                 });
-                at = if arrive_by { to } else { from };
-                stage = Stage::Ready;
-                k -= 1;
             }
-            Parent::Walk { from, to, seconds }
-                if (stage == Stage::Walk || stage == Stage::Ready) && k > 0 =>
-            {
+            Parent::Walk { from, to, seconds } => {
                 legs.push(Leg::Transfer {
-                    from_stop: from as u32,
-                    to_stop: to as u32,
-                    seconds,
+                    from_stop: from as u32, to_stop: to as u32, seconds,
                 });
-                at = if arrive_by { to } else { from };
-                stage = Stage::Ride;
             }
-            Parent::ReadyRide if stage == Stage::Ready && k > 0 => {
-                stage = Stage::Ride;
-            }
-            _ => return None,
+            Parent::ReadyRide => {}
         }
+        cursor = node.previous?;
     }
     None
+}
+
+/// The stop at the root depends on the orientation of reconstructed legs.
+fn parent_root_stop(legs: &[Leg], arrive_by: bool) -> Option<u32> {
+    let preceding = legs.last()?;
+    match (arrive_by, preceding) {
+        (false, Leg::Ride { from_stop, .. }) => Some(*from_stop),
+        (false, Leg::Transfer { from_stop, .. }) => Some(*from_stop),
+        (true, Leg::Ride { to_stop, .. }) => Some(*to_stop),
+        (true, Leg::Transfer { to_stop, .. }) => Some(*to_stop),
+        _ => None,
+    }
 }
 
 pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) -> bool {

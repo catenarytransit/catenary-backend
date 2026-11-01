@@ -61,6 +61,14 @@ pub(super) enum Parent {
     ReadyRide,
 }
 
+/// Immutable predecessor snapshot. Compact arrival cells may be improved many
+/// times in one search, but paths already derived from them must never change.
+#[derive(Clone, Copy)]
+pub(super) struct PathLink {
+    pub step: Parent,
+    pub previous: Option<u32>,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(super) struct Cell {
     pub time: i64,
@@ -96,9 +104,19 @@ impl Round {
     pub(super) fn get(&self, stage: Stage, stop: usize, generation: u32) -> Option<&Cell> {
         self.cells(stage).get(stop).filter(|c| c.generation == generation)
     }
+    #[cfg(test)]
     fn put(
         &mut self, stage: Stage, stop: usize, time: i64, parent: Parent,
-        generation: u32, reverse: bool, parents: &mut Vec<Parent>,
+        generation: u32, reverse: bool, parents: &mut Vec<PathLink>,
+        stats: &mut RaptorStats,
+    ) -> bool {
+        self.put_linked(stage, stop, time, parent, None, generation, reverse, parents, stats)
+    }
+
+    fn put_linked(
+        &mut self, stage: Stage, stop: usize, time: i64, parent: Parent,
+        previous: Option<u32>,
+        generation: u32, reverse: bool, parents: &mut Vec<PathLink>,
         stats: &mut RaptorStats,
     ) -> bool {
         let c = &mut self.cells_mut(stage)[stop];
@@ -107,13 +125,15 @@ impl Round {
             stats.labels_dominated += 1;
             return false;
         }
-        if c.generation != generation {
-            if parents.len() >= u32::MAX as usize { return false; }
-            c.parent = parents.len() as u32;
-            parents.push(parent);
-        } else {
-            parents[c.parent as usize] = parent;
+        if parents.len() >= u32::MAX as usize {
+            stats.profile_budget_exhausted = true;
+            return false;
         }
+        // The old implementation rewrote parents[c.parent] here. That
+        // silently changed previously selected walking/ride paths and could
+        // invalidate journeys already discovered at another stop.
+        c.parent = parents.len() as u32;
+        parents.push(PathLink { step: parent, previous });
         c.time = time;
         c.generation = generation;
         stats.labels_improved += 1;
@@ -133,6 +153,7 @@ struct Onboard {
     from: usize,
     pos: usize,
     event: i64,
+    predecessor: u32,
 }
 struct ActiveDay {
     day: usize,
@@ -338,7 +359,7 @@ fn routes_from_marked(
 
 pub(crate) struct ProfileSearchState {
     rounds: Vec<Round>,
-    parents: Vec<Parent>,
+    parents: Vec<PathLink>,
     bounds: Vec<u32>,
     // Persistent scalar profile arrivals; these never own parent pointers.
     // Entries are usable only while anchors are processed monotonically.
@@ -482,9 +503,9 @@ impl ProfileSearchState {
                     q.max_duration_seconds, reverse, self.time_at_dest[0])
                 && !dominated_by_profile(
                     &self.profile_ready, 0, ep.stop.idx(), t, reverse)
-                && self.rounds[0].put(
+                && self.rounds[0].put_linked(
                     Stage::Ready, ep.stop.idx(), t,
-                    Parent::Root { seconds: ep.seconds },
+                    Parent::Root { seconds: ep.seconds }, None,
                     generation, reverse, &mut self.parents, &mut self.stats,
                 ) {
                 marked.push(ep.stop.idx());
@@ -577,7 +598,7 @@ impl ProfileSearchState {
                                             (onboard.from, loc, onboard.pos, pos,
                                              onboard.event, event)
                                         };
-                                    if current.put(
+                                    if current.put_linked(
                                         Stage::Ride, loc, event,
                                         Parent::Ride {
                                             from, to, route: route.0,
@@ -585,7 +606,7 @@ impl ProfileSearchState {
                                             day: onboard.day as u16,
                                             board_pos, alight_pos,
                                             departure: dep, arrival: arr,
-                                        },
+                                        }, Some(onboard.predecessor),
                                         generation, reverse, &mut self.parents,
                                         &mut self.stats,
                                     ) {
@@ -617,6 +638,7 @@ impl ProfileSearchState {
                         if better {
                             day.onboard = Some(Onboard {
                                 transport, day: day.day, from: loc, pos, event,
+                                predecessor: ready.parent,
                             });
                         }
                     }
@@ -700,8 +722,9 @@ impl ProfileSearchState {
                             &self.profile_ready, k, from, ready, reverse)
                         && !dominated_by_lower_round(
                             before, Stage::Ready, from, ready, generation, reverse)
-                        && current.put(
+                        && current.put_linked(
                             Stage::Ready, from, ready, Parent::ReadyRide,
+                            Some(ride.parent),
                             generation, reverse, &mut self.parents, &mut self.stats
                         ) {
                         changed_ready.push(from);
@@ -729,9 +752,10 @@ impl ProfileSearchState {
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
                     // Physical arrival and boarding readiness are different
                     // dimensions: minimum change times do not extend a walk.
-                    current.put(
+                    current.put_linked(
                         Stage::Walk, to, at,
                         Parent::Walk { from: walk_from, to: walk_to, seconds },
+                        Some(ride.parent),
                         generation, reverse, &mut self.parents, &mut self.stats
                     );
                     let (rule_from, rule_to) = (walk_from, walk_to);
@@ -749,12 +773,10 @@ impl ProfileSearchState {
                             &self.profile_ready, k, to, ready, reverse)
                         && !dominated_by_lower_round(
                             before, Stage::Ready, to, ready, generation, reverse)
-                        && current.put(
+                        && current.put_linked(
                             Stage::Ready, to, ready,
-                            // Keep the exact footpath that produced this
-                            // transfer-ready time. The best physical-walk
-                            // cell can come from a different alighting stop.
                             Parent::Walk { from: walk_from, to: walk_to, seconds },
+                            Some(ride.parent),
                             generation, reverse, &mut self.parents, &mut self.stats
                         ) {
                         changed_ready.push(to);
@@ -892,16 +914,18 @@ mod compact_reconstruction_tests {
         let mut stats = RaptorStats::default();
         assert!(rounds[0].put(Stage::Ready, 0, 1_000,
             Parent::Root { seconds: 0 }, 1, false, &mut parents, &mut stats));
-        assert!(rounds[1].put(Stage::Ride, 1, 1_100,
+        let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
+        assert!(rounds[1].put_linked(Stage::Ride, 1, 1_100,
             Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
                 board_pos: 0, alight_pos: 1, departure: 1_020, arrival: 1_100 },
-            1, false, &mut parents, &mut stats));
-        assert!(rounds[1].put(Stage::Ready, 2, 1_140,
+            Some(root), 1, false, &mut parents, &mut stats));
+        let ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
+        assert!(rounds[1].put_linked(Stage::Ready, 2, 1_140,
             Parent::Walk { from: 1, to: 2, seconds: 40 },
-            1, false, &mut parents, &mut stats));
-        assert!(rounds[1].put(Stage::Walk, 2, 1_120,
+            Some(ride), 1, false, &mut parents, &mut stats));
+        assert!(rounds[1].put_linked(Stage::Walk, 2, 1_120,
             Parent::Walk { from: 3, to: 2, seconds: 20 },
-            1, false, &mut parents, &mut stats));
+            Some(ride), 1, false, &mut parents, &mut stats));
         let result = reconstruct(&rounds, &parents, 1, false, 1, 2, Stage::Ready, 0)
             .expect("exact ready-state predecessor must reconstruct");
         assert_eq!(result.boardings, 1);
@@ -918,12 +942,14 @@ mod compact_reconstruction_tests {
         let mut stats = RaptorStats::default();
         rounds[0].put(Stage::Ready, 0, 0, Parent::Root { seconds: 0 },
             1, false, &mut parents, &mut stats);
-        rounds[1].put(Stage::Ride, 1, 100,
+        let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
+        rounds[1].put_linked(Stage::Ride, 1, 100,
             Parent::Ride { from: 0, to: 1, route: 0, transport: 0, day: 0,
                 board_pos: 0, alight_pos: 1, departure: 10, arrival: 100 },
-            1, false, &mut parents, &mut stats);
-        rounds[1].put(Stage::Ready, 1, 130, Parent::ReadyRide,
-            1, false, &mut parents, &mut stats);
+            Some(root), 1, false, &mut parents, &mut stats);
+        let ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
+        rounds[1].put_linked(Stage::Ready, 1, 130, Parent::ReadyRide,
+            Some(ride), 1, false, &mut parents, &mut stats);
         let result = reconstruct(&rounds, &parents, 1, false, 1, 1, Stage::Ready, 0)
             .expect("self-transfer readiness should reference the same ride");
         assert_eq!(result.boardings, 1);
@@ -1409,5 +1435,39 @@ mod transfer_round_regressions {
             Duration::from_secs(5)
         ).unwrap();
         assert!(backward.is_empty(), "reverse blocked change produced route: {backward:?}");
+    }
+}
+
+
+#[cfg(test)]
+mod immutable_path_tests {
+    use super::*;
+    use crate::routing_common::profile_compact_reconstruct::reconstruct;
+
+    #[test]
+    fn overwriting_best_arrival_never_mutates_an_existing_path() {
+        let mut rounds = vec![Round::new(3), Round::new(3)];
+        let mut links = Vec::new();
+        let mut stats = RaptorStats::default();
+        rounds[0].put(Stage::Ready, 0, 0, Parent::Root { seconds: 0 },
+            1, false, &mut links, &mut stats);
+        let root = rounds[0].get(Stage::Ready, 0, 1).unwrap().parent;
+        rounds[1].put_linked(Stage::Ride, 1, 60, Parent::Ride {
+            from: 0, to: 1, route: 11, transport: 0, day: 0,
+            board_pos: 0, alight_pos: 1, departure: 10, arrival: 60,
+        }, Some(root), 1, false, &mut links, &mut stats);
+        let first_ride = rounds[1].get(Stage::Ride, 1, 1).unwrap().parent;
+        rounds[1].put_linked(Stage::Walk, 2, 70,
+            Parent::Walk { from: 1, to: 2, seconds: 10 },
+            Some(first_ride), 1, false, &mut links, &mut stats);
+        rounds[1].put_linked(Stage::Ride, 1, 50, Parent::Ride {
+            from: 0, to: 1, route: 22, transport: 1, day: 0,
+            board_pos: 0, alight_pos: 1, departure: 10, arrival: 50,
+        }, Some(root), 1, false, &mut links, &mut stats);
+        let old_walk = reconstruct(&rounds, &links, 1, false, 1, 2, Stage::Walk, 0)
+            .expect("earlier walk must retain the route 11 parent");
+        assert!(old_walk.legs.iter().any(|leg| matches!(
+            leg, crate::routing_common::raptor_query::Leg::Ride { route: 11, .. }
+        )));
     }
 }
