@@ -1520,6 +1520,41 @@ mod transfer_round_regressions {
     }
 
     #[test]
+    fn compact_profile_matches_point_raptor_on_transfer_fixture() {
+        let bytes = two_leg_timetable(false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        for (arrive_by, instant) in [
+            (false, q.departure_unix_seconds),
+            (true, q.departure_unix_seconds + 30 * 60),
+        ] {
+            let mut query = q.clone();
+            query.departure_unix_seconds = instant;
+            let (profile, stats) = route_profile_incremental(
+                &tt, &query, &[instant], arrive_by, Duration::from_secs(5)
+            ).unwrap();
+            let point = if arrive_by {
+                crate::routing_common::raptor_arrive_by::route_arrive_by_with_stats(
+                    &tt, &query
+                ).unwrap().0
+            } else {
+                crate::routing_common::raptor_query::route_with_stats(
+                    &tt, &query
+                ).unwrap().0
+            };
+            let transit = |j: &Vec<Journey>| j.iter()
+                .filter(|x| x.boardings == 2)
+                .map(|x| (x.departure_unix_seconds, x.arrival_unix_seconds))
+                .collect::<Vec<_>>();
+            let expected = transit(&point);
+            assert!(!expected.is_empty(), "point RAPTOR fixture is invalid");
+            let actual = transit(&profile);
+            assert!(expected.iter().all(|x| actual.contains(x)),
+                "compact profile missed point solver journey: reverse={arrive_by} expected={expected:?} actual={actual:?} stats={stats:?}");
+        }
+    }
+
+    #[test]
     fn two_ride_forward_reconstructs_after_compact_scan() {
         let bytes = two_leg_timetable(false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
