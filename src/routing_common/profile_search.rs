@@ -484,8 +484,14 @@ pub fn route_profile_with_stats(
     // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
     let last = reference.max(boundary);
+    // Reserve a portion of the request's wall budget for one fallback query
+    // when the profile solver times out or produces no validated itinerary.
+    // Starting the profile solver with the whole deadline made that recovery
+    // unreachable on exactly the hard queries that needed it.
     let remaining = deadline.saturating_duration_since(Instant::now());
-    let mut state = ProfileSearchState::new(tt, &q, first, last, arrive_by, remaining)?;
+    let fallback_reserve = remaining / 5;
+    let compact_budget = remaining.saturating_sub(fallback_reserve);
+    let mut state = ProfileSearchState::new(tt, &q, first, last, arrive_by, compact_budget)?;
     let mut transit = Vec::new();
     loop {
         if Instant::now() >= deadline || batches >= MAX_PROFILE_BATCHES {
@@ -559,6 +565,9 @@ pub fn route_profile_with_stats(
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
         fallback.max_duration_seconds = options.max_journey_duration_seconds;
+        // The event list is sorted by requested travel direction, so this
+        // reference is never a synthetic timetable start. If there are no
+        // initial events, use the actual requested time instead.
         fallback.departure_unix_seconds = events.first().copied().unwrap_or(reference);
         let (candidates, one) = if arrive_by {
             raptor_arrive_by::route_arrive_by_with_stats(tt, &fallback)?

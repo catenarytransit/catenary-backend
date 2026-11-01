@@ -373,9 +373,10 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
-        let prior_valid_journeys = self.journeys.len();
-        // Only commit this anchor's station arrivals to the persistent
-        // profile after it yields a fully valid destination journey.
+        // Nigiri retains round arrival times independently of whether a
+        // journey to the destination was found at this particular anchor.
+        // They remain valid dominance bounds for earlier forward starts and
+        // later backward starts. Parents are strictly event-local.
         let mut reached_rides = vec![Vec::<usize>::new(); q.max_boardings + 1];
         let mut reached_ready = vec![Vec::<usize>::new(); q.max_boardings + 1];
         let horizon = i64::from(q.max_duration_seconds);
@@ -658,7 +659,10 @@ impl ProfileSearchState {
             marked = changed_ready;
             if self.stats.profile_budget_exhausted { break; }
         }
-        if self.journeys.len() > prior_valid_journeys {
+        // Preserve the compact arrival skyline across monotone profile
+        // anchors exactly as Nigiri's round_times_ does. The current
+        // generation-tagged states act like Nigiri's event-local best_/tmp_.
+        {
             for k in 0..self.rounds.len() {
                 for &stop in &reached_ready[k] {
                     if let Some(value) = self.rounds[k].get(Stage::Ready, stop, generation) {
