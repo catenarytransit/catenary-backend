@@ -1181,7 +1181,7 @@ mod transfer_round_regressions {
     /// Competing incoming services reach different platforms. The earlier
     /// physical footpath is prohibited as a GTFS connection; the later one
     /// must remain eligible for the onward train in both search directions.
-    fn competing_transfer_timetable() -> TimetableOwned {
+    fn competing_transfer_timetable(prohibited: bool) -> TimetableOwned {
         use crate::routing_common::timetable::PackedFootpath;
         let mut tt = TimetableOwned::empty(20_000, 2);
         tt.add_source("test", "competing-transfers", "attempt").unwrap();
@@ -1253,14 +1253,15 @@ mod transfer_round_regressions {
         tt.transport_to_trip_section_offsets.extend([0; 3]);
         tt.station_transfer_rules.push(StationTransferRule {
             from: LocationIdx(1), to: LocationIdx(3),
-            min_seconds: 0, flags: 1,
+            min_seconds: if prohibited { 0 } else { 20 * 60 },
+            flags: if prohibited { 1 } else { 0 },
         });
         tt
     }
 
     #[test]
     fn prohibited_early_walk_keeps_valid_later_transfer_forward_and_reverse() {
-        let bytes = competing_transfer_timetable().encode().unwrap();
+        let bytes = competing_transfer_timetable(true).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
         for (reverse, event) in [
@@ -1284,6 +1285,27 @@ mod transfer_round_regressions {
                 leg, Leg::Transfer { from_stop: 1, to_stop: 3, .. }
             )));
         }
+    }
+
+    #[test]
+    fn transfer_ready_uses_later_physical_arrival_with_shorter_change() {
+        let bytes = competing_transfer_timetable(false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let anchor = base + 8 * 3600;
+        let mut q = request();
+        q.departure_unix_seconds = anchor;
+        q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
+        let (journeys, stats) = route_profile_incremental(
+            &tt, &q, &[anchor], false, Duration::from_secs(5)
+        ).unwrap();
+        assert!(!journeys.is_empty(),
+            "a slower physical walk with a shorter GTFS change must survive: {stats:?}");
+        assert!(journeys.iter().any(|j| {
+            j.boardings == 2 && j.legs.iter().any(|leg| matches!(
+                leg, Leg::Transfer { from_stop: 2, to_stop: 3, seconds: 60 }
+            ))
+        }));
     }
 
     #[test]
