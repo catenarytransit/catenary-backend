@@ -493,7 +493,7 @@ pub fn is_null_island(x: f64, y: f64) -> bool {
 pub fn contains_rail_or_metro_lines(gtfs: &gtfs_structures::Gtfs) -> bool {
     let mut answer = false;
 
-    for (_, route) in gtfs.routes.iter() {
+    for route in gtfs.routes.values() {
         let is_rail_line = matches!(
             route.route_type,
             RouteType::Tramway
