@@ -83,9 +83,7 @@ impl IntervalEstimator {
 
     /// Port of nigiri::routing::interval_estimator::initial.
     pub fn initial(&self, itv: Interval) -> Interval {
-        if self.min_connection_count == 0
-            || (!self.extend_earlier && !self.extend_later)
-        {
+        if self.min_connection_count == 0 || (!self.extend_earlier && !self.extend_later) {
             return itv;
         }
         let mut next = itv;
@@ -119,9 +117,7 @@ impl IntervalEstimator {
     /// Port of nigiri::routing::interval_estimator::extension:
     /// expand the existing interval by its width times the remaining result count.
     pub fn extension(&self, itv: Interval, missing_connections: usize) -> Interval {
-        if missing_connections == 0
-            || (!self.extend_earlier && !self.extend_later)
-        {
+        if missing_connections == 0 || (!self.extend_earlier && !self.extend_later) {
             return itv;
         }
         let ext = itv.size().saturating_mul(missing_connections as i64);
@@ -148,7 +144,10 @@ mod tests {
     #[test]
     fn nigiri_forward_initial_and_extension() {
         let e = IntervalEstimator::new(1_000_000, 48 * 3_600, 5, false);
-        let initial = e.initial(Interval { from: 1_000_000, to: 1_000_000 });
+        let initial = e.initial(Interval {
+            from: 1_000_000,
+            to: 1_000_000,
+        });
         assert_eq!(initial.size(), 6 * 3_600);
         assert_eq!(initial.from, 1_000_000);
         let extended = e.extension(initial, 2);
@@ -159,7 +158,10 @@ mod tests {
     #[test]
     fn nigiri_reverse_initial_and_clamped_extension() {
         let e = IntervalEstimator::new(1_000_000, 12 * 3_600, 5, true);
-        let initial = e.initial(Interval { from: 1_000_000, to: 1_000_000 });
+        let initial = e.initial(Interval {
+            from: 1_000_000,
+            to: 1_000_000,
+        });
         assert_eq!(initial.from, 1_000_000 - 6 * 3_600);
         assert_eq!(initial.to, 1_000_000);
         let extended = e.extension(initial, 2);

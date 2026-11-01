@@ -10,9 +10,9 @@
 //! shared-state RAPTOR. OSR offsets and the mmap timetable are reused, while
 //! each event is still a point solve. The work budget is therefore essential.
 
-use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::interval_estimate::{Interval, IntervalEstimator};
 use crate::routing_common::profile_raptor::ProfileSearchState;
+use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{
     self, Journey, Leg, Query, RaptorStats, for_each_route_service_day, transport_event_second,
 };
@@ -75,7 +75,10 @@ impl ProfileOptions {
             (1..=16).contains(&self.min_itineraries),
             "min_itineraries must be between 1 and 16"
         );
-        ensure!((1..=120).contains(&self.timeout_seconds), "timeout_seconds must be between 1 and 120");
+        ensure!(
+            (1..=120).contains(&self.timeout_seconds),
+            "timeout_seconds must be between 1 and 120"
+        );
         ensure!(
             self.max_journey_duration_seconds > 0
                 && self
@@ -194,15 +197,12 @@ pub(crate) fn route_diverse_pareto(journeys: Vec<Journey>) -> Vec<Journey> {
                 return false;
             }
             pareto.iter().any(|optimal| {
-                let arrival_gap =
-                    candidate.arrival_unix_seconds - optimal.arrival_unix_seconds;
+                let arrival_gap = candidate.arrival_unix_seconds - optimal.arrival_unix_seconds;
                 let departure_gap =
                     optimal.departure_unix_seconds - candidate.departure_unix_seconds;
                 dominates(optimal, candidate)
-                    && (0..=MAX_ALTERNATIVE_ARRIVAL_SLACK_SECONDS)
-                        .contains(&arrival_gap)
-                    && (0..=MAX_ALTERNATIVE_DEPARTURE_SLACK_SECONDS)
-                        .contains(&departure_gap)
+                    && (0..=MAX_ALTERNATIVE_ARRIVAL_SLACK_SECONDS).contains(&arrival_gap)
+                    && (0..=MAX_ALTERNATIVE_DEPARTURE_SLACK_SECONDS).contains(&departure_gap)
                     && candidate.boardings <= optimal.boardings.saturating_add(1)
             })
         })
@@ -211,7 +211,8 @@ pub(crate) fn route_diverse_pareto(journeys: Vec<Journey>) -> Vec<Journey> {
     // is the fastest candidate, not whichever route was scanned first.
     extras.sort_by_key(|j| {
         (
-            j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds),
+            j.arrival_unix_seconds
+                .saturating_sub(j.departure_unix_seconds),
             j.boardings,
             j.departure_unix_seconds,
             j.arrival_unix_seconds,
@@ -232,7 +233,11 @@ pub(crate) fn route_diverse_pareto(journeys: Vec<Journey>) -> Vec<Journey> {
         added += 1;
     }
     result.sort_by_key(|j| {
-        (j.departure_unix_seconds, j.arrival_unix_seconds, j.boardings)
+        (
+            j.departure_unix_seconds,
+            j.arrival_unix_seconds,
+            j.boardings,
+        )
     });
     result
 }
@@ -450,17 +455,28 @@ pub fn route_profile_with_stats(
     // stop/route/transport columns, rather than probing an entire route graph
     // for every timetable departure.
     let events = timetable_start_events(tt, request, reference, boundary, arrive_by, &mut stats);
-    let estimator = IntervalEstimator::new(reference, options.max_search_window_seconds,
-        options.min_itineraries, arrive_by);
+    let estimator = IntervalEstimator::new(
+        reference,
+        options.max_search_window_seconds,
+        options.min_itineraries,
+        arrive_by,
+    );
     let initial = if arrive_by {
-        Interval { from: reference.saturating_sub(i64::from(options.search_window_seconds)), to: reference }
+        Interval {
+            from: reference.saturating_sub(i64::from(options.search_window_seconds)),
+            to: reference,
+        }
     } else {
-        Interval { from: reference, to: reference.saturating_add(i64::from(options.search_window_seconds)) }
+        Interval {
+            from: reference,
+            to: reference.saturating_add(i64::from(options.search_window_seconds)),
+        }
     };
     let mut interval = estimator.initial(initial);
     let mut examined = 0usize;
     let mut batches = 0usize;
-    let deadline = started.checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
+    let deadline = started
+        .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
         .unwrap_or(started);
     stats.profile_events_enumerated = events.len() as u64;
 
@@ -493,12 +509,24 @@ pub fn route_profile_with_stats(
             state.extend(tt, &q, &batch)?;
         }
         batches += 1;
-        transit = route_diverse_pareto(state.result().into_iter().filter(|j| {
-            let t = if arrive_by { j.arrival_unix_seconds } else { j.departure_unix_seconds };
-            t >= interval.from && t <= interval.to
-                && j.arrival_unix_seconds.saturating_sub(j.departure_unix_seconds)
-                    <= i64::from(options.max_journey_duration_seconds)
-        }).collect());
+        transit = route_diverse_pareto(
+            state
+                .result()
+                .into_iter()
+                .filter(|j| {
+                    let t = if arrive_by {
+                        j.arrival_unix_seconds
+                    } else {
+                        j.departure_unix_seconds
+                    };
+                    t >= interval.from
+                        && t <= interval.to
+                        && j.arrival_unix_seconds
+                            .saturating_sub(j.departure_unix_seconds)
+                            <= i64::from(options.max_journey_duration_seconds)
+                })
+                .collect(),
+        );
         let qualifying = filter_extreme_durations(transit.clone(), options, arrive_by);
         // Like Nigiri's n_results_in_interval(), count qualifying Pareto
         // journeys whose start time lies within the actual searched interval.
@@ -506,10 +534,16 @@ pub fn route_profile_with_stats(
         if strict.len() >= options.min_itineraries || state.stats().profile_budget_exhausted {
             break;
         }
-        if examined == events.len() { break; }
-        let next = estimator.extension(interval,
-            options.min_itineraries.saturating_sub(strict.len()));
-        if next == interval { break; }
+        if examined == events.len() {
+            break;
+        }
+        let next = estimator.extension(
+            interval,
+            options.min_itineraries.saturating_sub(strict.len()),
+        );
+        if next == interval {
+            break;
+        }
         interval = next;
         stats.profile_interval_extensions += 1;
     }
@@ -522,9 +556,12 @@ pub fn route_profile_with_stats(
     // well-tested point RAPTOR search rather than the former 128 point solves.
     // The incomplete profile remains explicitly visible in debug statistics.
     // Do not silently reduce multi-day journey eligibility on fallback.
-    if transit.is_empty() && !stats.profile_budget_exhausted
+    if transit.is_empty()
+        && !stats.profile_budget_exhausted
         && Instant::now() < deadline
-        && !request.access.is_empty() && !request.egress.is_empty() {
+        && !request.access.is_empty()
+        && !request.egress.is_empty()
+    {
         let mut fallback = request.clone();
         fallback.direct_walk_seconds = None;
         fallback.max_duration_seconds = options.max_journey_duration_seconds;
@@ -654,8 +691,12 @@ mod tests {
         let request = request();
         let reference = request.departure_unix_seconds;
         let events = timetable_start_events(
-            &tt, &request, reference, reference + 2 * 86_400,
-            false, &mut stats,
+            &tt,
+            &request,
+            reference,
+            reference + 2 * 86_400,
+            false,
+            &mut stats,
         );
         assert!(!events.contains(&reference));
         assert!(!events.is_empty());
@@ -668,13 +709,15 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = request();
         let (journeys, stats) = route_profile_with_stats(
-            &tt, &q,
+            &tt,
+            &q,
             ProfileOptions {
                 max_journey_duration_seconds: 36 * 3_600,
                 ..ProfileOptions::default()
             },
             false,
-        ).unwrap();
+        )
+        .unwrap();
         assert!(!journeys.is_empty(), "first service was dropped: {stats:?}");
         assert!(stats.profile_interval_extensions > 0);
         assert!(stats.profile_events_enumerated > 0);
@@ -840,16 +883,19 @@ mod tests {
                 arrival_unix_seconds: arr,
                 boardings: 1,
                 legs: vec![Leg::Ride {
-                    from_stop: 0, to_stop: 1, route: 1, transport: 0, service_day: 0,
-                    board_stop_index: 0, alight_stop_index: 1,
-                    departure_unix_seconds: dep, arrival_unix_seconds: arr,
+                    from_stop: 0,
+                    to_stop: 1,
+                    route: 1,
+                    transport: 0,
+                    service_day: 0,
+                    board_stop_index: 0,
+                    alight_stop_index: 1,
+                    departure_unix_seconds: dep,
+                    arrival_unix_seconds: arr,
                 }],
             }
         }
-        let choices = route_diverse_pareto(vec![
-            candidate(100, 1_900),
-            candidate(300, 2_100),
-        ]);
+        let choices = route_diverse_pareto(vec![candidate(100, 1_900), candidate(300, 2_100)]);
         assert_eq!(choices.len(), 2);
     }
 

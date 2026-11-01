@@ -158,13 +158,14 @@ fn onboard_dominates(a: &Onboard, b: &Onboard, arrive_by: bool) -> bool {
     // When both states board the same scheduled vehicle at the same anchor
     // with identical boardings, the shorter walking predecessor is preferable.
     // Do not let stop scan order choose the longer physical interchange.
-    if a.service_day == b.service_day && a.transport == b.transport
-        && a.rides == b.rides && a.anchor == b.anchor
+    if a.service_day == b.service_day
+        && a.transport == b.transport
+        && a.rides == b.rides
+        && a.anchor == b.anchor
     {
         // Boarding at a different stop can change which downstream stops
         // remain reachable. Keep both positions until final optimization.
-        return a.position == b.position
-            && a.walking_seconds <= b.walking_seconds;
+        return a.position == b.position && a.walking_seconds <= b.walking_seconds;
     }
     a.service_day == b.service_day
         && a.rides <= b.rides
@@ -522,10 +523,12 @@ fn indexed_transport(
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         stats.transport_lookup_probes += 1;
-        let event = transport_event_second(
-            tt, route, active[mid], pos, arrive_by, midnight,
-        )?;
-        if if arrive_by { event <= ready } else { event < ready } {
+        let event = transport_event_second(tt, route, active[mid], pos, arrive_by, midnight)?;
+        if if arrive_by {
+            event <= ready
+        } else {
+            event < ready
+        } {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -664,20 +667,15 @@ fn scan_routes(
         // provenance labels probe a route with many inactive service patterns.
         let mut active_days: Vec<(usize, Vec<TransportIdx>)> = Vec::new();
         let range = tt.route_transport_ranges()[route.idx()];
-        for_each_route_service_day(
-            tt, route, day_lower, day_upper, stats, |day, _| {
-                let active: Vec<_> = (range.from..range.to)
-                    .map(TransportIdx)
-                    .filter(|t| {
-                        tt.bitfields()[tt.transport_traffic_days()[t.idx()].idx()]
-                            .test(day)
-                    })
-                    .collect();
-                if !active.is_empty() {
-                    active_days.push((day, active));
-                }
-            },
-        );
+        for_each_route_service_day(tt, route, day_lower, day_upper, stats, |day, _| {
+            let active: Vec<_> = (range.from..range.to)
+                .map(TransportIdx)
+                .filter(|t| tt.bitfields()[tt.transport_traffic_days()[t.idx()].idx()].test(day))
+                .collect();
+            if !active.is_empty() {
+                active_days.push((day, active));
+            }
+        });
         if active_days.is_empty() {
             continue;
         }
@@ -692,7 +690,11 @@ fn scan_routes(
                 stats.profile_budget_exhausted = true;
                 break;
             }
-            let pos = if arrive_by { stops.len() - 1 - step } else { step };
+            let pos = if arrive_by {
+                stops.len() - 1 - step
+            } else {
+                step
+            };
             let stop = stops[pos];
             let loc = stop.location().idx();
             let can_finish = if arrive_by {
@@ -702,14 +704,25 @@ fn scan_routes(
             };
             if can_finish {
                 for riding in &onboard {
-                    let midnight = (i64::from(tt.header().first_utc_day)
-                        + riding.service_day as i64) * 86_400;
+                    let midnight =
+                        (i64::from(tt.header().first_utc_day) + riding.service_day as i64) * 86_400;
                     let Some(event) = transport_event_second(
-                        tt, route, riding.transport, pos, !arrive_by, midnight,
-                    ) else { continue };
-                    if event < lower || event > upper
-                        || (arrive_by && event < event_anchor.saturating_sub(i64::from(max_duration_seconds)))
-                        || (!arrive_by && event > event_anchor.saturating_add(i64::from(max_duration_seconds))) {
+                        tt,
+                        route,
+                        riding.transport,
+                        pos,
+                        !arrive_by,
+                        midnight,
+                    ) else {
+                        continue;
+                    };
+                    if event < lower
+                        || event > upper
+                        || (arrive_by
+                            && event < event_anchor.saturating_sub(i64::from(max_duration_seconds)))
+                        || (!arrive_by
+                            && event > event_anchor.saturating_add(i64::from(max_duration_seconds)))
+                    {
                         continue;
                     }
                     let leg = if arrive_by {
@@ -753,11 +766,13 @@ fn scan_routes(
                         && terminal_alternatives.len() < 32
                         && final_stops.iter().any(|(stop, _)| *stop == loc)
                     {
-                        let best = current.get(&loc)
-                            .and_then(|labels| labels.iter()
+                        let best = current.get(&loc).and_then(|labels| {
+                            labels
+                                .iter()
                                 .filter(|l| l.rides <= candidate.rides)
                                 .map(|l| l.time)
-                                .reduce(|a, b| if arrive_by { a.max(b) } else { a.min(b) }));
+                                .reduce(|a, b| if arrive_by { a.max(b) } else { a.min(b) })
+                        });
                         let within_slack = best.is_none_or(|time| {
                             if arrive_by {
                                 time.saturating_sub(event) <= 12 * 60
@@ -765,23 +780,20 @@ fn scan_routes(
                                 event.saturating_sub(time) <= 12 * 60
                             }
                         });
-                        let distinct_last_route = !terminal_alternatives.iter().any(
-                            |(prior, end, _)| {
-                                *end == loc && prior.path
-                                    .and_then(|id| nodes.get(id))
-                                    .is_some_and(|node| matches!(
-                                        &node.leg,
-                                        Leg::Ride { route: r, .. } if *r == route.0
-                                    ))
-                            },
-                        );
-                        if within_slack && distinct_last_route
-                            && nodes.len() < MAX_PATH_NODES
-                        {
+                        let distinct_last_route =
+                            !terminal_alternatives.iter().any(|(prior, end, _)| {
+                                *end == loc
+                                    && prior.path.and_then(|id| nodes.get(id)).is_some_and(|node| {
+                                        matches!(
+                                            &node.leg,
+                                            Leg::Ride { route: r, .. } if *r == route.0
+                                        )
+                                    })
+                            });
+                        if within_slack && distinct_last_route && nodes.len() < MAX_PATH_NODES {
                             let mut terminal = candidate;
-                            terminal.path = Some(append_path(
-                                nodes, leg.clone(), Some(riding.predecessor),
-                            ));
+                            terminal.path =
+                                Some(append_path(nodes, leg.clone(), Some(riding.predecessor)));
                             for &(end, seconds) in final_stops {
                                 if end == loc {
                                     terminal_alternatives.push((terminal, end, seconds));
@@ -790,9 +802,15 @@ fn scan_routes(
                         }
                     }
                     if let Some(label) = insert_path_label(
-                        current, loc, candidate, leg,
-                        Some(riding.predecessor), nodes, arrive_by,
-                        stats, changed,
+                        current,
+                        loc,
+                        candidate,
+                        leg,
+                        Some(riding.predecessor),
+                        nodes,
+                        arrive_by,
+                        stats,
+                        changed,
                     ) {
                         ride_seeds.push((loc, label));
                     }
@@ -829,7 +847,9 @@ fn scan_routes(
                     for (day, active) in &active_days {
                         let Some((transport, event_time)) = indexed_transport(
                             tt, route, pos, *day, ready, arrive_by, active, stats,
-                        ) else { continue };
+                        ) else {
+                            continue;
+                        };
                         if event_time < lower || event_time > upper {
                             continue;
                         }
@@ -837,24 +857,25 @@ fn scan_routes(
                         // profile anchor. Do not let an unrelated train several
                         // days later inflate the provenance skyline.
                         if label.rides == 0
-                            && (event_time < first_board_lower
-                                || event_time > first_board_upper)
+                            && (event_time < first_board_lower || event_time > first_board_upper)
                         {
                             continue;
                         }
-                        let Some(predecessor) = label.path else { continue };
+                        let Some(predecessor) = label.path else {
+                            continue;
+                        };
                         let Some(anchor) =
                             first_vehicle_anchor(nodes, predecessor, label, event_time, arrive_by)
-                        else { continue };
+                        else {
+                            continue;
+                        };
                         if label.rides == 0 && anchor != event_anchor {
                             // The only legal first boarding for this start
                             // has exact origin departure == event_anchor.
                             // Later services are processed as separate starts.
                             continue;
                         }
-                        if label.rides == 0
-                            && (anchor < first_anchor || anchor > last_anchor)
-                        {
+                        if label.rides == 0 && (anchor < first_anchor || anchor > last_anchor) {
                             continue;
                         }
                         insert_onboard(
@@ -906,12 +927,21 @@ pub(crate) struct ProfileSearchState {
 
 impl ProfileSearchState {
     pub fn new(
-        tt: &ZeroCopyTimetable<'_>, request: &Query,
-        earliest: i64, latest: i64, arrive_by: bool, timeout: Duration,
+        tt: &ZeroCopyTimetable<'_>,
+        request: &Query,
+        earliest: i64,
+        latest: i64,
+        arrive_by: bool,
+        timeout: Duration,
     ) -> Result<Self> {
-        ensure!(request.max_boardings <= 16, "max_boardings exceeds supported query limit");
-        ensure!((1..=7 * 86_400).contains(&request.max_duration_seconds),
-            "max_duration_seconds must be between 1 second and 7 days");
+        ensure!(
+            request.max_boardings <= 16,
+            "max_boardings exceeds supported query limit"
+        );
+        ensure!(
+            (1..=7 * 86_400).contains(&request.max_duration_seconds),
+            "max_duration_seconds must be between 1 second and 7 days"
+        );
         ensure!(earliest <= latest, "invalid profile interval");
         let n = tt.coordinates().len();
         for ep in request.access.iter().chain(request.egress.iter()) {
@@ -924,15 +954,24 @@ impl ProfileSearchState {
         };
         let lower = if arrive_by {
             earliest.saturating_sub(i64::from(request.max_duration_seconds))
-        } else { earliest };
-        let upper = if arrive_by { latest }
-            else { latest.saturating_add(i64::from(request.max_duration_seconds)) };
+        } else {
+            earliest
+        };
+        let upper = if arrive_by {
+            latest
+        } else {
+            latest.saturating_add(i64::from(request.max_duration_seconds))
+        };
         let first_board_lower = if arrive_by {
             earliest.saturating_sub(i64::from(max_offset))
-        } else { earliest };
+        } else {
+            earliest
+        };
         let first_board_upper = if arrive_by {
             latest
-        } else { latest.saturating_add(i64::from(max_offset)) };
+        } else {
+            latest.saturating_add(i64::from(max_offset))
+        };
         let now = Instant::now();
         let mut stats = RaptorStats::default();
         stats.profile_searches = 1;
@@ -940,24 +979,38 @@ impl ProfileSearchState {
             rounds: vec![Round::default(); request.max_boardings + 1],
             nodes: Vec::new(),
             stamps: vec![0; tt.route_transport_ranges().len()],
-            epoch: 0, journeys: Vec::new(), stats,
+            epoch: 0,
+            journeys: Vec::new(),
+            stats,
             deadline: now.checked_add(timeout).unwrap_or(now),
-            lower, upper, first_anchor: earliest, last_anchor: latest,
-            first_board_lower, first_board_upper, arrive_by,
+            lower,
+            upper,
+            first_anchor: earliest,
+            last_anchor: latest,
+            first_board_lower,
+            first_board_upper,
+            arrive_by,
             last_processed_anchor: None,
         })
     }
 
     pub fn extend(
-        &mut self, tt: &ZeroCopyTimetable<'_>, request: &Query, anchors: &[i64],
+        &mut self,
+        tt: &ZeroCopyTimetable<'_>,
+        request: &Query,
+        anchors: &[i64],
     ) -> Result<()> {
-        ensure!(anchors.windows(2).all(|w| w[0] <= w[1]),
-            "profile anchors must be sorted");
+        ensure!(
+            anchors.windows(2).all(|w| w[0] <= w[1]),
+            "profile anchors must be sorted"
+        );
         // Process in expansion order. In forward searches new later anchors
         // can be added after older ones. Arrive-by uses the reverse order.
         let ordered: Vec<i64> = if self.arrive_by {
             anchors.iter().rev().copied().collect()
-        } else { anchors.to_vec() };
+        } else {
+            anchors.to_vec()
+        };
         let arrive_by = self.arrive_by;
         let lower = self.lower;
         let upper = self.upper;
@@ -968,8 +1021,14 @@ impl ProfileSearchState {
         let deadline = self.deadline;
         for (event_idx, anchor) in ordered.into_iter().enumerate() {
             if let Some(last) = self.last_processed_anchor {
-                ensure!(if arrive_by { anchor <= last } else { anchor >= last },
-                    "profile expansion violates incremental search order");
+                ensure!(
+                    if arrive_by {
+                        anchor <= last
+                    } else {
+                        anchor >= last
+                    },
+                    "profile expansion violates incremental search order"
+                );
             }
             if Instant::now() >= self.deadline {
                 self.stats.profile_budget_exhausted = true;
@@ -977,220 +1036,225 @@ impl ProfileSearchState {
             }
             self.last_processed_anchor = Some(anchor);
             self.stats.profile_anchor_events += 1;
-        let mut marked = Vec::new();
-        let initial = if arrive_by {
-            &request.egress
-        } else {
-            &request.access
-        };
-        for ep in initial {
-            let stop = ep.stop.idx();
-            let time = if arrive_by {
-                anchor.saturating_sub(i64::from(ep.seconds))
-            } else {
-                anchor.saturating_add(i64::from(ep.seconds))
-            };
-            if time < self.lower || time > self.upper {
-                continue;
-            }
-            let candidate = Label {
-                time,
-                path: None,
-                transit: None,
-                anchor,
-                rides: 0,
-            };
-            let leg = if arrive_by {
-                Leg::Egress {
-                    from_stop: ep.stop.0,
-                    seconds: ep.seconds,
-                }
-            } else {
-                Leg::Access {
-                    to_stop: ep.stop.0,
-                    seconds: ep.seconds,
-                }
-            };
-            insert_path_label(
-                &mut self.rounds[0],
-                stop,
-                candidate,
-                leg,
-                None,
-                &mut self.nodes,
-                arrive_by,
-                &mut self.stats,
-                &mut marked,
-            );
-        }
-        marked.sort_unstable();
-        marked.dedup();
-        let mut changed_ends: Vec<(usize, Label, usize, u32)> = Vec::new();
-        for k in 1..=request.max_boardings {
-            if marked.is_empty() || self.stats.profile_budget_exhausted {
-                break;
-            }
-            self.stats.rounds += 1;
-            self.stats.marked_stops += marked.len() as u64;
-            let (earlier, later) = self.rounds.split_at_mut(k);
-            let prev = &earlier[k - 1];
-            let curr = &mut later[0];
-            let mut changed = Vec::new();
-            for &stop in &marked {
-                if let Some(labels) = prev.get(&stop) {
-                    for &label in labels {
-                        if label.anchor != anchor {
-                            continue;
-                        }
-                        // Carrying an earlier label does not create a new
-                        // boarding opportunity. Only genuine ride/footpath
-                        // improvements may mark the next RAPTOR round.
-                        insert_label(curr, stop, label, arrive_by);
-                    }
-                }
-            }
-            let routes = marked_routes(tt, &marked, &mut self.stamps, &mut self.epoch);
-            let mut ride_seeds = Vec::new();
-            let final_stops: Vec<(usize, u32)> = (if arrive_by {
-                &request.access
-            } else {
+            let mut marked = Vec::new();
+            let initial = if arrive_by {
                 &request.egress
-            }).iter().map(|ep| (ep.stop.idx(), ep.seconds)).collect();
-            let mut terminal_alternatives = Vec::new();
-            scan_routes(
-                tt,
-                prev,
-                curr,
-                &mut self.nodes,
-                &routes,
-                &marked,
-                self.lower,
-                self.upper,
-                self.first_anchor,
-                self.last_anchor,
-                first_board_lower,
-                first_board_upper,
-                anchor,
-                request.max_duration_seconds,
-                arrive_by,
-                self.deadline,
-                &mut self.stats,
-                &mut changed,
-                &mut ride_seeds,
-                &final_stops,
-                &mut terminal_alternatives,
-            );
-            for (label, stop, offset) in terminal_alternatives {
-                changed_ends.push((k, label, stop, offset));
+            } else {
+                &request.access
+            };
+            for ep in initial {
+                let stop = ep.stop.idx();
+                let time = if arrive_by {
+                    anchor.saturating_sub(i64::from(ep.seconds))
+                } else {
+                    anchor.saturating_add(i64::from(ep.seconds))
+                };
+                if time < self.lower || time > self.upper {
+                    continue;
+                }
+                let candidate = Label {
+                    time,
+                    path: None,
+                    transit: None,
+                    anchor,
+                    rides: 0,
+                };
+                let leg = if arrive_by {
+                    Leg::Egress {
+                        from_stop: ep.stop.0,
+                        seconds: ep.seconds,
+                    }
+                } else {
+                    Leg::Access {
+                        to_stop: ep.stop.0,
+                        seconds: ep.seconds,
+                    }
+                };
+                insert_path_label(
+                    &mut self.rounds[0],
+                    stop,
+                    candidate,
+                    leg,
+                    None,
+                    &mut self.nodes,
+                    arrive_by,
+                    &mut self.stats,
+                    &mut marked,
+                );
             }
-            // Walk propagation is intentionally one hop: Gentian constructs a
-            // transfer closure. Each improved *provenance* remains independent.
-            for (stop, source) in ride_seeds {
-                if self.stats.profile_budget_exhausted {
+            marked.sort_unstable();
+            marked.dedup();
+            let mut changed_ends: Vec<(usize, Label, usize, u32)> = Vec::new();
+            for k in 1..=request.max_boardings {
+                if marked.is_empty() || self.stats.profile_budget_exhausted {
                     break;
                 }
-                let Some(predecessor) = source.path else {
-                    continue;
-                };
-                let feet = if arrive_by {
-                    tt.footpaths_to(LocationIdx(stop as u32))
+                self.stats.rounds += 1;
+                self.stats.marked_stops += marked.len() as u64;
+                let (earlier, later) = self.rounds.split_at_mut(k);
+                let prev = &earlier[k - 1];
+                let curr = &mut later[0];
+                let mut changed = Vec::new();
+                for &stop in &marked {
+                    if let Some(labels) = prev.get(&stop) {
+                        for &label in labels {
+                            if label.anchor != anchor {
+                                continue;
+                            }
+                            // Carrying an earlier label does not create a new
+                            // boarding opportunity. Only genuine ride/footpath
+                            // improvements may mark the next RAPTOR round.
+                            insert_label(curr, stop, label, arrive_by);
+                        }
+                    }
+                }
+                let routes = marked_routes(tt, &marked, &mut self.stamps, &mut self.epoch);
+                let mut ride_seeds = Vec::new();
+                let final_stops: Vec<(usize, u32)> = (if arrive_by {
+                    &request.access
                 } else {
-                    tt.footpaths_from(LocationIdx(stop as u32))
-                };
-                for edge in feet {
-                    self.stats.footpath_edges_examined += 1;
-                    let target = edge.target().idx();
-                    let secs = edge.seconds();
-                    if secs == 0 {
-                        continue;
-                    }
-                    let time = if arrive_by {
-                        source.time.saturating_sub(i64::from(secs))
-                    } else {
-                        source.time.saturating_add(i64::from(secs))
-                    };
-                    if time < self.lower || time > self.upper {
-                        continue;
-                    }
-                    let leg = if arrive_by {
-                        Leg::Transfer {
-                            from_stop: target as u32,
-                            to_stop: stop as u32,
-                            seconds: secs,
-                        }
-                    } else {
-                        Leg::Transfer {
-                            from_stop: stop as u32,
-                            to_stop: target as u32,
-                            seconds: secs,
-                        }
-                    };
-                    insert_path_label(
-                        curr,
-                        target,
-                        Label {
-                            time,
-                            path: None,
-                            ..source
-                        },
-                        leg,
-                        Some(predecessor),
-                        &mut self.nodes,
-                        arrive_by,
-                        &mut self.stats,
-                        &mut changed,
-                    );
+                    &request.egress
+                })
+                .iter()
+                .map(|ep| (ep.stop.idx(), ep.seconds))
+                .collect();
+                let mut terminal_alternatives = Vec::new();
+                scan_routes(
+                    tt,
+                    prev,
+                    curr,
+                    &mut self.nodes,
+                    &routes,
+                    &marked,
+                    self.lower,
+                    self.upper,
+                    self.first_anchor,
+                    self.last_anchor,
+                    first_board_lower,
+                    first_board_upper,
+                    anchor,
+                    request.max_duration_seconds,
+                    arrive_by,
+                    self.deadline,
+                    &mut self.stats,
+                    &mut changed,
+                    &mut ride_seeds,
+                    &final_stops,
+                    &mut terminal_alternatives,
+                );
+                for (label, stop, offset) in terminal_alternatives {
+                    changed_ends.push((k, label, stop, offset));
+                }
+                // Walk propagation is intentionally one hop: Gentian constructs a
+                // transfer closure. Each improved *provenance* remains independent.
+                for (stop, source) in ride_seeds {
                     if self.stats.profile_budget_exhausted {
                         break;
                     }
-                }
-            }
-            changed.sort_unstable();
-            changed.dedup();
-            let endpoints = if arrive_by {
-                &request.access
-            } else {
-                &request.egress
-            };
-            for ep in endpoints {
-                if changed.binary_search(&ep.stop.idx()).is_err() {
-                    continue;
-                }
-                if let Some(labels) = curr.get(&ep.stop.idx()) {
-                    for &label in labels {
-                        if label.anchor != anchor {
+                    let Some(predecessor) = source.path else {
+                        continue;
+                    };
+                    let feet = if arrive_by {
+                        tt.footpaths_to(LocationIdx(stop as u32))
+                    } else {
+                        tt.footpaths_from(LocationIdx(stop as u32))
+                    };
+                    for edge in feet {
+                        self.stats.footpath_edges_examined += 1;
+                        let target = edge.target().idx();
+                        let secs = edge.seconds();
+                        if secs == 0 {
                             continue;
                         }
-                        changed_ends.push((k, label, ep.stop.idx(), ep.seconds));
+                        let time = if arrive_by {
+                            source.time.saturating_sub(i64::from(secs))
+                        } else {
+                            source.time.saturating_add(i64::from(secs))
+                        };
+                        if time < self.lower || time > self.upper {
+                            continue;
+                        }
+                        let leg = if arrive_by {
+                            Leg::Transfer {
+                                from_stop: target as u32,
+                                to_stop: stop as u32,
+                                seconds: secs,
+                            }
+                        } else {
+                            Leg::Transfer {
+                                from_stop: stop as u32,
+                                to_stop: target as u32,
+                                seconds: secs,
+                            }
+                        };
+                        insert_path_label(
+                            curr,
+                            target,
+                            Label {
+                                time,
+                                path: None,
+                                ..source
+                            },
+                            leg,
+                            Some(predecessor),
+                            &mut self.nodes,
+                            arrive_by,
+                            &mut self.stats,
+                            &mut changed,
+                        );
+                        if self.stats.profile_budget_exhausted {
+                            break;
+                        }
                     }
                 }
+                changed.sort_unstable();
+                changed.dedup();
+                let endpoints = if arrive_by {
+                    &request.access
+                } else {
+                    &request.egress
+                };
+                for ep in endpoints {
+                    if changed.binary_search(&ep.stop.idx()).is_err() {
+                        continue;
+                    }
+                    if let Some(labels) = curr.get(&ep.stop.idx()) {
+                        for &label in labels {
+                            if label.anchor != anchor {
+                                continue;
+                            }
+                            changed_ends.push((k, label, ep.stop.idx(), ep.seconds));
+                        }
+                    }
+                }
+                marked = changed;
             }
-            marked = changed;
-        }
-        for (_round, label, stop, offset) in changed_ends {
-            let Some(mut journey) = (if arrive_by {
-                reconstruct_reverse(&self.nodes, label, stop, offset)
-            } else {
-                reconstruct_forward(&self.nodes, label, stop, offset)
-            }) else {
-                continue;
-            };
-            if !arrive_by {
-                optimize_same_trip_endpoint_walks(tt, request, &mut journey);
-            } else {
-                crate::routing_common::transfer_optimizer::optimize_internal_transfers(tt, &mut journey);
+            for (_round, label, stop, offset) in changed_ends {
+                let Some(mut journey) = (if arrive_by {
+                    reconstruct_reverse(&self.nodes, label, stop, offset)
+                } else {
+                    reconstruct_forward(&self.nodes, label, stop, offset)
+                }) else {
+                    continue;
+                };
+                if !arrive_by {
+                    optimize_same_trip_endpoint_walks(tt, request, &mut journey);
+                } else {
+                    crate::routing_common::transfer_optimizer::optimize_internal_transfers(
+                        tt,
+                        &mut journey,
+                    );
+                }
+                self.stats.profile_journeys_reconstructed += 1;
+                if valid_journey(tt, request, &journey) {
+                    self.journeys.push(journey);
+                } else {
+                    self.stats.profile_journeys_rejected += 1;
+                }
             }
-            self.stats.profile_journeys_reconstructed += 1;
-            if valid_journey(tt, request, &journey) {
-                self.journeys.push(journey);
-            } else {
-                self.stats.profile_journeys_rejected += 1;
+            if self.stats.profile_budget_exhausted {
+                break;
             }
-        }
-        if self.stats.profile_budget_exhausted {
-            break;
-        }
-
         }
         Ok(())
     }
@@ -1199,12 +1263,17 @@ impl ProfileSearchState {
         crate::routing_common::profile_search::route_diverse_pareto(self.journeys.clone())
     }
 
-    pub fn stats(&self) -> &RaptorStats { &self.stats }
+    pub fn stats(&self) -> &RaptorStats {
+        &self.stats
+    }
 }
 
 pub(crate) fn route_profile_incremental(
-    tt: &ZeroCopyTimetable<'_>, request: &Query, anchors: &[i64],
-    arrive_by: bool, budget: Duration,
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    anchors: &[i64],
+    arrive_by: bool,
+    budget: Duration,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     let mut sorted = anchors.to_vec();
     sorted.sort_unstable();
@@ -1212,8 +1281,14 @@ pub(crate) fn route_profile_incremental(
     if sorted.is_empty() || request.max_boardings == 0 {
         return Ok((vec![], RaptorStats::default()));
     }
-    let mut state = ProfileSearchState::new(tt, request, sorted[0],
-        *sorted.last().unwrap(), arrive_by, budget)?;
+    let mut state = ProfileSearchState::new(
+        tt,
+        request,
+        sorted[0],
+        *sorted.last().unwrap(),
+        arrive_by,
+        budget,
+    )?;
     state.extend(tt, request, &sorted)?;
     Ok((state.result(), state.stats().clone()))
 }
@@ -1225,8 +1300,7 @@ mod tests {
     #[test]
     fn active_transport_index_skips_inactive_calendar_without_changing_fifo_order() {
         use crate::routing_common::timetable::{
-            BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TimingProfileIdx,
-            TrafficDays,
+            BitfieldIdx, Delta, PackedStop, Range, TimetableOwned, TimingProfileIdx, TrafficDays,
         };
         let mut owned = TimetableOwned::empty(20_000, 2);
         for _ in 0..2 {
@@ -1256,16 +1330,18 @@ mod tests {
         for time in [1_000, 2_000, 3_000] {
             owned.transport_route.push(RouteIdx(0));
             owned.transport_timing_profile.push(TimingProfileIdx(0));
-            owned.transport_first_dep_offset.push(Delta::from_seconds(time).unwrap());
+            owned
+                .transport_first_dep_offset
+                .push(Delta::from_seconds(time).unwrap());
             owned.transport_initial_day_offset.push(0);
         }
         let mut active = TrafficDays::default();
         active.set(0, true).unwrap();
         let inactive = TrafficDays::default();
         owned.bitfields.extend([active, inactive]);
-        owned.transport_traffic_days.extend([
-            BitfieldIdx(1), BitfieldIdx(2), BitfieldIdx(1),
-        ]);
+        owned
+            .transport_traffic_days
+            .extend([BitfieldIdx(1), BitfieldIdx(2), BitfieldIdx(1)]);
         owned.route_traffic_days.push(BitfieldIdx(1));
         owned.route_section_clasz_offsets.push(0);
         owned.section_flag_offsets.push(0);
@@ -1277,30 +1353,59 @@ mod tests {
         let midnight = 20_000_i64 * 86_400;
         let mut stats = RaptorStats::default();
         let next = indexed_transport(
-            &tt, RouteIdx(0), 0, day, midnight + 1_500, false, &active,
+            &tt,
+            RouteIdx(0),
+            0,
+            day,
+            midnight + 1_500,
+            false,
+            &active,
             &mut stats,
         );
         assert_eq!(next, Some((TransportIdx(2), midnight + 3_000)));
         let previous = indexed_transport(
-            &tt, RouteIdx(0), 1, day, midnight + 3_700, true, &active,
+            &tt,
+            RouteIdx(0),
+            1,
+            day,
+            midnight + 3_700,
+            true,
+            &active,
             &mut stats,
         );
         assert_eq!(previous, Some((TransportIdx(2), midnight + 3_600)));
-        assert!(indexed_transport(
-            &tt, RouteIdx(0), 0, day, midnight + 3_001, false, &active,
-            &mut stats,
-        ).is_none());
+        assert!(
+            indexed_transport(
+                &tt,
+                RouteIdx(0),
+                0,
+                day,
+                midnight + 3_001,
+                false,
+                &active,
+                &mut stats,
+            )
+            .is_none()
+        );
     }
 
     #[test]
     fn first_vehicle_anchor_requires_matching_profile_start() {
         let mut nodes = Vec::new();
-        let access = append_path(&mut nodes, Leg::Access {
-            to_stop: 0, seconds: 120,
-        }, None);
+        let access = append_path(
+            &mut nodes,
+            Leg::Access {
+                to_stop: 0,
+                seconds: 120,
+            },
+            None,
+        );
         let root = Label {
-            time: 1_120, path: Some(access), transit: None,
-            anchor: 1_000, rides: 0,
+            time: 1_120,
+            path: Some(access),
+            transit: None,
+            anchor: 1_000,
+            rides: 0,
         };
         // The vehicle at 1_200 is the requested first boarding.
         assert_eq!(
@@ -1318,12 +1423,19 @@ mod tests {
     #[test]
     fn identical_onboard_vehicle_prefers_shorter_walk_independent_of_scan_order() {
         let long = Onboard {
-            transport: TransportIdx(7), service_day: 0, from: 3,
-            event_time: 1000, position: 3, predecessor: 0,
-            anchor: 700, rides: 2, walking_seconds: 524,
+            transport: TransportIdx(7),
+            service_day: 0,
+            from: 3,
+            event_time: 1000,
+            position: 3,
+            predecessor: 0,
+            anchor: 700,
+            rides: 2,
+            walking_seconds: 524,
         };
         let short = Onboard {
-            walking_seconds: 149, ..long
+            walking_seconds: 149,
+            ..long
         };
         let mut states = Vec::new();
         insert_onboard(&mut states, long, false);
@@ -1341,12 +1453,21 @@ mod tests {
     #[test]
     fn same_vehicle_different_boarding_positions_remain_reachable() {
         let early = Onboard {
-            transport: TransportIdx(7), service_day: 0, from: 3,
-            event_time: 1000, position: 2, predecessor: 0,
-            anchor: 700, rides: 2, walking_seconds: 524,
+            transport: TransportIdx(7),
+            service_day: 0,
+            from: 3,
+            event_time: 1000,
+            position: 2,
+            predecessor: 0,
+            anchor: 700,
+            rides: 2,
+            walking_seconds: 524,
         };
         let later = Onboard {
-            position: 4, from: 4, walking_seconds: 149, ..early
+            position: 4,
+            from: 4,
+            walking_seconds: 149,
+            ..early
         };
         let mut states = Vec::new();
         insert_onboard(&mut states, early, false);

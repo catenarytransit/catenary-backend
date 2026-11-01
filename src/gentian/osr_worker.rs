@@ -191,8 +191,12 @@ fn run_request(
         if !x.name.is_empty() || !x.gtfs_id.is_empty() || !x.platform_code.is_empty() {
             let route_names = x.route_names.join("\u{1f}");
             let matched = router.match_platform(
-                &point, &x.gtfs_id, &x.name, &x.platform_code,
-                &route_names, 25.0,
+                &point,
+                &x.gtfs_id,
+                &x.name,
+                &x.platform_code,
+                &route_names,
+                25.0,
             )?;
             if matched.found {
                 point = ffi::Coordinate::indoor(x.latitude, x.longitude, matched.level);
@@ -211,7 +215,12 @@ fn run_request(
         );
         let routes = x.route_names.join("\u{1f}");
         let matched = router.match_platform(
-            &origin, &x.gtfs_id, &x.name, &x.platform_code, &routes, 25.0,
+            &origin,
+            &x.gtfs_id,
+            &x.name,
+            &x.platform_code,
+            &routes,
+            25.0,
         )?;
         if matched.found {
             origin = ffi::Coordinate::indoor(query.latitude, query.longitude, matched.level);
@@ -316,9 +325,7 @@ fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Route
     let mut input = Vec::new();
     let received = limited.read_until(b'\n', &mut input)?;
     ensure!(
-        received > 0
-            && received <= MAX_OSR_REQUEST_BYTES as usize
-            && input.last() == Some(&b'\n'),
+        received > 0 && received <= MAX_OSR_REQUEST_BYTES as usize && input.last() == Some(&b'\n'),
         "OSR request exceeds 4 MiB or is not newline terminated"
     );
     let response = match serde_json::from_slice::<Request>(&input) {

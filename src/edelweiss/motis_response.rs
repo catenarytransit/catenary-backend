@@ -443,10 +443,18 @@ fn platform_metadata(
         latitude: f64::from(coordinate.lat),
         longitude: f64::from(coordinate.lon),
         platform: PlatformMetadata {
-            name: tt.location_name().get(stop as usize)
-                .and_then(|x| tt.get_string(*x)).unwrap_or("").to_owned(),
-            gtfs_id: tt.location_id().get(stop as usize)
-                .and_then(|x| tt.get_string(*x)).unwrap_or("").to_owned(),
+            name: tt
+                .location_name()
+                .get(stop as usize)
+                .and_then(|x| tt.get_string(*x))
+                .unwrap_or("")
+                .to_owned(),
+            gtfs_id: tt
+                .location_id()
+                .get(stop as usize)
+                .and_then(|x| tt.get_string(*x))
+                .unwrap_or("")
+                .to_owned(),
             platform_code: metadata.platform_code.clone(),
             route_names: metadata.route_names.clone(),
         },
@@ -891,16 +899,23 @@ mod tests {
     fn detailed_platform_endpoints_retain_gtfs_matching_metadata() {
         let mut owned = catenary::routing_common::timetable::TimetableOwned::empty(0, 1);
         owned.add_source("test", "metro", "1").unwrap();
-        owned.coordinates.push(catenary::routing_common::timetable::Coordinate {
-            lat: 34.0354, lon: -118.4341,
-        });
+        owned
+            .coordinates
+            .push(catenary::routing_common::timetable::Coordinate {
+                lat: 34.0354,
+                lon: -118.4341,
+            });
         let stop_id = owned.add_string("metro-e-platform").unwrap();
         let stop_name = owned.add_string("Expo / Sepulveda").unwrap();
         owned.location_id.push(stop_id);
         owned.location_name.push(stop_name);
-        owned.location_source.push(catenary::routing_common::timetable::SourceIdx(0));
+        owned
+            .location_source
+            .push(catenary::routing_common::timetable::SourceIdx(0));
         owned.location_type.push(1);
-        owned.location_parent.push(catenary::routing_common::timetable::LocationIdx::INVALID);
+        owned
+            .location_parent
+            .push(catenary::routing_common::timetable::LocationIdx::INVALID);
         owned.location_transfer_seconds.push(120);
         owned.location_routes_offsets.push(0);
         owned.footpaths_out_offsets.push(0);

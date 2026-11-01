@@ -4,9 +4,7 @@
 use actix_web::{HttpResponse, web};
 use anyhow::{Context, Result, ensure};
 use catenary::routing_common::route_manager::Router;
-use catenary::routing_common::timetable::{
-    LocationIdx, PackedFootpath, ZeroCopyTimetable,
-};
+use catenary::routing_common::timetable::{LocationIdx, PackedFootpath, ZeroCopyTimetable};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -67,11 +65,24 @@ fn distance_meters(a_lat: f64, a_lon: f64, b_lat: f64, b_lon: f64) -> f64 {
 
 fn stop(tt: &ZeroCopyTimetable<'_>, idx: LocationIdx) -> Result<Stop> {
     let i = idx.idx();
-    let point = tt.coordinates().get(i).context("footpath target is outside timetable")?;
+    let point = tt
+        .coordinates()
+        .get(i)
+        .context("footpath target is outside timetable")?;
     Ok(Stop {
         stop_index: idx.0,
-        stop_id: tt.location_id().get(i).and_then(|v| tt.get_string(*v)).unwrap_or("").to_owned(),
-        name: tt.location_name().get(i).and_then(|v| tt.get_string(*v)).unwrap_or("").to_owned(),
+        stop_id: tt
+            .location_id()
+            .get(i)
+            .and_then(|v| tt.get_string(*v))
+            .unwrap_or("")
+            .to_owned(),
+        name: tt
+            .location_name()
+            .get(i)
+            .and_then(|v| tt.get_string(*v))
+            .unwrap_or("")
+            .to_owned(),
         lat: f64::from(point.lat),
         lon: f64::from(point.lon),
         route_count: tt.routes_at(idx).len(),
@@ -86,24 +97,35 @@ fn edges(
 ) -> Result<Vec<Footpath>> {
     let mut sorted = paths.to_vec();
     sorted.sort_unstable_by_key(|edge| (edge.seconds(), edge.target().0));
-    sorted.into_iter().take(limit).map(|edge| {
-        let target = stop(tt, edge.target())?;
-        Ok(Footpath {
-            straight_line_meters: distance_meters(origin.lat, origin.lon, target.lat, target.lon).round() as u32,
-            target,
-            seconds: edge.seconds(),
+    sorted
+        .into_iter()
+        .take(limit)
+        .map(|edge| {
+            let target = stop(tt, edge.target())?;
+            Ok(Footpath {
+                straight_line_meters: distance_meters(
+                    origin.lat, origin.lon, target.lat, target.lon,
+                )
+                .round() as u32,
+                target,
+                seconds: edge.seconds(),
+            })
         })
-    }).collect()
+        .collect()
 }
 
 fn inspect(router: &Router, request: Request) -> Result<Response> {
     ensure!(
-        request.lat.is_finite() && request.lon.is_finite()
+        request.lat.is_finite()
+            && request.lon.is_finite()
             && (-90.0..=90.0).contains(&request.lat)
             && (-180.0..=180.0).contains(&request.lon),
         "invalid stop coordinates"
     );
-    let limit = request.max_edges.unwrap_or(DEFAULT_MAX_EDGES).clamp(1, HARD_MAX_EDGES);
+    let limit = request
+        .max_edges
+        .unwrap_or(DEFAULT_MAX_EDGES)
+        .clamp(1, HARD_MAX_EDGES);
     // An itinerary supplies the exact timetable index. A standalone GTFS
     // screen supplies coordinates only: resolve the nearest compiled location
     // within a bounded radius, independently of regular route planning.
@@ -113,17 +135,17 @@ fn inspect(router: &Router, request: Request) -> Result<Response> {
         let mut consider = |index: LocationIdx| {
             if let Some(point) = tt.coordinates().get(index.idx()) {
                 let distance = distance_meters(
-                    request.lat, request.lon,
-                    f64::from(point.lat), f64::from(point.lon),
+                    request.lat,
+                    request.lon,
+                    f64::from(point.lat),
+                    f64::from(point.lon),
                 );
                 let radius = if request.stop_index.is_some() {
                     STOP_COORDINATE_TOLERANCE_METERS
                 } else {
                     NEARBY_STOP_RADIUS_METERS
                 };
-                if distance <= radius
-                    && best.is_none_or(|(_, _, previous)| distance < previous)
-                {
+                if distance <= radius && best.is_none_or(|(_, _, previous)| distance < previous) {
                     best = Some((&region.id, index, distance));
                 }
             }
@@ -136,7 +158,8 @@ fn inspect(router: &Router, request: Request) -> Result<Response> {
             }
         }
     }
-    let (region, idx, _) = best.context("no matching compiled stop found near these coordinates")?;
+    let (region, idx, _) =
+        best.context("no matching compiled stop found near these coordinates")?;
     let tt = router.timetable_for(region)?;
     let origin = stop(&tt, idx)?;
     let outgoing_paths = tt.footpaths_from(idx);

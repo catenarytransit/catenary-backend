@@ -40,7 +40,10 @@ pub fn compute(
         u32::try_from(stops.len()).is_ok(),
         "too many locations for packed indexes"
     );
-    ensure!(metadata.len() == stops.len(), "GTFS platform metadata count mismatch");
+    ensure!(
+        metadata.len() == stops.len(),
+        "GTFS platform metadata count mismatch"
+    );
     const CELL: f64 = 0.02;
     let mut tiles: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
     for (idx, stop) in stops.iter().enumerate() {
@@ -90,17 +93,29 @@ pub fn compute(
     };
     for (i, stop) in stops.iter().enumerate() {
         let mut coordinate = ffi::Coordinate::outdoor(f64::from(stop.lat), f64::from(stop.lon));
-        let stop_id = tt.location_id.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
-        let name = tt.location_name.get(i).and_then(|v| tt.string(*v)).unwrap_or("");
+        let stop_id = tt
+            .location_id
+            .get(i)
+            .and_then(|v| tt.string(*v))
+            .unwrap_or("");
+        let name = tt
+            .location_name
+            .get(i)
+            .and_then(|v| tt.string(*v))
+            .unwrap_or("");
         let hint = &metadata[i];
         let routes = hint.route_names.join("\u{1f}");
         let matched = router.match_platform(
-            &coordinate, stop_id, name, &hint.platform_code, &routes, 25.0,
+            &coordinate,
+            stop_id,
+            name,
+            &hint.platform_code,
+            &routes,
+            25.0,
         )?;
         if matched.found {
-            coordinate = ffi::Coordinate::indoor(
-                f64::from(stop.lat), f64::from(stop.lon), matched.level,
-            );
+            coordinate =
+                ffi::Coordinate::indoor(f64::from(stop.lat), f64::from(stop.lon), matched.level);
         }
         // Profile-independent candidates can be reused for both match roles.
         let raw = router.get_raw_match(&coordinate, 250.0)?;

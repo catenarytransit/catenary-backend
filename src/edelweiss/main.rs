@@ -2,16 +2,14 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-mod motis_response;
 mod footpath_debug;
+mod motis_response;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result, ensure};
 use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::raptor_query::WalkingEndpoint;
-use catenary::routing_common::route_manager::{
-    Coordinates, Router, RouterSettings,
-};
+use catenary::routing_common::route_manager::{Coordinates, Router, RouterSettings};
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
@@ -214,11 +212,8 @@ fn osr_access(
         StreetMode::Walk => pedestrian_speed,
         StreetMode::Bike => cycling_speed,
     });
-    let search_radius = (speed * f64::from(max_seconds))
-        .max(router.settings.access_radius_meters);
-    let nearest = router.nearest_stops(
-        transit_region, point, 4096, search_radius,
-    )?;
+    let search_radius = (speed * f64::from(max_seconds)).max(router.settings.access_radius_meters);
+    let nearest = router.nearest_stops(transit_region, point, 4096, search_radius)?;
     let table = router.timetable_for(transit_region)?;
     let platform_metadata = router.platform_metadata_for(transit_region)?;
     let stops = nearest
@@ -229,11 +224,15 @@ fn osr_access(
                 stop: id.0,
                 latitude: f64::from(c.lat),
                 longitude: f64::from(c.lon),
-                name: table.location_name().get(id.idx())
+                name: table
+                    .location_name()
+                    .get(id.idx())
                     .and_then(|r| table.get_string(*r))
                     .unwrap_or("")
                     .to_owned(),
-                gtfs_id: table.location_id().get(id.idx())
+                gtfs_id: table
+                    .location_id()
+                    .get(id.idx())
                     .and_then(|r| table.get_string(*r))
                     .unwrap_or("")
                     .to_owned(),
@@ -268,18 +267,28 @@ fn osr_access(
     // The OSR worker must only return destinations actually requested.
     // Enforce this at the protocol boundary and keep the cheapest offset
     // per stop before seeding round zero or enumerating profile anchors.
-    let requested: std::collections::HashSet<u32> =
-        request.stops.iter().map(|x| x.stop).collect();
+    let requested: std::collections::HashSet<u32> = request.stops.iter().map(|x| x.stop).collect();
     let mut best = std::collections::HashMap::<u32, u32>::new();
     for x in reply.reachable {
-        ensure!(requested.contains(&x.stop), "OSR returned unknown stop index");
-        ensure!(x.seconds <= max_seconds, "OSR returned duration outside access budget");
-        best.entry(x.stop).and_modify(|v| *v = (*v).min(x.seconds))
+        ensure!(
+            requested.contains(&x.stop),
+            "OSR returned unknown stop index"
+        );
+        ensure!(
+            x.seconds <= max_seconds,
+            "OSR returned duration outside access budget"
+        );
+        best.entry(x.stop)
+            .and_modify(|v| *v = (*v).min(x.seconds))
             .or_insert(x.seconds);
     }
-    let mut endpoints: Vec<_> = best.into_iter().map(|(stop, seconds)| WalkingEndpoint {
-        stop: LocationIdx(stop), seconds,
-    }).collect();
+    let mut endpoints: Vec<_> = best
+        .into_iter()
+        .map(|(stop, seconds)| WalkingEndpoint {
+            stop: LocationIdx(stop),
+            seconds,
+        })
+        .collect();
     endpoints.sort_by_key(|x| (x.seconds, x.stop.0));
     Ok(endpoints)
 }
@@ -671,7 +680,10 @@ async fn main() -> Result<()> {
             .app_data(state.clone())
             .route("/v1/route", web::post().to(route));
         if enable_footpath_debug {
-            app.route("/v1/debug/footpaths", web::post().to(footpath_debug::handle))
+            app.route(
+                "/v1/debug/footpaths",
+                web::post().to(footpath_debug::handle),
+            )
         } else {
             app
         }

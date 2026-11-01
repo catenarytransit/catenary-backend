@@ -1033,7 +1033,6 @@ fn add_footpaths(tt: &mut TimetableOwned, mut transfers: Vec<Vec<(u32, u32)>>) -
     Ok(())
 }
 
-
 fn load_platform_metadata(
     client: &mut Client,
     sources: &[ChateauSource],
@@ -1044,39 +1043,53 @@ fn load_platform_metadata(
     let mut index = HashMap::with_capacity(tt.coordinates.len());
     for i in 0..tt.coordinates.len() {
         let source = tt.location_source[i].0;
-        let id = tt.string(tt.location_id[i]).context("invalid GTFS stop id")?;
+        let id = tt
+            .string(tt.location_id[i])
+            .context("invalid GTFS stop id")?;
         index.insert((source, id.to_owned()), i);
     }
     let mut out = vec![PlatformStopMeta::default(); tt.coordinates.len()];
     for (source_idx, source) in sources.iter().enumerate() {
         let mut route_labels = HashMap::<String, String>::new();
-        query_source(client, "
+        query_source(
+            client,
+            "
             SELECT route_id, COALESCE(NULLIF(short_name, ''), route_id)
             FROM gtfs.routes
             WHERE onestop_feed_id = $1 AND attempt_id = $2
-        ", source, |r| {
-            route_labels.insert(r.get(0), r.get(1));
-            Ok(())
-        })?;
-        query_source(client, "
+        ",
+            source,
+            |r| {
+                route_labels.insert(r.get(0), r.get(1));
+                Ok(())
+            },
+        )?;
+        query_source(
+            client,
+            "
             SELECT gtfs_id, COALESCE(platform_code, ''), routes
             FROM gtfs.stops
             WHERE onestop_feed_id = $1 AND attempt_id = $2
               AND point IS NOT NULL
-        ", source, |r| {
-            let id: String = r.get(0);
-            let code: String = r.get(1);
-            let routes: Vec<Option<String>> = r.get(2);
-            if let Some(&i) = index.get(&(u16::try_from(source_idx)?, id)) {
-                out[i] = PlatformStopMeta {
-                    platform_code: code,
-                    route_names: routes.into_iter().flatten()
-                        .map(|route| route_labels.get(&route).cloned().unwrap_or(route))
-                        .collect(),
-                };
-            }
-            Ok(())
-        })?;
+        ",
+            source,
+            |r| {
+                let id: String = r.get(0);
+                let code: String = r.get(1);
+                let routes: Vec<Option<String>> = r.get(2);
+                if let Some(&i) = index.get(&(u16::try_from(source_idx)?, id)) {
+                    out[i] = PlatformStopMeta {
+                        platform_code: code,
+                        route_names: routes
+                            .into_iter()
+                            .flatten()
+                            .map(|route| route_labels.get(&route).cloned().unwrap_or(route))
+                            .collect(),
+                    };
+                }
+                Ok(())
+            },
+        )?;
     }
     Ok(out)
 }
@@ -1121,10 +1134,13 @@ pub fn build(
     }
     assemble_routes(&mut tt, schedules)?;
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
-    let transfers =
-        super::footpaths::compute(
-            osr_dir, &tt, &platform_metadata, max_seconds, candidate_meters,
-        )?;
+    let transfers = super::footpaths::compute(
+        osr_dir,
+        &tt,
+        &platform_metadata,
+        max_seconds,
+        candidate_meters,
+    )?;
     // Every edge must be routed through the OSM pedestrian network. Avoid
     // parent/child beelines that can jump over tracks or between OSR levels.
     // Closing the directed, OSR-verified graph preserves this invariant.
