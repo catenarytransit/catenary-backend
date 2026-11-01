@@ -477,7 +477,7 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let started = Instant::now();
     let reference = request.departure_unix_seconds;
     let max_window = i64::from(options.max_search_window_seconds);
-    let boundary = if arrive_by {
+    let _boundary = if arrive_by {
         reference.checked_sub(max_window)
     } else {
         reference.checked_add(max_window)
@@ -493,12 +493,9 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let fallback_reserve =
         Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
     let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
-    // Generate only the service-active anchors once from the compressed
-    // stop/route/transport columns, rather than probing an entire route graph
-    // for every timetable departure.
-    let events = timetable_start_events(
-        tt, request, reference, boundary, arrive_by, &mut stats, profile_deadline,
-    );
+    // Nigiri expands the interval only when the current search needs more
+    // connections. Enumerating the full 48-hour window up front can consume
+    // almost the entire request budget before RAPTOR scans a single route.
     let estimator = IntervalEstimator::new(
         reference,
         options.max_search_window_seconds,
@@ -517,6 +514,10 @@ pub(crate) fn route_profile_with_stats_precomputed(
         }
     };
     let mut interval = estimator.initial(initial);
+    let mut events = timetable_start_events(
+        tt, request, interval.from, interval.to, arrive_by,
+        &mut stats, profile_deadline,
+    );
     let mut examined = 0usize;
     let mut batches = 0usize;
     stats.profile_events_enumerated = events.len() as u64;
@@ -588,9 +589,8 @@ pub(crate) fn route_profile_with_stats_precomputed(
         if strict.len() >= options.min_itineraries || state.stats().profile_budget_exhausted {
             break;
         }
-        if examined == events.len() {
-            break;
-        }
+        // Reaching the end of *this* batch is not the end of the maximum
+        // search interval. Sparse regional service may only appear tomorrow.
         let next = estimator.extension(
             interval,
             options.min_itineraries.saturating_sub(strict.len()),
@@ -598,6 +598,26 @@ pub(crate) fn route_profile_with_stats_precomputed(
         if next == interval {
             break;
         }
+        // For forward queries, extend to later events in ascending order;
+        // for arrive-by queries, append earlier events in descending order.
+        // Each new batch is disjoint except for its inclusive boundary.
+        // This maintains monotone anchor order without re-enumerating the
+        // entire timetable on every interval extension.
+        let (new_from, new_to) = if arrive_by {
+            (next.from, interval.from)
+        } else {
+            (interval.to, next.to)
+        };
+        let new_events = timetable_start_events(
+            tt, request, new_from, new_to, arrive_by,
+            &mut stats, profile_deadline,
+        );
+        for event in new_events {
+            if events.last().copied() != Some(event) {
+                events.push(event);
+            }
+        }
+        stats.profile_events_enumerated = events.len() as u64;
         interval = next;
         stats.profile_interval_extensions += 1;
     }
