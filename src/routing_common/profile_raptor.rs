@@ -1293,6 +1293,29 @@ mod tests {
     }
 
     #[test]
+    fn first_vehicle_anchor_requires_matching_profile_start() {
+        let mut nodes = Vec::new();
+        let access = append_path(&mut nodes, Leg::Access {
+            to_stop: 0, seconds: 120,
+        }, None);
+        let root = Label {
+            time: 1_120, path: Some(access), transit: None,
+            anchor: 1_000, rides: 0,
+        };
+        // The vehicle at 1_200 is the requested first boarding.
+        assert_eq!(
+            first_vehicle_anchor(&nodes, access, root, 1_200, false),
+            Some(1_080)
+        );
+        // Its actual origin departure (1_080) must be processed by
+        // a different profile event than anchor 1_000.
+        assert_ne!(
+            first_vehicle_anchor(&nodes, access, root, 1_200, false),
+            Some(root.anchor)
+        );
+    }
+
+    #[test]
     fn identical_onboard_vehicle_prefers_shorter_walk_independent_of_scan_order() {
         let long = Onboard {
             transport: TransportIdx(7), service_day: 0, from: 3,
