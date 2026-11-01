@@ -1029,11 +1029,19 @@ fn route_with_stats_impl(
         }
     }
     for (round, layer) in labels.iter().enumerate() {
+        if deadline.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for dest in request
             .egress
             .iter()
             .filter(|x| layer[x.stop.idx()].time + i64::from(x.seconds) <= max_time)
         {
+            if deadline.is_some_and(|limit| Instant::now() >= limit) {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             if let Some(journey) =
                 reconstruct(&labels, round, dest.stop.idx(), dest.seconds, departure)
             {

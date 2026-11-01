@@ -485,11 +485,19 @@ fn route_arrive_by_with_stats_impl(
         }
     }
     for (round, layer) in layers.iter().enumerate() {
+        if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         for start in request
             .access
             .iter()
             .filter(|ep| layer[ep.stop.idx()].time - i64::from(ep.seconds) >= min_time)
         {
+            if stop_at.is_some_and(|limit| Instant::now() >= limit) {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             if let Some(journey) = reconstruct(
                 &layers,
                 round,
