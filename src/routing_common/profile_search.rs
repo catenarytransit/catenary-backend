@@ -519,9 +519,21 @@ pub(crate) fn route_profile_with_stats_precomputed(
         tt, request, interval.from, interval.to, arrive_by,
         &mut stats, profile_deadline,
     );
+    // Nigiri get_starts(..., add_ontrip=true) includes an initial state at
+    // the requested time even if no actual vehicle departure occurs exactly
+    // then. A search based only on vehicle-board events cannot reconstruct
+    // that on-trip state and can miss a long-distance journey whose first
+    // boarding lies outside the initial profile interval. Keep it separate
+    // from the reported number of actual timetable departure events.
+    let ontrip_synthetic = events.binary_search(&reference).is_err();
+    if ontrip_synthetic {
+        let at = events.partition_point(|&t| t < reference);
+        events.insert(at, reference);
+    }
     let mut examined = 0usize;
     let mut batches = 0usize;
-    stats.profile_events_enumerated = events.len() as u64;
+    stats.profile_events_enumerated =
+        (events.len() - usize::from(ontrip_synthetic)) as u64;
 
     let mut q = request.clone();
     // Nigiri keeps the full max_travel_time for long-distance searches and
@@ -612,7 +624,8 @@ pub(crate) fn route_profile_with_stats_precomputed(
                 events.push(event);
             }
         }
-        stats.profile_events_enumerated = events.len() as u64;
+        stats.profile_events_enumerated =
+            (events.len() - usize::from(ontrip_synthetic)) as u64;
         interval = next;
         stats.profile_interval_extensions += 1;
     }
