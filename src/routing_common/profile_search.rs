@@ -322,6 +322,7 @@ fn timetable_start_events(
     boundary: i64,
     arrive_by: bool,
     stats: &mut RaptorStats,
+    stop_at: Instant,
 ) -> Vec<i64> {
     // Do not enqueue a fake service at the requested timestamp: an empty
     // initial window must advance to the first actual boarding/alighting.
@@ -332,6 +333,10 @@ fn timetable_start_events(
         &request.access
     };
     for endpoint in endpoints {
+        if Instant::now() >= stop_at {
+            stats.profile_budget_exhausted = true;
+            break;
+        }
         let offset = i64::from(endpoint.seconds);
         let first_event =
             reference
@@ -342,8 +347,16 @@ fn timetable_start_events(
                 .max(boundary)
                 .saturating_add(if arrive_by { -offset } else { offset });
         for &route in tt.routes_at(endpoint.stop) {
+            if Instant::now() >= stop_at {
+                stats.profile_budget_exhausted = true;
+                break;
+            }
             let stops = tt.stops_on(route);
             for (position, stop) in stops.iter().enumerate() {
+                if Instant::now() >= stop_at {
+                    stats.profile_budget_exhausted = true;
+                    break;
+                }
                 if stop.location() != endpoint.stop
                     || if arrive_by {
                         !stop.inbound()
@@ -365,6 +378,10 @@ fn timetable_start_events(
                     last_event,
                     stats,
                     |day, stats| {
+                        if Instant::now() >= stop_at {
+                            stats.profile_budget_exhausted = true;
+                            return;
+                        }
                         let midnight = (i64::from(tt.header().first_utc_day) + day as i64) * 86_400;
                         let range = tt.route_transport_ranges()[route.idx()];
                         let (mut lo, mut hi) = (range.from, range.to);
@@ -388,6 +405,12 @@ fn timetable_start_events(
                             }
                         }
                         for transport_idx in lo..range.to {
+                            if (stats.stop_events_scanned & 255) == 0
+                                && Instant::now() >= stop_at
+                            {
+                                stats.profile_budget_exhausted = true;
+                                break;
+                            }
                             let transport = TransportIdx(transport_idx);
                             let Some(event) = transport_event_second(
                                 tt, route, transport, position, arrive_by, midnight,
@@ -461,10 +484,21 @@ pub(crate) fn route_profile_with_stats_precomputed(
     }
     .ok_or_else(|| anyhow::anyhow!("profile interval timestamp overflow"))?;
     let mut stats = RaptorStats::default();
+    let deadline = started
+        .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
+        .unwrap_or(started);
+    // Reserve a fixed fraction of the full request wall budget before even
+    // enumerating initial timetable events. Otherwise a dense route column
+    // can starve both the profile scan and its point-RAPTOR fallback.
+    let fallback_reserve =
+        Duration::from_secs(u64::from(options.timeout_seconds)) / 5;
+    let profile_deadline = deadline.checked_sub(fallback_reserve).unwrap_or(started);
     // Generate only the service-active anchors once from the compressed
     // stop/route/transport columns, rather than probing an entire route graph
     // for every timetable departure.
-    let events = timetable_start_events(tt, request, reference, boundary, arrive_by, &mut stats);
+    let events = timetable_start_events(
+        tt, request, reference, boundary, arrive_by, &mut stats, profile_deadline,
+    );
     let estimator = IntervalEstimator::new(
         reference,
         options.max_search_window_seconds,
@@ -485,9 +519,6 @@ pub(crate) fn route_profile_with_stats_precomputed(
     let mut interval = estimator.initial(initial);
     let mut examined = 0usize;
     let mut batches = 0usize;
-    let deadline = started
-        .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
-        .unwrap_or(started);
     stats.profile_events_enumerated = events.len() as u64;
 
     let mut q = request.clone();
@@ -506,19 +537,15 @@ pub(crate) fn route_profile_with_stats_precomputed(
     // across events, resetting only on reversed interval extension.
     let first = reference.min(boundary);
     let last = reference.max(boundary);
-    // Reserve a portion of the request's wall budget for one fallback query
-    // when the profile solver times out or produces no validated itinerary.
-    // Starting the profile solver with the whole deadline made that recovery
-    // unreachable on exactly the hard queries that needed it.
-    let remaining = deadline.saturating_duration_since(Instant::now());
-    let fallback_reserve = remaining / 5;
-    let compact_budget = remaining.saturating_sub(fallback_reserve);
+    // Destination bounds share the same profile deadline as event enumeration;
+    // the 20% fallback reserve remains available even on a dense timetable.
+    let compact_budget = profile_deadline.saturating_duration_since(Instant::now());
     let mut state = ProfileSearchState::new_with_topology(
         tt, &q, first, last, arrive_by, compact_budget, topology
     )?;
     let mut transit = Vec::new();
     loop {
-        if Instant::now() >= deadline || batches >= MAX_PROFILE_BATCHES {
+        if Instant::now() >= profile_deadline || batches >= MAX_PROFILE_BATCHES {
             stats.profile_budget_exhausted = true;
             break;
         }
