@@ -1393,6 +1393,36 @@ mod transfer_round_regressions {
     }
 
     #[test]
+    fn provenance_restricted_transfer_survives_across_profile_anchors() {
+        let bytes = competing_transfer_timetable(true).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let start = base + 8 * 3600;
+        let next_day = start + 86_400;
+        let mut q = request();
+        q.departure_unix_seconds = start;
+        q.egress = vec![WalkingEndpoint { stop: LocationIdx(4), seconds: 0 }];
+        for reverse in [false, true] {
+            let offset = if reverse { 35 * 60 } else { 0 };
+            let anchors = [start + offset, next_day + offset];
+            let (journeys, stats) = route_profile_incremental(
+                &tt, &q, &anchors, reverse, Duration::from_secs(5)
+            ).unwrap();
+            assert_eq!(stats.profile_anchor_events, 2);
+            for day in [0, 1] {
+                let target_arrival = start + day * 86_400 + 35 * 60;
+                assert!(journeys.iter().any(|j|
+                    j.arrival_unix_seconds == target_arrival
+                    && j.boardings == 2
+                    && j.legs.iter().any(|leg| matches!(
+                        leg, Leg::Transfer { from_stop: 2, to_stop: 3, .. }
+                    ))
+                ), "legal connection on day {day} lost under persistent dominance: {journeys:?}");
+            }
+        }
+    }
+
+    #[test]
     fn prohibited_early_walk_keeps_valid_later_transfer_forward_and_reverse() {
         let bytes = competing_transfer_timetable(true).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
