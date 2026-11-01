@@ -1442,6 +1442,40 @@ mod transfer_round_regressions {
     }
 
     #[test]
+    fn equal_arrival_routes_remain_distinct_after_best_cell_ties() {
+        let mut tt = two_leg_timetable(false);
+        // Two independent services with the exact same 0 -> 1 schedule.
+        // Neither should overwrite the other's immutable destination path.
+        tt.route_stops[2] =
+            PackedStop::new(LocationIdx(0), true, true, true, true).unwrap();
+        tt.route_stops[3] =
+            PackedStop::new(LocationIdx(1), true, true, true, true).unwrap();
+        tt.location_routes_offsets = vec![0, 2, 4, 4];
+        tt.location_routes = vec![RouteIdx(0), RouteIdx(1), RouteIdx(0), RouteIdx(1)];
+        tt.timing_profile_events[3] = Delta::from_seconds(10 * 60).unwrap();
+        tt.transport_first_dep_offset[1] =
+            Delta::from_seconds(8 * 3600).unwrap();
+        let bytes = tt.encode().unwrap();
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut q = request();
+        q.egress = vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }];
+        q.max_boardings = 1;
+        let (journeys, stats) = route_profile_incremental(
+            &view, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
+        ).unwrap();
+        let mut routes: Vec<u32> = journeys.iter().flat_map(|j|
+            j.legs.iter().filter_map(|leg| match leg {
+                Leg::Ride { route, .. } => Some(*route),
+                _ => None,
+            })
+        ).collect();
+        routes.sort_unstable();
+        routes.dedup();
+        assert_eq!(routes, vec![0, 1],
+            "equal-time route alternatives were lost: {journeys:?}; {stats:?}");
+    }
+
+    #[test]
     fn two_ride_forward_reconstructs_after_compact_scan() {
         let bytes = two_leg_timetable(false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
