@@ -503,14 +503,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .into_iter()
             .filter(|s|
             //removes station platforms
-        !(s.local_ref.is_some() && 
-            match &s.station_type {
-                Some(station_type) => {
-                     station_type.as_str() == "stop_position"
-                },
-                None => false
-            }
-    ))
+            !(s.local_ref.is_some() && 
+                match &s.station_type {
+                    Some(station_type) => {
+                        station_type.as_str() == "stop_position"
+                    },
+                    None => false
+                }
+            ))
             .collect::<Vec<_>>();
 
         for s in &parent_stations {
