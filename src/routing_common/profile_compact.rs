@@ -949,3 +949,137 @@ mod compressed_timetable_profile_tests {
         assert!(state.result().iter().any(|j| j.departure_unix_seconds == late));
     }
 }
+
+
+#[cfg(test)]
+mod transfer_round_regressions {
+    use super::*;
+    use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::timetable::{
+        BitfieldIdx, Delta, PackedStop, Range, SourceIdx, StationTransferRule,
+        TimetableOwned, TimingProfileIdx, TrafficDays,
+    };
+
+    fn two_leg_timetable(prohibit_change: bool) -> TimetableOwned {
+        let mut tt = TimetableOwned::empty(20_000, 2);
+        tt.add_source("test", "two-leg", "attempt").unwrap();
+        for _ in 0..3 {
+            tt.coordinates.push(Default::default());
+            tt.location_id.push(Default::default());
+            tt.location_name.push(Default::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(1);
+            tt.location_transfer_seconds.push(0);
+        }
+        tt.location_routes_offsets = vec![0, 1, 3, 4];
+        tt.location_routes = vec![
+            RouteIdx(0), RouteIdx(0), RouteIdx(1), RouteIdx(1)
+        ];
+        tt.footpaths_out_offsets = vec![0; 4];
+        tt.footpaths_in_offsets = vec![0; 4];
+        for (from, to) in [(0, 1), (1, 2)] {
+            tt.route_stops.extend([
+                PackedStop::new(LocationIdx(from), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(to), true, true, true, true).unwrap(),
+            ]);
+        }
+        tt.route_stop_offsets.extend([2, 4]);
+        tt.route_transport_ranges.extend([
+            Range { from: 0, to: 1 }, Range { from: 1, to: 2 }
+        ]);
+        tt.timing_profile_offsets.extend([2, 4]);
+        tt.timing_profile_events.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(10 * 60).unwrap(),
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(15 * 60).unwrap(),
+        ]);
+        tt.route_clasz.extend([2, 2]);
+        tt.transport_route.extend([RouteIdx(0), RouteIdx(1)]);
+        tt.transport_timing_profile.extend([
+            TimingProfileIdx(0), TimingProfileIdx(1)
+        ]);
+        tt.transport_first_dep_offset.extend([
+            Delta::from_seconds(8 * 3600).unwrap(),
+            Delta::from_seconds(8 * 3600 + 15 * 60).unwrap(),
+        ]);
+        tt.transport_initial_day_offset.extend([0, 0]);
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        days.set(1, true).unwrap();
+        tt.bitfields.push(days);
+        tt.transport_traffic_days.extend([BitfieldIdx(1), BitfieldIdx(1)]);
+        tt.route_traffic_days.extend([BitfieldIdx(1), BitfieldIdx(1)]);
+        tt.route_section_clasz_offsets.extend([0, 0]);
+        tt.section_flag_offsets.extend([0, 0]);
+        tt.transport_to_trip_section_offsets.extend([0, 0]);
+        if prohibit_change {
+            tt.station_transfer_rules.push(StationTransferRule {
+                from: LocationIdx(1),
+                to: LocationIdx(1),
+                min_seconds: 0,
+                flags: 1,
+            });
+        }
+        tt
+    }
+
+    fn request() -> Query {
+        Query {
+            departure_unix_seconds: 20_000_i64 * 86400 + 8 * 3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 2,
+            max_duration_seconds: 2 * 3600,
+        }
+    }
+
+    #[test]
+    fn two_ride_forward_reconstructs_after_compact_scan() {
+        let bytes = two_leg_timetable(false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        let (journeys, stats) = route_profile_incremental(
+            &tt, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
+        ).unwrap();
+        assert!(!journeys.is_empty(), "two-ride forward missing: {stats:?}");
+        assert!(journeys.iter().any(|j| j.boardings == 2
+            && j.departure_unix_seconds == q.departure_unix_seconds
+            && j.arrival_unix_seconds == q.departure_unix_seconds + 30 * 60));
+    }
+
+    #[test]
+    fn two_ride_backward_reconstructs_without_reversing_footpaths() {
+        let bytes = two_leg_timetable(false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut q = request();
+        q.departure_unix_seconds += 30 * 60;
+        let (journeys, stats) = route_profile_incremental(
+            &tt, &q, &[q.departure_unix_seconds], true, Duration::from_secs(5)
+        ).unwrap();
+        assert!(!journeys.is_empty(), "two-ride reverse missing: {stats:?}");
+        assert!(journeys.iter().any(|j| j.boardings == 2
+            && j.departure_unix_seconds == q.departure_unix_seconds - 30 * 60
+            && j.arrival_unix_seconds == q.departure_unix_seconds));
+    }
+
+    #[test]
+    fn prohibited_same_platform_change_is_not_silently_ignored() {
+        let bytes = two_leg_timetable(true).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = request();
+        let (forward, _) = route_profile_incremental(
+            &tt, &q, &[q.departure_unix_seconds], false, Duration::from_secs(5)
+        ).unwrap();
+        assert!(forward.is_empty(), "blocked change produced a route: {forward:?}");
+        let mut reverse_q = q;
+        reverse_q.departure_unix_seconds += 30 * 60;
+        let (backward, _) = route_profile_incremental(
+            &tt, &reverse_q, &[reverse_q.departure_unix_seconds], true,
+            Duration::from_secs(5)
+        ).unwrap();
+        assert!(backward.is_empty(), "reverse blocked change produced route: {backward:?}");
+    }
+}
