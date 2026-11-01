@@ -756,7 +756,7 @@ impl ProfileSearchState {
             // Only the final best ride state at each stop is expanded; the
             // footprint is at most three cells per stop and RAPTOR round.
             for &from in &improved_rides {
-                let Some(ride) = current.get(Stage::Ride, from, generation) else {
+                let Some(ride) = current.get(Stage::Ride, from, generation).copied() else {
                     continue;
                 };
                 let t = ride.time;
