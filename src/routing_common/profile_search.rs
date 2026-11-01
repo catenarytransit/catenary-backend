@@ -438,6 +438,18 @@ pub fn route_profile_with_stats(
     options: ProfileOptions,
     arrive_by: bool,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_profile_with_stats_precomputed(tt, request, options, arrive_by, None)
+}
+
+/// Edelweiss route entry point: uses the graph computed once for each loaded
+/// timetable; tests and callers without a router may still use the wrapper.
+pub(crate) fn route_profile_with_stats_precomputed(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    options: ProfileOptions,
+    arrive_by: bool,
+    topology: Option<&crate::routing_common::profile_compact::LowerBoundTopology>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
     let started = Instant::now();
     let reference = request.departure_unix_seconds;
@@ -492,7 +504,9 @@ pub fn route_profile_with_stats(
     let remaining = deadline.saturating_duration_since(Instant::now());
     let fallback_reserve = remaining / 5;
     let compact_budget = remaining.saturating_sub(fallback_reserve);
-    let mut state = ProfileSearchState::new(tt, &q, first, last, arrive_by, compact_budget)?;
+    let mut state = ProfileSearchState::new_with_topology(
+        tt, &q, first, last, arrive_by, compact_budget, topology
+    )?;
     let mut transit = Vec::new();
     loop {
         if Instant::now() >= deadline || batches >= MAX_PROFILE_BATCHES {

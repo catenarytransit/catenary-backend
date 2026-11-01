@@ -139,62 +139,93 @@ struct ActiveDay {
     onboard: Option<Onboard>,
 }
 
-/// Optimistic section durations are the minimum over all compressed timing
-/// patterns of the route, *including* inactive ones. Missing offsets take zero
-/// to keep the lower bound admissible. Footpaths use their exact durations.
-fn lower_bounds(
-    tt: &ZeroCopyTimetable<'_>, request: &Query, reverse: bool,
-) -> Vec<u32> {
-    let n = tt.coordinates().len();
-    // Flat edge storage avoids allocating an individual Vec for every stop
-    // (hundreds of thousands of tiny heap objects for regional timetables).
-    // The condensed CSR also gives the Dijkstra scan sequential cache access.
-    let mut edges: Vec<(u32, u32, u32)> = Vec::new();
-    for route_id in 0..tt.route_transport_ranges().len() {
-        let route = RouteIdx(route_id as u32);
-        let stops = tt.stops_on(route);
-        if stops.len() < 2 { continue; }
-        let mut minimum = vec![u32::MAX; stops.len() - 1];
-        let mut seen_patterns = HashSet::new();
-        let range = tt.route_transport_ranges()[route_id];
-        for index in range.from..range.to {
-            let t = TransportIdx(index);
-            let Some(profile) = tt.transport_timing_profile().get(t.idx()) else { continue };
-            if !seen_patterns.insert(profile.idx()) { continue; }
-            let Some(events) = tt.events_for_transport(t) else { continue };
-            for pos in 0..minimum.len() {
-                let dep = events.get(pos * 2);
-                let arr = events.get(pos * 2 + 1);
-                if let (Some(dep), Some(arr)) = (dep, arr) {
-                    minimum[pos] = minimum[pos].min(
-                        arr.seconds().saturating_sub(dep.seconds()));
+/// Immutable optimistic route-duration topology. Build this once per mmap
+/// timetable at startup. Each request only runs reverse Dijkstra from its
+/// own OSR destination offsets, as with Nigiri's lower-bound preparation.
+///
+/// Edges are deliberately optimistic: an intermediate stop need not permit
+/// boarding when a passenger is already on the same vehicle.
+pub(crate) struct LowerBoundTopology {
+    forward: CsrGraph,
+    reverse: CsrGraph,
+}
+struct CsrGraph {
+    offsets: Vec<usize>,
+    edges: Vec<(u32, u32)>,
+}
+impl CsrGraph {
+    fn from_edges(n: usize, edge_iter: impl IntoIterator<Item=(u32,u32,u32)>) -> Self {
+        let edges = edge_iter.into_iter().collect::<Vec<_>>();
+        let mut offsets = vec![0usize; n + 1];
+        for &(from, _, _) in &edges {
+            offsets[from as usize + 1] += 1;
+        }
+        for i in 1..offsets.len() {
+            offsets[i] += offsets[i - 1];
+        }
+        let mut cursors = offsets[..n].to_vec();
+        let mut compressed = vec![(0u32, 0u32); edges.len()];
+        for (from, to, cost) in edges {
+            let cursor = &mut cursors[from as usize];
+            compressed[*cursor] = (to, cost);
+            *cursor += 1;
+        }
+        Self { offsets, edges: compressed }
+    }
+    fn successors(&self, stop: usize) -> &[(u32,u32)] {
+        &self.edges[self.offsets[stop]..self.offsets[stop + 1]]
+    }
+}
+impl LowerBoundTopology {
+    pub(crate) fn build(tt: &ZeroCopyTimetable<'_>) -> Self {
+        let n = tt.coordinates().len();
+        let mut edges: Vec<(u32, u32, u32)> = Vec::new();
+        for route_id in 0..tt.route_transport_ranges().len() {
+            let route = RouteIdx(route_id as u32);
+            let stops = tt.stops_on(route);
+            if stops.len() < 2 { continue; }
+            let mut minimum = vec![u32::MAX; stops.len() - 1];
+            let mut seen_patterns = HashSet::new();
+            let range = tt.route_transport_ranges()[route_id];
+            for index in range.from..range.to {
+                let t = TransportIdx(index);
+                let Some(profile) = tt.transport_timing_profile().get(t.idx()) else {
+                    continue;
+                };
+                if !seen_patterns.insert(profile.idx()) { continue; }
+                let Some(events) = tt.events_for_transport(t) else { continue; };
+                for pos in 0..minimum.len() {
+                    if let (Some(dep), Some(arr)) =
+                        (events.get(pos * 2), events.get(pos * 2 + 1))
+                    {
+                        minimum[pos] = minimum[pos]
+                            .min(arr.seconds().saturating_sub(dep.seconds()));
+                    }
                 }
             }
-        }
-        for (pos, pair) in stops.windows(2).enumerate() {
-            let from = pair[0].location().idx();
-            let to = pair[1].location().idx();
-            let cost = if minimum[pos] == u32::MAX { 0 } else { minimum[pos] };
-            // Lower-bound graph is deliberately optimistic: even a nonboarding
-            // intermediate stop remains reachable while riding through it.
-            if reverse {
-                edges.push((from as u32, to as u32, cost));
-            } else {
-                edges.push((to as u32, from as u32, cost));
+            for (pos, pair) in stops.windows(2).enumerate() {
+                let cost = if minimum[pos] == u32::MAX { 0 } else { minimum[pos] };
+                edges.push((pair[0].location().0, pair[1].location().0, cost));
             }
         }
+        let forward = CsrGraph::from_edges(n, edges.iter().copied());
+        let reverse = CsrGraph::from_edges(n, edges.iter().map(
+            |&(from, to, cost)| (to, from, cost)));
+        Self { forward, reverse }
     }
-    let mut offsets = vec![0usize; n + 1];
-    for &(from, _, _) in &edges { offsets[from as usize + 1] += 1; }
-    for i in 1..offsets.len() { offsets[i] += offsets[i - 1]; }
-    let mut next_offset = offsets[..n].to_vec();
-    let mut neighbors = vec![(0u32, 0u32); edges.len()];
-    for (from, to, cost) in edges {
-        let cursor = &mut next_offset[from as usize];
-        neighbors[*cursor] = (to, cost);
-        *cursor += 1;
-    }
-    drop(next_offset);
+}
+
+/// Dijkstra on the cached topology, plus the timetable's directional walking
+/// CSR. The edge weights underestimate all real journeys, so this pruning
+/// never assumes nonexistent transfers or a particular service day.
+/// If the precomputation deadline expires, all-zero distances disable only
+/// pruning; they never make an otherwise valid itinerary unreachable.
+fn lower_bounds(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, reverse: bool,
+    topology: &LowerBoundTopology, deadline: Instant,
+) -> Vec<u32> {
+    let n = tt.coordinates().len();
+    let graph = if reverse { &topology.forward } else { &topology.reverse };
     let mut dist = vec![u32::MAX; n];
     let mut heap = BinaryHeap::<Reverse<(u32, usize)>>::new();
     let terminals = if reverse { &request.access } else { &request.egress };
@@ -205,9 +236,14 @@ fn lower_bounds(
             heap.push(Reverse((ep.seconds, stop)));
         }
     }
+    let mut visited = 0usize;
     while let Some(Reverse((weight, at))) = heap.pop() {
+        visited += 1;
+        if (visited & 4095) == 0 && Instant::now() >= deadline {
+            return vec![0; n];
+        }
         if weight != dist[at] { continue; }
-        for &(next, cost) in &neighbors[offsets[at]..offsets[at + 1]] {
+        for &(next, cost) in graph.successors(at) {
             let next = next as usize;
             let candidate = weight.saturating_add(cost);
             if candidate < dist[next] {
@@ -320,6 +356,14 @@ impl ProfileSearchState {
         tt: &ZeroCopyTimetable<'_>, q: &Query,
         earliest: i64, latest: i64, reverse: bool, timeout: Duration,
     ) -> Result<Self> {
+        Self::new_with_topology(tt, q, earliest, latest, reverse, timeout, None)
+    }
+
+    pub fn new_with_topology(
+        tt: &ZeroCopyTimetable<'_>, q: &Query,
+        earliest: i64, latest: i64, reverse: bool, timeout: Duration,
+        precomputed: Option<&LowerBoundTopology>,
+    ) -> Result<Self> {
         ensure!(earliest <= latest, "invalid profile interval");
         ensure!(q.max_boardings <= 16, "max_boardings exceeds 16");
         ensure!((1..=7 * 86_400).contains(&q.max_duration_seconds),
@@ -333,7 +377,10 @@ impl ProfileSearchState {
         let mut stats = RaptorStats::default();
         stats.profile_searches = 1;
         let bounds_started = Instant::now();
-        let bounds = lower_bounds(tt, q, reverse);
+        let owned = precomputed.is_none().then(|| LowerBoundTopology::build(tt));
+        let topology = precomputed.or(owned.as_ref())
+            .expect("topology must be supplied or constructed");
+        let bounds = lower_bounds(tt, q, reverse, topology, deadline);
         stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
         let invalid = if reverse { NEG_INF } else { INF };
         Ok(Self {
