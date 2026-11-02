@@ -10,6 +10,7 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail, ensure};
 use geojson::{Feature, GeoJson, Geometry, Value};
 use postgres::Client;
+use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
@@ -368,10 +369,49 @@ pub fn resolve(
     id: &str,
     client: &mut Client,
 ) -> Result<RegionSelection> {
+    resolve_with_progress(config, config_path, id, client, |_| {})
+}
+
+/// Resolve regional GTFS sources while optionally reporting startup stages.
+/// The default `resolve` entry point stays silent for other callers.
+pub fn resolve_with_progress(
+    config: &RoutingRegionsConfig,
+    config_path: &Path,
+    id: &str,
+    client: &mut Client,
+    mut progress: impl FnMut(&str),
+) -> Result<RegionSelection> {
+    progress(&format!("loading region {id} geometry"));
+    let step = Instant::now();
     let region = config.region(id)?;
     let geometry = config.geometry_json(config_path, id)?;
+    progress(&format!(
+        "loaded region geometry ({} bytes) in {:?}",
+        geometry.len(),
+        step.elapsed()
+    ));
+
+    progress(&format!("querying PostGIS for chateaux intersecting region {id}"));
+    let step = Instant::now();
     let chateaux = select_chateaux(client, &geometry)?;
+    progress(&format!(
+        "PostGIS selected {} chateaux in {:?}",
+        chateaux.len(),
+        step.elapsed()
+    ));
+
+    progress(&format!(
+        "selecting active production GTFS feeds from {} chateaux",
+        chateaux.len()
+    ));
+    let step = Instant::now();
     let sources = select_active_sources(client, &chateaux)?;
+    progress(&format!(
+        "selected {} active GTFS feeds in {:?}",
+        sources.len(),
+        step.elapsed()
+    ));
+
     Ok(RegionSelection {
         id: region.id.clone(),
         name: region.name.clone(),
