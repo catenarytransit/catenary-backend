@@ -28,6 +28,8 @@ pub struct ItineraryPatternRow {
     pub gtfs_stop_sequence: u32,
     pub timepoint: Option<bool>,
     pub stop_headsign_idx: Option<i16>,
+    pub pickup_type: i16,
+    pub drop_off_type: i16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, QueryableByName)]

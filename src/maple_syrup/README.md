@@ -2,6 +2,19 @@
 
 The goal is to reduce the current 197 GB of Stop times into a series of transfer patterns and trip patterns.
 
+### Pickup and drop-off types
+
+Each stop difference retains `pickup_type` and `drop_off_type`, including unknown
+numeric values accepted by gtfs-structures. Both fields participate in itinerary
+hashing and equality: trips with different boarding or alighting methods remain
+separate itineraries even when their stops and time offsets match.
+
+Both Maple import paths persist these fields in `gtfs.itinerary_pattern` as
+`smallint` values (`0` regular, `1` unavailable, `2` arrange by phone, `3` coordinate
+with the driver). Apply the `2026-11-02-220000_itinerary_pickup_drop_off_types`
+Diesel migration before running the updated importer. Existing rows default to
+`0`; reimport feeds to restore their original pickup and drop-off restrictions.
+
 ### How to run a direct connection query
 
 In Hannah Bast, et. al's original Transfer Patterns (2010) paper section 4.1, direct-connection queries are precomputing by storing the list of stops in each line and then storing arrays of Lines and stations.

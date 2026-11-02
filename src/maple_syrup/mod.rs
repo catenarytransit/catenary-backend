@@ -809,3 +809,86 @@ mod chronological_compression_tests {
         assert!(time_since_start(Some(u32::MAX), 0).is_err());
     }
 }
+
+#[cfg(test)]
+mod pickup_drop_off_tests {
+    use super::reduce;
+    use gtfs_structures::{Gtfs, PickupDropOffType, Stop, StopTime, Trip};
+    use std::sync::Arc;
+
+    fn trip(id: &str, start: u32) -> Trip {
+        Trip {
+            id: id.to_string(),
+            route_id: "route".to_string(),
+            service_id: "daily".to_string(),
+            trip_headsign: Some("Destination".to_string()),
+            stop_times: (0..2)
+                .map(|index| StopTime {
+                    stop: Arc::new(Stop {
+                        id: format!("stop-{index}"),
+                        ..Default::default()
+                    }),
+                    stop_sequence: index + 1,
+                    arrival_time: Some(start + index * 600),
+                    departure_time: Some(start + index * 600),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn retains_pickup_and_drop_off_types_in_distinct_itineraries() {
+        let methods = [
+            (PickupDropOffType::Regular, 0),
+            (PickupDropOffType::NotAvailable, 1),
+            (PickupDropOffType::ArrangeByPhone, 2),
+            (PickupDropOffType::CoordinateWithDriver, 3),
+            (PickupDropOffType::Unknown(7), 7),
+        ];
+        for stop_index in 0..2 {
+            let mut gtfs = Gtfs::default();
+            for (pickup, pickup_code) in methods {
+                for (drop_off, drop_off_code) in methods {
+                    let id = format!("{pickup_code}-{drop_off_code}");
+                    let mut trip = trip(&id, 3600);
+                    trip.stop_times[stop_index].pickup_type = pickup;
+                    trip.stop_times[stop_index].drop_off_type = drop_off;
+                    gtfs.trips.insert(id, trip);
+                }
+            }
+
+            let reduced = reduce(&gtfs);
+            assert_eq!(reduced.itineraries.len(), methods.len() * methods.len());
+            for (_, pickup_code) in methods {
+                for (_, drop_off_code) in methods {
+                    let id = format!("{pickup_code}-{drop_off_code}");
+                    let hash = reduced.trips_to_itineraries[id.as_str()];
+                    let stops = &reduced.itineraries[&hash].stop_sequences;
+                    assert_eq!(stops[stop_index].pickup_type, pickup_code);
+                    assert_eq!(stops[stop_index].drop_off_type, drop_off_code);
+                    assert_eq!(stops[1 - stop_index].pickup_type, 0);
+                    assert_eq!(stops[1 - stop_index].drop_off_type, 0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn merges_identical_methods_across_trip_start_times() {
+        let mut gtfs = Gtfs::default();
+        for (id, start) in [("first", 3600), ("second", 7200)] {
+            let mut trip = trip(id, start);
+            trip.stop_times[0].drop_off_type = PickupDropOffType::NotAvailable;
+            trip.stop_times[1].pickup_type = PickupDropOffType::NotAvailable;
+            gtfs.trips.insert(id.to_string(), trip);
+        }
+
+        let reduced = reduce(&gtfs);
+        assert_eq!(reduced.itineraries.len(), 1);
+        let hash = reduced.trips_to_itineraries["first"];
+        assert_eq!(hash, reduced.trips_to_itineraries["second"]);
+        assert_eq!(reduced.itineraries_to_trips[&hash].len(), 2);
+    }
+}

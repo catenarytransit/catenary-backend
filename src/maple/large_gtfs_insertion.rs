@@ -1200,6 +1200,8 @@ pub async fn gtfs_process_large_feed(
                         departure_time_since_start: stop_sequence.departure_time_since_start,
                         interpolated_time_since_start: stop_sequence.interpolated_time_since_start,
                         timepoint: stop_sequence.timepoint.into(),
+                        pickup_type: stop_sequence.pickup_type,
+                        drop_off_type: stop_sequence.drop_off_type,
                         stop_headsign_idx: match stop_sequence.stop_headsign {
                             Some(ref stop_headsign) => {
                                 itinerary.stop_headsigns_unique_list.as_ref().and_then(|x| {
