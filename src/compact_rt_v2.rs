@@ -109,17 +109,94 @@ impl<T: Clone + PartialEq> OptionalColumn<T> {
     }
 }
 
+/// A signed 15-bit value only reaches +/-16_384 seconds (<5 hours).
+/// Store exact seconds in two-byte i16 for <= 9 hours. Select I24 for any
+/// delay beyond nine hours anywhere in the feed, and i32 if I24 cannot fit.
+/// The width decision is shared by event-level and trip-level delays.
+const NINE_HOURS_SECONDS: i32 = 9 * 60 * 60;
+const I24_MIN_SECONDS: i32 = -8_388_608;
+const I24_MAX_SECONDS: i32 = 8_388_607;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DelayWidth {
+    I16,
+    I24,
+    I32,
+}
+
+impl DelayWidth {
+    fn include(&mut self, delay: Option<i32>) {
+        let Some(delay) = delay else { return };
+        if !(I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&delay) {
+            *self = Self::I32;
+        } else if !(-NINE_HOURS_SECONDS..=NINE_HOURS_SECONDS).contains(&delay)
+            && *self == Self::I16
+        {
+            *self = Self::I24;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CompactDelayColumn {
+    Absent,
+    I16(OptionalColumn<i16>),
+    I24(OptionalColumn<I24>),
+    I32(OptionalColumn<i32>),
+}
+
+impl CompactDelayColumn {
+    fn from_values(values: Vec<Option<i32>>, width: DelayWidth) -> Self {
+        if values.iter().all(Option::is_none) {
+            return Self::Absent;
+        }
+
+        match width {
+            DelayWidth::I16 => Self::I16(OptionalColumn::from_values(
+                values.into_iter().map(|value| {
+                    value.map(|v| i16::try_from(v).expect("feed delay width was checked"))
+                }).collect(),
+            )),
+            DelayWidth::I24 => Self::I24(OptionalColumn::from_values(
+                values.into_iter().map(|value| {
+                    value.map(|v| {
+                        assert!(
+                            (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&v),
+                            "feed delay width was checked"
+                        );
+                        I24::wrapping_from_i32(v)
+                    })
+                }).collect(),
+            )),
+            DelayWidth::I32 => Self::I32(OptionalColumn::from_values(values)),
+        }
+    }
+
+    fn get(&self, index: usize) -> Option<i32> {
+        match self {
+            Self::Absent => None,
+            Self::I16(column) => column.get(index).copied().map(i32::from),
+            Self::I24(column) => column.get(index).copied().map(i32::from),
+            Self::I32(column) => column.get(index).copied(),
+        }
+    }
+
+    fn is_absent(&self) -> bool {
+        matches!(self, Self::Absent)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactEventColumns {
     pub count: u32,
-    pub delay: OptionalColumn<i32>,
+    pub delay: CompactDelayColumn,
     pub time: OptionalColumn<I24>,
     pub uncertainty: OptionalColumn<i32>,
     pub scheduled_time: OptionalColumn<I24>,
 }
 
 impl CompactEventColumns {
-    fn from_events(events: Vec<CompactStopTimeEvent>) -> Self {
+    fn from_events(events: Vec<CompactStopTimeEvent>, width: DelayWidth) -> Self {
         let count = u32::try_from(events.len()).expect("too many realtime events");
         let mut delay = Vec::with_capacity(events.len());
         let mut time = Vec::with_capacity(events.len());
@@ -133,7 +210,7 @@ impl CompactEventColumns {
         }
         Self {
             count,
-            delay: OptionalColumn::from_values(delay),
+            delay: CompactDelayColumn::from_values(delay, width),
             time: OptionalColumn::from_values(time),
             uncertainty: OptionalColumn::from_values(uncertainty),
             scheduled_time: OptionalColumn::from_values(scheduled_time),
@@ -146,7 +223,7 @@ impl CompactEventColumns {
         }
         let index = index as usize;
         Some(CompactStopTimeEvent {
-            delay: self.delay.get(index).copied(),
+            delay: self.delay.get(index),
             time: self.time.get(index).copied(),
             uncertainty: self.uncertainty.get(index).copied(),
             scheduled_time: self.scheduled_time.get(index).copied(),
@@ -223,7 +300,6 @@ pub struct CompactTripUpdateV2 {
     pub stop_start: u32,
     pub stop_len: u32,
     pub timestamp: Option<u64>,
-    pub delay: Option<i32>,
     pub trip_properties: Option<Box<TripProperties>>,
 }
 
@@ -237,6 +313,7 @@ pub struct CompactTripEntityV2 {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactTripFeedV2 {
     pub entities: Vec<CompactTripEntityV2>,
+    pub trip_delay: CompactDelayColumn,
     pub stops: CompactStopTimeStore,
 }
 
@@ -251,11 +328,30 @@ impl CompactTripFeedV2 {
         let mut occupancies = Vec::new();
         let mut properties = Vec::new();
         let mut features = RtFeatures::default();
+        let mut trip_delays = Vec::with_capacity(entities.len());
+
+        // Determine the physical delay width once, across trip and event
+        // delays. A single exceptional value widens both columns together.
+        let mut delay_width = DelayWidth::I16;
+        for entity in &entities {
+            if let Some(trip) = &entity.trip_update {
+                delay_width.include(trip.delay);
+                for stop in &trip.stop_time_update {
+                    for event in [stop.arrival.as_deref(), stop.departure.as_deref()]
+                        .into_iter()
+                        .flatten()
+                    {
+                        delay_width.include(event.delay);
+                    }
+                }
+            }
+        }
 
         for mut entity in entities {
+            trip_delays.push(entity.trip_update.as_ref().and_then(|trip| trip.delay));
             let trip_update = entity.trip_update.take().map(|update| {
                 let CompactTripUpdate {
-                    trip, vehicle, stop_time_update, timestamp, delay, trip_properties,
+                    trip, vehicle, stop_time_update, timestamp, delay: _, trip_properties,
                 } = update;
                 let stop_start = u32::try_from(rows.len()).expect("too many stop updates");
                 let stop_len = u32::try_from(stop_time_update.len()).expect("too many stop updates");
@@ -301,7 +397,7 @@ impl CompactTripFeedV2 {
                     properties.push(stop.stop_time_properties.map(|boxed| *boxed));
                 }
                 CompactTripUpdateV2 {
-                    trip, vehicle, stop_start, stop_len, timestamp, delay, trip_properties,
+                    trip, vehicle, stop_start, stop_len, timestamp, trip_properties,
                 }
             });
             packed_entities.push(CompactTripEntityV2 {
@@ -311,14 +407,13 @@ impl CompactTripFeedV2 {
             });
         }
 
-        let events = CompactEventColumns::from_events(events);
-        for (column, flag) in [
-            (&events.delay, RtFeatures::DELAY),
-            (&events.uncertainty, RtFeatures::UNCERTAINTY),
-        ] {
-            if !column.is_absent() {
-                features.insert(flag);
-            }
+        let events = CompactEventColumns::from_events(events, delay_width);
+        let trip_delay = CompactDelayColumn::from_values(trip_delays, delay_width);
+        if !events.delay.is_absent() || !trip_delay.is_absent() {
+            features.insert(RtFeatures::DELAY);
+        }
+        if !events.uncertainty.is_absent() {
+            features.insert(RtFeatures::UNCERTAINTY);
         }
         if !events.time.is_absent() {
             features.insert(RtFeatures::TIME);
@@ -342,6 +437,7 @@ impl CompactTripFeedV2 {
         (
             Self {
                 entities: packed_entities,
+                trip_delay,
                 stops: CompactStopTimeStore {
                     rows, stop_ids, events, schedule_relationship,
                     departure_occupancy_status, stop_time_properties,
@@ -354,7 +450,8 @@ impl CompactTripFeedV2 {
     fn expanded_entities(&self) -> Vec<CompactFeedEntity> {
         self.entities
             .iter()
-            .map(|entity| {
+            .enumerate()
+            .map(|(entity_index, entity)| {
                 let trip_update = entity.trip_update.as_ref().map(|tu| {
                     let begin = tu.stop_start as usize;
                     let end = begin.checked_add(tu.stop_len as usize)
@@ -367,7 +464,7 @@ impl CompactTripFeedV2 {
                         vehicle: tu.vehicle.clone(),
                         stop_time_update,
                         timestamp: tu.timestamp,
-                        delay: tu.delay,
+                        delay: self.trip_delay.get(entity_index),
                         trip_properties: tu.trip_properties.clone(),
                     }
                 });
