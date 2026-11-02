@@ -75,8 +75,19 @@ Euclidean division for overnight and multi-day vehicles. The existing
 calendar selection and compressed event decoding are shared by ping, pong
 and the direct-alternative lookup.
 
-The compact kernel has separate physical-arrival and transfer-ready states,
-so ping-bound preparation maps them to Nigiri's transfer-ready round times.
+The compact kernel has separate physical-arrival and transfer-ready states.
+During ping, transfer-ready round times are recorded before destination and
+lower-bound pruning, following Nigiri's `update_transfers` and
+`update_footpaths`. `fill_ping_bounds` copies row zero and folds each later
+row with the preceding row; it does not reconstruct missing entries from
+surviving vehicle-arrival cells.
+
+Intermodal endpoints follow `update_intermodal_footpaths`: only a physical
+vehicle arrival plus the OSR endpoint offset completes a point journey.
+Timetable walks remain available between vehicles. They cannot be chained
+onto the final OSR offset, since that would require an initial timetable walk
+when pong reverses direction and intermodal `get_starts` forbids that walk.
+This rule applies symmetrically to departure and arrive-by requests.
 At locations with pair-specific GTFS restrictions, scalar ping bounds are
 permissive and the existing predecessor/transfer validation decides legality.
 Reflexive station-change legs in the direct refinement are validated as

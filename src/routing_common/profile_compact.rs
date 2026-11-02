@@ -674,31 +674,16 @@ impl ProfileSearchState {
         self.bounds_last_round = 0;
     }
 
-    pub(crate) fn fill_ping_bounds(
-        &self,
-        tt: &ZeroCopyTimetable<'_>,
-        n_rows: usize,
-    ) -> PingBounds {
-        let invalid = if self.reverse { NEG_INF } else { INF };
+    pub(crate) fn fill_ping_bounds(&self, n_rows: usize) -> PingBounds {
         let mut rows = Vec::<Vec<i64>>::with_capacity(n_rows);
         for k in 0..n_rows {
             let mut row = self.profile_ready[k].clone();
             for (stop, time) in row.iter_mut().enumerate() {
-                if k != 0 && self.profile_ride[k][stop] != invalid {
-                    // Compact RAPTOR separates physical arrivals from change
-                    // readiness. Recover Nigiri's transfer-ready round time
-                    // even if the change was past ping's destination bound.
-                    let change = i64::from(tt.location_transfer_seconds()[stop]);
-                    let ride = self.profile_ride[k][stop];
-                    let ready = if self.reverse {
-                        ride.saturating_sub(change)
-                    } else {
-                        ride.saturating_add(change)
-                    };
-                    if better(ready, *time, self.reverse) {
-                        *time = ready;
-                    }
-                }
+                // Direct translation of raptor::fill_bounds: row zero is
+                // copied; each later row is folded with the preceding row.
+                // Ping records round times before destination/LB pruning,
+                // as update_transfers/update_footpaths do in Nigiri. Do not
+                // try to reconstruct that matrix from surviving ride cells.
                 if k != 0 && better(rows[k - 1][stop], *time, self.reverse) {
                     *time = rows[k - 1][stop];
                 }
@@ -1336,6 +1321,16 @@ impl ProfileSearchState {
                     } else {
                         t.saturating_add(i64::from(change))
                     };
+                    // Nigiri update_transfers writes round_times_ before
+                    // checking time_at_dest_ and destination lower bounds.
+                    // These scalar times are needed by the opposite search
+                    // even when this stop does not enter ping's frontier.
+                    if self.point_mode && self.ping_bounds.is_none() {
+                        let saved = &mut self.profile_ready[k][from];
+                        if better(ready, *saved, reverse) {
+                            *saved = ready;
+                        }
+                    }
                     if (lower..=upper).contains(&ready)
                         && within_ping_bounds(
                             self.ping_bounds.as_ref(), self.bounds_last_round,
@@ -1393,6 +1388,25 @@ impl ProfileSearchState {
                     } else {
                         t.saturating_add(i64::from(seconds))
                     };
+                    let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
+                    let ready = change_seconds(tt, walk_from, walk_to).map(|change| {
+                        if reverse {
+                            at.min(t.saturating_sub(i64::from(change)))
+                        } else {
+                            at.max(t.saturating_add(i64::from(change)))
+                        }
+                    });
+                    // Nigiri update_footpaths has the same pre-pruning
+                    // round_times_ write as update_transfers. Save the legal
+                    // transfer-ready time, independently of physical walks.
+                    if self.point_mode && self.ping_bounds.is_none()
+                        && let Some(ready) = ready
+                    {
+                        let saved = &mut self.profile_ready[k][to];
+                        if better(ready, *saved, reverse) {
+                            *saved = ready;
+                        }
+                    }
                     if !(lower..=upper).contains(&at)
                         || !can_reach(
                             &self.bounds,
@@ -1406,7 +1420,6 @@ impl ProfileSearchState {
                     {
                         continue;
                     }
-                    let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
                     // Physical arrival and boarding readiness are different
                     // dimensions: minimum change times do not extend a walk.
                     current.put_linked(
@@ -1424,14 +1437,8 @@ impl ProfileSearchState {
                         &mut self.parents,
                         &mut self.stats,
                     );
-                    let (rule_from, rule_to) = (walk_from, walk_to);
-                    let Some(change) = change_seconds(tt, rule_from, rule_to) else {
+                    let Some(ready) = ready else {
                         continue;
-                    };
-                    let ready = if reverse {
-                        at.min(t.saturating_sub(i64::from(change)))
-                    } else {
-                        at.max(t.saturating_add(i64::from(change)))
                     };
                     if (lower..=upper).contains(&ready)
                         && within_ping_bounds(
@@ -1486,7 +1493,22 @@ impl ProfileSearchState {
             //
             // Invalid predecessors NEVER tighten the bound: this is crucial
             // when several transfer-ready states share an arrival timestamp.
-            let terminals = if reverse { &q.access } else { &q.egress };
+            // Nigiri update_intermodal_footpaths uses tmp_ (the vehicle's
+            // physical arrival), never a timetable-footpath round time.
+            // OSR offsets already cover the intermodal access/egress. A
+            // final table walk would become an initial table walk when
+            // PONG reverses direction, which intermodal get_starts forbids.
+            // Vehicle + OSR terminals were collected above. Table walks
+            // still seed the next transit round, but cannot complete a
+            // point-mode intermodal journey in either search direction.
+            let terminals: &[crate::routing_common::raptor_query::WalkingEndpoint] =
+                if self.point_mode {
+                    &[]
+                } else if reverse {
+                    &q.access
+                } else {
+                    &q.egress
+                };
             let mut terminal_candidates = Vec::new();
             for ep in terminals {
                 // Ride destinations have already been validated above, so
@@ -1946,6 +1968,116 @@ mod compressed_timetable_profile_tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 36 * 3_600,
+        }
+    }
+
+    fn train_with_endpoint_footpath(reverse: bool) -> TimetableOwned {
+        use crate::routing_common::timetable::PackedFootpath;
+
+        let mut tt = daily_train();
+        // A third stop has no vehicle service. A table footpath connects it
+        // to an end of the train, independently of the OSR endpoint costs.
+        tt.coordinates.push(Default::default());
+        tt.location_id.push(Default::default());
+        tt.location_name.push(Default::default());
+        tt.location_source.push(SourceIdx(0));
+        tt.location_parent.push(LocationIdx::INVALID);
+        tt.location_type.push(1);
+        tt.location_transfer_seconds.push(0);
+        tt.location_routes_offsets.push(tt.location_routes.len() as u32);
+        if reverse {
+            // Unavailable initial table walk in the forward validation:
+            // stop 2 -> train's boarding stop 0.
+            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(0), 60).unwrap());
+            tt.footpaths_out_offsets = vec![0, 0, 0, 1];
+            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
+            tt.footpaths_in_offsets = vec![0, 1, 1, 1];
+        } else {
+            // Unavailable initial table walk in the reverse validation:
+            // train's alighting stop 1 -> stop 2.
+            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
+            tt.footpaths_out_offsets = vec![0, 0, 1, 1];
+            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(1), 60).unwrap());
+            tt.footpaths_in_offsets = vec![0, 0, 0, 1];
+        }
+        tt
+    }
+
+    #[test]
+    fn intermodal_pong_cannot_finish_by_chaining_a_table_walk_to_an_osr_offset() {
+        use crate::routing_common::pong::route_pong_with_stats_precomputed;
+        use crate::routing_common::profile_search::ProfileOptions;
+
+        let base = 20_000_i64 * 86_400;
+        let departure = base + 9 * 3_600;
+        let arrival = base + 17 * 3_600;
+        for reverse in [false, true] {
+            let bytes = train_with_endpoint_footpath(reverse).encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            let mut q = query();
+            q.max_boardings = 3;
+            q.departure_unix_seconds = if reverse { arrival } else { departure };
+            let offsets = vec![
+                WalkingEndpoint {
+                    stop: LocationIdx(if reverse { 0 } else { 1 }),
+                    seconds: 600,
+                },
+                WalkingEndpoint { stop: LocationIdx(2), seconds: 0 },
+            ];
+            if reverse { q.access = offsets; } else { q.egress = offsets; }
+            // The table path costs 60 seconds, but the actual OSR offset
+            // from/to the train costs 600. Previously ping chose the table
+            // shortcut and pong could not match the one-boarding journey.
+            let (journeys, stats) = route_pong_with_stats_precomputed(
+                &tt,
+                &q,
+                ProfileOptions {
+                    search_window_seconds: 1,
+                    min_itineraries: 1,
+                    ..ProfileOptions::default()
+                },
+                reverse,
+                None,
+            )
+            .unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert_eq!(journeys[0].boardings, 1);
+            assert_eq!(journeys[0].departure_unix_seconds, departure - if reverse { 600 } else { 0 });
+            assert_eq!(journeys[0].arrival_unix_seconds, arrival + if reverse { 0 } else { 600 });
+            assert!(journeys[0].legs.iter().all(|leg| !matches!(leg,
+                crate::routing_common::raptor_query::Leg::Transfer { .. }
+            )));
+            assert!(valid_journey(&tt, &q, &journeys[0]));
+            assert!(!stats.profile_budget_exhausted);
+        }
+    }
+
+    #[test]
+    fn ping_saves_footpath_round_times_before_destination_pruning() {
+        let base = 20_000_i64 * 86_400;
+        let departure = base + 9 * 3_600;
+        let arrival = base + 17 * 3_600;
+        for reverse in [false, true] {
+            let bytes = train_with_endpoint_footpath(reverse).encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            let mut q = query();
+            q.max_boardings = 3;
+            let (anchor, bound, expected) = if reverse {
+                (arrival, departure, departure - 60)
+            } else {
+                (departure, arrival, arrival + 60)
+            };
+            let mut state = ProfileSearchState::new(
+                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
+            )
+            .unwrap();
+            state.execute_point(&tt, &q, anchor, 3, bound).unwrap();
+            // Stop 2 cannot improve the destination bound. Nigiri still
+            // saves its round time before pruning the active frontier.
+            assert!(state.rounds[1].get(Stage::Ready, 2, state.generation).is_none());
+            let saved = state.fill_ping_bounds(2);
+            assert_eq!(saved.rows[1][2], expected);
+            assert_eq!(saved.rows[1][if reverse { 1 } else { 0 }], anchor);
         }
     }
 
