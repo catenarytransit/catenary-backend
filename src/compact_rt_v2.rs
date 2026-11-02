@@ -10,9 +10,9 @@ use crate::compact_formats::{
     CompactStopTimeUpdate, CompactTripUpdate,
 };
 use ahash::AHashMap;
+use gtfs_realtime::trip_update::TripProperties;
 use gtfs_realtime::trip_update::stop_time_update::StopTimeProperties;
 use gtfs_realtime::{FeedMessage, TripDescriptor, VehicleDescriptor};
-use gtfs_realtime::trip_update::TripProperties;
 use i24::I24;
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -85,7 +85,10 @@ impl<T: Clone + PartialEq> OptionalColumn<T> {
                     packed.push(value);
                 }
             }
-            Self::Sparse { indices, values: packed }
+            Self::Sparse {
+                indices,
+                values: packed,
+            }
         } else {
             Self::Dense(values)
         }
@@ -98,7 +101,10 @@ impl<T: Clone + PartialEq> OptionalColumn<T> {
             Self::AllPresent(values) => values.get(index),
             Self::Sparse { indices, values } => {
                 let index = u32::try_from(index).ok()?;
-                indices.binary_search(&index).ok().and_then(|i| values.get(i))
+                indices
+                    .binary_search(&index)
+                    .ok()
+                    .and_then(|i| values.get(i))
             }
             Self::Dense(values) => values.get(index).and_then(Option::as_ref),
         }
@@ -129,8 +135,7 @@ impl DelayWidth {
         let Some(delay) = delay else { return };
         if !(I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&delay) {
             *self = Self::I32;
-        } else if !(-NINE_HOURS_SECONDS..=NINE_HOURS_SECONDS).contains(&delay)
-            && *self == Self::I16
+        } else if !(-NINE_HOURS_SECONDS..=NINE_HOURS_SECONDS).contains(&delay) && *self == Self::I16
         {
             *self = Self::I24;
         }
@@ -153,20 +158,26 @@ impl CompactDelayColumn {
 
         match width {
             DelayWidth::I16 => Self::I16(OptionalColumn::from_values(
-                values.into_iter().map(|value| {
-                    value.map(|v| i16::try_from(v).expect("feed delay width was checked"))
-                }).collect(),
+                values
+                    .into_iter()
+                    .map(|value| {
+                        value.map(|v| i16::try_from(v).expect("feed delay width was checked"))
+                    })
+                    .collect(),
             )),
             DelayWidth::I24 => Self::I24(OptionalColumn::from_values(
-                values.into_iter().map(|value| {
-                    value.map(|v| {
-                        assert!(
-                            (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&v),
-                            "feed delay width was checked"
-                        );
-                        I24::wrapping_from_i32(v)
+                values
+                    .into_iter()
+                    .map(|value| {
+                        value.map(|v| {
+                            assert!(
+                                (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&v),
+                                "feed delay width was checked"
+                            );
+                            I24::wrapping_from_i32(v)
+                        })
                     })
-                }).collect(),
+                    .collect(),
             )),
             DelayWidth::I32 => Self::I32(OptionalColumn::from_values(values)),
         }
@@ -351,12 +362,19 @@ impl CompactTripFeedV2 {
             trip_delays.push(entity.trip_update.as_ref().and_then(|trip| trip.delay));
             let trip_update = entity.trip_update.take().map(|update| {
                 let CompactTripUpdate {
-                    trip, vehicle, stop_time_update, timestamp, delay: _, trip_properties,
+                    trip,
+                    vehicle,
+                    stop_time_update,
+                    timestamp,
+                    delay: _,
+                    trip_properties,
                 } = update;
                 let stop_start = u32::try_from(rows.len()).expect("too many stop updates");
-                let stop_len = u32::try_from(stop_time_update.len()).expect("too many stop updates");
+                let stop_len =
+                    u32::try_from(stop_time_update.len()).expect("too many stop updates");
                 for stop in stop_time_update {
-                    let first_event = u32::try_from(events.len()).expect("too many realtime events");
+                    let first_event =
+                        u32::try_from(events.len()).expect("too many realtime events");
                     let mut flags = 0;
                     let stop_sequence = match stop.stop_sequence {
                         Some(sequence) => {
@@ -390,14 +408,22 @@ impl CompactTripFeedV2 {
                         events.push(*departure);
                     }
                     rows.push(CompactStopRow {
-                        stop_id, stop_sequence, first_event, flags,
+                        stop_id,
+                        stop_sequence,
+                        first_event,
+                        flags,
                     });
                     relationships.push(stop.schedule_relationship);
                     occupancies.push(stop.departure_occupancy_status);
                     properties.push(stop.stop_time_properties.map(|boxed| *boxed));
                 }
                 CompactTripUpdateV2 {
-                    trip, vehicle, stop_start, stop_len, timestamp, trip_properties,
+                    trip,
+                    vehicle,
+                    stop_start,
+                    stop_len,
+                    timestamp,
+                    trip_properties,
                 }
             });
             packed_entities.push(CompactTripEntityV2 {
@@ -439,8 +465,12 @@ impl CompactTripFeedV2 {
                 entities: packed_entities,
                 trip_delay,
                 stops: CompactStopTimeStore {
-                    rows, stop_ids, events, schedule_relationship,
-                    departure_occupancy_status, stop_time_properties,
+                    rows,
+                    stop_ids,
+                    events,
+                    schedule_relationship,
+                    departure_occupancy_status,
+                    stop_time_properties,
                 },
             },
             features,
@@ -454,7 +484,8 @@ impl CompactTripFeedV2 {
             .map(|(entity_index, entity)| {
                 let trip_update = entity.trip_update.as_ref().map(|tu| {
                     let begin = tu.stop_start as usize;
-                    let end = begin.checked_add(tu.stop_len as usize)
+                    let end = begin
+                        .checked_add(tu.stop_len as usize)
                         .expect("stop range overflow");
                     let stop_time_update = (begin..end)
                         .map(|index| self.stops.get_stop(index).expect("valid compact stop"))
@@ -507,7 +538,11 @@ impl CompactFeedMessageV2 {
     }
 
     pub fn from_legacy(compact: CompactFeedMessage) -> Self {
-        let CompactFeedMessage { header, reference_epoch, entity } = compact;
+        let CompactFeedMessage {
+            header,
+            reference_epoch,
+            entity,
+        } = compact;
         let trip_only = entity.iter().any(|e| e.trip_update.is_some())
             && entity.iter().all(|e| {
                 e.vehicle.is_none()
@@ -522,7 +557,12 @@ impl CompactFeedMessageV2 {
         } else {
             (CompactFeedDataV2::Legacy(entity), RtFeatures::default())
         };
-        Self { header, reference_epoch, features, data }
+        Self {
+            header,
+            reference_epoch,
+            features,
+            data,
+        }
     }
 
     pub fn entity_len(&self) -> usize {
@@ -662,7 +702,10 @@ mod tests {
             panic!("expected compact trip feed");
         };
         assert!(compact.features.contains(RtFeatures::DELAY));
-        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I16(_)));
+        assert!(matches!(
+            feed.stops.events.delay,
+            CompactDelayColumn::I16(_)
+        ));
         assert!(matches!(feed.trip_delay, CompactDelayColumn::I16(_)));
         assert_eq!(size_of::<i16>(), 2);
         assert_eq!(compact.to_feed_message(), raw);
@@ -673,26 +716,30 @@ mod tests {
         let mut raw = test_message();
         let trip = raw.entity[0].trip_update.as_mut().unwrap();
         trip.delay = Some(15);
-        trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
-            Some(NINE_HOURS_SECONDS + 1);
+        trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(NINE_HOURS_SECONDS + 1);
 
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
         let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
-        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert!(matches!(
+            feed.stops.events.delay,
+            CompactDelayColumn::I24(_)
+        ));
         assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
         assert_eq!(compact.to_feed_message(), raw);
 
         // Negative exceptions must also promote the whole feed.
         let trip = raw.entity[0].trip_update.as_mut().unwrap();
-        trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
-            Some(-NINE_HOURS_SECONDS - 1);
+        trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(-NINE_HOURS_SECONDS - 1);
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
         let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
-        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert!(matches!(
+            feed.stops.events.delay,
+            CompactDelayColumn::I24(_)
+        ));
         assert_eq!(compact.to_feed_message(), raw);
     }
 
@@ -707,7 +754,10 @@ mod tests {
         let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
-        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert!(matches!(
+            feed.stops.events.delay,
+            CompactDelayColumn::I24(_)
+        ));
         assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
         assert_eq!(compact.to_feed_message(), raw);
     }
@@ -748,18 +798,23 @@ mod tests {
             let mut raw = test_message();
             let trip = raw.entity[0].trip_update.as_mut().unwrap();
             trip.delay = Some(-12);
-            trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
-                Some(event_delay);
+            trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(event_delay);
 
             let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
             let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
                 panic!("expected compact trip feed");
             };
             if (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&event_delay) {
-                assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+                assert!(matches!(
+                    feed.stops.events.delay,
+                    CompactDelayColumn::I24(_)
+                ));
                 assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
             } else {
-                assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I32(_)));
+                assert!(matches!(
+                    feed.stops.events.delay,
+                    CompactDelayColumn::I32(_)
+                ));
                 assert!(matches!(feed.trip_delay, CompactDelayColumn::I32(_)));
             }
             assert_eq!(compact.to_feed_message(), raw);
@@ -769,8 +824,11 @@ mod tests {
     #[test]
     fn absent_delays_use_no_column_at_all() {
         let mut raw = test_message();
-        raw.entity[0].trip_update.as_mut().unwrap()
-            .stop_time_update[0].arrival.as_mut().unwrap().delay = None;
+        raw.entity[0].trip_update.as_mut().unwrap().stop_time_update[0]
+            .arrival
+            .as_mut()
+            .unwrap()
+            .delay = None;
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
         assert!(!compact.features.contains(RtFeatures::DELAY));
         let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {

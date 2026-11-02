@@ -223,7 +223,10 @@ fn main() -> Result<()> {
         );
         let step = Instant::now();
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
-        eprintln!("Gentian startup: loaded routing regions configuration in {:?}", step.elapsed());
+        eprintln!(
+            "Gentian startup: loaded routing regions configuration in {:?}",
+            step.elapsed()
+        );
 
         let url = args
             .database_url
@@ -233,15 +236,15 @@ fn main() -> Result<()> {
         let step = Instant::now();
         let mut client = Client::connect(url, NoTls)
             .context("connecting to Postgres to resolve routing region")?;
-        eprintln!("Gentian startup: connected to PostgreSQL in {:?}", step.elapsed());
+        eprintln!(
+            "Gentian startup: connected to PostgreSQL in {:?}",
+            step.elapsed()
+        );
 
-        let resolved = resolve_with_progress(
-            &config,
-            &args.regions_config,
-            id,
-            &mut client,
-            |stage| eprintln!("Gentian startup: {stage}"),
-        )?;
+        let resolved =
+            resolve_with_progress(&config, &args.regions_config, id, &mut client, |stage| {
+                eprintln!("Gentian startup: {stage}")
+            })?;
         eprintln!(
             "Gentian startup: region {id} resolved in {:?}",
             startup.elapsed()

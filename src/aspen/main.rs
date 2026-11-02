@@ -129,7 +129,8 @@ pub struct AspenServer {
     pub authoritative_trajectory_data_store:
         Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
-    pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
+    pub authoritative_gtfs_rt_store:
+        Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
@@ -1239,8 +1240,9 @@ impl AspenRpc for AspenServer {
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                    let compact =
-                        Arc::new(CompactFeedMessageV2::from_feed_message(trip_gtfs_rt.clone()));
+                    let compact = Arc::new(CompactFeedMessageV2::from_feed_message(
+                        trip_gtfs_rt.clone(),
+                    ));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .await
