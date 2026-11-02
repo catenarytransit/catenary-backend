@@ -179,7 +179,7 @@ pub async fn assign_trips_for_dresden(
     };
 
     let mut active_route_ids = HashSet::new();
-    for entity in &feed_msg.entities() {
+    for entity in feed_msg.entities().iter() {
         if let Some(vehicle) = &entity.vehicle {
             if let Some(trip) = &vehicle.trip {
                 if let Some(route_id) = &trip.route_id {
@@ -349,7 +349,7 @@ pub async fn assign_trips_for_dresden(
             "Found 'f-delfi~de~motis~rt' trip updates feed with {} entities",
             delfi_msg.entity_len()
         );
-        for entity in &delfi_msg.entities() {
+        for entity in delfi_msg.entities().iter() {
             if let Some(tu) = &entity.trip_update {
                 if let Some(trip_id) = &tu.trip.trip_id {
                     let delay = tu
@@ -406,7 +406,7 @@ pub async fn assign_trips_for_dresden(
 
         gc_history(&mut history_lock, current_time_ms);
 
-        for entity in &feed_msg.entities() {
+        for entity in feed_msg.entities().iter() {
             if let Some(vehicle) = &entity.vehicle {
                 let vehicle_id = match &vehicle.vehicle {
                     Some(desc) => match &desc.id {
