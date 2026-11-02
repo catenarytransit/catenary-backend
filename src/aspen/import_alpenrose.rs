@@ -927,7 +927,7 @@ pub async fn new_rt_data(
             let alert_feed = Arc::clone(alert_feed.get());
             alert_input_hasher.update([1_u8]);
 
-            for entity in &alert_feed.entities() {
+            for entity in alert_feed.entities().iter() {
                 if let Some(alert) = &entity.alert {
                     hash_len_prefixed(&mut alert_input_hasher, entity.id.as_bytes());
                     let encoded = alert.encode_to_vec();
@@ -4316,7 +4316,7 @@ pub async fn new_rt_data(
             .await
         {
             let cpu_started = current_thread_cpu_time();
-            for entity in &vehicle_feed.get().entities() {
+            for entity in vehicle_feed.get().entities().iter() {
                 if let Some(vehicle_position) = aspenised_vehicle_positions.get(entity.id.as_str())
                 {
                     history_vehicle_positions.insert(entity.id.clone(), vehicle_position.clone());
@@ -4331,7 +4331,7 @@ pub async fn new_rt_data(
             .await
         {
             let cpu_started = current_thread_cpu_time();
-            for entity in &trip_feed.get().entities() {
+            for entity in trip_feed.get().entities().iter() {
                 if let Some(trip_update) = trip_updates.get(entity.id.as_str()) {
                     history_trip_updates
                         .insert(CompactString::new(&entity.id), trip_update.clone());
