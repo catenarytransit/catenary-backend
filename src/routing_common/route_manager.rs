@@ -7,7 +7,7 @@ use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
 use anyhow::{Context, Result, bail, ensure};
-use geo::{Contains, Point};
+use geo::{Intersects, Point};
 use geojson::{GeoJson, Value};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -61,6 +61,7 @@ pub struct TransitRegion {
     pub platform_metadata: Vec<PlatformStopMeta>,
     pub id: String,
     geometry: Vec<geo::Geometry<f64>>,
+    countries: Vec<String>,
     pub timetable: MappedTimetable,
     pub metadata: MetadataIndex,
     pub(crate) lower_bound_topology: crate::routing_common::profile_compact::LowerBoundTopology,
@@ -90,6 +91,7 @@ pub struct RoutingResponse {
 pub struct Router {
     pub transit: Vec<TransitRegion>,
     streets: Vec<StreetRegion>,
+    country_boundaries: Vec<(String, Vec<geo::Geometry<f64>>)>,
     pub settings: RouterSettings,
 }
 
@@ -118,7 +120,7 @@ fn polygon_geometries(value: GeoJson) -> Result<Vec<geo::Geometry<f64>>> {
 
 fn contains(geometries: &[geo::Geometry<f64>], point: Coordinates) -> bool {
     let p = Point::new(point.lon, point.lat);
-    geometries.iter().any(|geometry| geometry.contains(&p))
+    geometries.iter().any(|geometry| geometry.intersects(&p))
 }
 
 fn bbox_area(geometry: &geo::Geometry<f64>) -> f64 {
@@ -143,6 +145,80 @@ fn transit_region_for<'a>(
                 .total_cmp(&area(geometry_b))
                 .then(id_a.cmp(id_b))
         })
+        .map(|(id, _)| id)
+}
+
+// A country atlas is required for the coastal fallback: even countries without
+// a compiled timetable must participate in ownership checks.
+const COASTAL_BUFFER_METERS: f64 = 10_000.0;
+
+fn geometry_distance(geometry: &geo::Geometry<f64>, point: Coordinates) -> f64 {
+    if geometry.intersects(&Point::new(point.lon, point.lat)) {
+        return 0.0;
+    }
+    match geometry {
+        geo::Geometry::Polygon(p) => polygon_distance(p, point),
+        geo::Geometry::MultiPolygon(p) => p.0.iter()
+            .map(|p| polygon_distance(p, point))
+            .fold(f64::INFINITY, f64::min),
+        _ => f64::INFINITY,
+    }
+}
+
+fn polygon_distance(polygon: &geo::Polygon<f64>, point: Coordinates) -> f64 {
+    std::iter::once(polygon.exterior()).chain(polygon.interiors())
+        .flat_map(|ring| ring.lines())
+        .map(|line| segment_distance(point, line))
+        .fold(f64::INFINITY, f64::min)
+}
+
+// Distance to a finite great-circle segment, in meters. Unlike a degree-based
+// buffer this remains meaningful at high latitudes and across the date line.
+fn segment_distance(point: Coordinates, line: geo::Line<f64>) -> f64 {
+    const R: f64 = 6_371_000.0;
+    let bearing = |a: Coordinates, b: Coordinates| {
+        let dl = (b.lon - a.lon).to_radians();
+        let (a, b) = (a.lat.to_radians(), b.lat.to_radians());
+        (dl.sin() * b.cos()).atan2(a.cos() * b.sin() - a.sin() * b.cos() * dl.cos())
+    };
+    let a = Coordinates { lat: line.start.y, lon: line.start.x };
+    let b = Coordinates { lat: line.end.y, lon: line.end.x };
+    let ap = haversine_meters(a.lat, a.lon, point.lat, point.lon) / R;
+    let ab = haversine_meters(a.lat, a.lon, b.lat, b.lon) / R;
+    let angle = bearing(a, point) - bearing(a, b);
+    let along = (ap.sin() * angle.cos()).atan2(ap.cos());
+    if ab == 0.0 || along < 0.0 || along > ab {
+        return haversine_meters(a.lat, a.lon, point.lat, point.lon)
+            .min(haversine_meters(b.lat, b.lon, point.lat, point.lon));
+    }
+    R * (ap.sin() * angle.sin()).clamp(-1.0, 1.0).asin().abs()
+}
+
+fn boundary_distance(geometries: &[geo::Geometry<f64>], point: Coordinates) -> f64 {
+    geometries.iter().map(|g| geometry_distance(g, point))
+        .fold(f64::INFINITY, f64::min)
+}
+
+fn coastal_region_for<'a>(
+    regions: impl Iterator<Item = (&'a str, &'a [geo::Geometry<f64>], &'a [String])>,
+    countries: &[(String, Vec<geo::Geometry<f64>>)],
+    point: Coordinates,
+) -> Option<&'a str> {
+    let mut distances: Vec<_> = countries.iter()
+        .map(|(code, geometry)| (code, boundary_distance(geometry, point)))
+        .filter(|(_, distance)| *distance <= COASTAL_BUFFER_METERS)
+        .collect();
+    distances.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(b.0)));
+    let (country, distance) = distances.first()?;
+    // Do not guess at a shared border or an equidistant offshore boundary.
+    if distances.get(1).is_some_and(|(_, other)| other - distance <= 1.0) {
+        return None;
+    }
+    regions
+        .filter(|(_, _, codes)| codes.iter().any(|code| code.eq_ignore_ascii_case(country)))
+        .map(|(id, geometry, _)| (id, boundary_distance(geometry, point)))
+        .filter(|(_, distance)| *distance <= COASTAL_BUFFER_METERS)
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(b.0)))
         .map(|(id, _)| id)
 }
 
@@ -199,6 +275,26 @@ impl Router {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let country_boundaries = if let Some(path) = &regions.country_boundaries {
+            let root = routing_config.parent().unwrap_or_else(|| Path::new("."));
+            let json = GeoJson::from_str(&fs::read_to_string(root.join(path))?)?;
+            let GeoJson::FeatureCollection(collection) = json else {
+                bail!("country boundaries must be a GeoJSON FeatureCollection");
+            };
+            let mut countries = std::collections::BTreeMap::<String, Vec<geo::Geometry<f64>>>::new();
+            for feature in collection.features {
+                // Keep unidentified features as blockers too. They cannot be
+                // assigned to a configured country, but must not be ignored.
+                let code = super::routing_regions::feature_country_code(&feature)
+                    .unwrap_or_default();
+                countries.entry(code).or_default().extend(
+                    polygon_geometries(GeoJson::Feature(feature))?
+                );
+            }
+            countries.into_iter().collect()
+        } else {
+            Vec::new()
+        };
         let mut transit = Vec::new();
         for region in &regions.regions {
             let geom_json = regions.geometry_json(routing_config, &region.id)?;
@@ -253,6 +349,7 @@ impl Router {
                 platform_metadata,
                 id: region.id.clone(),
                 geometry: geometries,
+                countries: region.countries.clone(),
                 timetable,
                 metadata,
                 lower_bound_topology,
@@ -265,6 +362,7 @@ impl Router {
         Ok(Self {
             transit,
             streets,
+            country_boundaries,
             settings,
         })
     }
@@ -273,10 +371,15 @@ impl Router {
         let p = Point::new(point.lon, point.lat);
         self.streets
             .iter()
-            .filter(|r| r.geometry.contains(&p))
+            .filter(|r| r.geometry.intersects(&p))
             .min_by(|a, b| a.area.total_cmp(&b.area).then(a.id.cmp(&b.id)))
             .map(|r| r.id.as_str())
-            .context("coordinate is outside all OSR regions")
+            .or_else(|| self.streets.iter()
+                .map(|r| (r, geometry_distance(&r.geometry, point)))
+                .filter(|(_, distance)| *distance <= COASTAL_BUFFER_METERS)
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
+                .map(|(r, _)| r.id.as_str()))
+            .context("coordinate is outside all OSR regions (including 10 km coastal buffer)")
     }
 
     pub fn select(&self, from: Coordinates, to: Coordinates) -> Result<RoutingSelection> {
@@ -294,13 +397,13 @@ impl Router {
                 .iter()
                 .map(|r| (r.id.as_str(), r.geometry.as_slice())),
             from,
-        );
+        ).or_else(|| self.coastal_region_for(from));
         let destination_region = transit_region_for(
             self.transit
                 .iter()
                 .map(|r| (r.id.as_str(), r.geometry.as_slice())),
             to,
-        );
+        ).or_else(|| self.coastal_region_for(to));
         // Reject cross-region requests before contacting OSR or running RAPTOR.
         // Different OSR street-graph regions are still permitted within one
         // transit region, since access and egress can use separate OSR graphs.
@@ -312,6 +415,14 @@ impl Router {
             origin_osr_region: start_osr,
             destination_osr_region: end_osr,
         })
+    }
+
+    fn coastal_region_for(&self, point: Coordinates) -> Option<&str> {
+        coastal_region_for(
+            self.transit.iter().map(|r| (r.id.as_str(), r.geometry.as_slice(), r.countries.as_slice())),
+            &self.country_boundaries,
+            point,
+        )
     }
 
     pub fn timetable_for(&self, name: &str) -> Result<ZeroCopyTimetable<'_>> {
@@ -471,7 +582,7 @@ fn haversine_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dx = (lon2 - lon1).to_radians();
     let a = (dy * 0.5).sin().powi(2)
         + lat1.to_radians().cos() * lat2.to_radians().cos() * (dx * 0.5).sin().powi(2);
-    12_742_000.0 * a.sqrt().asin()
+    12_742_000.0 * a.clamp(0.0, 1.0).sqrt().asin()
 }
 
 #[cfg(test)]
@@ -588,5 +699,89 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("destination is outside all compiled transit regions"));
+    }
+
+    #[test]
+    fn coastal_fallback_is_limited_to_ten_kilometers() {
+        let us = vec![rectangle(-120.0, 30.0, -115.0, 40.0)];
+        let countries = vec![("US".to_owned(), us.clone())];
+        let codes = vec!["us".to_owned()];
+        let select = |lon| coastal_region_for(
+            std::iter::once(("usa", us.as_slice(), codes.as_slice())),
+            &countries, Coordinates { lat: 34.0, lon },
+        );
+        assert_eq!(select(-120.05), Some("usa"));
+        assert_eq!(select(-120.2), None);
+        assert_eq!(coastal_region_for(
+            std::iter::once(("usa", us.as_slice(), codes.as_slice())),
+            &[], Coordinates { lat: 34.0, lon: -120.05 },
+        ), None);
+    }
+
+    #[test]
+    fn uncompiled_neighbor_blocks_country_fallback() {
+        let us = vec![rectangle(-120.0, 30.0, -115.0, 49.0)];
+        let canada = vec![rectangle(-120.0, 49.0, -115.0, 60.0)];
+        let countries = vec![("US".to_owned(), us.clone()), ("CA".to_owned(), canada)];
+        let codes = vec!["US".to_owned()];
+        for point in [Coordinates { lat: 49.01, lon: -118.0 },
+                      Coordinates { lat: 49.02, lon: -120.02 }] {
+            assert_eq!(coastal_region_for(
+                std::iter::once(("usa", us.as_slice(), codes.as_slice())),
+                &countries, point,
+            ), None);
+        }
+    }
+
+    #[test]
+    fn nearest_country_wins_offshore_independent_of_config_order() {
+        let us = vec![rectangle(-120.0, 30.0, -115.0, 49.0)];
+        let canada = vec![rectangle(-120.0, 49.0, -115.0, 60.0)];
+        let countries = vec![("CA".to_owned(), canada.clone()), ("US".to_owned(), us.clone())];
+        let us_codes = vec!["US".to_owned()];
+        let ca_codes = vec!["CA".to_owned()];
+        let regions = [("usa", us.as_slice(), us_codes.as_slice()),
+                       ("canada", canada.as_slice(), ca_codes.as_slice())];
+        assert_eq!(coastal_region_for(regions.into_iter(), &countries,
+            Coordinates { lat: 49.02, lon: -120.02 }), Some("canada"));
+        assert_eq!(coastal_region_for(regions.into_iter().rev(), &countries,
+            Coordinates { lat: 49.02, lon: -120.02 }), Some("canada"));
+        assert_eq!(coastal_region_for(regions.into_iter(), &countries,
+            Coordinates { lat: 49.0, lon: -120.02 }), None);
+    }
+
+    #[test]
+    fn polygon_holes_and_multipolygon_islands_use_nearest_boundary() {
+        let outer = geo::Rect::new((-120.0, 30.0), (-115.0, 40.0)).to_polygon();
+        let hole = geo::Rect::new((-119.0, 33.0), (-118.0, 35.0)).to_polygon();
+        let mainland = geo::Polygon::new(outer.exterior().clone(), vec![hole.exterior().clone()]);
+        let island = geo::Rect::new((-121.0, 33.0), (-120.9, 33.1)).to_polygon();
+        let geometry = geo::Geometry::MultiPolygon(geo::MultiPolygon(vec![mainland, island]));
+        assert!(geometry_distance(&geometry, Coordinates { lat: 34.0, lon: -118.5 }) > 40_000.0);
+        assert!(geometry_distance(&geometry, Coordinates { lat: 33.05, lon: -121.01 }) < 1_000.0);
+    }
+
+    #[test]
+    fn great_circle_distance_handles_latitude_and_date_line() {
+        let line = geo::Line::new((179.9, 70.0), (-179.9, 70.0));
+        let distance = segment_distance(Coordinates { lat: 70.01, lon: 180.0 }, line);
+        assert!((1_000.0..1_200.0).contains(&distance));
+        let line = geo::Line::new((0.0, 0.0), (0.0, 1.0));
+        let distance = segment_distance(Coordinates { lat: 0.5, lon: 0.01 }, line);
+        assert!((1_100.0..1_120.0).contains(&distance));
+    }
+
+    #[test]
+    fn exact_boundary_and_unknown_country_are_handled_conservatively() {
+        let us = vec![rectangle(-120.0, 30.0, -115.0, 49.0)];
+        assert_eq!(transit_region_for(std::iter::once(("usa", us.as_slice())),
+            Coordinates { lat: 34.0, lon: -120.0 }), Some("usa"));
+        let unknown = vec![rectangle(-120.1, 33.0, -120.0, 35.0)];
+        let countries = vec![("US".to_owned(), us.clone()), (String::new(), unknown)];
+        let codes = vec!["US".to_owned()];
+        assert_eq!(coastal_region_for(
+            std::iter::once(("usa", us.as_slice(), codes.as_slice())),
+            &countries, Coordinates { lat: 34.0, lon: -120.05 },
+        ), None);
     }
 }
