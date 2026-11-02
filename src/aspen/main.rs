@@ -1992,7 +1992,7 @@ impl AspenRpc for AspenServer {
                     .await
                 {
                     let compact_feed_msg = guard.get();
-                    for entity in &compact_feed_msg.entities() {
+                    for entity in compact_feed_msg.entities().iter() {
                         if entity.trip_update.is_some() {
                             trip_update_count += 1;
                         }
