@@ -109,7 +109,7 @@ impl<T: Clone + PartialEq> OptionalColumn<T> {
     }
 }
 
-/// A signed 15-bit value only reaches +/-16_384 seconds (<5 hours).
+/// A signed 15-bit value only reaches -16_384..=16_383 seconds (<5 hours).
 /// Store exact seconds in two-byte i16 for <= 9 hours. Select I24 for any
 /// delay beyond nine hours anywhere in the feed, and i32 if I24 cannot fit.
 /// The width decision is shared by event-level and trip-level delays.
@@ -693,6 +693,22 @@ mod tests {
             panic!("expected compact trip feed");
         };
         assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert_eq!(compact.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn exceptional_trip_delay_promotes_event_delays_to_i24() {
+        let mut raw = test_message();
+        let trip = raw.entity[0].trip_update.as_mut().unwrap();
+        trip.delay = Some(NINE_HOURS_SECONDS + 1);
+        trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(8);
+
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
         assert_eq!(compact.to_feed_message(), raw);
     }
 
