@@ -350,11 +350,11 @@ mod tests {
         tt.section_flag_offsets.extend([0, 0]);
         tt.transport_to_trip_section_offsets.extend([0, 0]);
         tt.timing_profile_events.extend(
-            [0, 300, 600, 780, 0, 300, 900]
+            [0, 300, 300, 600, 600, 780, 0, 300, 300, 900]
                 .into_iter()
                 .map(|n| Delta::from_seconds(n).unwrap()),
         );
-        tt.timing_profile_offsets.extend([4, 7]);
+        tt.timing_profile_offsets.extend([6, 10]);
         tt.transport_route.extend([RouteIdx(0), RouteIdx(1)]);
         tt.transport_timing_profile
             .extend([TimingProfileIdx(0), TimingProfileIdx(1)]);
@@ -387,16 +387,16 @@ mod tests {
                     .push(PackedFootpath::new(LocationIdx(to), duration).unwrap());
                 inbound[to as usize].push((from as u32, duration));
             }
-            tt.footpaths_out_offsets[from] = tt.footpaths_out.len() as u32;
+            tt.footpaths_out_offsets[from + 1] = tt.footpaths_out.len() as u32;
         }
         for (to, incoming) in inbound.into_iter().enumerate() {
             for (from, duration) in incoming {
                 tt.footpaths_in
                     .push(PackedFootpath::new(LocationIdx(from), duration).unwrap());
             }
-            tt.footpaths_in_offsets[to] = tt.footpaths_in.len() as u32;
+            tt.footpaths_in_offsets[to + 1] = tt.footpaths_in.len() as u32;
         }
-        tt.location_routes_offsets = vec![1, 2, 3, 4, 5, 6, 7];
+        tt.location_routes_offsets = vec![0, 1, 2, 3, 4, 5, 6, 7];
         tt.location_routes = (0..7).map(|i| RouteIdx(u32::from(i >= 4))).collect();
         tt
     }
@@ -505,8 +505,9 @@ mod tests {
     fn does_not_choose_short_walk_if_the_next_vehicle_has_already_left() {
         let mut owned = fixture();
         // Arrival at stop 2 at 08:24:00, short walk finishes after 08:25:00.
-        owned.timing_profile_events[2] = Delta::from_seconds(24 * 60).unwrap();
-        owned.timing_profile_events[3] = Delta::from_seconds(25 * 60).unwrap();
+        owned.timing_profile_events[3] = Delta::from_seconds(24 * 60).unwrap();
+        owned.timing_profile_events[4] = Delta::from_seconds(24 * 60).unwrap();
+        owned.timing_profile_events[5] = Delta::from_seconds(25 * 60).unwrap();
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let mut j = journey();
@@ -563,7 +564,7 @@ mod tests {
         owned.station_transfer_rules.push(StationTransferRule {
             from: LocationIdx(2),
             to: LocationIdx(5),
-            min_seconds: 800,
+            min_seconds: 1000,
             flags: 0,
         });
         let bytes = owned.encode().unwrap();

@@ -47,6 +47,13 @@ pub struct RaptorStats {
     pub profile_duration_filtered: u64,
     /// Number of FIFO binary-search probes and inactive-service skips.
     pub transport_lookup_probes: u64,
+    pub transport_lookup_calls: u64,
+    pub transport_lookup_skipped_onboard: u64,
+    pub transport_bound_prunes: u64,
+    pub profile_start_labels: u64,
+    pub profile_boundary_events: u64,
+    pub profile_compact_ms: f64,
+    pub profile_fallback_ms: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1834,26 +1841,31 @@ mod tests {
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 3;
-        let journeys = route(
+        // Exercise a transfer after transit. Access walking is supplied by
+        // OSR; use_start_footpaths=false intentionally does not expand round 0.
+        let mut labels = vec![
+            Label {
+                time: INF,
+                parent: None,
+                last_alight: None
+            };
+            3
+        ];
+        labels[0] = Label {
+            time: departure + 17,
+            parent: None,
+            last_alight: Some((0, departure + 17)),
+        };
+        relax_walks_from(
             &view,
-            &Query {
-                departure_unix_seconds: departure,
-                access: vec![WalkingEndpoint {
-                    stop: LocationIdx(0),
-                    seconds: 17,
-                }],
-                egress: vec![WalkingEndpoint {
-                    stop: LocationIdx(1),
-                    seconds: 23,
-                }],
-                direct_walk_seconds: None,
-                max_boardings: 0,
-                max_duration_seconds: 180,
-            },
-        )
-        .unwrap();
-        assert_eq!(journeys.len(), 1);
-        assert_eq!(journeys[0].arrival_unix_seconds, departure + 17 + 75 + 23);
+            &mut labels,
+            &[0],
+            departure + 180,
+            &mut RaptorStats::default(),
+            None,
+        );
+        assert_eq!(labels[1].time, departure + 17 + 75);
+        assert_eq!(labels[1].last_alight, Some((0, departure + 17)));
     }
 
     #[test]

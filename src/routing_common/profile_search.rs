@@ -9,13 +9,40 @@
 
 use crate::routing_common::interval_estimate::{Interval, IntervalEstimator};
 use crate::routing_common::profile_compact::ProfileSearchState;
-use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{
-    self, Journey, Leg, Query, RaptorStats, for_each_route_service_day, transport_event_second,
+    Journey, Leg, Query, RaptorStats, for_each_route_service_day, transport_event_second,
 };
-use crate::routing_common::timetable::{TransportIdx, ZeroCopyTimetable};
+use crate::routing_common::timetable::{LocationIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
 use std::time::{Duration, Instant};
+
+/// Nigiri routing::start. Equal origin times form one RAPTOR execution.
+/// Via state is explicit; Edelweiss currently supports only state zero.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct StartLabel {
+    pub time_at_start: i64,
+    pub time_at_stop: i64,
+    pub stop: LocationIdx,
+    pub via_state: u8,
+}
+impl StartLabel {
+    pub(crate) fn point(q: &Query, time: i64, reverse: bool) -> Vec<Self> {
+        let endpoints = if reverse { &q.egress } else { &q.access };
+        endpoints
+            .iter()
+            .map(|ep| Self {
+                time_at_start: time,
+                time_at_stop: if reverse {
+                    time.saturating_sub(i64::from(ep.seconds))
+                } else {
+                    time.saturating_add(i64::from(ep.seconds))
+                },
+                stop: ep.stop,
+                via_state: 0,
+            })
+            .collect()
+    }
+}
 
 pub const DEFAULT_SEARCH_WINDOW_SECONDS: u32 = 15 * 60;
 pub const DEFAULT_MAX_SEARCH_WINDOW_SECONDS: u32 = 48 * 3_600;
@@ -109,6 +136,10 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.active_transport_days += one.active_transport_days;
     total.stop_events_scanned += one.stop_events_scanned;
     total.transport_lookup_probes += one.transport_lookup_probes;
+    total.transport_lookup_calls += one.transport_lookup_calls;
+    total.transport_lookup_skipped_onboard += one.transport_lookup_skipped_onboard;
+    total.transport_bound_prunes += one.transport_bound_prunes;
+    total.profile_start_labels += one.profile_start_labels;
     total.footpath_edges_examined += one.footpath_edges_examined;
     total.walking_heap_pushes += one.walking_heap_pushes;
     total.labels_improved += one.labels_improved;
@@ -323,7 +354,7 @@ fn timetable_start_events(
     arrive_by: bool,
     stats: &mut RaptorStats,
     stop_at: Instant,
-) -> Vec<i64> {
+) -> Vec<StartLabel> {
     // Do not enqueue a fake service at the requested timestamp: an empty
     // initial window must advance to the first actual boarding/alighting.
     let mut events = Vec::new();
@@ -432,7 +463,12 @@ fn timetable_start_events(
                             if at_origin >= reference.min(boundary)
                                 && at_origin <= reference.max(boundary)
                             {
-                                events.push(at_origin);
+                                events.push(StartLabel {
+                                    time_at_start: at_origin,
+                                    time_at_stop: event,
+                                    stop: endpoint.stop,
+                                    via_state: 0,
+                                });
                             }
                         }
                     },
@@ -440,7 +476,7 @@ fn timetable_start_events(
             }
         }
     }
-    events.sort_unstable();
+    events.sort_unstable_by_key(|s| (s.time_at_start, s.stop.0, s.time_at_stop));
     events.dedup();
     if arrive_by {
         events.reverse();
@@ -521,9 +557,12 @@ pub(crate) fn route_profile_with_stats_precomputed(
         &mut stats,
         profile_deadline,
     );
-    let mut examined = 0usize;
     let mut batches = 0usize;
-    stats.profile_events_enumerated = events.len() as u64;
+    stats.profile_events_enumerated += events
+        .iter()
+        .map(|s| s.time_at_start)
+        .collect::<std::collections::HashSet<_>>()
+        .len() as u64;
 
     let mut q = request.clone();
     // Nigiri keeps the full max_travel_time for long-distance searches and
@@ -553,19 +592,18 @@ pub(crate) fn route_profile_with_stats_precomputed(
             stats.profile_budget_exhausted = true;
             break;
         }
-        let previous = examined;
-        while examined < events.len() {
-            let event = events[examined];
-            if event < interval.from || event > interval.to {
-                break;
-            }
-            examined += 1;
-        }
-        if examined > previous {
-            let mut batch = events[previous..examined].to_vec();
-            batch.sort_unstable();
-            state.extend(tt, &q, &batch)?;
-        }
+        // Nigiri's extra on-trip boundary start primes the persistent skyline.
+        // Our intervals are inclusive seconds, so use the first instant outside.
+        let boundary_start = if arrive_by {
+            interval.from.saturating_sub(1)
+        } else {
+            interval.to.saturating_add(1)
+        };
+        events.extend(StartLabel::point(&q, boundary_start, arrive_by));
+        stats.profile_boundary_events += 1;
+        let scan_started = Instant::now();
+        state.extend_starts(tt, &q, &events)?;
+        stats.profile_compact_ms += scan_started.elapsed().as_secs_f64() * 1_000.0;
         batches += 1;
         transit = route_diverse_pareto(
             state
@@ -601,17 +639,14 @@ pub(crate) fn route_profile_with_stats_precomputed(
         if next == interval {
             break;
         }
-        // For forward queries, extend to later events in ascending order;
-        // for arrive-by queries, append earlier events in descending order.
-        // Each new batch is disjoint except for its inclusive boundary.
-        // This maintains monotone anchor order without re-enumerating the
-        // entire timetable on every interval extension.
+        // Only enumerate the newly added inclusive interval. The state resets
+        // its persistent arrivals when the next batch reverses anchor order.
         let (new_from, new_to) = if arrive_by {
-            (next.from, interval.from)
+            (next.from, interval.from.saturating_sub(1))
         } else {
-            (interval.to, next.to)
+            (interval.to.saturating_add(1), next.to)
         };
-        let new_events = timetable_start_events(
+        events = timetable_start_events(
             tt,
             request,
             new_from,
@@ -620,61 +655,45 @@ pub(crate) fn route_profile_with_stats_precomputed(
             &mut stats,
             profile_deadline,
         );
-        for event in new_events {
-            if events.last().copied() != Some(event) {
-                events.push(event);
-            }
-        }
-        stats.profile_events_enumerated = events.len() as u64;
+        stats.profile_events_enumerated += events
+            .iter()
+            .map(|s| s.time_at_start)
+            .collect::<std::collections::HashSet<_>>()
+            .len() as u64;
         interval = next;
         stats.profile_interval_extensions += 1;
     }
-    let accumulated = state.stats().clone();
-    accumulate_stats(&mut stats, accumulated.clone());
-    stats.profile_anchor_events += accumulated.profile_anchor_events;
-    stats.profile_budget_exhausted |= accumulated.profile_budget_exhausted;
-    // Always allow a bounded point-RAPTOR recovery if a compact search found
-    // no valid journey, even when the compact search reports exhaustion.
-    // Never silently drop a usable timetable result on a path-work limit.
+    // Recovery uses the same compact kernel and immutable calendar index.
+    // Keep its time separate: no old full-Label-array point solver is invoked.
     if transit.is_empty()
         && Instant::now() < deadline
         && !request.access.is_empty()
         && !request.egress.is_empty()
     {
-        let mut fallback = request.clone();
-        fallback.direct_walk_seconds = None;
-        // Keep point recovery's horizon consistent with the pre-trip RAPTOR
-        // worst-time-at-destination bound. Otherwise a slow fallback journey
-        // bypasses the competitiveness check already used by the profile.
-        fallback.max_duration_seconds = q.max_duration_seconds;
-        if let Some(direct) = request.direct_walk_seconds {
-            fallback.max_duration_seconds = fallback.max_duration_seconds.min(direct.max(1));
-        }
-        // Nigiri's on-trip fallback searches from the requested reference
-        // instant. The first enumerated start event may be hours later or
-        // earlier and is not a valid replacement for the user's query time.
-        fallback.departure_unix_seconds = reference;
-        let (candidates, one) = if arrive_by {
-            raptor_arrive_by::route_arrive_by_with_stats_deadline(tt, &fallback, deadline)?
-        } else {
-            raptor_query::route_with_stats_deadline(tt, &fallback, deadline)?
-        };
+        let recovery_started = Instant::now();
         stats.profile_fallback_searches += 1;
-        stats.profile_budget_exhausted |= one.profile_budget_exhausted;
-        accumulate_stats(&mut stats, one);
-        transit.extend(candidates.into_iter().filter(|j| {
-            let t = if arrive_by {
-                j.arrival_unix_seconds
-            } else {
-                j.departure_unix_seconds
-            };
-            t.abs_diff(reference) <= u64::from(options.max_search_window_seconds)
-                && j.arrival_unix_seconds
-                    .saturating_sub(j.departure_unix_seconds)
-                    <= i64::from(options.max_journey_duration_seconds)
-        }));
-        transit = route_diverse_pareto(transit);
+        state.recover_point(tt, &q, reference, deadline)?;
+        stats.profile_fallback_ms += recovery_started.elapsed().as_secs_f64() * 1_000.0;
+        transit = state
+            .result()
+            .into_iter()
+            .filter(|j| {
+                let t = if arrive_by {
+                    j.arrival_unix_seconds
+                } else {
+                    j.departure_unix_seconds
+                };
+                t.abs_diff(reference) <= u64::from(options.max_search_window_seconds)
+                    && j.arrival_unix_seconds
+                        .saturating_sub(j.departure_unix_seconds)
+                        <= i64::from(options.max_journey_duration_seconds)
+            })
+            .collect();
     }
+    let accumulated = state.stats().clone();
+    stats.profile_anchor_events += accumulated.profile_anchor_events;
+    stats.profile_budget_exhausted |= accumulated.profile_budget_exhausted;
+    accumulate_stats(&mut stats, accumulated);
 
     let total_before_filter = transit.len();
     transit = filter_extreme_durations(transit, options, arrive_by);
@@ -845,9 +864,9 @@ mod tests {
             &mut stats,
             Instant::now() + Duration::from_secs(5),
         );
-        assert!(!events.contains(&reference));
+        assert!(events.iter().all(|s| s.time_at_start != reference));
         assert!(!events.is_empty());
-        assert!(events[0] > reference + 15 * 60);
+        assert!(events[0].time_at_start > reference + 15 * 60);
     }
 
     #[test]
@@ -904,7 +923,11 @@ mod tests {
     fn tomorrow_daily_train_is_not_lost_to_six_hour_point_horizon() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        assert!(raptor_query::route(&tt, &request()).unwrap().is_empty());
+        assert!(
+            crate::routing_common::raptor_query::route(&tt, &request())
+                .unwrap()
+                .is_empty()
+        );
 
         let (journeys, stats) = route_profile_with_stats(
             &tt,

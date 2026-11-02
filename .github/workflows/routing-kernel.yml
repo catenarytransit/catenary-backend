@@ -1,0 +1,19 @@
+name: Routing kernel
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  routing:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/raptor-check
+      - name: Test production routing modules
+        run: cargo test --locked --manifest-path tools/raptor-check/Cargo.toml
+      - name: Test optimized routing modules
+        run: cargo test --locked --release --manifest-path tools/raptor-check/Cargo.toml
