@@ -305,6 +305,8 @@ pub mod gtfs {
             interpolated_time_since_start -> Nullable<Int4>,
             timepoint -> Nullable<Bool>,
             stop_headsign_idx -> Nullable<Int2>,
+            pickup_type -> Int2,
+            drop_off_type -> Int2,
         }
     }
 
