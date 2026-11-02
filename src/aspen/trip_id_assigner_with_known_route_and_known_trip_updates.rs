@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use catenary::aspen_dataset::GtfsRtType;
-use catenary::compact_formats::CompactFeedMessage;
+use catenary::compact_rt_v2::CompactFeedMessageV2;
 use catenary::models::{CompressedTrip, ItineraryPatternMeta, ItineraryPatternRow, Stop};
 use catenary::postgres_tools::CatenaryPostgresPool;
 
@@ -151,7 +151,7 @@ fn get_expected_trip_position(
 }
 
 pub async fn assign_trips_for_dresden(
-    authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
+    authoritative_gtfs_rt: &Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     conn: &mut diesel_async::AsyncPgConnection,
 ) -> Result<HashMap<String, String>, Box<dyn std::error::Error + Send + Sync>> {
     use log::debug;
@@ -168,7 +168,7 @@ pub async fn assign_trips_for_dresden(
             let msg_val = Arc::clone(msg.get());
             debug!(
                 "Found 'f-tlms~rt' vehicle positions feed with {} entities",
-                msg_val.entity.len()
+                msg_val.entity_len()
             );
             msg_val
         }
@@ -179,7 +179,7 @@ pub async fn assign_trips_for_dresden(
     };
 
     let mut active_route_ids = HashSet::new();
-    for entity in &feed_msg.entity {
+    for entity in feed_msg.entities().iter() {
         if let Some(vehicle) = &entity.vehicle {
             if let Some(trip) = &vehicle.trip {
                 if let Some(route_id) = &trip.route_id {
@@ -347,9 +347,9 @@ pub async fn assign_trips_for_dresden(
         let delfi_msg = delfi_msg.get();
         debug!(
             "Found 'f-delfi~de~motis~rt' trip updates feed with {} entities",
-            delfi_msg.entity.len()
+            delfi_msg.entity_len()
         );
-        for entity in &delfi_msg.entity {
+        for entity in delfi_msg.entities().iter() {
             if let Some(tu) = &entity.trip_update {
                 if let Some(trip_id) = &tu.trip.trip_id {
                     let delay = tu
@@ -406,7 +406,7 @@ pub async fn assign_trips_for_dresden(
 
         gc_history(&mut history_lock, current_time_ms);
 
-        for entity in &feed_msg.entity {
+        for entity in feed_msg.entities().iter() {
             if let Some(vehicle) = &entity.vehicle {
                 let vehicle_id = match &vehicle.vehicle {
                     Some(desc) => match &desc.id {

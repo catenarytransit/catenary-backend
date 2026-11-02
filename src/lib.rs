@@ -101,6 +101,7 @@ pub mod agency_specific_types;
 pub mod aspen_dataset;
 pub mod catenaryconfig;
 pub mod compact_formats;
+pub mod compact_rt_v2;
 pub mod connections_lookup;
 pub mod etcd_cache;
 pub mod genentech_auth;

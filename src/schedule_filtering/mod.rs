@@ -76,14 +76,18 @@ pub fn include_only_route_types(
 
     // remove data that are not needed
 
-    gtfs.routes.retain(|route_id, _| route_ids_to_keep.contains(route_id));
+    gtfs.routes
+        .retain(|route_id, _| route_ids_to_keep.contains(route_id));
 
-    gtfs.trips.retain(|trip_id, _| trips_to_keep.contains(trip_id));
+    gtfs.trips
+        .retain(|trip_id, _| trips_to_keep.contains(trip_id));
 
     if (delete_shapes_and_stops) {
-        gtfs.stops.retain(|stop_id, _| keep_stop_ids.contains(stop_id));
+        gtfs.stops
+            .retain(|stop_id, _| keep_stop_ids.contains(stop_id));
 
-        gtfs.shapes.retain(|shape_id, _| keep_shapes.contains(shape_id));
+        gtfs.shapes
+            .retain(|shape_id, _| keep_shapes.contains(shape_id));
     }
 
     gtfs

@@ -75,7 +75,7 @@ use std::error::Error;
 mod async_threads_alpenrose;
 mod metrolink_california_additions;
 use crate::id_cleanup::gtfs_rt_correct_route_id_string;
-use catenary::compact_formats::CompactFeedMessage;
+use catenary::compact_rt_v2::CompactFeedMessageV2;
 use catenary::parse_gtfs_rt_message;
 use rand::Rng;
 use std::collections::{HashMap, HashSet};
@@ -129,7 +129,8 @@ pub struct AspenServer {
     pub authoritative_trajectory_data_store:
         Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>>,
     // Backed up in redis as well, program can be shut down and restarted without data loss
-    pub authoritative_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
+    pub authoritative_gtfs_rt_store:
+        Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     pub conn_pool: Arc<CatenaryPostgresPool>,
     pub authoritative_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
@@ -139,7 +140,7 @@ pub struct AspenServer {
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
     pub backup_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
-    pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
+    pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     pub backup_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
     pub etcd_addresses: Arc<Vec<String>>,
@@ -557,7 +558,7 @@ impl AspenRpc for AspenServer {
 
         match pair {
             Some(pair) => {
-                let message: &CompactFeedMessage = pair.get().as_ref();
+                let message: &CompactFeedMessageV2 = pair.get().as_ref();
                 let message = message.to_feed_message();
 
                 Some(message.encode_to_vec())
@@ -579,7 +580,7 @@ impl AspenRpc for AspenServer {
 
         match pair {
             Some(pair) => {
-                let message: &CompactFeedMessage = pair.get().as_ref();
+                let message: &CompactFeedMessageV2 = pair.get().as_ref();
                 let message = message.to_feed_message();
 
                 let mut d = flate2::write::ZlibEncoder::new(Vec::new(), Compression::default());
@@ -1226,7 +1227,7 @@ impl AspenRpc for AspenServer {
 
             if new_data || chateau_id == "uc~irvine~anteater~express" {
                 if let Some(vehicles_gtfs_rt) = vehicles_gtfs_rt {
-                    let compact = Arc::new(CompactFeedMessage::from_feed_message(
+                    let compact = Arc::new(CompactFeedMessageV2::from_feed_message(
                         vehicles_gtfs_rt.clone(),
                     ));
                     self.authoritative_gtfs_rt_store
@@ -1239,8 +1240,9 @@ impl AspenRpc for AspenServer {
                 }
 
                 if let Some(trip_gtfs_rt) = trips_gtfs_rt {
-                    let compact =
-                        Arc::new(CompactFeedMessage::from_feed_message(trip_gtfs_rt.clone()));
+                    let compact = Arc::new(CompactFeedMessageV2::from_feed_message(
+                        trip_gtfs_rt.clone(),
+                    ));
                     self.authoritative_gtfs_rt_store
                         .entry_async((realtime_feed_id.clone(), GtfsRtType::TripUpdates))
                         .await
@@ -1251,7 +1253,7 @@ impl AspenRpc for AspenServer {
                 }
 
                 if let Some(alerts_gtfs_rt) = alerts_gtfs_rt {
-                    let compact = Arc::new(CompactFeedMessage::from_feed_message(
+                    let compact = Arc::new(CompactFeedMessageV2::from_feed_message(
                         alerts_gtfs_rt.clone(),
                     ));
                     self.authoritative_gtfs_rt_store
@@ -1992,7 +1994,7 @@ impl AspenRpc for AspenServer {
                     .await
                 {
                     let compact_feed_msg = guard.get();
-                    for entity in &compact_feed_msg.entity {
+                    for entity in compact_feed_msg.entities().iter() {
                         if entity.trip_update.is_some() {
                             trip_update_count += 1;
                         }
@@ -2706,12 +2708,12 @@ fn contains_new_data(
 }
 
 async fn upsert_compact_feed(
-    store: &SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>,
+    store: &SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>,
     realtime_feed_id: &str,
     feed_type: GtfsRtType,
     feed: FeedMessage,
 ) {
-    let compact = Arc::new(CompactFeedMessage::from_feed_message(feed));
+    let compact = Arc::new(CompactFeedMessageV2::from_feed_message(feed));
 
     store
         .entry_async((realtime_feed_id.to_string(), feed_type))

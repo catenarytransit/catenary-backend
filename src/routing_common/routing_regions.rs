@@ -10,8 +10,8 @@ use std::str::FromStr;
 use anyhow::{Context, Result, bail, ensure};
 use geojson::{Feature, GeoJson, Geometry, Value};
 use postgres::Client;
-use std::time::Instant;
 use serde::{Deserialize, Serialize};
+use std::time::Instant;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -391,7 +391,9 @@ pub fn resolve_with_progress(
         step.elapsed()
     ));
 
-    progress(&format!("querying PostGIS for chateaux intersecting region {id}"));
+    progress(&format!(
+        "querying PostGIS for chateaux intersecting region {id}"
+    ));
     let step = Instant::now();
     let chateaux = select_chateaux(client, &geometry)?;
     progress(&format!(

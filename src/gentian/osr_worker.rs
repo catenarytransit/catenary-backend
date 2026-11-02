@@ -500,7 +500,10 @@ mod tests {
         let config: Config = toml::from_str("[osm_manager]\ndata_dir = '/tmp/osr-data'\n")?;
         assert!(config.osr_worker.excluded_regions.is_empty());
         assert!(config.osr_worker.region_load_modes.is_empty());
-        assert_eq!(RegionLoadMode::default().ffi_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
+        assert_eq!(
+            RegionLoadMode::default().ffi_mode(),
+            ffi::MetadataLoadMode::ReadIntoMemory
+        );
         Ok(())
     }
 
@@ -509,10 +512,22 @@ mod tests {
         let config: Config = toml::from_str(
             "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker.region_load_modes]\n'asia/japan' = 'mmap'\n'europe/germany' = 'read'\n",
         )?;
-        assert_eq!(config.osr_worker.region_load_modes["asia/japan"], RegionLoadMode::Mmap);
-        assert_eq!(config.osr_worker.region_load_modes["europe/germany"], RegionLoadMode::Read);
-        assert_eq!(config.osr_worker.region_load_modes["asia/japan"].ffi_mode(), ffi::MetadataLoadMode::MmapPrivate);
-        assert_eq!(config.osr_worker.region_load_modes["europe/germany"].ffi_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
+        assert_eq!(
+            config.osr_worker.region_load_modes["asia/japan"],
+            RegionLoadMode::Mmap
+        );
+        assert_eq!(
+            config.osr_worker.region_load_modes["europe/germany"],
+            RegionLoadMode::Read
+        );
+        assert_eq!(
+            config.osr_worker.region_load_modes["asia/japan"].ffi_mode(),
+            ffi::MetadataLoadMode::MmapPrivate
+        );
+        assert_eq!(
+            config.osr_worker.region_load_modes["europe/germany"].ffi_mode(),
+            ffi::MetadataLoadMode::ReadIntoMemory
+        );
         assert!(toml::from_str::<Config>(
             "[osm_manager]\ndata_dir = '/tmp/osr-data'\n\n[osr_worker.region_load_modes]\n'asia/japan' = 'invalid'\n",
         ).is_err());
@@ -689,12 +704,18 @@ mod tests {
         let original = graphs["test"].as_ref().context("null test router")?;
         let expected_nodes = original.node_count();
         ensure!(expected_nodes > 0, "test graph has no nodes");
-        assert_eq!(original.metadata_load_mode(), ffi::MetadataLoadMode::ReadIntoMemory);
+        assert_eq!(
+            original.metadata_load_mode(),
+            ffi::MetadataLoadMode::ReadIntoMemory
+        );
 
         let mapped_modes = BTreeMap::from([("test".to_owned(), RegionLoadMode::Mmap)]);
         let mapped = open_graphs(&paths, &mapped_modes)?;
         let mmap_router = mapped["test"].as_ref().context("null mapped router")?;
-        assert_eq!(mmap_router.metadata_load_mode(), ffi::MetadataLoadMode::MmapPrivate);
+        assert_eq!(
+            mmap_router.metadata_load_mode(),
+            ffi::MetadataLoadMode::MmapPrivate
+        );
         assert_eq!(mmap_router.node_count(), expected_nodes);
         assert_eq!(mmap_router.way_count(), original.way_count());
 

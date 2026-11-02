@@ -71,9 +71,8 @@ fn index_trip_update_id(
         .or_insert(vec![entity_id]);
 }
 
-use catenary::compact_formats::{
-    CompactFeedMessage, CompactItineraryPatternRow, CompactStopTimeUpdate,
-};
+use catenary::compact_formats::{CompactItineraryPatternRow, CompactStopTimeUpdate};
+use catenary::compact_rt_v2::CompactFeedMessageV2;
 use lazy_static::lazy_static;
 
 use crate::async_threads_alpenrose::set_stage;
@@ -552,7 +551,7 @@ pub async fn new_rt_data(
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>,
     >,
-    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessage>>>,
+    authoritative_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     chateau_id: &str,
     realtime_feed_id: &str,
     has_vehicles: bool,
@@ -915,7 +914,7 @@ pub async fn new_rt_data(
     // chateau, so checking only the feed that triggered this job is not enough.
     // Processing these captured Arcs also guarantees that the fingerprint below
     // describes the exact alert inputs used by this rebuild.
-    let mut alert_feed_snapshot: AHashMap<String, Arc<CompactFeedMessage>> = AHashMap::new();
+    let mut alert_feed_snapshot: AHashMap<String, Arc<CompactFeedMessageV2>> = AHashMap::new();
     let mut alert_input_hasher = Sha256::new();
 
     for source_realtime_feed_id in this_chateau.realtime_feeds.iter().flatten() {
@@ -928,7 +927,7 @@ pub async fn new_rt_data(
             let alert_feed = Arc::clone(alert_feed.get());
             alert_input_hasher.update([1_u8]);
 
-            for entity in &alert_feed.entity {
+            for entity in alert_feed.entities().iter() {
                 if let Some(alert) = &entity.alert {
                     hash_len_prefixed(&mut alert_input_hasher, entity.id.as_bytes());
                     let encoded = alert.encode_to_vec();
@@ -1049,7 +1048,7 @@ pub async fn new_rt_data(
             let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
             let cpu_started = current_thread_cpu_time();
 
-            for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+            for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entities().iter() {
                 if let Some(vehicle_pos) = &vehicle_entity.vehicle {
                     let assigned_trip_id =
                         if chateau_id == "deutschland" && realtime_feed_id == "f-tlms~rt" {
@@ -1081,7 +1080,7 @@ pub async fn new_rt_data(
             let trip_gtfs_rt_for_feed_id = trip_gtfs_rt_for_feed_id.get();
             let cpu_started = current_thread_cpu_time();
 
-            for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
+            for trip_entity in trip_gtfs_rt_for_feed_id.entities().iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
                         trip_ids_to_lookup.insert(trip_id.clone());
@@ -1115,7 +1114,7 @@ pub async fn new_rt_data(
             let alert_gtfs_rt_for_feed_id = alert_gtfs_rt_for_feed_id.get();
             let cpu_started = current_thread_cpu_time();
 
-            for alert_entity in alert_gtfs_rt_for_feed_id.entity.iter() {
+            for alert_entity in alert_gtfs_rt_for_feed_id.entities().iter() {
                 if let Some(alert) = &alert_entity.alert {
                     for entity in alert.informed_entity.iter() {
                         if let Some(trip) = &entity.trip {
@@ -1609,7 +1608,7 @@ pub async fn new_rt_data(
             let cpu_started = current_thread_cpu_time();
             let ref_epoch = trip_gtfs_rt_for_feed_id.reference_epoch;
 
-            for trip_entity in trip_gtfs_rt_for_feed_id.entity.iter() {
+            for trip_entity in trip_gtfs_rt_for_feed_id.entities().iter() {
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
                         if missing_trip_ids.contains(trip_id) {
@@ -2035,7 +2034,7 @@ pub async fn new_rt_data(
                 let vehicle_gtfs_rt_for_feed_id = vehicle_gtfs_rt_for_feed_id.get();
                 let cpu_started = current_thread_cpu_time();
 
-                for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entity.iter() {
+                for vehicle_entity in vehicle_gtfs_rt_for_feed_id.entities().iter() {
                     if let Some(vehicle_pos) = &vehicle_entity.vehicle {
                         let assigned_trip_id = if chateau_id == "deutschland"
                             && realtime_feed_id == "f-tlms~rt"
@@ -2392,7 +2391,7 @@ pub async fn new_rt_data(
                 let mut trip_update_cpu = TripUpdateCpuTimings::default();
                 let ref_epoch = trip_updates_gtfs_rt_for_feed_id.reference_epoch;
 
-                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entity.iter() {
+                for trip_update_entity in trip_updates_gtfs_rt_for_feed_id.entities().iter() {
                     let mut trip_update_phase_started = current_thread_cpu_time();
                     if let Some(trip_update) = &trip_update_entity.trip_update {
                         let trip_id = trip_update.trip.trip_id.clone();
@@ -3892,7 +3891,7 @@ pub async fn new_rt_data(
                 {
                     let cpu_started = current_thread_cpu_time();
 
-                    for alert_entity in alert_updates_gtfs_rt.entity.iter() {
+                    for alert_entity in alert_updates_gtfs_rt.entities().iter() {
                         if let Some(alert) = &alert_entity.alert {
                             let alert_id = Arc::from(alert_entity.id.as_str());
                             let aspenised_alert: AspenisedAlert = (*alert.clone()).into();
@@ -4317,7 +4316,7 @@ pub async fn new_rt_data(
             .await
         {
             let cpu_started = current_thread_cpu_time();
-            for entity in &vehicle_feed.get().entity {
+            for entity in vehicle_feed.get().entities().iter() {
                 if let Some(vehicle_position) = aspenised_vehicle_positions.get(entity.id.as_str())
                 {
                     history_vehicle_positions.insert(entity.id.clone(), vehicle_position.clone());
@@ -4332,7 +4331,7 @@ pub async fn new_rt_data(
             .await
         {
             let cpu_started = current_thread_cpu_time();
-            for entity in &trip_feed.get().entity {
+            for entity in trip_feed.get().entities().iter() {
                 if let Some(trip_update) = trip_updates.get(entity.id.as_str()) {
                     history_trip_updates
                         .insert(CompactString::new(&entity.id), trip_update.clone());
