@@ -225,7 +225,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
         // PONG: fold and save ping's bounds BEFORE reversing/resetting the
         // shared state. Most transfers first, then retain arrivals between
         // the remaining pong runs exactly as raptor::next_start_time does.
-        let ping_bounds = state.fill_ping_bounds(tt, ping_results[0].boardings);
+        let ping_bounds = state.fill_ping_bounds(ping_results[0].boardings);
         state.flip_point_direction(&mut other_lower_bounds);
         state.set_ping_bounds(ping_bounds);
         for ping_j in &mut ping_results {
