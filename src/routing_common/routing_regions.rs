@@ -217,7 +217,7 @@ fn valid_country_code(s: &str) -> bool {
     s.len() == 2 && s.bytes().all(|b| b.is_ascii_alphabetic())
 }
 
-fn feature_country_code(feature: &Feature) -> Option<String> {
+pub(super) fn feature_country_code(feature: &Feature) -> Option<String> {
     let properties = feature.properties.as_ref()?;
     for key in ["ISO3166-1-Alpha-2", "ISO_A2", "ISO_A2_EH", "iso_a2"] {
         if let Some(code) = properties.get(key).and_then(serde_json::Value::as_str) {

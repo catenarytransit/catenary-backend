@@ -12,3 +12,17 @@ geojson = ["routing_regions/socal.geojson"]
 
 # For countries instead, set country_boundaries above to a locally available
 # ISO 3166-1 Alpha-2 GeoJSON collection and use countries = ["US"].
+
+# Edelweiss first uses exact polygon matches (including polygon edges).
+# For country-based regions it can then select the nearest region within 10 km.
+# The full country_boundaries collection is used to determine the containing or
+# nearest country, including countries without compiled timetables. A neighboring
+# country's land or nearer coastline blocks fallback to the wrong country;
+# ambiguous offshore ties within 1 meter are rejected.
+# Keep all countries in this file, not just countries with compiled regions.
+# Features without recognized ISO codes act as blockers for buffered selection.
+# Custom geojson-only regions keep exact transit matching; buffered transit
+# matching requires explicit countries and country_boundaries. OSR graph coverage
+# independently uses exact matching followed by a nearest-graph 10 km fallback.
+# This changes endpoint selection only; it does not expand compiled timetables
+# or permit journeys between different selected transit regions.
