@@ -4,10 +4,13 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, ensure};
 use catenary::routing_common::feed_policy::{excluded_routing_source, validate_routing_sources};
-use catenary::routing_common::routing_regions::{RegionSelection, RoutingRegionsConfig, resolve};
+use catenary::routing_common::routing_regions::{
+    RegionSelection, RoutingRegionsConfig, resolve_with_progress,
+};
 use catenary::routing_common::timetable::{MAX_DAYS, TimetableOwned};
 use chrono::Utc;
 use clap::Parser;
@@ -213,19 +216,51 @@ fn main() -> Result<()> {
         );
     }
     let mut selection = if let Some(id) = &args.region {
+        let startup = Instant::now();
+        eprintln!(
+            "Gentian startup: reading routing regions configuration {}",
+            args.regions_config.display()
+        );
+        let step = Instant::now();
         let config = RoutingRegionsConfig::load(&args.regions_config)?;
+        eprintln!("Gentian startup: loaded routing regions configuration in {:?}", step.elapsed());
+
         let url = args
             .database_url
             .as_deref()
             .context("--database-url or DATABASE_URL is required with --region")?;
+        eprintln!("Gentian startup: connecting to PostgreSQL for region {id}");
+        let step = Instant::now();
         let mut client = Client::connect(url, NoTls)
             .context("connecting to Postgres to resolve routing region")?;
-        Some(resolve(&config, &args.regions_config, id, &mut client)?)
+        eprintln!("Gentian startup: connected to PostgreSQL in {:?}", step.elapsed());
+
+        let resolved = resolve_with_progress(
+            &config,
+            &args.regions_config,
+            id,
+            &mut client,
+            |stage| eprintln!("Gentian startup: {stage}"),
+        )?;
+        eprintln!(
+            "Gentian startup: region {id} resolved in {:?}",
+            startup.elapsed()
+        );
+        Some(resolved)
     } else {
         None
     };
     if let Some(selection) = selection.as_mut() {
+        let before_chateaux = selection.chateaux.len();
+        let before_sources = selection.sources.len();
         exclude_chateaux(selection);
+        eprintln!(
+            "Gentian startup: excluded {} chateaux and {} sources; {} chateaux and {} sources remain",
+            before_chateaux - selection.chateaux.len(),
+            before_sources - selection.sources.len(),
+            selection.chateaux.len(),
+            selection.sources.len()
+        );
     }
 
     if args.list_chateaux {
