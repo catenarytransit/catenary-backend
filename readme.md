@@ -1,6 +1,6 @@
 ## Architecture
 
-Catenary Backend is a distributed system comprised of microservices operating in Kubernetes. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
+Catenary Backend is a distributed system comprised of microservices. The system is designed for fault tolerance, high-avaliability, and native execution speed in x86-64 using the Rust systems programming language.
 
 The code is heavily commented, go to each folder in src for more information.
 
