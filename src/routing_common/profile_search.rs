@@ -59,11 +59,16 @@ const MAX_SOLVER_HORIZON_SECONDS: u32 = 7 * 86_400;
 
 #[derive(Clone, Copy, Debug)]
 pub struct ProfileOptions {
+    /// Requested timetable interval before any connection-count expansion.
     pub search_window_seconds: u32,
+    /// Classic rRAPTOR expansion limit. PONG follows the timetable horizon
+    /// and shared timeout instead of the interval estimator.
     pub max_search_window_seconds: u32,
     pub min_itineraries: usize,
     pub timeout_seconds: u32,
     pub max_journey_duration_seconds: u32,
+    /// Presentation heuristics for classic rRAPTOR; PONG uses Nigiri's
+    /// strict frontier and requested maximum travel time instead.
     pub extreme_duration_ratio: f64,
     pub extreme_duration_slack_seconds: u32,
     pub comparison_window_seconds: u32,

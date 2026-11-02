@@ -54,6 +54,13 @@ pub struct RaptorStats {
     pub profile_boundary_events: u64,
     pub profile_compact_ms: f64,
     pub profile_fallback_ms: f64,
+    /// PONG cursor advances (each iteration contains one ping and its pongs).
+    pub pong_iterations: u64,
+    pub pong_forward_searches: u64,
+    pub pong_backward_searches: u64,
+    /// Completed half-open PONG departure/arrival interval in Unix seconds.
+    pub pong_interval_from: Option<i64>,
+    pub pong_interval_to: Option<i64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
