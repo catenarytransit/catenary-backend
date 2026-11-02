@@ -1582,9 +1582,16 @@ impl ProfileSearchState {
         // Preserve the compact arrival skyline across monotone profile
         // anchors exactly as Nigiri's round_times_ does. The current
         // generation-tagged states act like Nigiri's event-local best_/tmp_.
+        // Nigiri's execute() bounds all round iteration by this execution's
+        // max_transfers, not the shared state's capacity. A pong can have a
+        // smaller boarding budget than the ping that allocated the buffers.
+        // Only the active rows have reached-stop lists; leave higher shared
+        // rows intact for subsequent executions.
         {
-            for k in 0..self.rounds.len() {
-                for &stop in &reached_ready[k] {
+            for (k, (ready_stops, ride_stops)) in
+                reached_ready.iter().zip(&reached_rides).enumerate()
+            {
+                for &stop in ready_stops {
                     if let Some(value) = self.rounds[k].get(Stage::Ready, stop, generation) {
                         let current = &mut self.profile_ready[k][stop];
                         if better(value.time, *current, reverse) {
@@ -1592,7 +1599,7 @@ impl ProfileSearchState {
                         }
                     }
                 }
-                for &stop in &reached_rides[k] {
+                for &stop in ride_stops {
                     if let Some(value) = self.rounds[k].get(Stage::Ride, stop, generation) {
                         let current = &mut self.profile_ride[k][stop];
                         if better(value.time, *current, reverse) {
@@ -1939,6 +1946,82 @@ mod compressed_timetable_profile_tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 36 * 3_600,
+        }
+    }
+
+    #[test]
+    fn point_execution_can_reduce_the_shared_boarding_budget_in_both_directions() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let departure = base + 9 * 3_600;
+        let arrival = base + 17 * 3_600;
+        let mut q = query();
+        q.max_boardings = 3;
+
+        for reverse in [false, true] {
+            let (anchor, destination_bound) = if reverse {
+                (arrival, departure)
+            } else {
+                (departure, arrival)
+            };
+            let mut state = ProfileSearchState::new(
+                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
+            )
+            .unwrap();
+            // PONG retains shared buffers while executing successively
+            // smaller candidate transfer budgets. The last call has two
+            // reached-stop rows inside a state with four allocated rows.
+            for budget in [3, 2, 1] {
+                let inactive_ready = state.profile_ready[budget + 1..].to_vec();
+                let inactive_ride = state.profile_ride[budget + 1..].to_vec();
+                let journeys = state
+                    .execute_point(&tt, &q, anchor, budget, destination_bound)
+                    .unwrap();
+                assert!(journeys.iter().any(|j| {
+                    j.boardings == 1
+                        && j.departure_unix_seconds == departure
+                        && j.arrival_unix_seconds == arrival
+                }));
+                assert_eq!(&state.profile_ready[budget + 1..], inactive_ready.as_slice());
+                assert_eq!(&state.profile_ride[budget + 1..], inactive_ride.as_slice());
+            }
+        }
+    }
+
+    #[test]
+    fn pong_direct_train_uses_a_smaller_budget_than_the_shared_state() {
+        use crate::routing_common::pong::route_pong_with_stats_precomputed;
+        use crate::routing_common::profile_search::ProfileOptions;
+
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let departure = base + 9 * 3_600;
+        let arrival = base + 17 * 3_600;
+        let mut q = query();
+        q.max_boardings = 3;
+        for (arrive_by, reference) in [(false, departure), (true, arrival)] {
+            q.departure_unix_seconds = reference;
+            let (journeys, stats) = route_pong_with_stats_precomputed(
+                &tt,
+                &q,
+                ProfileOptions {
+                    search_window_seconds: 1,
+                    min_itineraries: 1,
+                    ..ProfileOptions::default()
+                },
+                arrive_by,
+                None,
+            )
+            .unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert_eq!(journeys[0].boardings, 1);
+            assert_eq!(journeys[0].departure_unix_seconds, departure);
+            assert_eq!(journeys[0].arrival_unix_seconds, arrival);
+            assert!(stats.pong_forward_searches >= 1);
+            assert!(stats.pong_backward_searches >= 1);
+            assert!(!stats.profile_budget_exhausted);
         }
     }
 
