@@ -646,6 +646,125 @@ mod tests {
         assert_eq!(v2.to_feed_message(), raw);
     }
 
+    /// Verify that the common signed two-byte representation covers nine
+    /// hours in either direction without losing one-second resolution.
+    #[test]
+    fn nine_hour_delays_use_two_byte_signed_storage() {
+        let mut raw = test_message();
+        let trip = raw.entity[0].trip_update.as_mut().unwrap();
+        trip.delay = Some(-NINE_HOURS_SECONDS);
+        let stop = trip.stop_time_update.first_mut().unwrap();
+        stop.arrival.as_mut().unwrap().delay = Some(NINE_HOURS_SECONDS);
+        stop.departure.as_mut().unwrap().delay = Some(-1);
+
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(compact.features.contains(RtFeatures::DELAY));
+        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I16(_)));
+        assert!(matches!(feed.trip_delay, CompactDelayColumn::I16(_)));
+        assert_eq!(size_of::<i16>(), 2);
+        assert_eq!(compact.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn exceptional_event_delay_promotes_all_delay_columns_to_i24() {
+        let mut raw = test_message();
+        let trip = raw.entity[0].trip_update.as_mut().unwrap();
+        trip.delay = Some(15);
+        trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
+            Some(NINE_HOURS_SECONDS + 1);
+
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
+        assert_eq!(compact.to_feed_message(), raw);
+
+        // Negative exceptions must also promote the whole feed.
+        let trip = raw.entity[0].trip_update.as_mut().unwrap();
+        trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
+            Some(-NINE_HOURS_SECONDS - 1);
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+        assert_eq!(compact.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn trip_only_delay_is_preserved_and_sets_feature() {
+        let mut raw = test_message();
+        let trip = raw.entity[0].trip_update.as_mut().unwrap();
+        trip.delay = Some(0);
+        for stop in &mut trip.stop_time_update {
+            if let Some(arrival) = &mut stop.arrival {
+                arrival.delay = None;
+            }
+            if let Some(departure) = &mut stop.departure {
+                departure.delay = None;
+            }
+        }
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        assert!(compact.features.contains(RtFeatures::DELAY));
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(feed.stops.events.delay.is_absent());
+        assert!(matches!(feed.trip_delay, CompactDelayColumn::I16(_)));
+        assert_eq!(compact.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn i24_bounds_and_i32_overflow_fallback_are_lossless() {
+        for event_delay in [
+            I24_MIN_SECONDS,
+            I24_MAX_SECONDS,
+            I24_MIN_SECONDS - 1,
+            I24_MAX_SECONDS + 1,
+            i32::MIN,
+            i32::MAX,
+        ] {
+            let mut raw = test_message();
+            let trip = raw.entity[0].trip_update.as_mut().unwrap();
+            trip.delay = Some(-12);
+            trip.stop_time_update[0].arrival.as_mut().unwrap().delay =
+                Some(event_delay);
+
+            let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+            let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+                panic!("expected compact trip feed");
+            };
+            if (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&event_delay) {
+                assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I24(_)));
+                assert!(matches!(feed.trip_delay, CompactDelayColumn::I24(_)));
+            } else {
+                assert!(matches!(feed.stops.events.delay, CompactDelayColumn::I32(_)));
+                assert!(matches!(feed.trip_delay, CompactDelayColumn::I32(_)));
+            }
+            assert_eq!(compact.to_feed_message(), raw);
+        }
+    }
+
+    #[test]
+    fn absent_delays_use_no_column_at_all() {
+        let mut raw = test_message();
+        raw.entity[0].trip_update.as_mut().unwrap()
+            .stop_time_update[0].arrival.as_mut().unwrap().delay = None;
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        assert!(!compact.features.contains(RtFeatures::DELAY));
+        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            panic!("expected compact trip feed");
+        };
+        assert!(feed.stops.events.delay.is_absent());
+        assert!(feed.trip_delay.is_absent());
+        assert_eq!(compact.to_feed_message(), raw);
+    }
+
     #[test]
     fn mixed_feed_falls_back_without_discarding_payloads() {
         let mut raw = test_message();
