@@ -209,11 +209,16 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
                 to_stop,
                 seconds,
             } => {
+                let reflexive_change = from_stop == to_stop
+                    && tt.location_transfer_seconds().get(from_stop as usize)
+                        .is_some_and(|&change| change == seconds)
+                    && !tt.station_transfer_rule(LocationIdx(from_stop), LocationIdx(to_stop))
+                        .is_some_and(|rule| rule.prohibited());
                 if stop != Some(from_stop)
-                    || !tt
+                    || !(reflexive_change || tt
                         .footpaths_from(LocationIdx(from_stop))
                         .iter()
-                        .any(|f| f.target().0 == to_stop && f.seconds() == seconds)
+                        .any(|f| f.target().0 == to_stop && f.seconds() == seconds))
                 {
                     return false;
                 }

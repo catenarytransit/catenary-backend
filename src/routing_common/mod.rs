@@ -18,6 +18,7 @@ pub mod ways;
 #[cfg(test)]
 mod graph_tests;
 pub(crate) mod interval_estimate;
+pub(crate) mod pong;
 pub(crate) mod profile_compact;
 pub(crate) mod profile_compact_reconstruct;
 pub mod profile_search;

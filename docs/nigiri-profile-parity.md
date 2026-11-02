@@ -1,91 +1,105 @@
-# Edelweiss profile search and Nigiri
+# Edelweiss and Nigiri routing
 
-The profile start grouping and transport selection are adapted from MOTIS
-Nigiri commit `1ccdf6972b854d17963b1d7843614446824b1e1a`:
+The static timetable implementation is adapted from MOTIS Nigiri commit
+`1ccdf6972b854d17963b1d7843614446824b1e1a`, the revision pinned by MOTIS
+`f2cb2572a1d065f1e312c10e9b3efa010622268a`. The upstream MIT notice is
+preserved in `third_party/nigiri-LICENSE`.
 
-- `src/routing/start_times.cc`: retain start time, stop time, stop, and via state;
-  add an on-trip boundary start to prime the profile arrival skyline.
-- `include/nigiri/routing/search.h`: group equal start times; process forward
-  starts latest first and reverse starts earliest first.
-- `include/nigiri/routing/raptor/raptor.h`: retain one onboard transport per
-  compatible route group; cache its timing pattern; skip lookup when a marked
-  stop cannot improve that transport; binary search the first event day and
-  visit subsequent event days in chronological search order. Prune candidates
-  using their event time plus the destination lower bound before calendar checks.
-- `include/nigiri/event_times.h`: compressed event columns computed from the
-  first departure and an event-major array of timing-pattern offsets.
-- `src/loader/init_finish.cc`: route activity includes calendars shifted to
-  every event-day offset. Lookups test the transport calendar on
-  `start_day = event_day - event_offset.days`.
-- `include/nigiri/loader/get_index.h`: route groups must have sorted time-of-day
-  columns at every event, including events after midnight.
+## PONG timetable requests
 
-The upstream MIT license is in `third_party/nigiri-LICENSE`.
+`route_manager::route_profile_with_access` now dispatches timetable-view
+requests to `pong::route_pong_with_stats_precomputed`, following
+`src/routing/raptor/pong.cc`. Both departure and arrive-by searches use PONG.
 
-## Timetable compatibility
+- Start with the requested window, without `interval_estimator::initial`.
+  With the default five connections, the rRAPTOR estimator would enlarge a
+  15-minute window to six hours and 15 minutes before its first scan.
+- Run a point ping from the cursor, allowing
+  `min(max_travel_time + one day, five days)` of travel and waiting. Do not
+  apply fastest-direct filtering to ping. Sanitize the requested travel-time
+  limit to Nigiri's five-day maximum and boarding budget to 15 rides.
+- Keep ping's strict destination-time/boarding Pareto frontier and process
+  the candidates with the most transfers first.
+- Fold ping's round times from lower to higher boarding counts before
+  resetting the shared state. Pong indexes these bounds by its remaining
+  boarding budget, including Nigiri's transfer-time compensation and loose
+  CPU comparison. Pong's static destination lower bounds are zero.
+- Reverse search direction and run pong from each ping destination, with an
+  inclusive bound at the original ping cursor. Reset arrivals once before
+  the sequence of pongs, not between individual candidates. Match by the
+  ping destination timestamp and exact boarding count.
+- Retain search-oriented start/destination keys separately from physical
+  reconstructed leg times. Mark only matching pong results reconstructed.
+  Update each ping start key from its matching pong destination key.
+- Advance to one second after the first matched departure in forward mode,
+  or one second before the last matched arrival in arrive-by mode. Require
+  strict progress. Nigiri's minute-based cursor step is one exact second in
+  Gentian's second-based format.
+- Continue while the requested window is not covered or
+  `validated_count_including_slow + validated_count_excluding_slow < 2 * min`.
+  Validation uses the opposite-search destination key against the cursor,
+  independently of the reconstructed marker. Stop at the timetable boundary,
+  empty/dominated ping results, or the shared request deadline.
+- Finally discard unmatched/unreconstructed results, results not validated
+  by the cursor, journeys at least as long as fastest-direct, and journeys
+  exceeding the requested travel-time limit. Swap the oriented keys back
+  and sort in requested-direction time order, then boarding count.
+- For forward searches without vias, replace the middle ride in a
+  ride/walk/ride/walk/ride sequence with the earliest feasible direct
+  alternative, as in PONG's `get_earliest_alternative` refinement.
 
-Catenary's v5 mmap format already stores compressed timing profiles and exact
-seconds. It is retained. A cached `TransportIndex`, built once with the region's
-lower-bound topology, transposes distinct timing profiles into compressed
-Nigiri-style event columns. The query clones only an `Arc` to this immutable
-index. No full stop-time matrix or per-query/day active-transport bitset is built.
+The search reuses one set of compact round buffers across both directions.
+It shares the region's immutable transport index and ping lower-bound graph,
+with a saved folded ping-bound matrix. Reverse lower bounds do not require
+another Dijkstra search. OSR access and egress offsets are intermodal, so
+initial footpaths stay disabled in both directions.
 
-Existing Gentian files guarantee elapsed-time FIFO, which does not imply sorted
-time-of-day columns across midnight. The cached view partitions each route into
-compatible groups, retaining original route/transport IDs for reconstruction
-and metadata. Within a group, event-day-offset vectors are also equal so
-multi-day journeys with different running times cannot overtake across days.
-Each group is scanned independently, with one selected onboard transport.
-Existing timetable files therefore do not require regeneration for this change.
+PONG does not enumerate all boarding events in an estimated multi-hour
+interval, reserve time for profile fallback, or add six near-Pareto route
+alternatives. The classic event-driven rRAPTOR entry points remain available
+in `profile_search.rs`. The legacy maximum search-window and extreme-duration
+ratio/slack/comparison options belong to that path; PONG uses Nigiri's
+travel-time, timetable-boundary and timeout rules instead. The minimum
+itinerary count is a minimum, not a hard response limit.
 
-Day splitting uses Euclidean division and remainder in seconds. Overnight trips
-can be boarded after the last vehicle-start calendar day, including boarding on
-the next UTC day while validating the previous day's vehicle calendar.
+## Timetable and feature mapping
 
-## Profile semantics and diagnostics
+Gentian's v5 mmap format and compressed timing profiles retain exact seconds.
+A cached `TransportIndex` transposes distinct timing profiles into event
+columns and partitions routes into compatible FIFO groups. Original
+route/transport IDs and vehicle-start calendars remain authoritative for
+reconstruction and metadata. No timetable regeneration is required.
 
-Real timetable events retain `{time_at_start, time_at_stop, stop, via_state}`.
-Only the stops in an equal-start-time group seed that execution. Via state is
-explicit; nonzero values are rejected because Edelweiss does not yet expose via
-routing. Forward interval searches add a point start at `to + 1 second`, and
-reverse searches at `from - 1 second`: the outside boundary of Catenary's
-inclusive interval. Boundary results prime dominance but are excluded from the
-returned interval. Interval extensions invalidate arrival bounds if anchor order
-reverses, while retaining already reconstructed journeys.
+Day lookup follows `start_day = event_day - event_offset.days`, with
+Euclidean division for overnight and multi-day vehicles. The existing
+calendar selection and compressed event decoding are shared by ping, pong
+and the direct-alternative lookup.
 
-Point recovery uses the same compact kernel and cached index, with fresh profile
-bounds. `profile_compact_ms` and `profile_fallback_ms` distinguish its phases.
-`transport_lookup_calls`, `transport_lookup_skipped_onboard`, and
-`transport_bound_prunes` distinguish expensive lookups from avoided work.
-`profile_start_labels` and `profile_boundary_events` expose profile seeding.
-The existing aggregate counters still include both compact and recovery work.
+The compact kernel has separate physical-arrival and transfer-ready states,
+so ping-bound preparation maps them to Nigiri's transfer-ready round times.
+At locations with pair-specific GTFS restrictions, scalar ping bounds are
+permissive and the existing predecessor/transfer validation decides legality.
+Reflexive station-change legs in the direct refinement are validated as
+station changes without requiring a self-edge in the walking graph.
 
-Catenary's pair-specific GTFS transfer validation, second precision, route-diverse
-presentation policy, and immutable predecessor reconstruction are retained.
-This is an adaptation of the static no-via routing path, not a claim that all
-Nigiri features or its Cista binary format are supported.
+Edelweiss's `Query` exposes static, no-via intermodal routing. Nigiri's GPU,
+realtime, time-dependent offsets/footpaths, via states, transit constraint
+filters and optional slow-direct enrichment are not added by this port.
+The direct-alternative lookup therefore implements the static unconstrained
+branch over the compressed transport index, retaining Catenary's GTFS
+stop-pair restrictions. Street-only journeys remain in the separate direct
+response list.
 
-## Validation
+## Diagnostics and validation status
 
-Run the production routing modules independently of native backend dependencies:
+The routing marker is `compact-raptor-nigiri-pong-v5`. PONG reports
+`pong_iterations`, `pong_forward_searches`, `pong_backward_searches`, and
+`pong_interval_from`/`pong_interval_to` (half-open Unix-second bounds).
+The compact-kernel route, lookup, lower-bound and reconstruction counters
+remain available. A deadline interruption sets `profile_budget_exhausted`;
+partial unmatched point results are not returned as completed journeys.
 
-```sh
-cargo test --manifest-path tools/raptor-check/Cargo.toml
-cargo test --release --manifest-path tools/raptor-check/Cargo.toml
-```
-
-This harness imports the actual production source files; it contains no alternate
-solver. Tests compare lookup against exhaustive transport/calendar enumeration
-in both directions, including inactive days, midnight, multiple day offsets,
-calendar word boundaries, and boarding beyond the final vehicle-start day.
-Profile tests compare complete direct-trip frontiers with exhaustive schedules,
-exercise grouped seeds and boundary dominance, and check that recovery copies
-zero full round-label arrays. Existing transfer fixtures use the v5 interleaved
-arrival/departure layout and proper CSR sentinels.
-
-A synthetic 20-stop, seven-day route checks identical arrival results against
-the old point solver, one lookup instead of repeated per-day lookups, eighteen
-onboard lookup skips, and more than a twentyfold reduction in lookup probes.
-These are work-count regressions, not production latency measurements. Benchmark
-with the production timetable and original request before assigning a wall-time
-speedup to this change.
+No tests, builds, formatters, linters or benchmarks were run for the PONG
+port, as requested. The existing standalone routing harness imports the
+production PONG module so future callers can compile the same implementation
+without the native backend dependencies.

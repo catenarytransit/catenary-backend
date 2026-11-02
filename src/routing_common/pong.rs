@@ -1,0 +1,417 @@
+//! Static, no-via port of Nigiri's CPU PONG search.
+//!
+//! Upstream: motis-project/nigiri@1ccdf6972b854d17963b1d7843614446824b1e1a,
+//! src/routing/raptor/pong.cc. MIT license: third_party/nigiri-LICENSE.
+//! The control flow, oriented journey keys, validation cursor, weighted
+//! result count, lookahead and inclusive reverse bound follow that revision.
+//! Gentian keeps exact seconds, so Nigiri's one-minute cursor unit is one
+//! second here. OSR endpoints are intermodal: neither pass expands initial
+//! footpaths. Both directions reuse one set of compact RAPTOR round buffers.
+
+use crate::routing_common::profile_compact::{LowerBoundTopology, ProfileSearchState};
+use crate::routing_common::profile_compact_reconstruct::valid_journey;
+use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
+use crate::routing_common::raptor_query::{Journey, Leg, Query, RaptorStats, transport_event_second};
+use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
+use crate::routing_common::transport_index::TransportIndex;
+use anyhow::{Result, ensure};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+const DAY: u32 = 86_400;
+const MAX_TRAVEL_TIME: u32 = 5 * DAY;
+const MAX_BOARDINGS: usize = 15; // nigiri::routing::kMaxTransfers + 1
+
+/// The key is in *search direction*, separately from reconstructed physical
+/// leg times. In particular a ping starts at the query cursor even when the
+/// first vehicle leaves later. A pong starts at the ping's destination time.
+#[derive(Clone)]
+struct Candidate {
+    start_time: i64,
+    dest_time: i64,
+    boardings: usize,
+    journey: Journey,
+    reconstructed: bool,
+}
+
+impl Candidate {
+    fn point(journey: Journey, start_time: i64, reverse: bool) -> Self {
+        Self {
+            start_time,
+            dest_time: if reverse {
+                journey.departure_unix_seconds
+            } else {
+                journey.arrival_unix_seconds
+            },
+            boardings: journey.boardings,
+            journey,
+            reconstructed: false,
+        }
+    }
+
+    /// nigiri::routing::journey::dominates, including opposite-oriented keys.
+    fn dominates(&self, other: &Self) -> bool {
+        self.boardings <= other.boardings
+            && if self.start_time <= self.dest_time {
+                self.start_time >= other.start_time && self.dest_time <= other.dest_time
+            } else {
+                self.start_time <= other.start_time && self.dest_time >= other.dest_time
+            }
+    }
+
+    fn travel_time(&self) -> u64 {
+        self.dest_time.abs_diff(self.start_time)
+    }
+}
+
+fn pareto_add(results: &mut Vec<Candidate>, candidate: Candidate) {
+    if results.iter().any(|old| old.dominates(&candidate)) {
+        return;
+    }
+    results.retain(|old| !candidate.dominates(old));
+    results.push(candidate);
+}
+
+fn better(a: i64, b: i64, reverse: bool) -> bool {
+    if reverse { a > b } else { a < b }
+}
+
+fn step(time: i64, seconds: i64, reverse: bool) -> i64 {
+    if reverse { time.saturating_sub(seconds) } else { time.saturating_add(seconds) }
+}
+
+/// get_fastest_direct: the supplied OSR duration takes precedence. Otherwise
+/// use the same static endpoint/footpath search as Nigiri (only destination
+/// locations may be intermediate footpath targets).
+fn fastest_direct(tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool) -> Option<u32> {
+    if q.direct_walk_seconds.is_some() {
+        return q.direct_walk_seconds;
+    }
+    let (starts, ends) = if reverse { (&q.egress, &q.access) } else { (&q.access, &q.egress) };
+    let mut targets = HashMap::<u32, u32>::new();
+    for ep in ends {
+        targets.entry(ep.stop.0).and_modify(|d| *d = (*d).min(ep.seconds)).or_insert(ep.seconds);
+    }
+    let mut distances = HashMap::<u32, u32>::new();
+    let mut heap = BinaryHeap::new();
+    for ep in starts {
+        let old = distances.entry(ep.stop.0).or_insert(u32::MAX);
+        if ep.seconds < *old {
+            *old = ep.seconds;
+            heap.push(Reverse((ep.seconds, ep.stop.0)));
+        }
+    }
+    let mut best = u32::MAX;
+    while let Some(Reverse((distance, stop))) = heap.pop() {
+        if distances.get(&stop).is_some_and(|&old| old < distance) {
+            continue;
+        }
+        if let Some(&offset) = targets.get(&stop) {
+            best = best.min(distance.saturating_add(offset));
+        }
+        let paths = if reverse { tt.footpaths_to(LocationIdx(stop)) } else { tt.footpaths_from(LocationIdx(stop)) };
+        for path in paths {
+            if !targets.contains_key(&path.target().0) {
+                continue;
+            }
+            let distance = distance.saturating_add(path.seconds());
+            let old = distances.entry(path.target().0).or_insert(u32::MAX);
+            if distance < *old {
+                *old = distance;
+                heap.push(Reverse((distance, path.target().0)));
+            }
+        }
+    }
+    (best != u32::MAX).then_some(best)
+}
+
+pub(crate) fn route_pong_with_stats_precomputed(
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    options: ProfileOptions,
+    arrive_by: bool,
+    topology: Option<&LowerBoundTopology>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
+    options.validate()?;
+    let processing_start = Instant::now();
+    let deadline = processing_start
+        .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
+        .unwrap_or(processing_start);
+    let max_travel_time = options.max_journey_duration_seconds.min(MAX_TRAVEL_TIME);
+    let lookahead = max_travel_time.saturating_add(DAY).min(MAX_TRAVEL_TIME);
+    let fastest_direct = fastest_direct(tt, request, arrive_by).map(u64::from).unwrap_or(u64::MAX);
+    let reference = request.departure_unix_seconds;
+    let timetable_from = i64::from(tt.header().first_utc_day) * i64::from(DAY);
+    let timetable_to = timetable_from.saturating_add(i64::from(tt.header().day_count) * i64::from(DAY));
+    ensure!(timetable_from < timetable_to, "PONG requires a nonempty timetable interval");
+    // Half-open, as in MOTIS get_start_time. Include the exact requested
+    // arrive-by second; forward searches exclude the far endpoint.
+    let (interval_from, interval_to) = if arrive_by {
+        (reference.checked_sub(i64::from(options.search_window_seconds)), reference.checked_add(1))
+    } else {
+        (Some(reference), reference.checked_add(i64::from(options.search_window_seconds)))
+    };
+    let interval_from = interval_from.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
+        .clamp(timetable_from, timetable_to);
+    let interval_to = interval_to.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
+        .clamp(timetable_from, timetable_to);
+    let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
+    let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
+
+    let mut kernel_query = request.clone();
+    kernel_query.max_boardings = request.max_boardings.min(MAX_BOARDINGS);
+    kernel_query.max_duration_seconds = MAX_TRAVEL_TIME;
+    // PING deliberately ignores fastest_direct and admits the extra day of
+    // waiting. Apply duration/direct filtering only to validated pong keys.
+    kernel_query.direct_walk_seconds = None;
+    let mut state = ProfileSearchState::new_with_topology(
+        tt, &kernel_query, interval_from, interval_to, arrive_by,
+        deadline.saturating_duration_since(Instant::now()), topology,
+    )?;
+    let transports = state.transport_index();
+    // kPruneWithPingBounds: reverse lower bounds start at zero. Swap vectors
+    // when changing direction instead of allocating a second RAPTOR state.
+    let mut other_lower_bounds = vec![0; tt.coordinates().len()];
+    let mut results = Vec::<Candidate>::new();
+    let mut iterations = 0;
+    let mut forward_searches = 0;
+    let mut backward_searches = 0;
+
+    'sweep: loop {
+        let result_count = |include_too_slow: bool| {
+            results.iter().filter(|j| {
+                better(j.dest_time, cursor, arrive_by)
+                    && (include_too_slow || (j.travel_time() < fastest_direct
+                        && j.travel_time() <= u64::from(max_travel_time)))
+            }).count()
+        };
+        // Preserve the upstream weighted count, including unvalidated-path
+        // byproducts only after their destination key is behind the cursor.
+        if (!better(cursor, end_time, arrive_by)
+            && result_count(true) + result_count(false) >= 2 * options.min_itineraries)
+            || cursor < timetable_from || cursor >= timetable_to
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+        iterations += 1;
+
+        // PING: reset arrivals, start at the cursor, search with one day's
+        // lookahead, and collect the strict destination/boarding frontier.
+        state.reset_point_arrivals();
+        let mut ping_query = kernel_query.clone();
+        ping_query.max_duration_seconds = lookahead;
+        let ping = state.execute_point(
+            tt, &ping_query, cursor, kernel_query.max_boardings,
+            step(cursor, i64::from(lookahead), arrive_by),
+        )?;
+        if arrive_by { backward_searches += 1; } else { forward_searches += 1; }
+        if state.stats().profile_budget_exhausted {
+            break;
+        }
+        let mut ping_results = Vec::<Candidate>::new();
+        for journey in ping {
+            let candidate = Candidate::point(journey, cursor, arrive_by);
+            if !results.iter().any(|old| old.dominates(&candidate)) {
+                pareto_add(&mut ping_results, candidate);
+            }
+        }
+        if ping_results.is_empty() {
+            break;
+        }
+        ping_results.sort_by_key(|j| Reverse(j.boardings));
+
+        // PONG: fold and save ping's bounds BEFORE reversing/resetting the
+        // shared state. Most transfers first, then retain arrivals between
+        // the remaining pong runs exactly as raptor::next_start_time does.
+        let ping_bounds = state.fill_ping_bounds(tt, ping_results[0].boardings);
+        state.flip_point_direction(&mut other_lower_bounds);
+        state.set_ping_bounds(ping_bounds);
+        for ping_j in &mut ping_results {
+            let pong = state.execute_point(
+                tt, &kernel_query, ping_j.dest_time, ping_j.boardings,
+                ping_j.start_time,
+            )?;
+            if arrive_by { forward_searches += 1; } else { backward_searches += 1; }
+            if state.stats().profile_budget_exhausted {
+                break 'sweep;
+            }
+            for journey in pong {
+                pareto_add(&mut results, Candidate::point(journey, ping_j.dest_time, !arrive_by));
+            }
+            let matched = results.iter_mut().find(|pong_j| {
+                pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+            }).ok_or_else(|| anyhow::anyhow!(
+                "no pong for boardings={}, start_time={} found", ping_j.boardings, ping_j.dest_time
+            ))?;
+            matched.reconstructed = true;
+            ping_j.start_time = matched.dest_time;
+        }
+        state.flip_point_direction(&mut other_lower_bounds);
+
+        let first = ping_results.iter().map(|j| j.start_time)
+            .min_by(|a, b| if arrive_by { b.cmp(a) } else { a.cmp(b) })
+            .expect("nonempty ping results");
+        let next = step(first, 1, arrive_by);
+        ensure!(better(cursor, next, arrive_by), "no pong progress: start_time={cursor}, next={next}");
+        cursor = next;
+    }
+
+    // Only matched, reconstructed and cursor-validated journeys count as
+    // output. No near-Pareto route extras, fallback profile scan, duration
+    // ratio heuristic, or initial interval_estimator enlargement is applied.
+    let before_filter = results.len();
+    let mut journeys = results.into_iter().filter(|j| {
+        j.reconstructed && better(j.dest_time, cursor, arrive_by)
+            && j.travel_time() < fastest_direct
+            && j.travel_time() <= u64::from(max_travel_time)
+    }).map(|j| {
+        let mut journey = j.journey;
+        // Nigiri swaps start/destination keys after the opposite search.
+        journey.departure_unix_seconds = if arrive_by { j.start_time } else { j.dest_time };
+        journey.arrival_unix_seconds = if arrive_by { j.dest_time } else { j.start_time };
+        journey
+    }).collect::<Vec<_>>();
+    let mut stats = state.stats().clone();
+    stats.profile_duration_filtered = (before_filter - journeys.len()) as u64;
+    stats.profile_budget_exhausted |= Instant::now() >= deadline;
+    stats.pong_iterations = iterations;
+    stats.pong_forward_searches = forward_searches;
+    stats.pong_backward_searches = backward_searches;
+    stats.pong_interval_from = Some(if arrive_by { cursor.saturating_add(1) } else { interval_from });
+    stats.pong_interval_to = Some(if arrive_by { interval_to } else { cursor });
+
+    // Nigiri's final forward-only refinement replaces the middle vehicle in
+    // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
+    // There are no vias or realtime/TD footpaths in Edelweiss's Query type.
+    if !arrive_by {
+        for journey in &mut journeys {
+            improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
+        }
+    }
+    if let Some(seconds) = request.direct_walk_seconds.filter(|&d| d <= max_travel_time) {
+        let (departure, arrival) = if arrive_by {
+            (reference.saturating_sub(i64::from(seconds)), reference)
+        } else {
+            (reference, reference.saturating_add(i64::from(seconds)))
+        };
+        journeys.push(Journey {
+            boardings: 0, departure_unix_seconds: departure,
+            arrival_unix_seconds: arrival, legs: vec![Leg::DirectWalk { seconds }],
+        });
+    }
+    sort_journeys_for_response(&mut journeys, arrive_by);
+    Ok((journeys, stats))
+}
+
+fn alternative_walks(tt: &ZeroCopyTimetable<'_>, stop: u32, outgoing: bool) -> HashMap<u32, u32> {
+    // lookup_footpath with kExact: a reflexive connection includes the
+    // station change time; a non-reflexive connection uses its footpath.
+    let mut walks = HashMap::from([(stop, tt.location_transfer_seconds()[stop as usize])]);
+    let paths = if outgoing { tt.footpaths_from(LocationIdx(stop)) } else { tt.footpaths_to(LocationIdx(stop)) };
+    for path in paths {
+        walks.entry(path.target().0).and_modify(|d| *d = (*d).min(path.seconds())).or_insert(path.seconds());
+    }
+    walks
+}
+
+fn change_time(tt: &ZeroCopyTimetable<'_>, from: u32, to: u32) -> Option<u32> {
+    let rule = tt.station_transfer_rule(LocationIdx(from), LocationIdx(to));
+    if rule.is_some_and(|r| r.prohibited()) {
+        return None;
+    }
+    Some(tt.location_transfer_seconds()[from as usize]
+        .max(tt.location_transfer_seconds()[to as usize])
+        .max(rule.map_or(0, |r| r.min_seconds)))
+}
+
+/// Static counterpart of get_earliest_alternative/get_direct_journeys. FIFO
+/// compressed chains give each route-pair generator's first feasible trip;
+/// the minimum alighting-walk arrival is the upstream merge-heap's head.
+fn earliest_alternative(
+    tt: &ZeroCopyTimetable<'_>,
+    transports: &TransportIndex,
+    from: u32,
+    to: u32,
+    from_arrival: i64,
+    to_departure: i64,
+    stats: &mut RaptorStats,
+    deadline: Instant,
+) -> Option<[Leg; 3]> {
+    let boarding = alternative_walks(tt, from, true);
+    let alighting = alternative_walks(tt, to, false);
+    let from_routes = boarding.keys().flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied()).collect::<HashSet<_>>();
+    let to_routes = alighting.keys().flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied()).collect::<HashSet<_>>();
+    let mut routes = from_routes.intersection(&to_routes).copied().collect::<Vec<_>>();
+    routes.sort_unstable_by_key(|r| r.0);
+    let mut best = None;
+    let mut best_arrival = i64::MAX;
+    for route in routes {
+        if Instant::now() >= deadline { break; }
+        // direct.cc::for_each_pair: first boarding, next alighting, then
+        // continue after that pair. Repeated stop indices remain distinct.
+        let mut board_position: Option<usize> = None;
+        for (pos, stop) in tt.stops_on(route).iter().enumerate() {
+            if let Some(board_pos) = board_position {
+                let Some(&egress) = alighting.get(&stop.location().0).filter(|_| stop.inbound()) else { continue; };
+                board_position = None;
+                let board = tt.stops_on(route)[board_pos];
+                let access = boarding[&board.location().0];
+                let Some(change_before) = change_time(tt, from, board.location().0) else { continue; };
+                let Some(change_after) = change_time(tt, stop.location().0, to) else { continue; };
+                let ready = from_arrival.saturating_add(i64::from(access.max(change_before)));
+                let limit = to_departure.saturating_sub(i64::from(egress.max(change_after)));
+                for chain in transports.chains(route) {
+                    let Some(selected) = chain.select(tt, board_pos * 2, ready, false, limit, 0, stats) else { continue; };
+                    let midnight = (i64::from(tt.header().first_utc_day) + selected.start_day as i64) * i64::from(DAY);
+                    let Some(arrival) = transport_event_second(tt, route, selected.transport, pos, true, midnight) else { continue; };
+                    let walk_arrival = arrival.saturating_add(i64::from(egress));
+                    if arrival > limit || walk_arrival >= best_arrival { continue; }
+                    best_arrival = walk_arrival;
+                    best = Some([
+                        Leg::Transfer { from_stop: from, to_stop: board.location().0, seconds: access },
+                        Leg::Ride {
+                            from_stop: board.location().0, to_stop: stop.location().0,
+                            route: route.0, transport: selected.transport.0, service_day: selected.start_day as u16,
+                            board_stop_index: board_pos, alight_stop_index: pos,
+                            departure_unix_seconds: selected.event, arrival_unix_seconds: arrival,
+                        },
+                        Leg::Transfer { from_stop: stop.location().0, to_stop: to, seconds: egress },
+                    ]);
+                }
+            } else if stop.outbound() && boarding.contains_key(&stop.location().0) {
+                board_position = Some(pos);
+            }
+        }
+    }
+    best
+}
+
+fn improve_middle_rides(
+    tt: &ZeroCopyTimetable<'_>,
+    transports: &TransportIndex,
+    q: &Query,
+    journey: &mut Journey,
+    stats: &mut RaptorStats,
+    deadline: Instant,
+) {
+    if journey.legs.len() < 5 { return; }
+    for i in 0..=journey.legs.len() - 5 {
+        let (
+            Leg::Ride { to_stop: from, arrival_unix_seconds: arrival, .. },
+            Leg::Transfer { .. }, Leg::Ride { .. }, Leg::Transfer { .. },
+            Leg::Ride { from_stop: to, departure_unix_seconds: departure, .. },
+        ) = (&journey.legs[i], &journey.legs[i + 1], &journey.legs[i + 2], &journey.legs[i + 3], &journey.legs[i + 4]) else { continue; };
+        let Some(replacement) = earliest_alternative(tt, transports, *from, *to, *arrival, *departure, stats, deadline) else { continue; };
+        let mut improved = journey.clone();
+        for (offset, leg) in replacement.into_iter().enumerate() {
+            improved.legs[i + 1 + offset] = leg;
+        }
+        // Pair-specific GTFS restrictions and Catenary's exact footpath
+        // representation remain authoritative after the upstream refinement.
+        if valid_journey(tt, q, &improved) {
+            *journey = improved;
+        }
+    }
+}

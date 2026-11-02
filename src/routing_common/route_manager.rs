@@ -1,5 +1,6 @@
 use crate::routing_common::metadata_index::MetadataIndex;
-use crate::routing_common::profile_search::{self, ProfileOptions};
+use crate::routing_common::pong;
+use crate::routing_common::profile_search::ProfileOptions;
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
@@ -358,8 +359,9 @@ impl Router {
         })
     }
 
-    /// MOTIS-style timetable view with an adaptive window and departure-aware
-    /// Pareto filtering. OSR access/egress are reused for all profile anchors.
+    /// MOTIS PONG timetable view: advance a validated journey cursor until
+    /// the requested window and minimum connection count are covered.
+    /// OSR access/egress and compact round buffers are reused across passes.
     pub fn route_profile_with_access(
         &self,
         selection: RoutingSelection,
@@ -376,7 +378,7 @@ impl Router {
             .iter()
             .find(|region| region.id == selection.transit_region)
             .context("routing region disappeared")?;
-        let (journeys, raptor_stats) = profile_search::route_profile_with_stats_precomputed(
+        let (journeys, raptor_stats) = pong::route_pong_with_stats_precomputed(
             &tt,
             &Query {
                 departure_unix_seconds: unix_seconds,

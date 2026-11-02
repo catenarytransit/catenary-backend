@@ -56,6 +56,21 @@ fn dominated_by_lower_round(
 /// Nigiri-style persistent profile arrival comparisons. This history only
 /// contains anchors solved in monotone profile order and is invalidated when
 /// an interval extension breaks that order.
+fn dominated_by_profile_with_mode(
+    profile: &[Vec<i64>],
+    k: usize,
+    at: usize,
+    time: i64,
+    reverse: bool,
+    loose: bool,
+) -> bool {
+    profile
+        .iter()
+        .take(k + 1)
+        .any(|row| !better(time, row[at], reverse) && (!loose || time != row[at]))
+}
+
+#[cfg(test)]
 fn dominated_by_profile(
     profile: &[Vec<i64>],
     k: usize,
@@ -63,10 +78,36 @@ fn dominated_by_profile(
     time: i64,
     reverse: bool,
 ) -> bool {
-    profile
-        .iter()
-        .take(k + 1)
-        .any(|row| !better(time, row[at], reverse))
+    dominated_by_profile_with_mode(profile, k, at, time, reverse, false)
+}
+
+/// Nigiri raptor::fill_bounds/set_bounds, in the mmap timetable's seconds.
+/// Rows contain the best ping time with at most k boardings. The opposite
+/// search indexes them by its remaining boarding budget.
+pub(crate) struct PingBounds {
+    rows: Vec<Vec<i64>>,
+}
+
+fn within_ping_bounds(
+    bounds: Option<&PingBounds>,
+    last_round: usize,
+    round: usize,
+    stop: usize,
+    time: i64,
+    reverse: bool,
+    transfer_seconds: u32,
+) -> bool {
+    let Some(bounds) = bounds else {
+        return true;
+    };
+    let bound = bounds.rows[last_round - round][stop];
+    // raptor::within_bounds compensates for the transfer already present in
+    // the ping round time. Comparisons are inclusive on the CPU.
+    if reverse {
+        time >= bound.saturating_sub(i64::from(transfer_seconds))
+    } else {
+        time <= bound.saturating_add(i64::from(transfer_seconds))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -517,6 +558,10 @@ pub(crate) struct ProfileSearchState {
     stats: RaptorStats,
     deadline: Instant,
     reverse: bool,
+    point_mode: bool,
+    point_destination_bound: Option<i64>,
+    ping_bounds: Option<PingBounds>,
+    bounds_last_round: usize,
 }
 impl ProfileSearchState {
     #[cfg(test)]
@@ -532,6 +577,18 @@ impl ProfileSearchState {
     }
 
     pub fn new_with_topology(
+        tt: &ZeroCopyTimetable<'_>,
+        q: &Query,
+        earliest: i64,
+        latest: i64,
+        reverse: bool,
+        timeout: Duration,
+        precomputed: Option<&LowerBoundTopology>,
+    ) -> Result<Self> {
+        Self::new_internal(tt, q, earliest, latest, reverse, timeout, precomputed)
+    }
+
+    fn new_internal(
         tt: &ZeroCopyTimetable<'_>,
         q: &Query,
         earliest: i64,
@@ -586,7 +643,142 @@ impl ProfileSearchState {
             stats,
             deadline,
             reverse,
+            point_mode: false,
+            point_destination_bound: None,
+            ping_bounds: None,
+            bounds_last_round: 0,
         })
+    }
+
+    /// PONG shares the round buffers between the two search directions, as
+    /// Nigiri does. Only ping's immutable lower bounds and the folded ping
+    /// round times survive a direction switch.
+    pub(crate) fn flip_point_direction(&mut self, other_lower_bounds: &mut Vec<u32>) {
+        self.reverse = !self.reverse;
+        std::mem::swap(&mut self.bounds, other_lower_bounds);
+        self.reset_point_arrivals();
+    }
+
+    pub(crate) fn reset_point_arrivals(&mut self) {
+        let invalid = if self.reverse { NEG_INF } else { INF };
+        for row in &mut self.profile_ride {
+            row.fill(invalid);
+        }
+        for row in &mut self.profile_ready {
+            row.fill(invalid);
+        }
+        self.time_at_dest.fill(invalid);
+        self.journeys.clear();
+        self.last_anchor = None;
+        self.ping_bounds = None;
+        self.bounds_last_round = 0;
+    }
+
+    pub(crate) fn fill_ping_bounds(
+        &self,
+        tt: &ZeroCopyTimetable<'_>,
+        n_rows: usize,
+    ) -> PingBounds {
+        let invalid = if self.reverse { NEG_INF } else { INF };
+        let mut rows = Vec::<Vec<i64>>::with_capacity(n_rows);
+        for k in 0..n_rows {
+            let mut row = self.profile_ready[k].clone();
+            for (stop, time) in row.iter_mut().enumerate() {
+                if k != 0 && self.profile_ride[k][stop] != invalid {
+                    // Compact RAPTOR separates physical arrivals from change
+                    // readiness. Recover Nigiri's transfer-ready round time
+                    // even if the change was past ping's destination bound.
+                    let change = i64::from(tt.location_transfer_seconds()[stop]);
+                    let ride = self.profile_ride[k][stop];
+                    let ready = if self.reverse {
+                        ride.saturating_sub(change)
+                    } else {
+                        ride.saturating_add(change)
+                    };
+                    if better(ready, *time, self.reverse) {
+                        *time = ready;
+                    }
+                }
+                if k != 0 && better(rows[k - 1][stop], *time, self.reverse) {
+                    *time = rows[k - 1][stop];
+                }
+                // A scalar ping bound cannot encode a prohibited or minimum
+                // stop-pair transfer. Keep the existing provenance-sensitive
+                // GTFS validation authoritative at those locations.
+                if self.transfer_sensitive[stop] {
+                    *time = if self.reverse { INF } else { NEG_INF };
+                }
+            }
+            rows.push(row);
+        }
+        PingBounds { rows }
+    }
+
+    pub(crate) fn set_ping_bounds(&mut self, bounds: PingBounds) {
+        self.ping_bounds = Some(bounds);
+    }
+
+    pub(crate) fn transport_index(&self) -> Arc<TransportIndex> {
+        Arc::clone(&self.transports)
+    }
+
+    /// Nigiri's point execute(start_time, max_transfers, worst_time_at_dest).
+    /// The caller resets arrivals once for ping and once before the sequence
+    /// of pongs. Successive pongs retain scalar round arrivals and validated
+    /// predecessor snapshots, independently of their new start-time key.
+    pub(crate) fn execute_point(
+        &mut self,
+        tt: &ZeroCopyTimetable<'_>,
+        q: &Query,
+        anchor: i64,
+        max_boardings: usize,
+        worst_time_at_dest: i64,
+    ) -> Result<Vec<Journey>> {
+        ensure!(max_boardings < self.rounds.len(), "point boarding budget exceeds buffers");
+        self.point_mode = true;
+        self.point_destination_bound = Some(worst_time_at_dest);
+        self.bounds_last_round = max_boardings;
+        let mut q = q.clone();
+        q.max_boardings = max_boardings;
+        let starts = StartLabel::point(&q, anchor, self.reverse);
+        if Instant::now() >= self.deadline {
+            self.stats.profile_budget_exhausted = true;
+            return Ok(Vec::new());
+        }
+        self.stats.profile_anchor_events += 1;
+        self.stats.profile_start_labels += starts.len() as u64;
+        let started = Instant::now();
+        self.solve(tt, &q, anchor, &starts);
+        self.stats.profile_compact_ms += started.elapsed().as_secs_f64() * 1_000.0;
+
+        // Point results compare destination time and boardings. Optimized
+        // physical departure times must not replace the requested start key:
+        // PONG obtains that key from its opposite-direction validation pass.
+        let mut frontier = Vec::<Journey>::new();
+        for journey in &self.journeys {
+            let dest = if self.reverse {
+                journey.departure_unix_seconds
+            } else {
+                journey.arrival_unix_seconds
+            };
+            if journey.boardings > max_boardings
+                || better(worst_time_at_dest, dest, self.reverse)
+                || better(dest, anchor, self.reverse)
+            {
+                continue;
+            }
+            let dominates = |a: &Journey, b: &Journey| {
+                let a_time = if self.reverse { a.departure_unix_seconds } else { a.arrival_unix_seconds };
+                let b_time = if self.reverse { b.departure_unix_seconds } else { b.arrival_unix_seconds };
+                a.boardings <= b.boardings && !better(b_time, a_time, self.reverse)
+            };
+            if frontier.iter().any(|old| dominates(old, journey)) {
+                continue;
+            }
+            frontier.retain(|old| !dominates(journey, old));
+            frontier.push(journey.clone());
+        }
+        Ok(frontier)
     }
 
     #[cfg(test)]
@@ -672,7 +864,8 @@ impl ProfileSearchState {
         // Reset only the per-start competitiveness limit, not the arrival
         // matrix. Nigiri executes every start with a worst destination time
         // before updating it from transit and walking relaxations.
-        let worst = initial_destination_bound(anchor, q, reverse);
+        let worst = self.point_destination_bound
+            .unwrap_or_else(|| initial_destination_bound(anchor, q, reverse));
         for bound in &mut self.time_at_dest {
             if better(worst, *bound, reverse) {
                 *bound = worst;
@@ -708,7 +901,7 @@ impl ProfileSearchState {
                     self.time_at_dest[0],
                 )
                 && (self.transfer_sensitive[ep.stop.idx()]
-                    || !dominated_by_profile(&self.profile_ready, 0, ep.stop.idx(), t, reverse))
+                    || !dominated_by_profile_with_mode(&self.profile_ready, 0, ep.stop.idx(), t, reverse, self.point_mode))
                 && self.rounds[0].put_linked(
                     Stage::Ready,
                     ep.stop.idx(),
@@ -811,6 +1004,11 @@ impl ProfileSearchState {
                                 if let Some(onboard) = onboard {
                                     let event = onboard.time(pos, !reverse);
                                     if (lower..=upper).contains(&event)
+                                        && within_ping_bounds(
+                                            self.ping_bounds.as_ref(), self.bounds_last_round,
+                                            k, loc, event, reverse,
+                                            tt.location_transfer_seconds()[loc],
+                                        )
                                         && can_reach(
                                             &self.bounds,
                                             loc,
@@ -862,6 +1060,9 @@ impl ProfileSearchState {
                                             } else {
                                                 event.saturating_add(i64::from(seconds))
                                             };
+                                            let within_destination_bound = !self.point_mode
+                                                || (!better(self.time_at_dest[k], score, reverse)
+                                                    && !better(score, anchor, reverse));
                                             let slots = candidate_slots.entry(loc).or_default();
                                             let insertion = if slots.len()
                                                 < MAX_TERMINAL_PATHS_PER_STOP
@@ -886,7 +1087,7 @@ impl ProfileSearchState {
                                                     })
                                                     .map(Some)
                                             };
-                                            if let Some(replace) = insertion {
+                                            if let Some(replace) = insertion.filter(|_| within_destination_bound) {
                                                 if self.parents.len() < u32::MAX as usize {
                                                     let snapshot = self.parents.len() as u32;
                                                     self.parents.push(PathLink {
@@ -908,9 +1109,9 @@ impl ProfileSearchState {
                                                             loc, reverse, seconds,
                                                         )
                                                     {
-                                                        optimize_same_trip_endpoint_walks(
-                                                            tt, q, &mut journey
-                                                        );
+                                                        if !self.point_mode {
+                                                            optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+                                                        }
                                                         if valid_journey(tt, q, &journey) {
                                                             let actual = if reverse {
                                                                 journey.departure_unix_seconds
@@ -938,12 +1139,13 @@ impl ProfileSearchState {
                                             }
                                         }
                                         if (self.transfer_sensitive[loc]
-                                            || !dominated_by_profile(
+                                            || !dominated_by_profile_with_mode(
                                                 &self.profile_ride,
                                                 k,
                                                 loc,
                                                 event,
                                                 reverse,
+                                                self.point_mode,
                                             ))
                                             && !dominated_by_lower_round(
                                                 before,
@@ -1091,8 +1293,16 @@ impl ProfileSearchState {
                     continue;
                 };
                 self.stats.profile_journeys_reconstructed += 1;
-                optimize_same_trip_endpoint_walks(tt, q, &mut journey);
-                if valid_journey(tt, q, &journey) {
+                if !self.point_mode {
+                    optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+                }
+                if valid_journey(tt, q, &journey)
+                    && (!self.point_mode || (!better(self.time_at_dest[k], if reverse {
+                        journey.departure_unix_seconds
+                    } else {
+                        journey.arrival_unix_seconds
+                    }, reverse)))
+                {
                     let metric = if reverse {
                         journey.departure_unix_seconds
                     } else {
@@ -1127,6 +1337,11 @@ impl ProfileSearchState {
                         t.saturating_add(i64::from(change))
                     };
                     if (lower..=upper).contains(&ready)
+                        && within_ping_bounds(
+                            self.ping_bounds.as_ref(), self.bounds_last_round,
+                            k, from, ready, reverse,
+                            tt.location_transfer_seconds()[from],
+                        )
                         && can_reach(
                             &self.bounds,
                             from,
@@ -1137,7 +1352,7 @@ impl ProfileSearchState {
                             self.time_at_dest[k],
                         )
                         && (self.transfer_sensitive[from]
-                            || !dominated_by_profile(&self.profile_ready, k, from, ready, reverse))
+                            || !dominated_by_profile_with_mode(&self.profile_ready, k, from, ready, reverse, self.point_mode))
                         && !dominated_by_lower_round(
                             before,
                             Stage::Ready,
@@ -1219,6 +1434,11 @@ impl ProfileSearchState {
                         at.max(t.saturating_add(i64::from(change)))
                     };
                     if (lower..=upper).contains(&ready)
+                        && within_ping_bounds(
+                            self.ping_bounds.as_ref(), self.bounds_last_round,
+                            k, to, ready, reverse,
+                            tt.location_transfer_seconds()[to],
+                        )
                         && can_reach(
                             &self.bounds,
                             to,
@@ -1229,7 +1449,7 @@ impl ProfileSearchState {
                             self.time_at_dest[k],
                         )
                         && (self.transfer_sensitive[to]
-                            || !dominated_by_profile(&self.profile_ready, k, to, ready, reverse))
+                            || !dominated_by_profile_with_mode(&self.profile_ready, k, to, ready, reverse, self.point_mode))
                         && !dominated_by_lower_round(
                             before,
                             Stage::Ready,
@@ -1326,8 +1546,16 @@ impl ProfileSearchState {
                 // separate reconstruction phase does. Validate optimized
                 // service days and GTFS transfer constraints before recording
                 // a destination bound or returning the journey.
-                optimize_same_trip_endpoint_walks(tt, q, &mut journey);
-                if valid_journey(tt, q, &journey) {
+                if !self.point_mode {
+                    optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+                }
+                if valid_journey(tt, q, &journey)
+                    && (!self.point_mode || (!better(self.time_at_dest[k], if reverse {
+                        journey.departure_unix_seconds
+                    } else {
+                        journey.arrival_unix_seconds
+                    }, reverse)))
+                {
                     let metric = if reverse {
                         journey.departure_unix_seconds
                     } else {
