@@ -1,0 +1,65 @@
+[workspace]
+name = "catenary-backend"
+description = "Native build toolchain + libraries for catenary-backend (stateful services run separately via docs/dev/docker-compose.yml)"
+channels = ["conda-forge"]
+platforms = ["linux-64"]
+
+# Native/system-level build dependencies that the readme.md "Install Dependencies"
+# section normally installs with `apt`. Kept here instead so nothing has to be
+# installed with the system package manager on a laptop used for other things.
+#
+#   apt package            -> pixi/conda-forge equivalent
+#   build-essential, gcc    -> compilers (C/C++ toolchains pulled in transitively)
+#   pkg-config              -> pkg-config
+#   libssl-dev              -> openssl
+#   cmake                   -> cmake
+#   protobuf-compiler       -> libprotobuf (ships the `protoc` binary used by build.rs/prost-build)
+#   libpq-dev / postgresql-client -> postgresql (ships libpq headers + the `psql` CLI)
+#   coinor-cbc, coinor-libcbc-dev -> coin-or-cbc (good_lp's "coin_cbc" feature links against this)
+[dependencies]
+rust = ">=1.85,<2"
+# NOTE: `rust` alone pulls in the raw gcc_impl_linux-64/sysroot_linux-64
+# binaries but NOT the conda-forge compiler *activation scripts* that set
+# CC/CXX/CFLAGS/LDFLAGS/CMAKE_ARGS and sandbox builds to the conda prefix.
+# gcc_linux-64/gxx_linux-64 provide those activation scripts. Without them,
+# some *-sys build scripts (e.g. bzip2-sys's pkg-config probe) can resolve
+# against host libraries instead of the conda-provided ones, which can mix
+# this sysroot's CRT objects with a newer host glibc at link time and fail
+# with `undefined symbol: __libc_csu_init`/`__libc_csu_fini`.
+# See docs/dev/README.md "Troubleshooting" for the full story.
+gcc_linux-64 = "*"
+gxx_linux-64 = "*"
+pkg-config = "*"
+cmake = "*"
+openssl = "*"
+libprotobuf = "*"
+coin-or-cbc = "*"
+postgresql = "*"
+git = "*"
+jq = "*"
+curl = "*"
+
+# `pixi run <task>` or `pixi shell` then run the command directly.
+# These mirror the steps in .github/workflows/full-test-pipeline.yml.
+[tasks]
+build = "cargo build --release --bin maple --bin spruce --bin birch --bin alpenrose --bin aspen --bin aspenleader"
+
+# One-shot GTFS ingest. Requires the docker-compose services to be up and
+# catenaryconfig.toml to exist (see docs/dev/README.md).
+maple = "./target/release/maple"
+
+# Long-running services. Run each in its own `pixi run` invocation/terminal,
+# or background them yourself (`pixi run spruce &`, etc.) as the CI job does.
+spruce = "./target/release/spruce"
+birch = "./target/release/birch"
+alpenrose = "./target/release/alpenrose"
+aspen = "./target/release/aspen"
+aspenleader = "./target/release/aspenleader"
+
+# Applies migrations/up.sql files against whatever Postgres catenaryconfig.toml
+# (and $DATABASE_URL) point at, same as the CI "Run Database Migrations" step.
+migrate = "bash docs/dev/run-migrations.sh"
+
+# Optional: only needed if you want `diesel print-schema` / `diesel migration
+# generate` for schema changes. Not required to run the test pipeline locally.
+install-diesel-cli = "cargo install diesel_cli --no-default-features --features postgres"
