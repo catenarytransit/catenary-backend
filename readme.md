@@ -32,9 +32,10 @@ This project is built off the work of researchers in Germany and many other plac
 
 - Round-Based Public Transit Routing, Karlsruhe Institute of Technology, Delling, Daniel; Pajor Thomas, Werneck Renato. https://www.microsoft.com/en-us/research/wp-content/uploads/2012/01/raptor_alenex.pdf
 - Motis Project https://github.com/motis-project Felix Gündling, innovation in in-memory data stores for graphs
+  Our compression algorithm was validated by the Motis project at https://github.com/motis-project/nigiri, we thank them heavily for their collaberation.
 - Open Street Router OSR: https://github.com/motis-project/osr Felix Gündling
 - Hannah Bast, PhD at Freiburg Universitat: Transfer Patterns and Scalable Transfer Patterns
-- Patrick Brosi: Pfaedle and Line optimised shapes
+- Patrick Brosi: Pfaedle and Line optimised shapes, TRAVIC
 
 ----------------------------------
 ### Submodules maintained 
