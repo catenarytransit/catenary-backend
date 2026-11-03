@@ -4,6 +4,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod footpath_debug;
 mod motis_response;
+mod osr_client;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result, ensure};
@@ -13,8 +14,6 @@ use catenary::routing_common::route_manager::{Coordinates, Router, RouterSetting
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
 
@@ -252,15 +251,7 @@ fn osr_access(
         pedestrian_speed: matches!(mode, StreetMode::Walk).then_some(pedestrian_speed),
         cycling_speed: matches!(mode, StreetMode::Bike).then_some(cycling_speed),
     };
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    serde_json::to_writer(&mut stream, &request)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    let reply: OsrResponse = serde_json::from_str(&line)?;
+    let reply: OsrResponse = osr_client::query(addr, &request)?;
     if let Some(err) = reply.error {
         anyhow::bail!("OSR query: {err}");
     }
@@ -322,15 +313,7 @@ fn direct_osr_seconds(
             route_names: Vec::new(),
         }],
     };
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    serde_json::to_writer(&mut stream, &request)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    let reply: OsrResponse = serde_json::from_str(&line)?;
+    let reply: OsrResponse = osr_client::query(addr, &request)?;
     if let Some(error) = reply.error {
         anyhow::bail!("OSR direct route: {error}");
     }
@@ -481,9 +464,9 @@ fn run_query(
     timings.access_ms = access.1;
     timings.egress_ms = egress.1;
     timings.direct_walk_ms = direct.1;
-    let from = access.0?;
-    let to = egress.0?;
-    let direct = direct.0?;
+    let from = access.0.context("OSR access routing failed")?;
+    let to = egress.0.context("OSR egress routing failed")?;
+    let direct = direct.0.context("OSR direct routing failed")?;
 
     let phase = Instant::now();
     let profile_defaults = ProfileOptions::default();
@@ -579,6 +562,9 @@ fn run_query(
 async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResponse {
     let state = state.into_inner();
     let request = payload.into_inner();
+    let started = Instant::now();
+    let access_modes = request.pre_transit_modes.clone();
+    let egress_modes = request.post_transit_modes.clone();
     let result = web::block(move || {
         run_query(
             &state.router,
@@ -590,8 +576,21 @@ async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResp
     .await;
     match result {
         Ok(Ok((answer, _timings))) => HttpResponse::Ok().json(answer),
-        Ok(Err(err)) => HttpResponse::UnprocessableEntity().body(err.to_string()),
-        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+        Ok(Err(err)) => {
+            eprintln!(
+                "Edelweiss route failed after {:.3} ms (access={access_modes:?}, egress={egress_modes:?}): {err:#}",
+                milliseconds(started)
+            );
+            if err.downcast_ref::<osr_client::TransportError>().is_some() {
+                HttpResponse::BadGateway().body(format!("{err:#}"))
+            } else {
+                HttpResponse::UnprocessableEntity().body(format!("{err:#}"))
+            }
+        }
+        Err(err) => {
+            eprintln!("Edelweiss route worker failed after {:.3} ms: {err}", milliseconds(started));
+            HttpResponse::InternalServerError().body("Edelweiss route worker failed")
+        }
     }
 }
 

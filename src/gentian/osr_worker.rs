@@ -298,7 +298,8 @@ fn run_request(
                 .context("null OSR destination match store")?,
             &target_indices,
             &options,
-        )?
+        )
+        .context("native OSR one-to-many routing failed")?
     };
     let mut results = Vec::new();
     for (stop, path) in query.stops.into_iter().zip(paths) {
@@ -354,10 +355,13 @@ fn handle(stream: TcpStream, graphs: &BTreeMap<String, cxx::SharedPtr<ffi::Route
                 reachable,
                 error: None,
             },
-            Err(e) => Response {
-                reachable: Vec::new(),
-                error: Some(e.to_string()),
-            },
+            Err(e) => {
+                eprintln!("OSR routing failed: {e:#}");
+                Response {
+                    reachable: Vec::new(),
+                    error: Some(format!("{e:#}")),
+                }
+            }
         },
         Err(e) => Response {
             reachable: Vec::new(),

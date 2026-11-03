@@ -484,8 +484,6 @@ fn street_path(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<[f64; 2]>> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpStream;
     let q = PathQuery {
         region: region.to_owned(),
         latitude: from[1],
@@ -509,14 +507,7 @@ fn street_path(
     if let Some(geometry) = geometry_cache.get(&key) {
         return Ok(geometry.clone());
     }
-    let mut socket = TcpStream::connect(addr)?;
-    socket.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    socket.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    socket.write_all(key.as_bytes())?;
-    socket.write_all(b"\n")?;
-    let mut line = String::new();
-    BufReader::new(socket).read_line(&mut line)?;
-    let response: PathReply = serde_json::from_str(&line)?;
+    let response: PathReply = super::osr_client::query(addr, &q)?;
     if let Some(err) = response.error {
         anyhow::bail!("OSR geometry: {err}");
     }
@@ -566,7 +557,13 @@ fn street_leg(
             mode,
             pedestrian_speed,
             cycling_speed,
-        )?
+        )
+        .unwrap_or_else(|error| {
+            // Routing has already established this leg's duration. Optional
+            // map geometry must not discard an otherwise usable journey.
+            eprintln!("Edelweiss {mode} geometry unavailable: {error:#}");
+            Vec::new()
+        })
     } else {
         Vec::new()
     };
@@ -890,6 +887,39 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cycling_geometry_failure_preserves_the_routed_leg() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap().to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap()).read_line(&mut line).unwrap();
+            let request: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(request["mode"], "BIKE");
+            assert!(request.get("pedestrian_speed").is_none());
+            assert_eq!(request["cycling_speed"], 4.5);
+            stream.write_all(b"{\"reachable\":[],\"error\":\"native geometry failed\"}\n").unwrap();
+        });
+        let owned = catenary::routing_common::timetable::TimetableOwned::empty(0, 1);
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let leg = street_leg(
+            &mut HashMap::new(), &addr, "test",
+            json!({"lat": 0.0, "lon": 0.0}),
+            json!({"lat": 0.01, "lon": 0.01}),
+            &tt, &[], 1000, 300, true, "BIKE", 1.2, 4.5,
+        ).unwrap();
+        server.join().unwrap();
+        assert_eq!(leg["mode"], "BIKE");
+        assert_eq!(leg["duration"], 300);
+        assert_eq!(leg["startTime"], timestamp(1000));
+        assert_eq!(leg["endTime"], timestamp(1300));
+        assert_eq!(leg["legGeometry"]["length"], 0);
+    }
+
     #[test]
     fn identical_street_paths_share_one_osr_request() {
         use std::io::{BufRead, BufReader, Write};
