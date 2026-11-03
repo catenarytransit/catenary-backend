@@ -115,6 +115,17 @@ pub struct RawTripRef<'a> {
 }
 
 impl RawTripRef<'_> {
+    /// Compare the complete descriptor identity without allocating owned strings.
+    pub fn matches(&self, other: &AspenRawTripInfo) -> bool {
+        self.trip_id == other.trip_id.as_deref()
+            && self.route_id == other.route_id.as_deref()
+            && self.start_time == other.start_time.as_deref()
+            && self.start_date == other.start_date
+            && self.direction_id == other.direction_id
+            && self.schedule_relationship == other.schedule_relationship.as_ref()
+            && self.modified_trip == other.modified_trip.as_ref()
+    }
+
     pub fn effective_start_date(&self) -> Option<chrono::NaiveDate> {
         self.modified_trip
             .and_then(|m| m.start_date)
@@ -376,7 +387,7 @@ impl<'a> TripUpdateRef<'a> {
     #[inline]
     pub fn stops(
         self,
-    ) -> impl ExactSizeIterator<Item = StopTimeUpdateRef<'a>> + DoubleEndedIterator {
+    ) -> impl ExactSizeIterator<Item = StopTimeUpdateRef<'a>> + DoubleEndedIterator + Clone {
         let row = &self.table.rows[self.row];
         let start = row.stop_start as usize;
         (start..start + row.stop_len as usize).map(move |row| StopTimeUpdateRef {

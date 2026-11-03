@@ -1,6 +1,6 @@
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::aspen_dataset::{AspenisedData, AspenisedTripUpdate};
 use catenary::catenaryconfig;
+use catenary::compressed_aspen_dataset::{CompressedAspenisedData, TripUpdateRef};
 use catenary::models::{Agency, CompressedTrip, Route};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::sbb_formation_types::{SbbFormationApiResponse, SbbFormationData};
@@ -465,27 +465,17 @@ fn insert_realtime_trip_request(
         .or_insert(timing);
 }
 
-fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
-    let first_stop_time = trip_update
-        .stop_time_update
-        .as_slice()
-        .first()
-        .and_then(|stop| {
-            stop.departure
-                .as_ref()
-                .and_then(|event| event.time)
-                .or_else(|| stop.arrival.as_ref().and_then(|event| event.time))
-        });
-    let last_stop_time = trip_update
-        .stop_time_update
-        .as_slice()
-        .last()
-        .and_then(|stop| {
-            stop.arrival
-                .as_ref()
-                .and_then(|event| event.time)
-                .or_else(|| stop.departure.as_ref().and_then(|event| event.time))
-        });
+fn trip_update_timing(trip_update: TripUpdateRef<'_>) -> RealtimeTripTiming {
+    let first_stop_time = trip_update.stops().next().and_then(|stop| {
+        stop.departure()
+            .and_then(|event| event.time)
+            .or_else(|| stop.arrival().and_then(|event| event.time))
+    });
+    let last_stop_time = trip_update.stops().next_back().and_then(|stop| {
+        stop.arrival()
+            .and_then(|event| event.time)
+            .or_else(|| stop.departure().and_then(|event| event.time))
+    });
 
     RealtimeTripTiming {
         first_stop_time,
@@ -493,14 +483,14 @@ fn trip_update_timing(trip_update: &AspenisedTripUpdate) -> RealtimeTripTiming {
     }
 }
 
-fn collect_realtime_trip_requests(data: &AspenisedData) -> RealtimeTripRequests {
+fn collect_realtime_trip_requests(data: &CompressedAspenisedData) -> RealtimeTripRequests {
     let mut requests = HashMap::new();
 
-    for trip_update in data.trip_updates.values() {
+    for (_, trip_update) in data.trip_updates().iter() {
         insert_realtime_trip_request(
             &mut requests,
-            trip_update.trip.trip_id.as_deref(),
-            trip_update.trip.start_date,
+            trip_update.trip().trip_id,
+            trip_update.trip().start_date,
             trip_update_timing(trip_update),
         );
     }
@@ -598,7 +588,7 @@ fn evu_for_candidate(
 }
 
 async fn resolve_train_requests(
-    data: &AspenisedData,
+    data: &CompressedAspenisedData,
     conn_pool: &CatenaryPostgresPool,
     realtime_trip_requests: &RealtimeTripRequests,
 ) -> Result<TrainRequests, Box<dyn std::error::Error + Sync + Send>> {
@@ -607,6 +597,7 @@ async fn resolve_train_requests(
 
     for (trip_id, operation_dates) in realtime_trip_requests {
         let Some(compressed_trip) = data
+            .metadata()
             .compressed_trip_internal_cache
             .compressed_trips
             .get(trip_id.as_str())
@@ -616,6 +607,7 @@ async fn resolve_train_requests(
         };
 
         let Some(route) = data
+            .metadata()
             .vehicle_routes_cache
             .get(compressed_trip.route_id.as_str())
         else {
@@ -1176,7 +1168,7 @@ async fn fetch_requests_for_api_key(
 
 pub async fn bg_fetch_sbb_formations(
     store: SbbFormationStore,
-    authoritative_data_store: Arc<SccHashMap<String, Arc<AspenisedData>>>,
+    authoritative_data_store: Arc<SccHashMap<String, Arc<CompressedAspenisedData>>>,
     conn_pool: Arc<CatenaryPostgresPool>,
     worker_id: Arc<String>,
     etcd_addresses: Arc<Vec<String>>,
