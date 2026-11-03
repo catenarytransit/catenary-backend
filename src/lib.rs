@@ -99,6 +99,7 @@ use std::path::PathBuf;
 use std::{fs::File, io::BufReader, io::BufWriter};
 pub mod agency_specific_types;
 pub mod aspen_dataset;
+pub mod compressed_aspen_dataset;
 pub mod catenaryconfig;
 pub mod compact_formats;
 pub mod compact_rt_v2;
