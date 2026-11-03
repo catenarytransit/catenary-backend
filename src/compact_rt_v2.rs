@@ -5,6 +5,9 @@
 //! part of the feed feature bitmap. Optional event and stop-time properties are
 //! encoded once as feed-wide columns. A missing column allocates no per-row data.
 
+mod trip_descriptor;
+pub use trip_descriptor::{CompactTripDescriptorStore, TripDescriptorRef};
+
 use crate::compact_formats::{
     CompactFeedEntity, CompactFeedHeader, CompactFeedMessage, CompactStopTimeEvent,
     CompactStopTimeUpdate, CompactTripUpdate,
@@ -304,6 +307,8 @@ impl CompactStopTimeStore {
     }
 }
 
+// Retained for decoding existing V2 serialized snapshots. New snapshots use
+// TripDescriptorColumns, appended after the existing enum variants.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompactTripUpdateV2 {
     pub trip: TripDescriptor,
@@ -329,8 +334,73 @@ pub struct CompactTripFeedV2 {
 }
 
 impl CompactTripFeedV2 {
+    fn expanded_entities(&self) -> Vec<CompactFeedEntity> {
+        self.entities
+            .iter()
+            .enumerate()
+            .map(|(entity_index, entity)| {
+                let trip_update = entity.trip_update.as_ref().map(|tu| {
+                    let begin = tu.stop_start as usize;
+                    let end = begin
+                        .checked_add(tu.stop_len as usize)
+                        .expect("stop range overflow");
+                    let stop_time_update = (begin..end)
+                        .map(|index| self.stops.get_stop(index).expect("valid compact stop"))
+                        .collect();
+                    CompactTripUpdate {
+                        trip: tu.trip.clone(),
+                        vehicle: tu.vehicle.clone(),
+                        stop_time_update,
+                        timestamp: tu.timestamp,
+                        delay: self.trip_delay.get(entity_index),
+                        trip_properties: tu.trip_properties.clone(),
+                    }
+                });
+                CompactFeedEntity {
+                    id: entity.id.clone(),
+                    is_deleted: entity.is_deleted,
+                    trip_update,
+                    vehicle: None,
+                    alert: None,
+                    shape: None,
+                    stop: None,
+                    trip_modifications: None,
+                }
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactTripUpdateV3 {
+    /// Index into the feed-local descriptor columns.
+    pub trip_index: u32,
+    pub vehicle: Option<VehicleDescriptor>,
+    pub stop_start: u32,
+    pub stop_len: u32,
+    pub timestamp: Option<u64>,
+    pub trip_properties: Option<Box<TripProperties>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactTripEntityV3 {
+    pub id: String,
+    pub is_deleted: Option<bool>,
+    pub trip_update: Option<CompactTripUpdateV3>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompactTripFeedV3 {
+    pub entities: Vec<CompactTripEntityV3>,
+    pub descriptors: CompactTripDescriptorStore,
+    pub trip_delay: CompactDelayColumn,
+    pub stops: CompactStopTimeStore,
+}
+
+impl CompactTripFeedV3 {
     fn from_entities(entities: Vec<CompactFeedEntity>) -> (Self, RtFeatures) {
         let mut packed_entities = Vec::with_capacity(entities.len());
+        let mut descriptors = Vec::new();
         let mut rows = Vec::new();
         let mut stop_ids = Vec::new();
         let mut id_indices: AHashMap<Arc<str>, u32> = AHashMap::new();
@@ -417,8 +487,11 @@ impl CompactTripFeedV2 {
                     occupancies.push(stop.departure_occupancy_status);
                     properties.push(stop.stop_time_properties.map(|boxed| *boxed));
                 }
-                CompactTripUpdateV2 {
-                    trip,
+                let trip_index =
+                    u32::try_from(descriptors.len()).expect("too many trip descriptors");
+                descriptors.push(trip);
+                CompactTripUpdateV3 {
+                    trip_index,
                     vehicle,
                     stop_start,
                     stop_len,
@@ -426,7 +499,7 @@ impl CompactTripFeedV2 {
                     trip_properties,
                 }
             });
-            packed_entities.push(CompactTripEntityV2 {
+            packed_entities.push(CompactTripEntityV3 {
                 id: entity.id,
                 is_deleted: entity.is_deleted,
                 trip_update,
@@ -463,6 +536,7 @@ impl CompactTripFeedV2 {
         (
             Self {
                 entities: packed_entities,
+                descriptors: CompactTripDescriptorStore::new(descriptors),
                 trip_delay,
                 stops: CompactStopTimeStore {
                     rows,
@@ -491,7 +565,11 @@ impl CompactTripFeedV2 {
                         .map(|index| self.stops.get_stop(index).expect("valid compact stop"))
                         .collect();
                     CompactTripUpdate {
-                        trip: tu.trip.clone(),
+                        trip: self
+                            .descriptors
+                            .get(tu.trip_index as usize)
+                            .expect("valid compact trip descriptor")
+                            .to_owned(),
                         vehicle: tu.vehicle.clone(),
                         stop_time_update,
                         timestamp: tu.timestamp,
@@ -519,6 +597,9 @@ pub enum CompactFeedDataV2 {
     TripUpdates(CompactTripFeedV2),
     /// Mixed and non-trip feeds retain the existing lossless representation.
     Legacy(Vec<CompactFeedEntity>),
+    /// Appended to preserve the discriminants/layouts of existing V2 variants.
+    /// Older readers cannot decode this new variant.
+    TripDescriptorColumns(CompactTripFeedV3),
 }
 
 /// Persistent GTFS-RT snapshot. The resident trip-update feed uses pooled
@@ -552,8 +633,8 @@ impl CompactFeedMessageV2 {
                     && e.trip_modifications.is_none()
             });
         let (data, features) = if trip_only {
-            let (trips, features) = CompactTripFeedV2::from_entities(entity);
-            (CompactFeedDataV2::TripUpdates(trips), features)
+            let (trips, features) = CompactTripFeedV3::from_entities(entity);
+            (CompactFeedDataV2::TripDescriptorColumns(trips), features)
         } else {
             (CompactFeedDataV2::Legacy(entity), RtFeatures::default())
         };
@@ -568,6 +649,7 @@ impl CompactFeedMessageV2 {
     pub fn entity_len(&self) -> usize {
         match &self.data {
             CompactFeedDataV2::TripUpdates(feed) => feed.entities.len(),
+            CompactFeedDataV2::TripDescriptorColumns(feed) => feed.entities.len(),
             CompactFeedDataV2::Legacy(entities) => entities.len(),
         }
     }
@@ -578,6 +660,7 @@ impl CompactFeedMessageV2 {
     pub fn entities(&self) -> Cow<'_, [CompactFeedEntity]> {
         match &self.data {
             CompactFeedDataV2::TripUpdates(feed) => Cow::Owned(feed.expanded_entities()),
+            CompactFeedDataV2::TripDescriptorColumns(feed) => Cow::Owned(feed.expanded_entities()),
             CompactFeedDataV2::Legacy(entities) => Cow::Borrowed(entities),
         }
     }
@@ -652,7 +735,7 @@ mod tests {
         assert!(!v2.features.contains(RtFeatures::SCHEDULED_TIME));
         assert!(!v2.features.contains(RtFeatures::DEPARTURE_OCCUPANCY));
         assert!(!v2.features.contains(RtFeatures::STOP_TIME_PROPERTIES));
-        let CompactFeedDataV2::TripUpdates(feed) = &v2.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &v2.data else {
             panic!("expected trip feed");
         };
         assert!(feed.stops.events.uncertainty.is_absent());
@@ -698,7 +781,7 @@ mod tests {
         stop.departure.as_mut().unwrap().delay = Some(-1);
 
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(compact.features.contains(RtFeatures::DELAY));
@@ -719,7 +802,7 @@ mod tests {
         trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(NINE_HOURS_SECONDS + 1);
 
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(matches!(
@@ -733,7 +816,7 @@ mod tests {
         let trip = raw.entity[0].trip_update.as_mut().unwrap();
         trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(-NINE_HOURS_SECONDS - 1);
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(matches!(
@@ -751,7 +834,7 @@ mod tests {
         trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(8);
 
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(matches!(
@@ -777,7 +860,7 @@ mod tests {
         }
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
         assert!(compact.features.contains(RtFeatures::DELAY));
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(feed.stops.events.delay.is_absent());
@@ -801,7 +884,7 @@ mod tests {
             trip.stop_time_update[0].arrival.as_mut().unwrap().delay = Some(event_delay);
 
             let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
-            let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+            let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
                 panic!("expected compact trip feed");
             };
             if (I24_MIN_SECONDS..=I24_MAX_SECONDS).contains(&event_delay) {
@@ -831,7 +914,7 @@ mod tests {
             .delay = None;
         let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
         assert!(!compact.features.contains(RtFeatures::DELAY));
-        let CompactFeedDataV2::TripUpdates(feed) = &compact.data else {
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
             panic!("expected compact trip feed");
         };
         assert!(feed.stops.events.delay.is_absent());
@@ -846,5 +929,62 @@ mod tests {
         let v2 = CompactFeedMessageV2::from_feed_message(raw.clone());
         assert!(matches!(v2.data, CompactFeedDataV2::Legacy(_)));
         assert_eq!(v2.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn descriptor_rows_skip_deleted_entities_and_round_trip_serialization() {
+        let mut raw = test_message();
+        let mut deleted = raw.entity[0].clone();
+        deleted.id = "deleted".into();
+        deleted.is_deleted = Some(true);
+        deleted.trip_update = None;
+        raw.entity.insert(0, deleted);
+        let mut second = raw.entity[1].clone();
+        second.id = "second".into();
+        second.trip_update.as_mut().unwrap().trip.route_id = Some("route-2".into());
+        raw.entity.push(second);
+        let compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = &compact.data else {
+            panic!("expected descriptor columns");
+        };
+        assert_eq!(feed.descriptors.count, 2);
+        assert_eq!(feed.entities[1].trip_update.as_ref().unwrap().trip_index, 0);
+        assert_eq!(feed.entities[2].trip_update.as_ref().unwrap().trip_index, 1);
+        let bytes = crate::bincode_serialize(&compact).unwrap();
+        let decoded: CompactFeedMessageV2 = crate::bincode_deserialize(&bytes).unwrap();
+        assert_eq!(decoded.to_feed_message(), raw);
+    }
+
+    #[test]
+    fn existing_v2_variant_remains_decodable() {
+        let raw = test_message();
+        let mut compact = CompactFeedMessageV2::from_feed_message(raw.clone());
+        let CompactFeedDataV2::TripDescriptorColumns(feed) = compact.data else {
+            panic!("expected descriptor columns");
+        };
+        let entities = feed
+            .entities
+            .iter()
+            .map(|entity| CompactTripEntityV2 {
+                id: entity.id.clone(),
+                is_deleted: entity.is_deleted,
+                trip_update: entity.trip_update.as_ref().map(|tu| CompactTripUpdateV2 {
+                    trip: feed.descriptors.get(tu.trip_index as usize).unwrap().to_owned(),
+                    vehicle: tu.vehicle.clone(),
+                    stop_start: tu.stop_start,
+                    stop_len: tu.stop_len,
+                    timestamp: tu.timestamp,
+                    trip_properties: tu.trip_properties.clone(),
+                }),
+            })
+            .collect();
+        compact.data = CompactFeedDataV2::TripUpdates(CompactTripFeedV2 {
+            entities,
+            trip_delay: feed.trip_delay,
+            stops: feed.stops,
+        });
+        let bytes = crate::bincode_serialize(&compact).unwrap();
+        let decoded: CompactFeedMessageV2 = crate::bincode_deserialize(&bytes).unwrap();
+        assert_eq!(decoded.to_feed_message(), raw);
     }
 }
