@@ -139,7 +139,8 @@ pub struct AspenServer {
         Arc<parking_lot::Mutex<HashMap<String, ChateauWorkState>>>,
     pub rough_hash_of_gtfs_rt: Arc<SccHashMap<(String, GtfsRtType), u64>>,
     pub hash_of_raw_gtfs_rt_protobuf: Arc<SccHashMap<String, GtfsRealtimeHashStore>>,
-    pub backup_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
+    pub backup_data_store:
+        Arc<SccHashMap<String, Arc<catenary::compressed_aspen_dataset::CompressedAspenisedData>>>,
     pub backup_gtfs_rt_store: Arc<SccHashMap<(String, GtfsRtType), Arc<CompactFeedMessageV2>>>,
     pub backup_trip_updates_by_gtfs_feed_history:
         Arc<SccHashMap<CompactString, AHashMap<RtKey, RtCacheEntry>>>,
@@ -1610,9 +1611,16 @@ impl AspenRpc for AspenServer {
         _context: tarpc::context::Context,
         chateau_id: String,
     ) -> Option<AspenisedData> {
-        match self.backup_data_store.get_async(&chateau_id).await {
-            Some(aspenised_data) => Some((**aspenised_data.get()).clone()),
-            None => None,
+        let snapshot = {
+            let guard = self.backup_data_store.get_async(&chateau_id).await?;
+            Arc::clone(guard.get())
+        }; // Drop the SCC guard before expanding the compatibility response.
+        match tokio::task::spawn_blocking(move || snapshot.to_expanded()).await {
+            Ok(data) => Some(data),
+            Err(error) => {
+                eprintln!("Failed to expand Aspen backup for {chateau_id}: {error}");
+                None
+            }
         }
     }
 
@@ -1622,6 +1630,13 @@ impl AspenRpc for AspenServer {
         chateau_id: String,
         data: AspenisedData,
     ) -> () {
+        let data = match tokio::task::spawn_blocking(move || data.into_compressed()).await {
+            Ok(data) => data,
+            Err(error) => {
+                eprintln!("Failed to compress Aspen backup for {chateau_id}: {error}");
+                return;
+            }
+        };
         let _ = self
             .backup_data_store
             .insert_async(chateau_id, Arc::new(data))

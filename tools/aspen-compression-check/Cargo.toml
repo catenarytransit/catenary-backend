@@ -1,0 +1,19 @@
+[package]
+name = "catenary-aspen-compression-check"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+ahash = { version = "0.8.12", features = ["serde"] }
+bincode = { version = "2.0", features = ["serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+compact_str = { version = "0.9.0", features = ["serde"] }
+ecow = { version = "0.2.3", features = ["serde"] }
+gtfs-realtime = "0.2.0"
+i24 = { version = "2.3", features = ["serde"] }
+rstar = { version = "0.12", features = ["serde"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
+serde_json = "1.0"

@@ -1,0 +1,33 @@
+name: Aspen compression
+
+on:
+  push:
+    paths:
+      - 'src/aspen_dataset.rs'
+      - 'src/formation_v1.rs'
+      - 'src/compressed_aspen_dataset*'
+      - 'src/compressed_aspen_dataset/**'
+      - 'tools/aspen-compression-check/**'
+      - '.github/workflows/aspen-compression.yml'
+  pull_request:
+    paths:
+      - 'src/aspen_dataset.rs'
+      - 'src/formation_v1.rs'
+      - 'src/compressed_aspen_dataset*'
+      - 'src/compressed_aspen_dataset/**'
+      - 'tools/aspen-compression-check/**'
+      - '.github/workflows/aspen-compression.yml'
+
+jobs:
+  compression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTFS-RT protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tools/aspen-compression-check
+      - name: Test production Aspen types and compression modules
+        run: cargo test --locked --manifest-path tools/aspen-compression-check/Cargo.toml
