@@ -547,7 +547,9 @@ fn metrlink_coord_to_f32(coord: &CompactString) -> Option<f32> {
 //For example, the delay
 //then we write some indexes, so that way the realtime data can quickly be found by certain IDs
 pub async fn new_rt_data(
-    authoritative_data_store: Arc<SccHashMap<String, Arc<catenary::aspen_dataset::AspenisedData>>>,
+    authoritative_data_store: Arc<
+        SccHashMap<String, Arc<catenary::compressed_aspen_dataset::CompressedAspenisedData>>,
+    >,
     authoritative_trajectory_data_store: Arc<
         SccHashMap<String, Arc<catenary::aspen_dataset::AspenTrajectoryStore>>,
     >,
@@ -603,7 +605,7 @@ pub async fn new_rt_data(
     let (mut compressed_trip_internal_cache, previous_authoritative_data_store) =
         match authoritative_data_store.get_async(chateau_id).await {
             Some(data) => (
-                data.compressed_trip_internal_cache.clone(),
+                data.metadata().compressed_trip_internal_cache.clone(),
                 Some(Arc::clone(data.get())),
             ),
             None => (CompressedTripInternalCache::new(), None),
@@ -952,7 +954,7 @@ pub async fn new_rt_data(
             Some(previous_fingerprint)
                 if *previous_fingerprint.get() == current_alert_input_fingerprint =>
             {
-                Some(Arc::clone(&previous_data.aspenised_alerts))
+                Some(Arc::clone(&previous_data.metadata().aspenised_alerts))
             }
             _ => None,
         }
@@ -3151,7 +3153,7 @@ pub async fn new_rt_data(
                                                                 let platform_name = track.departure_platform
                                                                     .clone()
                                                                     .or_else(|| track.arrival_platform.clone());
-                                                                
+
                                                                 if let Some(platform_val) = platform_name {
                                                                     platform_resp = Some(platform_val.clone().into());
                                                                     platform = Some(catenary::formation_v1::AspenisedPlatformInfo {
@@ -3362,6 +3364,7 @@ pub async fn new_rt_data(
                                 Some(previous_authoritative_data_store) => {
                                     let previous_trip_update_id =
                                         match previous_authoritative_data_store
+                                            .metadata()
                                             .trip_updates_lookup_by_trip_id_to_trip_update_ids
                                             .get(trip_id.as_str())
                                         {
@@ -3370,11 +3373,12 @@ pub async fn new_rt_data(
                                                     .iter()
                                                     .filter(|possible_match_trip_id| {
                                                         previous_authoritative_data_store
-                                                            .trip_updates
+                                                            .trip_updates()
                                                             .get(possible_match_trip_id.as_str())
                                                             .is_some_and(|possible_old_trip| {
-                                                                possible_old_trip.trip
-                                                                    == trip_descriptor
+                                                                possible_old_trip
+                                                                    .trip()
+                                                                    .matches(&trip_descriptor)
                                                             })
                                                     });
 
@@ -3393,7 +3397,7 @@ pub async fn new_rt_data(
                                     previous_trip_update_id.as_ref().and_then(
                                         |previous_trip_update_id| {
                                             previous_authoritative_data_store
-                                                .trip_updates
+                                                .trip_updates()
                                                 .get(previous_trip_update_id.as_str())
                                         },
                                     )
@@ -3405,7 +3409,7 @@ pub async fn new_rt_data(
 
                         let stop_time_update = match previous_trip_update {
                             Some(previous_trip_update) => {
-                                let old_stop_time_update = &previous_trip_update.stop_time_update;
+                                let old_stop_time_update = previous_trip_update.stops();
                                 let mut current_stop_time_update = stop_time_update;
 
                                 // Fast path: feeds normally remove already-passed stops,
@@ -3417,18 +3421,19 @@ pub async fn new_rt_data(
                                     let prefix_len =
                                         old_stop_time_update.len() - current_stop_time_update.len();
 
-                                    let is_suffix = old_stop_time_update[prefix_len..]
-                                        .iter()
+                                    let is_suffix = old_stop_time_update
+                                        .clone()
+                                        .skip(prefix_len)
                                         .zip(current_stop_time_update.iter())
                                         .all(|(old_stu, current_stu)| {
-                                            if old_stu.stop_id.as_deref()
-                                                != current_stu.stop_id.as_deref()
-                                            {
+                                            if old_stu.stop_id() != current_stu.stop_id.as_deref() {
                                                 return false;
                                             }
 
-                                            match (old_stu.stop_sequence, current_stu.stop_sequence)
-                                            {
+                                            match (
+                                                old_stu.stop_sequence(),
+                                                current_stu.stop_sequence,
+                                            ) {
                                                 (Some(old_sequence), Some(current_sequence)) => {
                                                     old_sequence == current_sequence
                                                 }
@@ -3448,11 +3453,12 @@ pub async fn new_rt_data(
                                             prefix_len + current_stop_time_update.len(),
                                         );
 
-                                        for old_stu in &old_stop_time_update[..prefix_len] {
+                                        for old_stu in old_stop_time_update.clone().take(prefix_len)
+                                        {
                                             // Preserve existing behavior: old entries without a
                                             // stop_id are not carried forward.
-                                            if old_stu.stop_id.is_some() {
-                                                let mut old_stu = old_stu.clone();
+                                            if old_stu.stop_id().is_some() {
+                                                let mut old_stu = old_stu.to_owned();
                                                 old_stu.old_rt_data = true;
                                                 merged.push(old_stu);
                                             }
@@ -3484,15 +3490,13 @@ pub async fn new_rt_data(
                                             }
 
                                             for old_stu in old_stop_time_update {
-                                                let should_preserve = old_stu
-                                                    .stop_id
-                                                    .as_deref()
-                                                    .is_some_and(|stop_id| {
+                                                let should_preserve =
+                                                    old_stu.stop_id().is_some_and(|stop_id| {
                                                         !current_stop_ids.contains(stop_id)
                                                     });
 
                                                 if should_preserve {
-                                                    let mut old_stu = old_stu.clone();
+                                                    let mut old_stu = old_stu.to_owned();
                                                     old_stu.old_rt_data = true;
                                                     old_data_to_add.push(old_stu);
                                                 }
@@ -3935,7 +3939,7 @@ pub async fn new_rt_data(
                     eprintln!("Failed to load SNCF SIRI Situation Exchange alerts: {error}");
 
                     if let Some(previous_data) = &previous_authoritative_data_store {
-                        for (alert_id, alert) in previous_data.aspenised_alerts.iter() {
+                        for (alert_id, alert) in previous_data.metadata().aspenised_alerts.iter() {
                             if alert_id.starts_with("sncf-siri-sx:") {
                                 alerts.insert(Arc::clone(alert_id), alert.clone());
                             }
@@ -4226,8 +4230,10 @@ pub async fn new_rt_data(
             } else {
                 // Within the grace period, preserve old trip updates not present in the new feed
                 // to prevent UI flickering during transient data drops.
-                for (trip_update_id, old_trip_update) in &previous_data.trip_updates {
+                for (trip_update_id, old_trip_update) in previous_data.trip_updates().iter() {
                     if !trip_updates.contains_key(trip_update_id) {
+                        let trip_update_id = CompactString::new(trip_update_id);
+                        let old_trip_update = old_trip_update.to_owned();
                         trip_updates.insert(trip_update_id.clone(), old_trip_update.clone());
 
                         if let Some(trip_id) = &old_trip_update.trip.trip_id {
@@ -4280,6 +4286,8 @@ pub async fn new_rt_data(
         }
         cpu_timings.add_since("previous_trip_grace_merge", cpu_started);
     }
+
+    drop(previous_authoritative_data_store);
 
     let cpu_started = current_thread_cpu_time();
     let mut vehicle_positions_rtree_by_route_type = AHashMap::new();
@@ -4407,9 +4415,6 @@ pub async fn new_rt_data(
         parent_id_to_children_ids,
     };
 
-    // Insert the aspenised data - clone only for persistence, move into map when possible
-    let aspenised_data = Arc::new(aspenised_data);
-    let aspenised_data_for_persist = Arc::clone(&aspenised_data);
     cpu_timings.add_since("snapshot_assembly", cpu_started);
 
     let crate::trajectory::TrajectoryBuildResult {
@@ -4420,12 +4425,55 @@ pub async fn new_rt_data(
         chateau_id,
         realtime_feed_id,
         total_started,
-        aspenised_data_for_persist.as_ref(),
+        &aspenised_data,
         authoritative_trajectory_data_store.as_ref(),
         pool.as_ref(),
     )
     .await;
     cpu_timings.add_duration("trajectories", trajectory_cpu_time);
+
+    let stage = Instant::now();
+    set_stage(chateau_id, realtime_feed_id, "persist_data", total_started);
+
+    let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
+        Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
+        None => true,
+    };
+
+    if should_save {
+        if let Err(e) = persistence::save_chateau_data(chateau_id, &aspenised_data) {
+            eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
+        } else {
+            if let Err(e) =
+                crate::trajectory::save_trajectory_store(chateau_id, store.as_ref(), static_changed)
+            {
+                eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
+            }
+            LAST_SAVE_TIME
+                .entry_async(chateau_id.to_string())
+                .await
+                .and_modify(|t| *t = Instant::now())
+                .or_insert(Instant::now());
+        }
+    }
+
+    // Consume the mutable working dataset; the resident store retains only compact rows.
+    set_stage(
+        chateau_id,
+        realtime_feed_id,
+        "compress_authoritative_snapshot",
+        total_started,
+    );
+    let (aspenised_data, compression_cpu_time) = tokio::task::spawn_blocking(move || {
+        let cpu_started = current_thread_cpu_time();
+        let snapshot = Arc::new(aspenised_data.into_compressed());
+        (
+            snapshot,
+            current_thread_cpu_time().saturating_sub(cpu_started),
+        )
+    })
+    .await?;
+    cpu_timings.add_duration("compress_authoritative_snapshot", compression_cpu_time);
 
     set_stage(
         chateau_id,
@@ -4434,7 +4482,7 @@ pub async fn new_rt_data(
         total_started,
     );
 
-    let published_at_ms = aspenised_data.last_updated_time_ms;
+    let published_at_ms = aspenised_data.metadata().last_updated_time_ms;
 
     let authoritative_entry = authoritative_data_store
         .entry_async(chateau_id.to_string())
@@ -4442,14 +4490,14 @@ pub async fn new_rt_data(
     let cpu_started = current_thread_cpu_time();
     authoritative_entry
         .and_modify(|current| {
-            if published_at_ms >= current.last_updated_time_ms {
+            if published_at_ms >= current.metadata().last_updated_time_ms {
                 *current = Arc::clone(&aspenised_data);
             } else {
                 tracing::warn!(
                     chateau_id,
                     realtime_feed_id,
                     candidate_timestamp = published_at_ms,
-                    current_timestamp = current.last_updated_time_ms,
+                    current_timestamp = current.metadata().last_updated_time_ms,
                     "Refusing to overwrite newer authoritative snapshot"
                 );
             }
@@ -4488,33 +4536,6 @@ pub async fn new_rt_data(
         &store,
     )
     .await;
-
-    let stage = Instant::now();
-    set_stage(chateau_id, realtime_feed_id, "persist_data", total_started);
-
-    let should_save = match LAST_SAVE_TIME.get_async(chateau_id).await {
-        Some(last_save) => Instant::now().duration_since(*last_save.get()) > SAVE_INTERVAL,
-        None => true,
-    };
-
-    if should_save {
-        if let Err(e) =
-            persistence::save_chateau_data(chateau_id, aspenised_data_for_persist.as_ref())
-        {
-            eprintln!("Failed to save chateau data for {}: {}", chateau_id, e);
-        } else {
-            if let Err(e) =
-                crate::trajectory::save_trajectory_store(chateau_id, store.as_ref(), static_changed)
-            {
-                eprintln!("Failed to save trajectory data for {}: {}", chateau_id, e);
-            }
-            LAST_SAVE_TIME
-                .entry_async(chateau_id.to_string())
-                .await
-                .and_modify(|t| *t = Instant::now())
-                .or_insert(Instant::now());
-        }
-    }
 
     cpu_timings.print(chateau_id, realtime_feed_id, total_started.elapsed());
 

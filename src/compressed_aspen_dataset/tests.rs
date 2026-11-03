@@ -388,3 +388,113 @@ fn descriptor_presence_and_dense_rail_columns_round_trip() {
     ));
     assert_round_trip(data);
 }
+
+#[test]
+fn borrowed_descriptor_matching_preserves_full_service_identity() {
+    let mut data = empty_dataset();
+    let mut update = trip(vec![]);
+    update.trip.modified_trip = Some(ModifiedTripSelector {
+        modifications_id: Some("modification".into()),
+        affected_trip_id: Some("affected".into()),
+        start_time: Some("26:00:00".into()),
+        start_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 4),
+    });
+    let descriptor = update.trip.clone();
+    data.trip_updates.insert("update".into(), update);
+    let snapshot = data.into_compressed();
+    let view = snapshot.trip_updates().get("update").unwrap().trip();
+    assert!(view.matches(&descriptor));
+
+    let mut variants = Vec::new();
+    let mut changed = descriptor.clone();
+    changed.trip_id = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.route_id = Some(String::new());
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.direction_id = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.start_time = Some("01:01:02".into());
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.start_date = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.schedule_relationship = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.modified_trip = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.modified_trip.as_mut().unwrap().start_date = None;
+    variants.push(changed);
+    let mut changed = descriptor.clone();
+    changed.modified_trip.as_mut().unwrap().start_time = None;
+    variants.push(changed);
+
+    for changed in variants {
+        assert!(!view.matches(&changed), "{changed:?}");
+        assert_eq!(view.matches(&changed), view.to_owned() == changed);
+    }
+}
+
+#[test]
+fn borrowed_stop_iterators_support_suffix_merge_and_endpoint_reads() {
+    let mut data = empty_dataset();
+    let stops: Vec<_> = ["A", "B", "C", "D"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| {
+            let mut stop = empty_stop();
+            stop.stop_id = Some(Arc::from(id));
+            stop.stop_sequence = Some(index as u16);
+            stop.departure = Some(AspenStopTimeEvent {
+                time: Some(100 + index as i64),
+                delay: None,
+                uncertainty: None,
+            });
+            stop
+        })
+        .collect();
+    data.trip_updates.insert("update".into(), trip(stops));
+    let snapshot = data.into_compressed();
+    let update = snapshot.trip_updates().get("update").unwrap();
+    let old_stops = update.stops();
+    assert_eq!(old_stops.len(), 4);
+    assert_eq!(
+        old_stops.clone().next().unwrap().departure().unwrap().time,
+        Some(100)
+    );
+    assert_eq!(
+        old_stops
+            .clone()
+            .next_back()
+            .unwrap()
+            .departure()
+            .unwrap()
+            .time,
+        Some(103)
+    );
+    assert_eq!(
+        old_stops
+            .clone()
+            .skip(2)
+            .map(|s| s.stop_id().unwrap())
+            .collect::<Vec<_>>(),
+        ["C", "D"]
+    );
+    let preserved: Vec<_> = old_stops
+        .take(2)
+        .map(|s| {
+            let mut stop = s.to_owned();
+            stop.old_rt_data = true;
+            stop
+        })
+        .collect();
+    assert_eq!(preserved.len(), 2);
+    assert_eq!(preserved[1].stop_id.as_deref(), Some("B"));
+    assert!(preserved.iter().all(|s| s.old_rt_data));
+    assert!(update.stops().all(|s| !s.old_rt_data()));
+}

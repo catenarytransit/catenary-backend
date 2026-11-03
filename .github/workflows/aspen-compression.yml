@@ -3,6 +3,7 @@ name: Aspen compression
 on:
   push:
     paths:
+      - 'src/aspen/**'
       - 'src/aspen_dataset.rs'
       - 'src/formation_v1.rs'
       - 'src/compressed_aspen_dataset*'
@@ -11,6 +12,7 @@ on:
       - '.github/workflows/aspen-compression.yml'
   pull_request:
     paths:
+      - 'src/aspen/**'
       - 'src/aspen_dataset.rs'
       - 'src/formation_v1.rs'
       - 'src/compressed_aspen_dataset*'

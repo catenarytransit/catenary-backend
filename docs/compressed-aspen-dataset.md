@@ -8,16 +8,30 @@ change.
 
 ## Current integration
 
-Aspen's resident **backup** store now consumes ordinary incoming datasets and
-stores compressed snapshots. The existing backup RPC expands a snapshot only
-when requested. Compression and expansion run on Tokio's blocking pool, after
-releasing any SCC guard. The backup store does not retain an ordinary copy.
+Aspen's resident **authoritative and backup** stores retain
+`Arc<CompressedAspenisedData>` snapshots. Startup consumes legacy persisted
+`AspenisedData` into the compressed format before inserting it into the
+resident store. No expanded trip table is cached alongside a compressed snapshot.
 
-The authoritative processing store still uses `AspenisedData`. This PR supplies
-the separate representation and direct read API needed for further migration;
-it does not yet reduce the authoritative store's trip-update memory. Mutable
-stop merging, trajectory generation, legacy RPC responses, and existing disk
-persistence continue using their current representations.
+Each realtime rebuild still assembles an ordinary mutable dataset. Trajectory
+construction and periodic disk persistence use that working dataset before it
+is consumed by compression on Tokio's blocking pool. The timestamp check still
+prevents a stale candidate from replacing a newer authoritative snapshot. CPU
+profiling reports `compress_authoritative_snapshot` separately. Working data and
+the previous compressed snapshot can coexist during a rebuild, so peak RSS is
+higher than steady-state resident storage.
+
+Authoritative RPC lookups expand only selected trips into their existing response
+types. Metadata, alerts, vehicles, shapes, counts, and SBB formation scans read
+metadata or borrowed trip/stop views directly. Old-stop merging compares borrowed
+descriptors and stop rows, materializing only preserved rows; the startup grace
+period expands missing trips individually. Full-dataset and full-trip dumps
+expand on the blocking pool after releasing the SCC guard. Backup insertion and
+expansion also run on the blocking pool.
+
+RPC signatures and disk formats remain compatible. Periodic persistence finishes
+before publishing the compressed candidate so the working dataset can be moved
+without retaining an expanded copy. The raw `compact_rt_v2` store is unchanged.
 
 ## Use
 
@@ -108,4 +122,4 @@ overhead, peak conversion memory, or process RSS. These synthetic fixtures have
 empty non-trip metadata. Real savings depend on feed density, nested rail data,
 and the fraction of memory in trip updates. The scan benchmark demonstrates a
 read-cost tradeoff, not a speedup claim. Profile representative production
-snapshots before migrating the authoritative store.
+snapshots to measure steady-state RSS, rebuild peaks, and conversion latency.
