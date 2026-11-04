@@ -37,6 +37,8 @@ pub struct RaptorStats {
     pub profile_journeys_reconstructed: u64,
     /// Reconstructed journeys discarded by strict timetable validation.
     pub profile_journeys_rejected: u64,
+    /// Terminal snapshots reused after early validation during route scanning.
+    pub profile_terminal_reconstruction_reused: u64,
     /// One-shot reference RAPTOR searches used to recover empty profiles.
     pub profile_fallback_searches: u64,
     /// Geometric expansions of the requested departure/arrival interval.
@@ -58,6 +60,10 @@ pub struct RaptorStats {
     pub pong_iterations: u64,
     pub pong_forward_searches: u64,
     pub pong_backward_searches: u64,
+    /// PONG executions skipped because the matching result is already known.
+    pub pong_known_result_hits: u64,
+    /// Prior-result destination limits supplied to subsequent PING executions.
+    pub pong_seeded_destination_bounds: u64,
     /// Completed half-open PONG departure/arrival interval in Unix seconds.
     pub pong_interval_from: Option<i64>,
     pub pong_interval_to: Option<i64>,
