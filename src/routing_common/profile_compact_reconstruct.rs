@@ -3,7 +3,9 @@
 //! Every cell contains an arrival/boarding-ready time and one predecessor
 //! index. Route scanning never allocates a node for a dominated alternative.
 use crate::routing_common::profile_compact::{Parent, PathLink, Round, Stage};
-use crate::routing_common::raptor_query::{Journey, Leg, Query, transport_event_second};
+use crate::routing_common::raptor_query::{
+    Journey, Leg, Query, RaptorStats, optimize_same_trip_endpoint_walks, transport_event_second,
+};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 
 pub(super) fn reconstruct(
@@ -18,6 +20,34 @@ pub(super) fn reconstruct(
 ) -> Option<Journey> {
     let cell = rounds.get(k)?.get(stage, at, generation)?;
     reconstruct_snapshot(parents, cell.parent, cell.time, at, arrive_by, last_seconds)
+}
+
+/// A terminal snapshot must be validated before its time can prune other
+/// paths. Callers cache this result, including None, until round finalization.
+pub(super) fn reconstruct_validated_snapshot(
+    tt: &ZeroCopyTimetable<'_>,
+    q: &Query,
+    parents: &[PathLink],
+    snapshot: u32,
+    event: i64,
+    stop: usize,
+    reverse: bool,
+    seconds: u32,
+    point_mode: bool,
+    stats: &mut RaptorStats,
+) -> Option<Journey> {
+    stats.profile_journeys_reconstructed += 1;
+    let journey = reconstruct_snapshot(parents, snapshot, event, stop, reverse, seconds)
+        .and_then(|mut journey| {
+            if !point_mode {
+                optimize_same_trip_endpoint_walks(tt, q, &mut journey);
+            }
+            valid_journey(tt, q, &journey).then_some(journey)
+        });
+    if journey.is_none() {
+        stats.profile_journeys_rejected += 1;
+    }
+    journey
 }
 
 /// Follow immutable predecessor snapshots; no lookup of a mutable round cell

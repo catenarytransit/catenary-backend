@@ -707,6 +707,17 @@ impl ProfileSearchState {
         Arc::clone(&self.transports)
     }
 
+    /// Nigiri raptor::limit_time_at_dest/update_time_at_dest. Call after
+    /// reset_point_arrivals and before execute_point to seed a ping from
+    /// already validated PONG results. Catenary indexes by boardings.
+    pub(crate) fn limit_time_at_dest(&mut self, boardings: usize, time: i64) {
+        for bound in self.time_at_dest.iter_mut().skip(boardings) {
+            if better(time, *bound, self.reverse) {
+                *bound = time;
+            }
+        }
+    }
+
     /// Nigiri's point execute(start_time, max_transfers, worst_time_at_dest).
     /// The caller resets arrivals once for ping and once before the sequence
     /// of pongs. Successive pongs retain scalar round arrivals and validated
@@ -941,6 +952,10 @@ impl ProfileSearchState {
             // invariant for the Gentian compact solver.
             let mut ride_terminal_paths = Vec::<(i64, usize, u32, u32)>::new();
             let mut candidate_slots = HashMap::<usize, Vec<usize>>::new();
+            // Cache both successful and rejected early reconstructions by
+            // immutable snapshot. Round finalization must not extract and
+            // validate the same predecessor chain a second time.
+            let mut reconstructed_terminals = HashMap::<u32, Option<Journey>>::new();
             // Finish route scanning before taking immutable references to
             // round predecessors for timetable-validated destination updates.
             {
@@ -1086,35 +1101,29 @@ impl ProfileSearchState {
                                                     // predecessor chain before using it as a
                                                     // pruning bound: GTFS pair-specific transfers
                                                     // make unvalidated scalar bounds unsafe here.
-                                                    if better(score, self.time_at_dest[k], reverse)
-                                                    {
-                                                        if let Some(mut journey) =
-                                                        crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
-                                                            &self.parents, snapshot, event,
-                                                            loc, reverse, seconds,
-                                                        )
-                                                    {
-                                                        if !self.point_mode {
-                                                            optimize_same_trip_endpoint_walks(tt, q, &mut journey);
-                                                        }
-                                                        if valid_journey(tt, q, &journey) {
+                                                    if better(score, self.time_at_dest[k], reverse) {
+                                                        let journey = crate::routing_common::profile_compact_reconstruct::reconstruct_validated_snapshot(
+                                                            tt, q, &self.parents, snapshot, event,
+                                                            loc, reverse, seconds, self.point_mode,
+                                                            &mut self.stats,
+                                                        );
+                                                        if let Some(journey) = &journey {
                                                             let actual = if reverse {
                                                                 journey.departure_unix_seconds
                                                             } else {
                                                                 journey.arrival_unix_seconds
                                                             };
-                                                            for bound in self.time_at_dest
-                                                                .iter_mut().skip(k)
-                                                            {
+                                                            for bound in self.time_at_dest.iter_mut().skip(k) {
                                                                 if better(actual, *bound, reverse) {
                                                                     *bound = actual;
                                                                 }
                                                             }
                                                         }
-                                                    }
+                                                        reconstructed_terminals.insert(snapshot, journey);
                                                     }
                                                     let item = (score, loc, seconds, snapshot);
                                                     if let Some(idx) = replace {
+                                                        reconstructed_terminals.remove(&ride_terminal_paths[idx].3);
                                                         ride_terminal_paths[idx] = item;
                                                     } else {
                                                         slots.push(ride_terminal_paths.len());
@@ -1261,32 +1270,29 @@ impl ProfileSearchState {
                 )
             });
             for (arrival, stop, seconds, snapshot) in ride_terminal_paths {
-                let Some(mut journey) =
-                    crate::routing_common::profile_compact_reconstruct::reconstruct_snapshot(
-                        &self.parents,
-                        snapshot,
+                let journey = match reconstructed_terminals.remove(&snapshot) {
+                    Some(cached) => {
+                        self.stats.profile_terminal_reconstruction_reused += 1;
+                        cached
+                    }
+                    None => crate::routing_common::profile_compact_reconstruct::reconstruct_validated_snapshot(
+                        tt, q, &self.parents, snapshot,
                         if reverse {
                             arrival.saturating_add(i64::from(seconds))
                         } else {
                             arrival.saturating_sub(i64::from(seconds))
                         },
-                        stop,
-                        reverse,
-                        seconds,
-                    )
-                else {
+                        stop, reverse, seconds, self.point_mode, &mut self.stats,
+                    ),
+                };
+                let Some(journey) = journey else {
                     continue;
                 };
-                self.stats.profile_journeys_reconstructed += 1;
-                if !self.point_mode {
-                    optimize_same_trip_endpoint_walks(tt, q, &mut journey);
-                }
-                if valid_journey(tt, q, &journey)
-                    && (!self.point_mode || (!better(self.time_at_dest[k], if reverse {
-                        journey.departure_unix_seconds
-                    } else {
-                        journey.arrival_unix_seconds
-                    }, reverse)))
+                if !self.point_mode || !better(self.time_at_dest[k], if reverse {
+                    journey.departure_unix_seconds
+                } else {
+                    journey.arrival_unix_seconds
+                }, reverse)
                 {
                     let metric = if reverse {
                         journey.departure_unix_seconds
@@ -2154,6 +2160,62 @@ mod compressed_timetable_profile_tests {
             assert!(stats.pong_forward_searches >= 1);
             assert!(stats.pong_backward_searches >= 1);
             assert!(!stats.profile_budget_exhausted);
+        }
+    }
+
+    #[test]
+    fn prior_pong_destination_limits_survive_point_setup_at_the_correct_boarding_count() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut q = query();
+        q.max_boardings = 3;
+        for reverse in [false, true] {
+            let (anchor, limit, looser) = if reverse {
+                (base + 17 * 3_600, base + 9 * 3_600, base + 8 * 3_600)
+            } else {
+                (base + 9 * 3_600, base + 17 * 3_600, base + 18 * 3_600)
+            };
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
+            let invalid = if reverse { NEG_INF } else { INF };
+            state.reset_point_arrivals();
+            state.limit_time_at_dest(2, limit);
+            state.limit_time_at_dest(2, looser);
+            assert_eq!(state.time_at_dest, vec![invalid, invalid, limit, limit]);
+            // The equal-time direct train must remain reconstructable even
+            // when a known two-boarding result supplies the same limit.
+            let journeys = state.execute_point(&tt, &q, anchor, 3, looser).unwrap();
+            assert!(journeys.iter().any(|j| j.boardings == 1));
+            assert_eq!(state.time_at_dest[2], limit);
+            assert_eq!(state.time_at_dest[3], limit);
+            state.reset_point_arrivals();
+            assert_eq!(state.time_at_dest, vec![invalid; 4]);
+        }
+    }
+
+    #[test]
+    fn point_terminal_reconstruction_is_reused_in_both_directions() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let q = query();
+        for reverse in [false, true] {
+            let (anchor, bound) = if reverse {
+                (base + 17 * 3_600, base + 8 * 3_600)
+            } else {
+                (base + 9 * 3_600, base + 18 * 3_600)
+            };
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
+            let journeys = state.execute_point(&tt, &q, anchor, 1, bound).unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert!(valid_journey(&tt, &q, &journeys[0]));
+            assert_eq!(state.stats.profile_journeys_reconstructed, 1);
+            assert_eq!(state.stats.profile_terminal_reconstruction_reused, 1);
+            assert_eq!(state.stats.profile_journeys_rejected, 0);
         }
     }
 

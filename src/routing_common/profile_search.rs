@@ -156,6 +156,7 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.profile_searches += one.profile_searches;
     total.profile_journeys_reconstructed += one.profile_journeys_reconstructed;
     total.profile_journeys_rejected += one.profile_journeys_rejected;
+    total.profile_terminal_reconstruction_reused += one.profile_terminal_reconstruction_reused;
     total.profile_fallback_searches += one.profile_fallback_searches;
 }
 
