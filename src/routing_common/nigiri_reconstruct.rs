@@ -242,7 +242,7 @@ pub(crate) fn reconstruct(
     if !state.reverse {
         legs.reverse();
     }
-    let journey = Journey {
+    let mut journey = Journey {
         departure_unix_seconds: if state.reverse {
             point.dest_time
         } else {
@@ -259,6 +259,16 @@ pub(crate) fn reconstruct(
     ensure!(
         valid_journey(tt, q, &journey),
         "deferred Nigiri journey violates timetable or GTFS transfer rules"
+    );
+    // reconstruct.cc calls optimize_footpaths after legs are in passenger
+    // order for either search direction. Internal transfers leave PONG's
+    // departure/arrival keys untouched and retain both scheduled vehicles.
+    crate::routing_common::transfer_optimizer::optimize_internal_transfers_with_importance(
+        tt, &state.importance, &mut journey,
+    );
+    ensure!(
+        valid_journey(tt, q, &journey),
+        "optimized Nigiri journey violates timetable or GTFS transfer rules"
     );
     Ok(journey)
 }

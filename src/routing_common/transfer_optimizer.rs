@@ -5,13 +5,95 @@
 //! boarding positions can be re-linked through a shorter legal directed footpath.
 //! This is Nigiri's optimize_transfers idea, kept outside the hot route scan.
 //!
-//! Complexity per transfer is O(stops on the first vehicle + stops on the second
-//! vehicle + outgoing edges at eligible alighting stops + matching target pairs).
-//! No stop-pair Cartesian product, additional RAPTOR labels, or OSR query is used.
+//! Port of Nigiri 82e55ced src/routing/raptor/optimize_footpaths.cc and
+//! src/loader/init_finish.cc::assign_importance. MIT: third_party/nigiri-LICENSE.
+//! Candidate iteration and strict penalty comparison follow the C++ order.
+//! Catenary retains exact seconds and directed GTFS minimum/prohibited rules.
 
 use crate::routing_common::raptor_query::{Journey, Leg, transport_event_second};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
-use std::collections::HashMap;
+
+/// Nigiri's assign_importance, derived once alongside the loaded topology.
+/// Keep this outside the wire format so existing Gentian files remain usable.
+#[derive(Debug)]
+pub(crate) struct StationImportance {
+    roots: Vec<usize>,
+    values: Vec<u64>,
+    maximum: u64,
+}
+
+impl StationImportance {
+    pub(crate) fn build(tt: &ZeroCopyTimetable<'_>) -> Self {
+        // Literal upstream array, including the implicitly zero-initialized
+        // final three entries. Use enum indices, not its stale class comments:
+        // index 5 is RideSharing, index 12 is ODM in this Nigiri revision.
+        const PRIORITY: [u64; 16] = [20, 20, 20, 20, 20, 16, 15, 10, 10, 3, 2, 10, 1, 0, 0, 0];
+        let mut route_importance = Vec::with_capacity(tt.route_transport_ranges().len());
+        for (r, range) in tt.route_transport_ranges().iter().enumerate() {
+            let first_section = tt.route_section_clasz_offsets()[r] as usize;
+            let section_end = tt.route_section_clasz_offsets()[r + 1] as usize;
+            let clasz = if first_section < section_end {
+                tt.route_section_clasz()[first_section]
+            } else {
+                tt.route_clasz()[r]
+            };
+            let active_days: u64 = (range.from..range.to)
+                .map(|t| {
+                    tt.bitfields()[tt.transport_traffic_days()[t as usize].idx()]
+                        .words
+                        .iter()
+                        .map(|w| u64::from(w.count_ones()))
+                        .sum::<u64>()
+                })
+                .sum();
+            route_importance.push(active_days * PRIORITY.get(clasz as usize).copied().unwrap_or(0));
+        }
+        let parents = tt.location_parent();
+        let mut values = vec![0u64; parents.len()];
+        let mut roots = Vec::with_capacity(parents.len());
+        for (i, &parent) in parents.iter().enumerate() {
+            // assign_importance aggregates at the immediate parent.
+            let at = if parent == LocationIdx::INVALID {
+                i
+            } else {
+                parent.idx()
+            };
+            for route in tt.routes_at(LocationIdx(i as u32)) {
+                values[at] = values[at].saturating_add(route_importance[route.idx()]);
+            }
+            // timetable::locations::get_root_idx, including its cycle guard.
+            let mut root = i;
+            let mut steps = 0;
+            while parents[root] != LocationIdx::INVALID {
+                let p = parents[root].idx();
+                if p == i || steps > 20 {
+                    root = parent.idx();
+                    break;
+                }
+                root = p;
+                steps += 1;
+            }
+            roots.push(root);
+        }
+        let maximum = values.iter().copied().max().unwrap_or(0);
+        Self {
+            roots,
+            values,
+            maximum,
+        }
+    }
+
+    /// get_penalty in seconds: duration - station reward - buffer reward.
+    fn penalty(&self, duration: u32, buffer: i64, from: u32, to: u32) -> f64 {
+        let mut weight = f64::from(duration);
+        let root = self.roots[from as usize];
+        if root == self.roots[to as usize] && self.maximum != 0 {
+            weight -= self.values[root] as f64 / self.maximum as f64 * 180.0;
+        }
+        weight -= 0.2 * buffer.clamp(0, 900) as f64;
+        weight
+    }
+}
 
 #[derive(Default, Clone, Copy, Debug)]
 pub(crate) struct OptimizationStats {
@@ -79,13 +161,6 @@ fn change_seconds(tt: &ZeroCopyTimetable<'_>, from: u32, to: u32) -> Option<u32>
     )
 }
 
-/// In units of fifths of a second: walking duration minus a bounded 20%
-/// reward for remaining connection buffer. Keep original when exactly tied.
-/// Avoid floating point, and don't let huge waits overpower a shorter walk.
-fn rank(walk: u32, buffer: i64) -> (i64, u32, i64) {
-    (5 * i64::from(walk) - buffer.clamp(0, 900), walk, -buffer)
-}
-
 #[derive(Clone, Copy)]
 struct Choice {
     from_stop: u32,
@@ -99,6 +174,7 @@ struct Choice {
 
 fn best_transfer(
     tt: &ZeroCopyTimetable<'_>,
+    importance: &StationImportance,
     previous: Ride,
     from_stop: u32,
     to_stop: u32,
@@ -158,83 +234,79 @@ fn best_transfer(
         return None;
     }
 
-    let original_buffer = change_seconds(tt, from_stop, to_stop).map(|change| {
-        next.departure
-            .saturating_sub(previous.arrival)
-            .saturating_sub(i64::from(walking_seconds.max(change)))
+    let original_buffer = change_seconds(tt, from_stop, to_stop).and_then(|change| {
+        let gap = next.departure - previous.arrival;
+        (gap >= i64::from(walking_seconds.max(change))).then_some(gap - i64::from(walking_seconds))
     });
-    let mut best_rank = original_buffer
-        .filter(|&b| b >= 0)
-        .map(|b| rank(walking_seconds, b))
-        .unwrap_or((i64::MAX, u32::MAX, i64::MAX));
+    // Score the original transfer with its own endpoints as well. Upstream
+    // passes the surrounding rides' outer endpoints for this baseline; using
+    // the transfer endpoints makes the station reward consistent/idempotent.
+    let mut penalty_best = original_buffer
+        .map(|buffer| importance.penalty(walking_seconds, buffer, from_stop, to_stop))
+        .unwrap_or(f64::INFINITY);
     let mut best = None;
 
-    // Include all earlier boarding positions on the *same next vehicle*.
-    // Repeated GTFS locations keep their distinct stop-sequence indices.
-    let mut boarding_by_location: HashMap<u32, Vec<(usize, i64)>> = HashMap::new();
-    for (pos, stop) in second.iter().enumerate().take(next.alight_position) {
-        if !stop.outbound() {
+    // fr_from.stop_range_ = {board + 1, size}: include later alighting
+    // positions beyond the originally reconstructed exit, on the same run.
+    for (from_position, stp_from) in first.iter().enumerate().skip(previous.board_position + 1) {
+        if !stp_from.inbound() {
+            // C++ out_allowed(): permission to alight
             continue;
         }
-        let Some(departure) =
-            transport_event_second(tt, next.route, next.transport, pos, false, next_midnight)
-        else {
-            continue;
-        };
-        boarding_by_location
-            .entry(stop.location().0)
-            .or_default()
-            .push((pos, departure));
-    }
-
-    // A single adjacency lookup per alighting position replaces Nigiri's
-    // nested stop-position scan, which matters for long-distance services.
-    for (pos, stop) in first.iter().enumerate().skip(previous.board_position + 1) {
-        if !stop.inbound() {
-            continue;
-        }
-        let Some(arrival) = transport_event_second(
-            tt,
-            previous.route,
-            previous.transport,
-            pos,
-            true,
-            prev_midnight,
-        ) else {
-            continue;
-        };
-        for edge in tt.footpaths_from(stop.location()) {
-            stats.edges_examined += 1;
-            let Some(boardings) = boarding_by_location.get(&edge.target().0) else {
-                continue;
-            };
-            let Some(change) = change_seconds(tt, stop.location().0, edge.target().0) else {
-                continue;
-            };
-            let walking = edge.seconds();
-            if walking == 0 {
+        // fr_to.stop_range_ = {0, alight}: include every possible entry
+        // before the fixed exit, including earlier and later boarding stops.
+        for (to_position, stp_to) in second.iter().enumerate().take(next.alight_position) {
+            if !stp_to.outbound() {
+                // C++ in_allowed(): permission to board
                 continue;
             }
-            for &(to_position, departure) in boardings {
-                let buffer = departure
-                    .saturating_sub(arrival)
-                    .saturating_sub(i64::from(walking.max(change)));
-                if buffer < 0 {
+            for fp in tt.footpaths_from(stp_from.location()) {
+                stats.edges_examined += 1;
+                if fp.target() != stp_to.location() {
                     continue;
                 }
-                let candidate_rank = rank(walking, buffer);
-                if candidate_rank < best_rank {
-                    best_rank = candidate_rank;
-                    best = Some(Choice {
-                        from_stop: stop.location().0,
-                        to_stop: edge.target().0,
-                        from_position: pos,
-                        to_position,
-                        arrival,
-                        departure,
-                        walking_seconds: walking,
-                    });
+                let from = stp_from.location().0;
+                let to = stp_to.location().0;
+                let arrival = transport_event_second(
+                    tt,
+                    previous.route,
+                    previous.transport,
+                    from_position,
+                    true,
+                    prev_midnight,
+                )?;
+                let departure = transport_event_second(
+                    tt,
+                    next.route,
+                    next.transport,
+                    to_position,
+                    false,
+                    next_midnight,
+                )?;
+                let walking = fp.seconds();
+                // Preserve directed GTFS restrictions in addition to the
+                // upstream arr + footpath_duration <= dep feasibility check.
+                if let Some(change) = change_seconds(tt, from, to) {
+                    let gap = departure - arrival;
+                    if gap >= i64::from(walking.max(change)) {
+                        let penalty =
+                            importance.penalty(walking, gap - i64::from(walking), from, to);
+                        if penalty < penalty_best {
+                            // strict: keep original on a tie
+                            penalty_best = penalty;
+                            best = Some(Choice {
+                                from_stop: from,
+                                to_stop: to,
+                                from_position,
+                                to_position,
+                                arrival,
+                                departure,
+                                walking_seconds: walking,
+                            });
+                        }
+                    }
                 }
+                break; // first matching footpath, exactly as in C++
             }
         }
     }
@@ -246,6 +318,23 @@ fn best_transfer(
 /// Caller must run this before Pareto reduction and journey serialization.
 pub(crate) fn optimize_internal_transfers(
     tt: &ZeroCopyTimetable<'_>,
+    journey: &mut Journey,
+) -> OptimizationStats {
+    if !journey.legs.windows(3).any(|legs| {
+        matches!(
+            (&legs[0], &legs[1], &legs[2]),
+            (Leg::Ride { .. }, Leg::Transfer { .. }, Leg::Ride { .. })
+        )
+    }) {
+        return OptimizationStats::default();
+    }
+    let importance = StationImportance::build(tt);
+    optimize_internal_transfers_with_importance(tt, &importance, journey)
+}
+
+pub(crate) fn optimize_internal_transfers_with_importance(
+    tt: &ZeroCopyTimetable<'_>,
+    importance: &StationImportance,
     journey: &mut Journey,
 ) -> OptimizationStats {
     let mut stats = OptimizationStats::default();
@@ -270,7 +359,7 @@ pub(crate) fn optimize_internal_transfers(
             continue;
         };
         let Some(best) = best_transfer(
-            tt, previous, *from_stop, *to_stop, *seconds, next, &mut stats,
+            tt, importance, previous, *from_stop, *to_stop, *seconds, next, &mut stats,
         ) else {
             continue;
         };
@@ -574,5 +663,205 @@ mod tests {
             optimize_internal_transfers(&tt, &mut j).transfers_improved,
             0
         );
+    }
+
+    #[test]
+    fn importance_counts_active_days_and_aggregates_at_station_parent() {
+        let mut owned = fixture();
+        owned.location_parent[2] = LocationIdx(3);
+        owned.location_parent[5] = LocationIdx(3);
+        // Bus weight 2: one route at each of 2, 3 and 5, one active day.
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let importance = StationImportance::build(&tt);
+        assert_eq!(importance.values[3], 6);
+        assert_eq!(importance.maximum, 6);
+        assert_eq!(importance.penalty(200, 0, 2, 5), 20.0);
+        assert_eq!(importance.penalty(200, 0, 1, 4), 200.0);
+        assert_eq!(importance.penalty(200, 900, 1, 4), 20.0);
+        assert_eq!(importance.penalty(200, 1800, 1, 4), 20.0);
+
+        // Twice the service days doubles the contribution. First-section
+        // class takes precedence over the route's fallback class.
+        owned.bitfields[1].set(1, true).unwrap();
+        owned.route_section_clasz = vec![1]; // HighSpeed: weight 20
+        owned.route_section_clasz_offsets = vec![0, 1, 1];
+        owned.section_flag_offsets = vec![0, 1, 1];
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let importance = StationImportance::build(&tt);
+        assert_eq!(importance.values[3], 84); // 40 + 40 + 4
+        assert_eq!(importance.maximum, 84);
+    }
+
+    #[test]
+    fn station_reward_can_prefer_a_longer_walk_and_remains_idempotent() {
+        let mut owned = fixture();
+        owned.location_parent[2] = LocationIdx(3);
+        owned.location_parent[5] = LocationIdx(3);
+        owned.footpaths_out[1] = PackedFootpath::new(LocationIdx(5), 600).unwrap();
+        owned.footpaths_in[1] = PackedFootpath::new(LocationIdx(2), 600).unwrap();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut j = journey();
+        assert_eq!(
+            optimize_internal_transfers(&tt, &mut j).transfers_improved,
+            1
+        );
+        assert!(matches!(
+            j.legs[2],
+            Leg::Transfer {
+                from_stop: 2,
+                to_stop: 5,
+                seconds: 600
+            }
+        ));
+        assert_eq!(
+            optimize_internal_transfers(&tt, &mut j).transfers_improved,
+            0
+        );
+    }
+
+    #[test]
+    fn zero_importance_is_finite_and_negative_buffer_is_not_rewarded() {
+        let mut owned = fixture();
+        owned.bitfields[1] = TrafficDays::default();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let importance = StationImportance::build(&tt);
+        assert_eq!(importance.maximum, 0);
+        assert_eq!(importance.penalty(200, 0, 2, 2), 200.0);
+        assert_eq!(importance.penalty(200, -10, 2, 2), 200.0);
+    }
+
+    #[test]
+    fn equal_penalty_keeps_original_and_allows_boarding_at_exact_walk_arrival() {
+        let mut owned = fixture();
+        // Both transfer pairs have the same walk and buffer: keep original.
+        owned.transport_first_dep_offset[1] = Delta::from_seconds(8 * 3600 + 1200).unwrap();
+        owned.footpaths_out[1] = PackedFootpath::new(LocationIdx(5), 524).unwrap();
+        owned.footpaths_in[1] = PackedFootpath::new(LocationIdx(2), 524).unwrap();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut j = journey();
+        assert_eq!(
+            optimize_internal_transfers(&tt, &mut j).transfers_improved,
+            0
+        );
+        assert!(matches!(
+            j.legs[2],
+            Leg::Transfer {
+                from_stop: 1,
+                to_stop: 4,
+                ..
+            }
+        ));
+
+        // Exact boundary at 08:25:00: arrival 08:22:31 plus 149 seconds.
+        let mut owned = fixture();
+        owned.timing_profile_events[3] = Delta::from_seconds(1351).unwrap();
+        owned.timing_profile_events[4] = Delta::from_seconds(1351).unwrap();
+        owned.timing_profile_events[5] = Delta::from_seconds(1400).unwrap();
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut j = journey();
+        assert_eq!(
+            optimize_internal_transfers(&tt, &mut j).transfers_improved,
+            1
+        );
+        assert!(matches!(j.legs[2], Leg::Transfer { seconds: 149, .. }));
+    }
+
+    #[test]
+    fn live_pong_uses_later_alighting_shortcut_in_both_query_directions() {
+        use crate::routing_common::pong::route_pong_with_stats_precomputed;
+        use crate::routing_common::profile_compact_reconstruct::valid_journey;
+        use crate::routing_common::profile_search::ProfileOptions;
+        use crate::routing_common::raptor_query::{Query, WalkingEndpoint};
+        for walk in [149, 600] {
+            let mut owned = fixture();
+            if walk == 600 {
+                owned.location_parent[2] = LocationIdx(3);
+                owned.location_parent[5] = LocationIdx(3);
+                owned.footpaths_out[1] = PackedFootpath::new(LocationIdx(5), walk).unwrap();
+                owned.footpaths_in[1] = PackedFootpath::new(LocationIdx(2), walk).unwrap();
+            }
+            let bytes = owned.encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            let base = i64::from(tt.header().first_utc_day) * 86_400;
+            for arrive_by in [false, true] {
+                let q = Query {
+                    departure_unix_seconds: base + if arrive_by { 9 * 3600 } else { 8 * 3600 - 60 },
+                    access: vec![WalkingEndpoint {
+                        stop: LocationIdx(0),
+                        seconds: 0,
+                    }],
+                    egress: vec![WalkingEndpoint {
+                        stop: LocationIdx(6),
+                        seconds: 0,
+                    }],
+                    direct_walk_seconds: None,
+                    max_boardings: 2,
+                    max_duration_seconds: 3600,
+                };
+                let (journeys, _) = route_pong_with_stats_precomputed(
+                    &tt,
+                    &q,
+                    ProfileOptions {
+                        min_itineraries: 1,
+                        ..ProfileOptions::default()
+                    },
+                    arrive_by,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(journeys.len(), 1, "arrive_by={arrive_by}");
+                let j = &journeys[0];
+                assert!(valid_journey(&tt, &q, j));
+                assert_eq!(
+                    (
+                        j.departure_unix_seconds,
+                        j.arrival_unix_seconds,
+                        j.boardings
+                    ),
+                    (base + 8 * 3600, base + 8 * 3600 + 35 * 60, 2)
+                );
+                assert!(
+                    matches!(
+                        j.legs[1],
+                        Leg::Ride {
+                            to_stop: 2,
+                            alight_stop_index: 2,
+                            transport: 0,
+                            ..
+                        }
+                    ),
+                    "{j:?}"
+                );
+                assert!(
+                    matches!(
+                        j.legs[2],
+                        Leg::Transfer {
+                            from_stop: 2,
+                            to_stop: 5,
+                            seconds
+                        } if seconds == walk
+                    ),
+                    "{j:?}"
+                );
+                assert!(
+                    matches!(
+                        j.legs[3],
+                        Leg::Ride {
+                            from_stop: 5,
+                            board_stop_index: 1,
+                            transport: 1,
+                            ..
+                        }
+                    ),
+                    "{j:?}"
+                );
+            }
+        }
     }
 }

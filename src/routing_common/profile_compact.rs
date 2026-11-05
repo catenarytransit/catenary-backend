@@ -286,6 +286,7 @@ pub(crate) struct LowerBoundTopology {
     reverse: CsrGraph,
     stations: Vec<usize>,
     transfer_sensitive: Arc<Vec<bool>>,
+    importance: Arc<crate::routing_common::transfer_optimizer::StationImportance>,
 }
 struct CsrGraph {
     offsets: Vec<usize>,
@@ -326,6 +327,12 @@ impl CsrGraph {
 impl LowerBoundTopology {
     pub(crate) fn transport_index(&self) -> Arc<TransportIndex> {
         Arc::clone(&self.transports)
+    }
+
+    pub(crate) fn station_importance(
+        &self,
+    ) -> Arc<crate::routing_common::transfer_optimizer::StationImportance> {
+        Arc::clone(&self.importance)
     }
 
     pub(crate) fn transfer_sensitive(&self) -> Arc<Vec<bool>> {
@@ -402,6 +409,9 @@ impl LowerBoundTopology {
             stations,
             transfer_sensitive: Arc::new(transfer_sensitive),
             transports: Arc::new(TransportIndex::build(tt)),
+            importance: Arc::new(
+                crate::routing_common::transfer_optimizer::StationImportance::build(tt),
+            ),
         }
     }
 }
