@@ -22,7 +22,7 @@ fn meters(a: Coordinate, b: Coordinate) -> f64 {
 /// Each index is the exact LocationIdx produced by Gentian's timetable writer.
 pub fn compute(
     osr_dir: &Path,
-    tt: &catenary::routing_common::timetable::TimetableOwned,
+    tt: &mut catenary::routing_common::timetable::TimetableOwned,
     metadata: &[catenary::routing_common::route_manager::PlatformStopMeta],
     max_seconds: u32,
     candidate_meters: f64,
@@ -35,6 +35,12 @@ pub fn compute(
         candidate_meters.is_finite() && candidate_meters > 0.0,
         "candidate radius must be positive and finite"
     );
+    use catenary::routing_common::timetable::{OsrLocationMatch, OsrMatchGraph, OsrWayCandidate};
+    let fingerprint = catenary::routing_common::osr_graph_identity::fingerprint(osr_dir)?;
+    tt.osr_match_graphs.clear();
+    tt.osr_location_matches.clear();
+    tt.osr_candidates.clear();
+    tt.osr_candidate_offsets = vec![0];
     let stops = &tt.coordinates;
     ensure!(
         u32::try_from(stops.len()).is_ok(),
@@ -125,8 +131,27 @@ pub fn compute(
             coordinate =
                 ffi::Coordinate::indoor(f64::from(stop.lat), f64::from(stop.lon), matched.level);
         }
+        tt.osr_location_matches.push(OsrLocationMatch {
+            level: if matched.found { matched.level } else { 0.0 },
+            platform_index: if matched.found {
+                matched.platform_index
+            } else {
+                u32::MAX
+            },
+        });
         // Profile-independent candidates can be reused for both match roles.
         let raw = router.get_raw_match(&coordinate, 250.0)?;
+        tt.osr_candidates
+            .extend(raw.iter().map(|c| OsrWayCandidate {
+                distance_to_way: c.distance_to_way,
+                way_index: c.way_index,
+                left_node: c.left.node_index,
+                left_distance: c.left.distance_to_node,
+                right_node: c.right.node_index,
+                right_distance: c.right.distance_to_node,
+            }));
+        tt.osr_candidate_offsets
+            .push(u32::try_from(tt.osr_candidates.len())?);
         let origin_idx =
             router.append_lookup_match(origins.pin_mut(), &coordinate, &match_origin, &raw)?;
         let dest_idx = router.append_lookup_match(
@@ -202,6 +227,17 @@ pub fn compute(
             eprintln!("Gentian OSR transfers: {}/{} locations", i, stops.len());
         }
     }
+    ensure!(
+        fingerprint == catenary::routing_common::osr_graph_identity::fingerprint(osr_dir)?,
+        "OSR graph changed during Gentian compilation; rebuild against a stable graph"
+    );
+    tt.osr_match_graphs.push(OsrMatchGraph {
+        fingerprint,
+        node_count: router.node_count(),
+        way_count: router.way_count(),
+        raw_radius_meters: 250.0,
+        reserved: 0,
+    });
     Ok(out)
 }
 

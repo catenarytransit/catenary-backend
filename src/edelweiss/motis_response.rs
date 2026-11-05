@@ -1,7 +1,9 @@
 //! Convert an internal RAPTOR journey into a client-facing MOTIS plan response.
 //! Metadata is looked up by chateau and public GTFS IDs across import attempts.
 use anyhow::{Context, Result};
+use catenary::routing_common::native_osr::{Endpoint as StreetEndpoint, NativeOsr, path_geometry};
 use catenary::routing_common::route_manager::Coordinates;
+use catenary::routing_common::timetable::LocationIdx;
 use catenary::routing_common::{
     metadata_index::MetadataIndex,
     raptor_query::{Journey, Leg},
@@ -446,148 +448,110 @@ fn coordinate_place(point: Coordinates, name: &str) -> Value {
     json!({"name": name,"lat":point.lat,"lon":point.lon})
 }
 
-#[derive(serde::Serialize)]
-struct PathQuery {
-    region: String,
-    latitude: f64,
-    longitude: f64,
-    max_seconds: u32,
-    include_geometry: bool,
-    stops: Vec<PathTarget>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    origin_stop: Option<PlatformPathStop>,
-    mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pedestrian_speed: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cycling_speed: Option<f32>,
-}
-#[derive(serde::Serialize)]
-struct PathTarget {
-    stop: u32,
-    latitude: f64,
-    longitude: f64,
-    #[serde(flatten)]
-    platform: PlatformMetadata,
-}
-#[derive(Default, serde::Serialize)]
-struct PlatformMetadata {
-    name: String,
-    gtfs_id: String,
-    platform_code: String,
-    route_names: Vec<String>,
-}
-#[derive(serde::Serialize)]
-struct PlatformPathStop {
-    stop: u32,
-    latitude: f64,
-    longitude: f64,
-    #[serde(flatten)]
-    platform: PlatformMetadata,
-}
-fn platform_metadata(
-    tt: &ZeroCopyTimetable<'_>,
-    all: &[catenary::routing_common::route_manager::PlatformStopMeta],
-    location: &Value,
-) -> Option<PlatformPathStop> {
-    let stop = u32::try_from(location.get("stopIndex")?.as_u64()?).ok()?;
-    let coordinate = tt.coordinates().get(stop as usize)?;
-    let metadata = all.get(stop as usize)?;
-    Some(PlatformPathStop {
-        stop,
-        latitude: f64::from(coordinate.lat),
-        longitude: f64::from(coordinate.lon),
-        platform: PlatformMetadata {
-            name: tt
-                .location_name()
-                .get(stop as usize)
-                .and_then(|x| tt.get_string(*x))
-                .unwrap_or("")
-                .to_owned(),
-            gtfs_id: tt
-                .location_id()
-                .get(stop as usize)
-                .and_then(|x| tt.get_string(*x))
-                .unwrap_or("")
-                .to_owned(),
-            platform_code: metadata.platform_code.clone(),
-            route_names: metadata.route_names.clone(),
-        },
-    })
-}
-#[derive(serde::Deserialize)]
-struct PathReply {
-    reachable: Vec<PathReachable>,
-    error: Option<String>,
-}
-#[derive(serde::Deserialize)]
-struct PathReachable {
-    geometry: Option<Vec<[f64; 2]>>,
-}
-
-/// Separate reconstruction phase, only for the small number of selected legs.
-fn street_path(
-    geometry_cache: &mut HashMap<String, Vec<[f64; 2]>>,
-    addr: &str,
+/// A response-local cache avoids rerouting identical selected street legs.
+/// IDs, graph region, speeds, direction and budget all affect path selection.
+fn street_path_key(
     region: &str,
     from: [f64; 2],
     to: [f64; 2],
-    origin_stop: Option<PlatformPathStop>,
-    destination_stop: Option<PlatformPathStop>,
+    origin: Option<LocationIdx>,
+    destination: Option<LocationIdx>,
+    budget: u32,
+    mode: &str,
+    pedestrian_speed: f32,
+    cycling_speed: f32,
+) -> Result<String> {
+    Ok(serde_json::to_string(&(
+        region,
+        from,
+        to,
+        origin.map(|s| s.0),
+        destination.map(|s| s.0),
+        budget.clamp(1, 3600),
+        mode,
+        pedestrian_speed.to_bits(),
+        cycling_speed.to_bits(),
+    ))?)
+}
+
+fn street_path(
+    geometry_cache: &mut HashMap<String, Vec<[f64; 2]>>,
+    osr: &NativeOsr,
+    tt: &ZeroCopyTimetable<'_>,
+    platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
+    region: &str,
+    from: [f64; 2],
+    to: [f64; 2],
+    origin_stop: Option<LocationIdx>,
+    destination_stop: Option<LocationIdx>,
     budget: u32,
     mode: &str,
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<[f64; 2]>> {
-    use std::io::{BufRead, BufReader, Write};
-    use std::net::TcpStream;
-    let q = PathQuery {
-        region: region.to_owned(),
-        latitude: from[1],
-        longitude: from[0],
-        max_seconds: budget.clamp(1, 3600),
-        include_geometry: true,
+    let key = street_path_key(
+        region,
+        from,
+        to,
         origin_stop,
-        mode: mode.to_owned(),
-        pedestrian_speed: (mode == "WALK").then_some(pedestrian_speed),
-        cycling_speed: (mode == "BIKE").then_some(cycling_speed),
-        stops: vec![PathTarget {
-            stop: 0,
-            latitude: to[1],
-            longitude: to[0],
-            platform: destination_stop.map(|s| s.platform).unwrap_or_default(),
-        }],
-    };
-    // Cache exactly matching OSR requests within this HTTP response.
-    // The serialized key includes platform metadata, mode, speeds and budget.
-    let key = serde_json::to_string(&q)?;
+        destination_stop,
+        budget,
+        mode,
+        pedestrian_speed,
+        cycling_speed,
+    )?;
     if let Some(geometry) = geometry_cache.get(&key) {
         return Ok(geometry.clone());
     }
-    let mut socket = TcpStream::connect(addr)?;
-    socket.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    socket.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    socket.write_all(key.as_bytes())?;
-    socket.write_all(b"\n")?;
-    let mut line = String::new();
-    BufReader::new(socket).read_line(&mut line)?;
-    let response: PathReply = serde_json::from_str(&line)?;
-    if let Some(err) = response.error {
-        anyhow::bail!("OSR geometry: {err}");
-    }
-    let coordinates = response
-        .reachable
-        .into_iter()
-        .next()
-        .and_then(|x| x.geometry)
+    let origin = StreetEndpoint {
+        point: Coordinates {
+            lat: from[1],
+            lon: from[0],
+        },
+        stop: origin_stop,
+    };
+    let destination = StreetEndpoint {
+        point: Coordinates {
+            lat: to[1],
+            lon: to[0],
+        },
+        stop: destination_stop,
+    };
+    let profile = match mode {
+        "WALK" => osr_ffi::Profile::Foot,
+        "BIKE" => osr_ffi::Profile::BikeFast,
+        _ => anyhow::bail!("unsupported street geometry mode"),
+    };
+    let paths = osr.route(
+        region,
+        tt,
+        platform_stops,
+        origin,
+        &[destination],
+        profile,
+        0,
+        budget.clamp(1, 3600),
+        pedestrian_speed,
+        cycling_speed,
+        true,
+    )?;
+    let coordinates = paths
+        .first()
+        .map(|path| path_geometry(origin.point, destination.point, path))
         .unwrap_or_default();
     geometry_cache.insert(key, coordinates.clone());
     Ok(coordinates)
 }
 
+fn stop_index(location: &Value) -> Option<LocationIdx> {
+    u32::try_from(location.get("stopIndex")?.as_u64()?)
+        .ok()
+        .map(LocationIdx)
+}
+
 fn street_leg(
     geometry_cache: &mut HashMap<String, Vec<[f64; 2]>>,
-    addr: &str,
+    osr: &NativeOsr,
     region: &str,
     from: Value,
     to: Value,
@@ -611,12 +575,14 @@ fn street_leg(
     let coordinates = if detailed {
         street_path(
             geometry_cache,
-            addr,
+            osr,
+            tt,
+            platform_stops,
             region,
             first,
             last,
-            platform_metadata(tt, platform_stops, &from),
-            platform_metadata(tt, platform_stops, &to),
+            stop_index(&from),
+            stop_index(&to),
             seconds.saturating_add(900),
             mode,
             pedestrian_speed,
@@ -804,7 +770,7 @@ pub fn build(
     to: Coordinates,
     origin_osr_region: &str,
     destination_osr_region: &str,
-    osr_worker: &str,
+    osr: &NativeOsr,
     database_url: Option<&str>,
     detailed: bool,
     access_mode: &str,
@@ -829,7 +795,7 @@ pub fn build(
                     let end = place(tt, *to_stop);
                     legs.push(street_leg(
                         &mut geometry_cache,
-                        osr_worker,
+                        osr,
                         origin_osr_region,
                         previous,
                         end.clone(),
@@ -854,7 +820,7 @@ pub fn build(
                     let end = place(tt, *to_stop);
                     legs.push(street_leg(
                         &mut geometry_cache,
-                        osr_worker,
+                        osr,
                         origin_osr_region,
                         start,
                         end.clone(),
@@ -883,7 +849,7 @@ pub fn build(
                     let destination = coordinate_place(to, "Destination");
                     legs.push(street_leg(
                         &mut geometry_cache,
-                        osr_worker,
+                        osr,
                         destination_osr_region,
                         previous,
                         destination.clone(),
@@ -903,7 +869,7 @@ pub fn build(
                     let destination = coordinate_place(to, "Destination");
                     legs.push(street_leg(
                         &mut geometry_cache,
-                        osr_worker,
+                        osr,
                         origin_osr_region,
                         previous,
                         destination.clone(),
@@ -951,59 +917,30 @@ pub fn build(
 mod tests {
     use super::*;
     #[test]
-    fn identical_street_paths_share_one_osr_request() {
-        use std::io::{BufRead, BufReader, Write};
-        use std::net::TcpListener;
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            BufReader::new(stream.try_clone().unwrap())
-                .read_line(&mut line)
-                .unwrap();
-            assert!(line.contains("\"include_geometry\":true"));
-            assert!(line.contains("\"mode\":\"WALK\""));
-            stream.write_all(
-                b"{\"reachable\":[{\"geometry\":[[-118.5,34.0],[-118.49,34.01]]}],\"error\":null}\n"
-            ).unwrap();
-        });
-        let mut cache = HashMap::new();
-        let from = [-118.5, 34.0];
-        let to = [-118.49, 34.01];
-        let first = street_path(
-            &mut cache,
-            &addr,
-            "southern-california",
-            from,
-            to,
-            None,
-            None,
-            900,
-            "WALK",
-            1.19,
-            4.0,
-        )
-        .unwrap();
-        server.join().unwrap();
-        // The server has exited; a second network request would fail.
-        let second = street_path(
-            &mut cache,
-            &addr,
-            "southern-california",
-            from,
-            to,
-            None,
-            None,
-            900,
-            "WALK",
-            1.19,
-            4.0,
-        )
-        .unwrap();
-        assert_eq!(first, second);
-        assert_eq!(cache.len(), 1);
-        assert_eq!(first.len(), 2);
+    fn street_geometry_cache_distinguishes_routing_parameters() {
+        let key = |origin, budget, mode, speed| {
+            street_path_key(
+                "graph",
+                [1.0, 2.0],
+                [3.0, 4.0],
+                origin,
+                Some(LocationIdx(2)),
+                budget,
+                mode,
+                1.2,
+                speed,
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            key(Some(LocationIdx(1)), 900, "WALK", 4.0),
+            key(Some(LocationIdx(1)), 900, "WALK", 4.0)
+        );
+        let baseline = key(Some(LocationIdx(1)), 900, "BIKE", 4.0);
+        assert_ne!(baseline, key(None, 900, "BIKE", 4.0));
+        assert_ne!(baseline, key(Some(LocationIdx(1)), 600, "BIKE", 4.0));
+        assert_ne!(baseline, key(Some(LocationIdx(1)), 900, "WALK", 4.0));
+        assert_ne!(baseline, key(Some(LocationIdx(1)), 900, "BIKE", 6.0));
     }
 
     #[test]
@@ -1052,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn detailed_platform_endpoints_retain_gtfs_matching_metadata() {
+    fn detailed_platform_endpoints_retain_timetable_identity() {
         let mut owned = catenary::routing_common::timetable::TimetableOwned::empty(0, 1);
         owned.add_source("test", "metro", "1").unwrap();
         owned
@@ -1078,15 +1015,17 @@ mod tests {
         owned.footpaths_in_offsets.push(0);
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let hints = [catenary::routing_common::route_manager::PlatformStopMeta {
-            platform_code: "1".into(),
-            route_names: vec!["E".into()],
-        }];
-        let p = platform_metadata(&tt, &hints, &place(&tt, 0)).unwrap();
-        let json = serde_json::to_value(p).unwrap();
-        assert_eq!(json["gtfs_id"], "metro-e-platform");
-        assert_eq!(json["platform_code"], "1");
-        assert_eq!(json["route_names"][0], "E");
+        let location = place(&tt, 0);
+        let idx = stop_index(&location).unwrap();
+        assert_eq!(idx, LocationIdx(0));
+        let endpoint = StreetEndpoint::stop(&tt, idx).unwrap();
+        assert_eq!(endpoint.point.lat, f64::from(tt.coordinates()[0].lat));
+        assert_eq!(endpoint.point.lon, f64::from(tt.coordinates()[0].lon));
+        assert_eq!(
+            tt.get_string(tt.location_id()[idx.idx()]),
+            Some("metro-e-platform")
+        );
+        assert!(stop_index(&coordinate_place(endpoint.point, "Origin")).is_none());
     }
 
     #[test]

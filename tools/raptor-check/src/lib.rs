@@ -21,6 +21,8 @@ pub mod raptor_arrive_by;
 pub mod raptor_query;
 #[path = "../../../src/routing_common/timetable.rs"]
 pub mod timetable;
+#[path = "../../../src/routing_common/osr_graph_identity.rs"]
+pub mod osr_graph_identity;
 #[path = "../../../src/routing_common/transfer_optimizer.rs"]
 pub mod transfer_optimizer;
 #[path = "../../../src/routing_common/transport_index.rs"]

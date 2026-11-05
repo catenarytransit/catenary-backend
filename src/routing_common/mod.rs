@@ -29,3 +29,6 @@ pub mod raptor_arrive_by;
 pub mod raptor_query;
 pub mod route_manager;
 pub(crate) mod transport_index;
+
+pub mod osr_graph_identity;
+pub mod native_osr;

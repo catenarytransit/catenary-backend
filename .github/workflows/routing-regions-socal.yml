@@ -290,19 +290,23 @@ jobs:
             --list-timetable-sizes | tee temp/timetable-file-sizes.log
           grep -F 'southern-california:' temp/timetable-file-sizes.log
           grep -F 'Total published timetables:' temp/timetable-file-sizes.log
-      - name: Start long-running native OSR worker
+      - name: Verify Edelweiss runs without the OSR worker
         run: |
           set -euo pipefail
-          ./target/release/osr_worker \
-            --config catenaryconfig.toml --workers 3 > temp/osr-worker.log 2>&1 &
-          echo $! > temp/osr-worker.pid
-          for attempt in $(seq 1 45); do
-            if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then break; fi
-            sleep 2
-          done
-          kill -0 "$(cat temp/osr-worker.pid)"
-          python3 src/routing_regions/verify_concurrent_osr_worker.py \
-            --region north-america/us/california/socal --workers 3
+          # The earlier worker smoke test terminates its process. Every route
+          # below must use the native embedded backend, with no TCP service.
+          if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then
+            echo "Unexpected OSR worker still listening" >&2
+            exit 1
+          fi
+      - name: Compare persisted OSR candidates with fresh native matching
+        env:
+          CATENARY_OSR_TEST_TIMETABLE: compiled/routing/southern-california.bin
+          CATENARY_OSR_TEST_CONFIG: catenaryconfig.toml
+          CATENARY_OSR_TEST_REGION: north-america/us/california/socal
+        run: |
+          cargo test --release --lib precomputed_matches_equal_fresh_matching_in_both_directions -- --ignored
+          cargo test --release --bin edelweiss
       - name: Prepare reproducible Monday and Saturday routing queries
         run: |
           set -euo pipefail
@@ -396,7 +400,6 @@ jobs:
             temp/alhambra-pier-timings.json
             temp/alhambra-pier-query-stderr.log
             temp/alhambra-pier-journeys.txt
-            temp/osr-worker.log
             temp/osr-validation.log
             temp/osr-data/regions/north-america/us/california/socal/manifest.json
           if-no-files-found: ignore

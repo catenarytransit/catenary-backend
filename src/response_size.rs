@@ -61,17 +61,28 @@ mod tests {
                     "/ron",
                     web::get().to(|| async { HttpResponse::Ok().body("é🚆") }),
                 )
-                .route("/pb", web::get().to(|| async {
-                    HttpResponse::Ok()
-                        .insert_header((RESPONSE_SIZE_HEADER, "999"))
-                        .body(vec![0u8, 255, 128])
-                })),
+                .route(
+                    "/pb",
+                    web::get().to(|| async {
+                        HttpResponse::Ok()
+                            .insert_header((RESPONSE_SIZE_HEADER, "999"))
+                            .body(vec![0u8, 255, 128])
+                    }),
+                ),
         )
         .await;
         for (path, expected) in [("/ron", "é🚆".as_bytes()), ("/pb", &[0u8, 255, 128][..])] {
             let response =
                 test::call_service(&app, test::TestRequest::get().uri(path).to_request()).await;
-            assert_eq!(response.headers()[RESPONSE_SIZE_HEADER], expected.len().to_string());
+            assert_eq!(
+                response
+                    .headers()
+                    .get(RESPONSE_SIZE_HEADER)
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+                expected.len().to_string()
+            );
             assert_eq!(test::read_body(response).await.as_ref(), expected);
         }
     }
@@ -89,10 +100,13 @@ mod tests {
                         .expose_headers([RESPONSE_SIZE_HEADER]),
                 )
                 .wrap(middleware::Compress::default())
-                .route("/", web::get().to(move || {
-                    let payload = payload.clone();
-                    async move { HttpResponse::Ok().body(payload) }
-                })),
+                .route(
+                    "/",
+                    web::get().to(move || {
+                        let payload = payload.clone();
+                        async move { HttpResponse::Ok().body(payload) }
+                    }),
+                ),
         )
         .await;
         let response = test::call_service(
@@ -103,10 +117,33 @@ mod tests {
                 .to_request(),
         )
         .await;
-        assert_eq!(response.headers()[RESPONSE_SIZE_HEADER], expected_size.to_string());
-        assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
-        assert!(response.headers()[header::ACCESS_CONTROL_EXPOSE_HEADERS]
-            .to_str().unwrap().contains(RESPONSE_SIZE_HEADER));
+        assert_eq!(
+            response
+                .headers()
+                .get(RESPONSE_SIZE_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            expected_size.to_string()
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_ENCODING)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "gzip"
+        );
+        assert!(
+            response
+                .headers()
+                .get(header::ACCESS_CONTROL_EXPOSE_HEADERS)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .contains(RESPONSE_SIZE_HEADER)
+        );
         assert!(test::read_body(response).await.len() < expected_size);
     }
 
@@ -115,20 +152,32 @@ mod tests {
         let app = test::init_service(
             App::new()
                 .wrap(middleware::from_fn(response_size))
-                .route("/stream", web::get().to(|| async {
-                    HttpResponse::Ok()
-                        .insert_header((RESPONSE_SIZE_HEADER, "999"))
-                        .streaming(futures_util::stream::once(async {
-                            Ok::<_, Error>(web::Bytes::from_static(b"streamed"))
-                        }))
-                }))
-                .route("/empty", web::get().to(|| async { HttpResponse::Ok().finish() }))
-                .route("/304", web::get().to(|| async {
-                    HttpResponse::NotModified()
-                        .insert_header((RESPONSE_SIZE_HEADER, "999"))
-                        .finish()
-                }))
-                .route("/204", web::get().to(|| async { HttpResponse::NoContent().finish() })),
+                .route(
+                    "/stream",
+                    web::get().to(|| async {
+                        HttpResponse::Ok()
+                            .insert_header((RESPONSE_SIZE_HEADER, "999"))
+                            .streaming(futures_util::stream::once(async {
+                                Ok::<_, Error>(web::Bytes::from_static(b"streamed"))
+                            }))
+                    }),
+                )
+                .route(
+                    "/empty",
+                    web::get().to(|| async { HttpResponse::Ok().finish() }),
+                )
+                .route(
+                    "/304",
+                    web::get().to(|| async {
+                        HttpResponse::NotModified()
+                            .insert_header((RESPONSE_SIZE_HEADER, "999"))
+                            .finish()
+                    }),
+                )
+                .route(
+                    "/204",
+                    web::get().to(|| async { HttpResponse::NoContent().finish() }),
+                ),
         )
         .await;
         for path in ["/stream", "/304", "/204"] {
@@ -141,6 +190,14 @@ mod tests {
         }
         let response =
             test::call_service(&app, test::TestRequest::get().uri("/empty").to_request()).await;
-        assert_eq!(response.headers()[RESPONSE_SIZE_HEADER], "0");
+        assert_eq!(
+            response
+                .headers()
+                .get(RESPONSE_SIZE_HEADER)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "0"
+        );
     }
 }
