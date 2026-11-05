@@ -133,6 +133,8 @@ struct QueryTimings {
     osr_parallel_wall_ms: f64,
     raptor_ms: f64,
     metadata_ms: f64,
+    // Includes metadata plus OSR geometry reconstruction and JSON assembly.
+    response_build_ms: f64,
     query_total_ms: f64,
 }
 
@@ -541,7 +543,7 @@ fn run_query(
     let phase = Instant::now();
     let timetable = router.timetable_for(&routing.selection.transit_region)?;
     let index = router.metadata_for(&routing.selection.transit_region)?;
-    let mut response = motis_response::build(
+    let (mut response, metadata_ms) = motis_response::build(
         &timetable,
         index,
         router.platform_metadata_for(&routing.selection.transit_region)?,
@@ -573,7 +575,8 @@ fn run_query(
             "point-raptor"
         },
     });
-    timings.metadata_ms = milliseconds(phase);
+    timings.metadata_ms = metadata_ms;
+    timings.response_build_ms = milliseconds(phase);
     timings.query_total_ms = milliseconds(query_start);
     attach_query_timings(&mut response, &timings);
 
@@ -688,14 +691,15 @@ async fn main() -> Result<()> {
                 .with_context(|| format!("writing query timings to {}", path.display()))?;
         }
         eprintln!(
-            "Edelweiss query: total {:.3} ms; RAPTOR {:.3} ms; concurrent OSR wall {:.3} ms; OSR access {:.3} ms; OSR egress {:.3} ms; OSR direct {:.3} ms; metadata {:.3} ms",
+            "Edelweiss query: total {:.3} ms; RAPTOR {:.3} ms; concurrent OSR wall {:.3} ms; OSR access {:.3} ms; OSR egress {:.3} ms; OSR direct {:.3} ms; metadata {:.3} ms; response build {:.3} ms",
             timings.query_total_ms,
             timings.raptor_ms,
             timings.osr_parallel_wall_ms,
             timings.access_ms,
             timings.egress_ms,
             timings.direct_walk_ms,
-            timings.metadata_ms
+            timings.metadata_ms,
+            timings.response_build_ms
         );
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
@@ -778,6 +782,7 @@ mod tests {
             osr_parallel_wall_ms: 100.0,
             raptor_ms: 625.0,
             metadata_ms: 8.0,
+            response_build_ms: 20.0,
             query_total_ms: 740.0,
         };
         let mut response = serde_json::json!({
