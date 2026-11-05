@@ -27,7 +27,9 @@ jobs:
         cache-workspace-crates: true
     - name: Build
       run: cargo build --verbose
+    - name: Test response size middleware
+      run: cargo test --lib response_size::tests -- --nocapture
     - name: Test compact RAPTOR and profile-search regressions
       run: cargo test --lib routing_common::profile -- --nocapture
-    - name: Test Edelweiss walking geometry memoization
-      run: cargo test --bin edelweiss identical_street_paths_share_one_osr_request -- --nocapture
+    - name: Test Edelweiss street geometry cache parameters
+      run: cargo test --bin edelweiss street_geometry_cache_distinguishes_routing_parameters -- --nocapture
