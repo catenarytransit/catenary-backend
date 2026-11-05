@@ -955,11 +955,14 @@ async fn main() -> std::io::Result<()> {
                     Either::Right(srv.call(req))
                 }
             })
+            // Response wrappers run in registration order: measure before Compress.
+            .wrap(middleware::from_fn(catenary::response_size::response_size))
             .wrap(
                 actix_cors::Cors::default()
                     .allow_any_origin()
                     .allow_any_method()
-                    .allow_any_header(),
+                    .allow_any_header()
+                    .expose_headers([catenary::response_size::RESPONSE_SIZE_HEADER]),
             )
             .wrap(actix_block_ai_crawling::BlockAi)
             .wrap(middleware::Compress::default())
