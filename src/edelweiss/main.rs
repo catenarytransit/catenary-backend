@@ -212,7 +212,11 @@ fn osr_access(
         StreetMode::Walk => pedestrian_speed,
         StreetMode::Bike => cycling_speed,
     });
-    let search_radius = (speed * f64::from(max_seconds)).max(router.settings.access_radius_meters);
+    // Bound candidates by the actual mode/time budget, as MOTIS does.
+    // OSR raw matching searches 250 m at each endpoint; retain both margins.
+    // A fixed 5 km floor otherwise matches thousands of unreachable stops
+    // even for a short walk before/after transit.
+    let search_radius = speed * f64::from(max_seconds) + 2.0 * 250.0;
     let nearest = router.nearest_stops(transit_region, point, 4096, search_radius)?;
     let table = router.timetable_for(transit_region)?;
     let platform_metadata = router.platform_metadata_for(transit_region)?;

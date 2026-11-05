@@ -83,6 +83,31 @@ fn step(time: i64, seconds: i64, reverse: bool) -> i64 {
     if reverse { time.saturating_sub(seconds) } else { time.saturating_add(seconds) }
 }
 
+fn returnable_result(j: &Candidate, cursor: i64, reverse: bool, interrupted: bool) -> bool {
+    // A completed opposite search validates this candidate even if a later
+    // search times out before the whole sweep can advance the cursor. Never
+    // expose the unvalidated byproducts of an interrupted PONG.
+    j.reconstructed && (interrupted || better(j.dest_time, cursor, reverse))
+}
+
+fn direct_journey(request: &Query, max_travel_time: u32, arrive_by: bool) -> Option<Journey> {
+    let seconds = request
+        .direct_walk_seconds
+        .filter(|&d| d <= max_travel_time)?;
+    let reference = request.departure_unix_seconds;
+    let (departure, arrival) = if arrive_by {
+        (reference.saturating_sub(i64::from(seconds)), reference)
+    } else {
+        (reference, reference.saturating_add(i64::from(seconds)))
+    };
+    Some(Journey {
+        boardings: 0,
+        departure_unix_seconds: departure,
+        arrival_unix_seconds: arrival,
+        legs: vec![Leg::DirectWalk { seconds }],
+    })
+}
+
 /// get_fastest_direct: the supplied OSR duration takes precedence. Otherwise
 /// use the same static endpoint/footpath search as Nigiri (only destination
 /// locations may be intermediate footpath targets).
@@ -136,6 +161,11 @@ pub(crate) fn route_pong_with_stats_precomputed(
     topology: Option<&LowerBoundTopology>,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
+    ensure!(
+        request.access.iter().chain(&request.egress)
+            .all(|ep| ep.stop.idx() < tt.coordinates().len()),
+        "OSR endpoint index out of bounds"
+    );
     let processing_start = Instant::now();
     let deadline = processing_start
         .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
@@ -161,6 +191,24 @@ pub(crate) fn route_pong_with_stats_precomputed(
     let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
     let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
 
+    // Transit includes both endpoint offsets and a nonnegative vehicle time.
+    // If even that optimistic sum cannot beat direct walking, every transit
+    // result would be filtered below. Avoid continental preprocessing and
+    // round-buffer allocation entirely for these very short trips.
+    let endpoint_floor = request.access.iter().map(|ep| ep.seconds).min()
+        .zip(request.egress.iter().map(|ep| ep.seconds).min())
+        .map(|(a, b)| u64::from(a) + u64::from(b));
+    if request.max_boardings == 0 || endpoint_floor.is_none()
+        || endpoint_floor.is_some_and(|floor| floor >= fastest_direct)
+    {
+        let direct = direct_journey(request, max_travel_time, arrive_by);
+        return Ok((direct.into_iter().collect(), RaptorStats {
+            pong_interval_from: Some(interval_from),
+            pong_interval_to: Some(interval_to),
+            ..RaptorStats::default()
+        }));
+    }
+
     let mut kernel_query = request.clone();
     kernel_query.max_boardings = request.max_boardings.min(MAX_BOARDINGS);
     kernel_query.max_duration_seconds = MAX_TRAVEL_TIME;
@@ -181,6 +229,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
     let mut backward_searches = 0;
     let mut known_result_hits = 0;
     let mut seeded_destination_bounds = 0;
+    let mut budget_exhausted = false;
 
     'sweep: loop {
         let result_count = |include_too_slow: bool| {
@@ -216,14 +265,20 @@ pub(crate) fn route_pong_with_stats_precomputed(
         }
         let mut ping_query = kernel_query.clone();
         ping_query.max_duration_seconds = lookahead;
+        // Nigiri finishes the opposite search before checking its sweep
+        // timeout. Our kernel also polls inside a search, so reserve time
+        // for that validation instead of letting the first PING use it all.
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let pong_reserve = (remaining / 3).min(Duration::from_secs(1));
+        state.set_point_deadline(deadline - pong_reserve);
         let ping = state.execute_point(
             tt, &ping_query, cursor, kernel_query.max_boardings,
             step(cursor, i64::from(lookahead), arrive_by),
         )?;
         if arrive_by { backward_searches += 1; } else { forward_searches += 1; }
-        if state.stats().profile_budget_exhausted {
-            break;
-        }
+        let ping_exhausted = state.stats().profile_budget_exhausted;
+        budget_exhausted |= ping_exhausted;
+        state.set_point_deadline(deadline);
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
             let candidate = Candidate::point(journey, cursor, arrive_by);
@@ -259,6 +314,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
             )?;
             if arrive_by { forward_searches += 1; } else { backward_searches += 1; }
             if state.stats().profile_budget_exhausted {
+                budget_exhausted = true;
                 break 'sweep;
             }
             for journey in pong {
@@ -274,6 +330,12 @@ pub(crate) fn route_pong_with_stats_precomputed(
         }
         state.flip_point_direction(&mut other_lower_bounds);
 
+        if ping_exhausted {
+            // Completed PONG matches are usable, but an incomplete PING
+            // cannot establish coverage for advancing the paging cursor.
+            break;
+        }
+
         let first = ping_results.iter().map(|j| j.start_time)
             .min_by(|a, b| if arrive_by { b.cmp(a) } else { a.cmp(b) })
             .expect("nonempty ping results");
@@ -282,12 +344,11 @@ pub(crate) fn route_pong_with_stats_precomputed(
         cursor = next;
     }
 
-    // Only matched, reconstructed and cursor-validated journeys count as
-    // output. No near-Pareto route extras, fallback profile scan, duration
-    // ratio heuristic, or initial interval_estimator enlargement is applied.
+    // Only completed PONG matches count as output. An interrupted sweep
+    // retains validated matches without claiming coverage beyond its cursor.
     let before_filter = results.len();
     let mut journeys = results.into_iter().filter(|j| {
-        j.reconstructed && better(j.dest_time, cursor, arrive_by)
+        returnable_result(j, cursor, arrive_by, budget_exhausted)
             && j.travel_time() < fastest_direct
             && j.travel_time() <= u64::from(max_travel_time)
     }).map(|j| {
@@ -299,7 +360,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
     }).collect::<Vec<_>>();
     let mut stats = state.stats().clone();
     stats.profile_duration_filtered = (before_filter - journeys.len()) as u64;
-    stats.profile_budget_exhausted |= Instant::now() >= deadline;
+    stats.profile_budget_exhausted |= budget_exhausted || Instant::now() >= deadline;
     stats.pong_iterations = iterations;
     stats.pong_forward_searches = forward_searches;
     stats.pong_backward_searches = backward_searches;
@@ -316,16 +377,8 @@ pub(crate) fn route_pong_with_stats_precomputed(
             improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
         }
     }
-    if let Some(seconds) = request.direct_walk_seconds.filter(|&d| d <= max_travel_time) {
-        let (departure, arrival) = if arrive_by {
-            (reference.saturating_sub(i64::from(seconds)), reference)
-        } else {
-            (reference, reference.saturating_add(i64::from(seconds)))
-        };
-        journeys.push(Journey {
-            boardings: 0, departure_unix_seconds: departure,
-            arrival_unix_seconds: arrival, legs: vec![Leg::DirectWalk { seconds }],
-        });
+    if let Some(direct) = direct_journey(request, max_travel_time, arrive_by) {
+        journeys.push(direct);
     }
     sort_journeys_for_response(&mut journeys, arrive_by);
     Ok((journeys, stats))
@@ -450,6 +503,75 @@ mod tests {
         BitfieldIdx, Delta, PackedStop, Range, RouteIdx, SourceIdx, StationTransferRule,
         TimetableOwned, TimingProfileIdx, TrafficDays,
     };
+
+    #[test]
+    fn timeout_keeps_completed_pong_matches_without_advancing_coverage() {
+        for reverse in [false, true] {
+            let cursor = 100;
+            let dest_time = if reverse { 90 } else { 110 };
+            let mut result = Candidate {
+                start_time: if reverse { 80 } else { 120 },
+                dest_time,
+                boardings: 1,
+                journey: Journey {
+                    departure_unix_seconds: 80,
+                    arrival_unix_seconds: 120,
+                    boardings: 1,
+                    legs: Vec::new(),
+                },
+                reconstructed: true,
+            };
+            assert!(!returnable_result(&result, cursor, reverse, false));
+            assert!(returnable_result(&result, cursor, reverse, true));
+            result.reconstructed = false;
+            assert!(!returnable_result(&result, cursor, reverse, true));
+        }
+    }
+
+    #[test]
+    fn short_direct_walk_skips_all_transit_preprocessing_when_offsets_cannot_beat_it() {
+        let bytes = competing_trains(false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let reference = 20_000_i64 * 86_400 + 8 * 3_600;
+        for arrive_by in [false, true] {
+            let q = Query {
+                departure_unix_seconds: reference,
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 60,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 30,
+                }],
+                direct_walk_seconds: Some(90),
+                max_boardings: 3,
+                max_duration_seconds: 3_600,
+            };
+            let (journeys, stats) = route_pong_with_stats_precomputed(
+                &tt,
+                &q,
+                ProfileOptions::default(),
+                arrive_by,
+                None,
+            )
+            .unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert_eq!(journeys[0].boardings, 0);
+            assert_eq!(
+                journeys[0].departure_unix_seconds,
+                if arrive_by { reference - 90 } else { reference }
+            );
+            assert_eq!(
+                journeys[0].arrival_unix_seconds,
+                if arrive_by { reference } else { reference + 90 }
+            );
+            assert_eq!(stats.profile_searches, 0);
+            assert_eq!(stats.profile_lower_bound_edges, 0);
+            assert_eq!(stats.pong_iterations, 0);
+            assert!(!stats.profile_budget_exhausted);
+        }
+    }
 
     // A slow direct train (08:00-09:00) competes with a faster two-ride
     // connection (08:10-08:30). The next ping rediscovers a known PONG

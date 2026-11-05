@@ -110,7 +110,46 @@ The compact-kernel route, lookup, lower-bound and reconstruction counters
 remain available. A deadline interruption sets `profile_budget_exhausted`;
 partial unmatched point results are not returned as completed journeys.
 
-No tests, builds, formatters, linters or benchmarks were run for the PONG
-port, as requested. The existing standalone routing harness imports the
-production PONG module so future callers can compile the same implementation
-without the native backend dependencies.
+The standalone routing harness imports the production PONG module so it
+can be compiled without the native backend dependencies.
+
+## Lower-bound preprocessing and latency
+
+The station graph follows Nigiri at
+`82e55cedfc184ea3a33082619ba937d172e9c575`, particularly
+[`loader/build_lb_graph.h`](https://github.com/motis-project/nigiri/blob/82e55cedfc184ea3a33082619ba937d172e9c575/include/nigiri/loader/build_lb_graph.h)
+and [`routing/dijkstra.h`](https://github.com/motis-project/nigiri/blob/82e55cedfc184ea3a33082619ba937d172e9c575/include/nigiri/routing/dijkstra.h):
+
+- Merge parent/child station locations for optimistic bounds only. Routing
+  and reconstruction continue to use the original platform indices.
+- Include transit and walking edges at timetable load, retaining the minimum
+  duration per directed station pair. Query Dijkstra does not revisit the
+  platform-level transfer adjacency.
+- Use monotone integer buckets. Catenary uses radix buckets rather than one
+  Dial bucket per minute, preserving exact seconds without allocating a
+  separate bucket for every second in the multi-day horizon.
+
+Preprocessing has at most 10% of the query budget, capped at 100 ms. If it
+stops partway through Dijkstra, completed distances remain exact and all
+unfinished distances are capped at the last popped frontier key. Tentative
+upper estimates must never be used as lower bounds or unreachability claims.
+The added node/edge counters and `profile_lower_bounds_truncated` distinguish
+this safe fallback from exhaustion of the actual transit-search budget.
+
+Nigiri checks its timeout between complete PING/PONG sweeps. Since Catenary
+also interrupts inside scans, PING reserves up to one second (one third of
+remaining time) for opposite-direction validation. A completed PONG match
+can be returned if a later search times out; unmatched candidates remain
+excluded. An interrupted sweep does not advance the paging coverage cursor.
+
+If the minimum access-plus-egress offsets already equal or exceed the
+fastest direct journey, all transit results would fail the existing direct
+comparison. Skip preprocessing and round allocation for that case. OSR stop
+candidates also use mode speed times the actual endpoint budget plus the
+two 250 m raw-matching margins, rather than a minimum 5 km radius.
+
+Regression coverage includes both directions, nested station groups,
+duplicate edges, interrupted Dijkstra versus complete bounds, integer bucket
+search versus heap Dijkstra, completed timeout matches, and the short-direct
+fast path. Production LA timetable/OSR latency still requires a deployment
+benchmark; no production timetable or OSR graph is bundled with the harness.
