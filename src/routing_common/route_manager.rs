@@ -14,6 +14,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    time::Instant,
 };
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -241,14 +242,23 @@ impl Router {
         osr_config: &Path,
         settings: RouterSettings,
     ) -> Result<Self> {
+        let load_started = Instant::now();
+        let mut phase = Instant::now();
+        eprintln!("Edelweiss startup: loading routing and OSR configuration");
         let regions = RoutingRegionsConfig::load(routing_config)?;
         let osr: LocalConfig = toml::from_str(&fs::read_to_string(osr_config)?)?;
         let registry = osr.osm_manager.data_dir.join("regions.geojson");
+        eprintln!(
+            "Edelweiss startup: configuration loaded in {:.3}s; loading OSR registry {}",
+            phase.elapsed().as_secs_f64(),
+            registry.display(),
+        );
+        phase = Instant::now();
         let registry_json = GeoJson::from_str(&fs::read_to_string(&registry)?)?;
         let GeoJson::FeatureCollection(collection) = registry_json else {
             bail!("OSR region registry is not a FeatureCollection");
         };
-        let streets = collection
+        let streets: Vec<StreetRegion> = collection
             .features
             .into_iter()
             .map(|f| {
@@ -275,7 +285,13 @@ impl Router {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let country_boundaries = if let Some(path) = &regions.country_boundaries {
+        eprintln!(
+            "Edelweiss startup: loaded {} OSR regions in {:.3}s; loading country boundaries",
+            streets.len(),
+            phase.elapsed().as_secs_f64(),
+        );
+        phase = Instant::now();
+        let country_boundaries: Vec<(String, Vec<geo::Geometry<f64>>)> = if let Some(path) = &regions.country_boundaries {
             let root = routing_config.parent().unwrap_or_else(|| Path::new("."));
             let json = GeoJson::from_str(&fs::read_to_string(root.join(path))?)?;
             let GeoJson::FeatureCollection(collection) = json else {
@@ -295,8 +311,21 @@ impl Router {
         } else {
             Vec::new()
         };
+        eprintln!(
+            "Edelweiss startup: loaded {} country boundaries in {:.3}s",
+            country_boundaries.len(),
+            phase.elapsed().as_secs_f64(),
+        );
         let mut transit = Vec::new();
-        for region in &regions.regions {
+        for (region_index, region) in regions.regions.iter().enumerate() {
+            let region_started = Instant::now();
+            phase = Instant::now();
+            eprintln!(
+                "Edelweiss startup: region {} ({}/{}): loading geometry",
+                region.id,
+                region_index + 1,
+                regions.regions.len(),
+            );
             let geom_json = regions.geometry_json(routing_config, &region.id)?;
             let parsed: serde_json::Value = serde_json::from_str(&geom_json)?;
             let pieces = parsed
@@ -308,6 +337,13 @@ impl Router {
                 geometries.extend(polygon_geometries(GeoJson::from_str(&piece.to_string())?)?);
             }
             let path = regions.timetable_path(routing_config, &region.id, None)?;
+            eprintln!(
+                "Edelweiss startup: region {}: geometry loaded in {:.3}s; mapping and validating timetable {}",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+                path.display(),
+            );
+            phase = Instant::now();
             let timetable = MappedTimetable::open(&path).with_context(|| {
                 format!(
                     "mapping transit region {} from {}",
@@ -315,6 +351,14 @@ impl Router {
                     path.display()
                 )
             })?;
+            eprintln!(
+                "Edelweiss startup: region {}: timetable mapped and validated in {:.3}s ({} stops, {} transports); checking routing sources",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+                timetable.view()?.coordinates().len(),
+                timetable.view()?.transport_route().len(),
+            );
+            phase = Instant::now();
             crate::routing_common::feed_policy::validate_routing_sources(&timetable.view()?)
                 .with_context(|| {
                     format!(
@@ -323,14 +367,37 @@ impl Router {
                         path.display()
                     )
                 })?;
+            eprintln!(
+                "Edelweiss startup: region {}: routing sources checked in {:.3}s; building metadata index",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+            );
+            phase = Instant::now();
             let metadata = MetadataIndex::build(&timetable.view()?)?;
+            eprintln!(
+                "Edelweiss startup: region {}: metadata index built in {:.3}s; building lower-bound topology",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+            );
+            phase = Instant::now();
             // Compiled transit segment minima are invariant across queries.
             // Build the optimistic topology once at timetable load time.
             let lower_bound_topology =
                 crate::routing_common::profile_compact::LowerBoundTopology::build(
                     &timetable.view()?,
                 );
+            eprintln!(
+                "Edelweiss startup: region {}: lower-bound topology built in {:.3}s",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+            );
+            phase = Instant::now();
             let sidecar = path.with_extension("platforms.json");
+            eprintln!(
+                "Edelweiss startup: region {}: loading platform metadata {} (using empty defaults if absent)",
+                region.id,
+                sidecar.display(),
+            );
             let platform_metadata: Vec<PlatformStopMeta> = if sidecar.is_file() {
                 let value = serde_json::from_slice(&fs::read(&sidecar)?)?;
                 ensure!(
@@ -345,6 +412,12 @@ impl Router {
             } else {
                 vec![PlatformStopMeta::default(); timetable.view()?.coordinates().len()]
             };
+            eprintln!(
+                "Edelweiss startup: region {}: platform metadata loaded in {:.3}s; region ready in {:.3}s",
+                region.id,
+                phase.elapsed().as_secs_f64(),
+                region_started.elapsed().as_secs_f64(),
+            );
             transit.push(TransitRegion {
                 platform_metadata,
                 id: region.id.clone(),
@@ -358,6 +431,12 @@ impl Router {
         ensure!(
             !transit.is_empty() && !streets.is_empty(),
             "no routable regions"
+        );
+        eprintln!(
+            "Edelweiss startup: router loaded with {} transit regions and {} OSR regions in {:.3}s",
+            transit.len(),
+            streets.len(),
+            load_started.elapsed().as_secs_f64(),
         );
         Ok(Self {
             transit,

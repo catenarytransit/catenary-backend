@@ -580,6 +580,28 @@ fn run_query(
     Ok((response, timings))
 }
 
+// These endpoints are served only after Router::load succeeds. Health checks
+// deliberately avoid OSR and PostgreSQL calls, so they stay cheap under load.
+async fn index() -> HttpResponse {
+    HttpResponse::Ok().json(serde_json::json!({
+        "service": "edelweiss",
+        "version": env!("CARGO_PKG_VERSION"),
+        "endpoints": {
+            "health": "/health",
+            "route": "/v1/route"
+        }
+    }))
+}
+
+async fn health() -> HttpResponse {
+    HttpResponse::Ok()
+        .insert_header(("Cache-Control", "no-store"))
+        .json(serde_json::json!({
+            "service": "edelweiss",
+            "status": "ok"
+        }))
+}
+
 async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResponse {
     let state = state.into_inner();
     let request = payload.into_inner();
@@ -621,7 +643,9 @@ fn resolve_database_url(
 
 #[actix_web::main]
 async fn main() -> Result<()> {
+    let startup_started = Instant::now();
     let args = Args::parse();
+    eprintln!("Edelweiss startup: loading routing configuration {}", args.regions_config.display());
     let config = catenary::routing_common::routing_regions::RoutingRegionsConfig::load(
         &args.regions_config,
     )?;
@@ -633,12 +657,14 @@ async fn main() -> Result<()> {
     };
     // Match the rest of the backend: --database-url / DATABASE_URL overrides
     // [postgres].database_url in the selected catenaryconfig.toml file.
+    eprintln!("Edelweiss startup: resolving PostgreSQL configuration");
     let database_url = resolve_database_url(args.database_url.clone(), &args.catenary_config)?;
     if database_url.is_none() {
         eprintln!(
             "Warning: no PostgreSQL URL configured; route colours and other GTFS metadata will be unavailable"
         );
     }
+    eprintln!("Edelweiss startup: loading router");
     let router = Arc::new(Router::load(
         &args.regions_config,
         &args.catenary_config,
@@ -680,7 +706,8 @@ async fn main() -> Result<()> {
         osr_worker: args.osr_worker,
     });
     let enable_footpath_debug = args.enable_footpath_debug;
-    HttpServer::new(move || {
+    eprintln!("Edelweiss startup: binding HTTP server to {}", args.listen);
+    let server = HttpServer::new(move || {
         let app = App::new()
             .wrap(
                 actix_cors::Cors::default()
@@ -689,6 +716,8 @@ async fn main() -> Result<()> {
                     .allow_any_header(),
             )
             .app_data(state.clone())
+            .route("/", web::get().to(index))
+            .route("/health", web::get().to(health))
             .route("/v1/route", web::post().to(route));
         if enable_footpath_debug {
             app.route(
@@ -699,15 +728,45 @@ async fn main() -> Result<()> {
             app
         }
     })
-    .bind(&args.listen)?
-    .run()
-    .await?;
+    .bind(&args.listen)
+    .with_context(|| format!("binding Edelweiss HTTP server to {}", args.listen))?
+    .run();
+    eprintln!(
+        "Edelweiss startup: HTTP server starting on {} after {:.3}s; router is ready",
+        args.listen,
+        startup_started.elapsed().as_secs_f64(),
+    );
+    server.await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[actix_web::test]
+    async fn service_endpoints_work_without_routing_dependencies() {
+        let app = actix_web::test::init_service(
+            App::new()
+                .route("/", web::get().to(index))
+                .route("/health", web::get().to(health)),
+        )
+        .await;
+        let request = actix_web::test::TestRequest::get().uri("/").to_request();
+        let response = actix_web::test::call_service(&app, request).await;
+        assert_eq!(response.status(), actix_web::http::StatusCode::OK);
+        let body: serde_json::Value = actix_web::test::read_body_json(response).await;
+        assert_eq!(body["service"], "edelweiss");
+        assert_eq!(body["endpoints"]["health"], "/health");
+        assert_eq!(body["endpoints"]["route"], "/v1/route");
+
+        let request = actix_web::test::TestRequest::get().uri("/health").to_request();
+        let response = actix_web::test::call_service(&app, request).await;
+        assert_eq!(response.status(), actix_web::http::StatusCode::OK);
+        assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
+        let body: serde_json::Value = actix_web::test::read_body_json(response).await;
+        assert_eq!(body, serde_json::json!({"service": "edelweiss", "status": "ok"}));
+    }
 
     #[test]
     fn query_timings_are_included_in_response_without_erasing_raptor_diagnostics() {
