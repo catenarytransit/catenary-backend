@@ -6,15 +6,15 @@ mod footpath_debug;
 mod motis_response;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
+use catenary::routing_common::native_osr::{Endpoint as StreetEndpoint, NativeOsr};
 use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::raptor_query::WalkingEndpoint;
 use catenary::routing_common::route_manager::{Coordinates, Router, RouterSettings};
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
+use osr_ffi::Profile;
 use serde::{Deserialize, Serialize};
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpStream;
 use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
 
@@ -35,8 +35,9 @@ struct Args {
     query_timings: Option<PathBuf>,
     #[arg(long, env = "DATABASE_URL")]
     database_url: Option<String>,
-    #[arg(long, default_value = "127.0.0.1:40501")]
-    osr_worker: String,
+    /// Maximum concurrent in-process street searches across all requests.
+    #[arg(long, default_value_t = 3)]
+    osr_workers: usize,
     /// Opt-in, read-only transfer-closure inspection. Disabled in production by default.
     #[arg(long, env = "EDELWEISS_ENABLE_FOOTPATH_DEBUG")]
     enable_footpath_debug: bool,
@@ -55,6 +56,12 @@ enum StreetMode {
     Bike,
 }
 impl StreetMode {
+    fn profile(self) -> Profile {
+        match self {
+            Self::Walk => Profile::Foot,
+            Self::Bike => Profile::BikeFast,
+        }
+    }
     fn name(self) -> &'static str {
         match self {
             Self::Walk => "WALK",
@@ -153,47 +160,12 @@ fn attach_query_timings(response: &mut serde_json::Value, timings: &QueryTimings
 struct State {
     router: Arc<Router>,
     database_url: Option<String>,
-    osr_worker: String,
-}
-
-#[derive(Serialize)]
-struct OsrStop {
-    stop: u32,
-    latitude: f64,
-    longitude: f64,
-    name: String,
-    gtfs_id: String,
-    platform_code: String,
-    route_names: Vec<String>,
-}
-#[derive(Serialize)]
-struct OsrRequest<'a> {
-    region: &'a str,
-    direction: u8,
-    latitude: f64,
-    longitude: f64,
-    max_seconds: u32,
-    stops: Vec<OsrStop>,
-    mode: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pedestrian_speed: Option<f32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cycling_speed: Option<f32>,
-}
-#[derive(Deserialize)]
-struct OsrAccess {
-    stop: u32,
-    seconds: u32,
-}
-#[derive(Deserialize)]
-struct OsrResponse {
-    reachable: Vec<OsrAccess>,
-    error: Option<String>,
+    osr: Arc<NativeOsr>,
 }
 
 fn osr_access(
     router: &Router,
-    addr: &str,
+    osr: &NativeOsr,
     transit_region: &str,
     osr_region: &str,
     point: Coordinates,
@@ -203,104 +175,48 @@ fn osr_access(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Vec<WalkingEndpoint>> {
-    // MOTIS intermodal semantics: OSR one-to-many returns complete access
-    // offsets to traffic-bearing stops. Do not enable start footpaths or
-    // pre-extend these offsets through the timetable transfer graph.
-    // An extra relaxation would double-count walking and could create
-    // bogus first boarding opportunities.
-    // MOTIS enumerates traffic-bearing stops in a mode-appropriate search
-    // radius before performing one-to-many native street routing.
+    // Preserve complete OSR access/egress offsets; do not relax start footpaths.
     let speed = f64::from(match mode {
         StreetMode::Walk => pedestrian_speed,
         StreetMode::Bike => cycling_speed,
     });
-    // Bound candidates by the actual mode/time budget, as MOTIS does.
-    // OSR raw matching searches 250 m at each endpoint; retain both margins.
-    // A fixed 5 km floor otherwise matches thousands of unreachable stops
-    // even for a short walk before/after transit.
-    let search_radius = speed * f64::from(max_seconds) + 2.0 * 250.0;
-    let nearest = router.nearest_stops(transit_region, point, 4096, search_radius)?;
-    let table = router.timetable_for(transit_region)?;
-    let platform_metadata = router.platform_metadata_for(transit_region)?;
-    let stops = nearest
-        .into_iter()
-        .map(|(id, _)| {
-            let c = table.coordinates()[id.idx()];
-            OsrStop {
-                stop: id.0,
-                latitude: f64::from(c.lat),
-                longitude: f64::from(c.lon),
-                name: table
-                    .location_name()
-                    .get(id.idx())
-                    .and_then(|r| table.get_string(*r))
-                    .unwrap_or("")
-                    .to_owned(),
-                gtfs_id: table
-                    .location_id()
-                    .get(id.idx())
-                    .and_then(|r| table.get_string(*r))
-                    .unwrap_or("")
-                    .to_owned(),
-                platform_code: platform_metadata[id.idx()].platform_code.clone(),
-                route_names: platform_metadata[id.idx()].route_names.clone(),
-            }
-        })
-        .collect();
-    let request = OsrRequest {
-        region: osr_region,
+    let radius = speed * f64::from(max_seconds) + 2.0 * 250.0;
+    let nearest = router.nearest_stops(transit_region, point, 4096, radius)?;
+    let tt = router.timetable_for(transit_region)?;
+    let targets = nearest
+        .iter()
+        .map(|(stop, _)| StreetEndpoint::stop(&tt, *stop))
+        .collect::<Result<Vec<_>>>()?;
+    let paths = osr.route(
+        osr_region,
+        &tt,
+        router.platform_metadata_for(transit_region)?,
+        StreetEndpoint::position(point),
+        &targets,
+        mode.profile(),
         direction,
-        latitude: point.lat,
-        longitude: point.lon,
         max_seconds,
-        stops,
-        mode: mode.name(),
-        pedestrian_speed: matches!(mode, StreetMode::Walk).then_some(pedestrian_speed),
-        cycling_speed: matches!(mode, StreetMode::Bike).then_some(cycling_speed),
-    };
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    serde_json::to_writer(&mut stream, &request)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    let reply: OsrResponse = serde_json::from_str(&line)?;
-    if let Some(err) = reply.error {
-        anyhow::bail!("OSR query: {err}");
-    }
-    // The OSR worker must only return destinations actually requested.
-    // Enforce this at the protocol boundary and keep the cheapest offset
-    // per stop before seeding round zero or enumerating profile anchors.
-    let requested: std::collections::HashSet<u32> = request.stops.iter().map(|x| x.stop).collect();
-    let mut best = std::collections::HashMap::<u32, u32>::new();
-    for x in reply.reachable {
-        ensure!(
-            requested.contains(&x.stop),
-            "OSR returned unknown stop index"
-        );
-        ensure!(
-            x.seconds <= max_seconds,
-            "OSR returned duration outside access budget"
-        );
-        best.entry(x.stop)
-            .and_modify(|v| *v = (*v).min(x.seconds))
-            .or_insert(x.seconds);
-    }
-    let mut endpoints: Vec<_> = best
+        pedestrian_speed,
+        cycling_speed,
+        false,
+    )?;
+    let mut result: Vec<_> = nearest
         .into_iter()
-        .map(|(stop, seconds)| WalkingEndpoint {
-            stop: LocationIdx(stop),
-            seconds,
+        .zip(paths)
+        .filter(|(_, path)| path.found && path.duration_seconds <= max_seconds)
+        .map(|((stop, _), path)| WalkingEndpoint {
+            stop,
+            seconds: path.duration_seconds,
         })
         .collect();
-    endpoints.sort_by_key(|x| (x.seconds, x.stop.0));
-    Ok(endpoints)
+    result.sort_by_key(|x| (x.seconds, x.stop.0));
+    Ok(result)
 }
 
 fn direct_osr_seconds(
-    addr: &str,
+    router: &Router,
+    osr: &NativeOsr,
+    transit_region: &str,
     region: &str,
     from: Coordinates,
     to: Coordinates,
@@ -309,45 +225,31 @@ fn direct_osr_seconds(
     pedestrian_speed: f32,
     cycling_speed: f32,
 ) -> Result<Option<u32>> {
-    let request = OsrRequest {
+    let tt = router.timetable_for(transit_region)?;
+    let paths = osr.route(
         region,
-        direction: 0,
-        latitude: from.lat,
-        longitude: from.lon,
+        &tt,
+        router.platform_metadata_for(transit_region)?,
+        StreetEndpoint::position(from),
+        &[StreetEndpoint::position(to)],
+        mode.profile(),
+        0,
         max_seconds,
-        mode: mode.name(),
-        pedestrian_speed: matches!(mode, StreetMode::Walk).then_some(pedestrian_speed),
-        cycling_speed: matches!(mode, StreetMode::Bike).then_some(cycling_speed),
-        stops: vec![OsrStop {
-            stop: 0,
-            latitude: to.lat,
-            longitude: to.lon,
-            name: String::new(),
-            gtfs_id: String::new(),
-            platform_code: String::new(),
-            route_names: Vec::new(),
-        }],
-    };
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(45)))?;
-    stream.set_write_timeout(Some(std::time::Duration::from_secs(45)))?;
-    serde_json::to_writer(&mut stream, &request)?;
-    stream.write_all(b"\n")?;
-    stream.flush()?;
-    let mut line = String::new();
-    BufReader::new(stream).read_line(&mut line)?;
-    let reply: OsrResponse = serde_json::from_str(&line)?;
-    if let Some(error) = reply.error {
-        anyhow::bail!("OSR direct route: {error}");
-    }
-    Ok(reply.reachable.first().map(|x| x.seconds))
+        pedestrian_speed,
+        cycling_speed,
+        false,
+    )?;
+    Ok(paths
+        .first()
+        .filter(|p| p.found && p.duration_seconds <= max_seconds)
+        .map(|p| p.duration_seconds))
 }
 
 fn run_query(
     router: &Router,
     request: Request,
     url: Option<&str>,
-    osr_worker: &str,
+    osr: &NativeOsr,
 ) -> Result<(serde_json::Value, QueryTimings)> {
     let query_start = Instant::now();
     let origin = request.from;
@@ -400,8 +302,8 @@ fn run_query(
 
     // Access, egress and direct walking have no data dependencies.
     // Use Rayon's existing bounded pool, rather than spawning up to three
-    // operating-system threads per HTTP request. Native routers are isolated
-    // by the OSR worker's own fixed-size worker pool.
+    // operating-system threads per HTTP request. Graphs are shared read-only;
+    // NativeOsr bounds concurrent searches and keeps match stores call-local.
     let osr_start = Instant::now();
     let (access, (egress, direct)) = rayon::join(
         || {
@@ -409,7 +311,7 @@ fn run_query(
             let result = if request.access.is_empty() {
                 osr_access(
                     router,
-                    osr_worker,
+                    osr,
                     &selection.transit_region,
                     &selection.origin_osr_region,
                     request.from,
@@ -438,7 +340,7 @@ fn run_query(
                     let result = if request.egress.is_empty() {
                         osr_access(
                             router,
-                            osr_worker,
+                            osr,
                             &selection.transit_region,
                             &selection.destination_osr_region,
                             request.to,
@@ -466,7 +368,9 @@ fn run_query(
                         Ok(Some(seconds))
                     } else if selection.origin_osr_region == selection.destination_osr_region {
                         direct_osr_seconds(
-                            osr_worker,
+                            router,
+                            osr,
+                            &selection.transit_region,
                             &selection.origin_osr_region,
                             request.from,
                             request.to,
@@ -552,7 +456,7 @@ fn run_query(
         destination,
         &routing.selection.origin_osr_region,
         &routing.selection.destination_osr_region,
-        osr_worker,
+        osr,
         url,
         detailed_legs,
         access_mode.name(),
@@ -613,7 +517,7 @@ async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResp
             &state.router,
             request,
             state.database_url.as_deref(),
-            &state.osr_worker,
+            &state.osr,
         )
     })
     .await;
@@ -648,7 +552,10 @@ fn resolve_database_url(
 async fn main() -> Result<()> {
     let startup_started = Instant::now();
     let args = Args::parse();
-    eprintln!("Edelweiss startup: loading routing configuration {}", args.regions_config.display());
+    eprintln!(
+        "Edelweiss startup: loading routing configuration {}",
+        args.regions_config.display()
+    );
     let config = catenary::routing_common::routing_regions::RoutingRegionsConfig::load(
         &args.regions_config,
     )?;
@@ -673,6 +580,27 @@ async fn main() -> Result<()> {
         &args.catenary_config,
         settings,
     )?);
+    eprintln!("Edelweiss startup: loading in-process OSR graphs");
+    let osr = Arc::new(NativeOsr::load(&args.catenary_config, args.osr_workers)?);
+    for region in &router.transit {
+        let tt = region.timetable.view()?;
+        // Log incompatibility once at load, not for every candidate stop.
+        // Distinct graph partitions legitimately need fresh matching.
+        for street in router.street_region_ids() {
+            if let Ok(reuse) = osr.has_precomputed_matches(street, &tt) {
+                eprintln!(
+                    "Edelweiss startup: timetable {} / OSR {}: precomputed matches {}",
+                    region.id,
+                    street,
+                    if reuse {
+                        "enabled"
+                    } else {
+                        "unavailable; matching on demand"
+                    }
+                );
+            }
+        }
+    }
     if let Some(path) = args.query {
         let timing_output = args.query_timings.clone();
         let request: Request = serde_json::from_slice(
@@ -681,11 +609,10 @@ async fn main() -> Result<()> {
         // The synchronous postgres client creates and blocks on its own Tokio
         // runtime. Running it on an Actix worker thread would nest runtimes and
         // panic; use the same blocking pool as the HTTP route handler.
-        let (response, timings) = web::block(move || {
-            run_query(&router, request, database_url.as_deref(), &args.osr_worker)
-        })
-        .await
-        .context("CLI route-query worker failed")??;
+        let (response, timings) =
+            web::block(move || run_query(&router, request, database_url.as_deref(), &osr))
+                .await
+                .context("CLI route-query worker failed")??;
         if let Some(path) = &timing_output {
             fs::write(path, serde_json::to_vec_pretty(&timings)?)
                 .with_context(|| format!("writing query timings to {}", path.display()))?;
@@ -707,7 +634,7 @@ async fn main() -> Result<()> {
     let state = web::Data::new(State {
         router,
         database_url,
-        osr_worker: args.osr_worker,
+        osr,
     });
     let enable_footpath_debug = args.enable_footpath_debug;
     eprintln!("Edelweiss startup: binding HTTP server to {}", args.listen);
@@ -764,12 +691,17 @@ mod tests {
         assert_eq!(body["endpoints"]["health"], "/health");
         assert_eq!(body["endpoints"]["route"], "/v1/route");
 
-        let request = actix_web::test::TestRequest::get().uri("/health").to_request();
+        let request = actix_web::test::TestRequest::get()
+            .uri("/health")
+            .to_request();
         let response = actix_web::test::call_service(&app, request).await;
         assert_eq!(response.status(), actix_web::http::StatusCode::OK);
         assert_eq!(response.headers().get("cache-control").unwrap(), "no-store");
         let body: serde_json::Value = actix_web::test::read_body_json(response).await;
-        assert_eq!(body, serde_json::json!({"service": "edelweiss", "status": "ok"}));
+        assert_eq!(
+            body,
+            serde_json::json!({"service": "edelweiss", "status": "ok"})
+        );
     }
 
     #[test]

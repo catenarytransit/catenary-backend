@@ -358,7 +358,7 @@ fn main() -> Result<()> {
 
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, &output)?;
     println!(
-        "Wrote V4 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
+        "Wrote V6 seconds-precision schema-only timetable: {} bytes, {} sources; no compiled routes or transports",
         bytes,
         tt.sources.len()
     );

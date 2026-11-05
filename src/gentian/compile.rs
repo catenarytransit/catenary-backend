@@ -1147,7 +1147,7 @@ pub fn build(
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
     let transfers = super::footpaths::compute(
         osr_dir,
-        &tt,
+        &mut tt,
         &platform_metadata,
         max_seconds,
         candidate_meters,

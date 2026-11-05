@@ -1,4 +1,4 @@
-//! Nigiri-shaped static timetable data model; Catenary wire version 5.
+//! Nigiri-shaped static timetable data model; Catenary wire version 6.
 //! Unlike Nigiri's minute-based wire representation, every duration is in seconds.
 //! This is NOT binary compatible with Cista's serializer.
 //! Compiler and RAPTOR algorithms are deliberately deferred.
@@ -11,7 +11,7 @@ use bytemuck::{Pod, Zeroable};
 use std::fmt;
 
 pub const MAGIC: u32 = 0x4341_544E;
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 pub const MAX_DAYS: usize = 512;
 pub const TIMETABLE_OFFSET_DAYS: i32 = 5;
 pub const DEFAULT_TRANSFER_SECONDS: u32 = 120;
@@ -297,6 +297,38 @@ impl fmt::Display for FormatError {
 }
 impl std::error::Error for FormatError {}
 
+/// Identity of the graph whose native indexes appear in the OSR match columns.
+/// Raw candidates contain no profile, direction or speed-dependent costs.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct OsrMatchGraph {
+    pub fingerprint: [u8; 32],
+    pub node_count: u64,
+    pub way_count: u64,
+    pub raw_radius_meters: f32,
+    pub reserved: u32,
+}
+
+/// One record per timetable location. INVALID platform means unspecified level.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct OsrLocationMatch {
+    pub level: f32,
+    pub platform_index: u32,
+}
+
+/// Portable POD copy of osr::raw_way_candidate, in a CSR by LocationIdx.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
+pub struct OsrWayCandidate {
+    pub distance_to_way: f32,
+    pub way_index: u32,
+    pub left_node: u32,
+    pub left_distance: f32,
+    pub right_node: u32,
+    pub right_distance: f32,
+}
+
 macro_rules! columns {
     ($($name:ident: $ty:ty,)*) => {
         #[repr(C)]
@@ -329,7 +361,7 @@ macro_rules! columns {
                 Ok(b)
             }
 
-            /// Write the V4 column format without allocating a second copy of
+            /// Write the current column format without allocating a second copy of
             /// the timetable. The caller must supply an empty, truncated output.
             pub fn write_to<W: std::io::Write + std::io::Seek>(
                 &self,
@@ -437,6 +469,12 @@ columns! {
     sources: SourceRecord,
     source_end_days: i32,
     coordinates: Coordinate,
+    // Empty for schema-only timetables; otherwise one graph and one CSR row
+    // per location, including stops with no raw candidates.
+    osr_match_graphs: OsrMatchGraph,
+    osr_location_matches: OsrLocationMatch,
+    osr_candidate_offsets: u32,
+    osr_candidates: OsrWayCandidate,
     location_id: StringRef,
     location_source: SourceIdx,
     location_name: StringRef,
@@ -619,6 +657,73 @@ impl ZeroCopyTimetable<'_> {
     }
 }
 impl ZeroCopyTimetable<'_> {
+    fn validate_osr_matches(&self) -> Result<(), FormatError> {
+        if self.osr_match_graphs().is_empty() {
+            return if self.osr_location_matches().is_empty()
+                && self.osr_candidate_offsets().is_empty()
+                && self.osr_candidates().is_empty()
+            {
+                Ok(())
+            } else {
+                Err(FormatError::Layout)
+            };
+        }
+        if self.osr_match_graphs().len() != 1
+            || self.osr_location_matches().len() != self.coordinates().len()
+        {
+            return Err(FormatError::Layout);
+        }
+        let graph = &self.osr_match_graphs()[0];
+        if !graph.raw_radius_meters.is_finite()
+            || graph.raw_radius_meters <= 0.0
+            || graph.reserved != 0
+            || graph.fingerprint == [0; 32]
+        {
+            return Err(FormatError::Layout);
+        }
+        csr(
+            self.osr_candidate_offsets(),
+            self.osr_candidates().len(),
+            self.coordinates().len(),
+        )?;
+        for location in self.osr_location_matches() {
+            if !location.level.is_finite() {
+                return Err(FormatError::Layout);
+            }
+        }
+        for candidate in self.osr_candidates() {
+            if u64::from(candidate.way_index) >= graph.way_count
+                || [candidate.left_node, candidate.right_node]
+                    .iter()
+                    .any(|&node| node != u32::MAX && u64::from(node) >= graph.node_count)
+            {
+                return Err(FormatError::Index);
+            }
+            if [
+                candidate.distance_to_way,
+                candidate.left_distance,
+                candidate.right_distance,
+            ]
+            .iter()
+            .any(|d| !d.is_finite() || *d < 0.0)
+            {
+                return Err(FormatError::Layout);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn osr_candidates_for(&self, location: LocationIdx) -> &[OsrWayCandidate] {
+        let offsets = self.osr_candidate_offsets();
+        if location.idx() + 1 >= offsets.len() {
+            return &[];
+        }
+        &self.osr_candidates()
+            [offsets[location.idx()] as usize..offsets[location.idx() + 1] as usize]
+    }
+}
+
+impl ZeroCopyTimetable<'_> {
     fn validate(&self) -> Result<(), FormatError> {
         let n = self.coordinates().len();
         let r = self.route_transport_ranges().len();
@@ -647,6 +752,7 @@ impl ZeroCopyTimetable<'_> {
                 return Err(FormatError::Layout);
             }
         }
+        self.validate_osr_matches()?;
         let mut previous = None;
         for rule in self.station_transfer_rules() {
             if rule.from.idx() >= n || rule.to.idx() >= n || rule.flags > 1 {
@@ -1140,6 +1246,90 @@ mod tests {
         assert!(output.into_inner().is_empty());
         tt.day_count = 512;
         assert!(tt.write_to(&mut Cursor::new(Vec::new())).is_ok());
+    }
+
+    fn osr_fixture() -> TimetableOwned {
+        let mut tt = TimetableOwned::empty(20_000, 1);
+        tt.add_source("c", "f", "a").unwrap();
+        for _ in 0..2 {
+            tt.coordinates.push(Coordinate::default());
+            tt.location_id.push(StringRef::default());
+            tt.location_name.push(StringRef::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(0);
+            tt.location_transfer_seconds.push(120);
+            tt.location_routes_offsets.push(0);
+            tt.footpaths_out_offsets.push(0);
+            tt.footpaths_in_offsets.push(0);
+        }
+        tt.osr_match_graphs.push(OsrMatchGraph {
+            fingerprint: [7; 32],
+            node_count: 3,
+            way_count: 2,
+            raw_radius_meters: 250.0,
+            reserved: 0,
+        });
+        tt.osr_location_matches = vec![
+            OsrLocationMatch {
+                level: -1.0,
+                platform_index: 0,
+            },
+            OsrLocationMatch {
+                level: 0.0,
+                platform_index: u32::MAX,
+            },
+        ];
+        tt.osr_candidate_offsets = vec![0, 1, 1];
+        tt.osr_candidates.push(OsrWayCandidate {
+            distance_to_way: 3.5,
+            way_index: 1,
+            left_node: 2,
+            left_distance: 4.25,
+            right_node: u32::MAX,
+            right_distance: 0.0,
+        });
+        tt
+    }
+
+    #[test]
+    fn persisted_osr_matches_preserve_graph_levels_empty_stops_and_streaming_layout() {
+        let tt = osr_fixture();
+        let bytes = tt.encode().unwrap();
+        let mut stream = std::io::Cursor::new(Vec::new());
+        tt.write_to(&mut stream).unwrap();
+        assert_eq!(bytes, stream.into_inner());
+        let view = ZeroCopyTimetable::new(&bytes).unwrap();
+        assert_eq!(view.osr_match_graphs()[0].fingerprint, [7; 32]);
+        assert_eq!(view.osr_location_matches()[0].level, -1.0);
+        let candidates = view.osr_candidates_for(LocationIdx(0));
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].way_index, 1);
+        assert_eq!(candidates[0].left_distance, 4.25);
+        assert!(view.osr_candidates_for(LocationIdx(1)).is_empty());
+        assert!(view.osr_candidates_for(LocationIdx(u32::MAX)).is_empty());
+    }
+
+    #[test]
+    fn persisted_osr_matches_reject_broken_offsets_indexes_and_nonfinite_values() {
+        let mut tt = osr_fixture();
+        tt.osr_candidate_offsets[1] = 2;
+        assert!(tt.encode().is_err());
+        tt.osr_candidate_offsets[1] = 1;
+        tt.osr_candidates[0].way_index = 2;
+        assert!(matches!(tt.encode(), Err(FormatError::Index)));
+        tt.osr_candidates[0].way_index = 1;
+        tt.osr_candidates[0].left_node = 3;
+        assert!(matches!(tt.encode(), Err(FormatError::Index)));
+        tt.osr_candidates[0].left_node = 2;
+        tt.osr_candidates[0].distance_to_way = f32::NAN;
+        assert!(tt.encode().is_err());
+        tt.osr_candidates[0].distance_to_way = 3.5;
+        tt.osr_location_matches[0].level = f32::INFINITY;
+        assert!(tt.encode().is_err());
+        tt.osr_location_matches[0].level = -1.0;
+        tt.osr_match_graphs.clear();
+        assert!(tt.encode().is_err());
     }
 
     #[test]

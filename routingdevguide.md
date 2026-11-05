@@ -52,8 +52,10 @@ reports the total startup time and HTTP bind address.
 HTTP starts after all configured routing regions load successfully. During
 startup, the health endpoint is unavailable; allow sufficient startup-probe
 time before treating the process as unhealthy. The health response confirms the
-HTTP service and loaded router, without probing the separate OSR worker or
-PostgreSQL.
+HTTP service, loaded timetable router and embedded OSR graphs, without
+querying PostgreSQL. Street queries run inside Edelweiss; a separate OSR worker
+is no longer required. Gentian timetables must be rebuilt for V6. See
+[OSR match storage and migration](docs/osr-matched-routing-migration.md).
 
 With the default listen address:
 

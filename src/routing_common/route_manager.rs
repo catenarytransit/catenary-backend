@@ -237,6 +237,10 @@ fn require_same_transit_region<'a>(
 }
 
 impl Router {
+    pub fn street_region_ids(&self) -> impl Iterator<Item = &str> {
+        self.streets.iter().map(|region| region.id.as_str())
+    }
+
     pub fn load(
         routing_config: &Path,
         osr_config: &Path,
