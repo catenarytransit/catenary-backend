@@ -560,14 +560,22 @@ impl Router {
             "invalid access radius"
         );
         let mut stops = Vec::new();
+        let max_lat_delta = (radius_meters / 6_371_000.0).to_degrees();
         for (i, coordinate) in tt.coordinates().iter().enumerate() {
+            // Latitude separation alone is a lower bound on spherical
+            // distance. Avoid trigonometry for the rest of the continent.
+            if (point.lat - f64::from(coordinate.lat)).abs() > max_lat_delta
+                || tt.routes_at(LocationIdx(i as u32)).is_empty()
+            {
+                continue;
+            }
             let d = haversine_meters(
                 point.lat,
                 point.lon,
                 f64::from(coordinate.lat),
                 f64::from(coordinate.lon),
             );
-            if d <= radius_meters && !tt.routes_at(LocationIdx(i as u32)).is_empty() {
+            if d <= radius_meters {
                 stops.push((LocationIdx(i as u32), d));
             }
         }

@@ -1,4 +1,6 @@
-//! Nigiri-style compact round-array RAPTOR over Gentian's mmap timetable.
+//! Legacy event-profile scanner and shared lower-bound preprocessing.
+//! Live Edelweiss PONG uses nigiri_raptor.rs and nigiri_reconstruct.rs.
+//! This scanner remains for the separate classic profile API and regressions.
 //!
 //! Each (round, stop) has three *scalar* states: ride arrival, physical walk
 //! arrival, and transfer-ready time. The third state enforces GTFS stop-pair
@@ -6,6 +8,7 @@
 //! Accepted predecessor snapshots are immutable, and terminal journey
 //! reconstruction follows the captured boarding/footpath provenance.
 //! Forward profile anchors are evaluated latest-first.
+use crate::routing_common::dial::{Dial, dijkstra};
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::profile_search::StartLabel;
 use crate::routing_common::raptor_query::{
@@ -281,6 +284,8 @@ pub(crate) struct LowerBoundTopology {
     transports: Arc<TransportIndex>,
     forward: CsrGraph,
     reverse: CsrGraph,
+    stations: Vec<usize>,
+    transfer_sensitive: Arc<Vec<bool>>,
 }
 struct CsrGraph {
     offsets: Vec<usize>,
@@ -288,7 +293,13 @@ struct CsrGraph {
 }
 impl CsrGraph {
     fn from_edges(n: usize, edge_iter: impl IntoIterator<Item = (u32, u32, u32)>) -> Self {
-        let edges = edge_iter.into_iter().collect::<Vec<_>>();
+        // Nigiri build_lb_graph keeps only the cheapest edge per station pair.
+        let mut edges = edge_iter
+            .into_iter()
+            .filter(|(from, to, _)| from != to)
+            .collect::<Vec<_>>();
+        edges.sort_unstable();
+        edges.dedup_by_key(|edge| (edge.0, edge.1));
         let mut offsets = vec![0usize; n + 1];
         for &(from, _, _) in &edges {
             offsets[from as usize + 1] += 1;
@@ -313,7 +324,16 @@ impl CsrGraph {
     }
 }
 impl LowerBoundTopology {
+    pub(crate) fn transport_index(&self) -> Arc<TransportIndex> {
+        Arc::clone(&self.transports)
+    }
+
+    pub(crate) fn transfer_sensitive(&self) -> Arc<Vec<bool>> {
+        Arc::clone(&self.transfer_sensitive)
+    }
+
     pub(crate) fn build(tt: &ZeroCopyTimetable<'_>) -> Self {
+        let stations = station_groups(tt.location_parent());
         let n = tt.coordinates().len();
         let mut edges: Vec<(u32, u32, u32)> = Vec::new();
         for route_id in 0..tt.route_transport_ranges().len() {
@@ -349,95 +369,134 @@ impl LowerBoundTopology {
                 } else {
                     minimum[pos]
                 };
-                edges.push((pair[0].location().0, pair[1].location().0, cost));
+                edges.push((
+                    stations[pair[0].location().idx()] as u32,
+                    stations[pair[1].location().idx()] as u32,
+                    cost,
+                ));
+            }
+        }
+        // Like Nigiri loader/build_lb_graph.h, include footpaths in the
+        // contracted graph at load time. Never scan full platform transfer
+        // lists again in query-local lower-bound Dijkstra.
+        for (from, &station) in stations.iter().enumerate() {
+            for fp in tt.footpaths_from(LocationIdx(from as u32)) {
+                edges.push((
+                    station as u32,
+                    stations[fp.target().idx()] as u32,
+                    fp.seconds(),
+                ));
             }
         }
         let forward = CsrGraph::from_edges(n, edges.iter().copied());
         let reverse =
             CsrGraph::from_edges(n, edges.iter().map(|&(from, to, cost)| (to, from, cost)));
+        let mut transfer_sensitive = vec![false; stations.len()];
+        for rule in tt.station_transfer_rules() {
+            transfer_sensitive[rule.from.idx()] = true;
+            transfer_sensitive[rule.to.idx()] = true;
+        }
         Self {
             forward,
             reverse,
+            stations,
+            transfer_sensitive: Arc::new(transfer_sensitive),
             transports: Arc::new(TransportIndex::build(tt)),
         }
     }
 }
 
-/// Dijkstra on the cached topology, plus the timetable's directional walking
-/// CSR. The edge weights underestimate all real journeys, so this pruning
-/// never assumes nonexistent transfers or a particular service day.
-/// If the precomputation deadline expires, all-zero distances disable only
-/// pruning; they never make an otherwise valid itinerary unreachable.
+/// Merge every parent/child component, including nested station groups.
+/// Union-find also terminates for a malformed parent cycle; merging extra
+/// vertices only weakens an optimistic lower bound, never transit routing.
+fn station_groups(parents: &[LocationIdx]) -> Vec<usize> {
+    fn root(groups: &mut [usize], mut at: usize) -> usize {
+        while groups[at] != at {
+            groups[at] = groups[groups[at]];
+            at = groups[at];
+        }
+        at
+    }
+    let mut groups = (0..parents.len()).collect::<Vec<_>>();
+    for (at, parent) in parents.iter().enumerate() {
+        if *parent != LocationIdx::INVALID {
+            let from = root(&mut groups, at);
+            let to = root(&mut groups, parent.idx());
+            groups[from] = to;
+        }
+    }
+    for at in 0..parents.len() {
+        let representative = root(&mut groups, at);
+        groups[at] = representative;
+    }
+    groups
+}
+
+// Nigiri routing/dijkstra.{h,cc}: a full Dial traversal, with the global
+// five-day bucket horizon. The request duration and wall timeout do not
+// truncate preprocessing. Query/PONG bounds are applied by the search.
+const LOWER_BOUND_HORIZON: u32 = 5 * 86_400;
+
+pub(crate) fn point_lower_bounds(
+    tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool,
+    topology: &LowerBoundTopology, stats: &mut RaptorStats,
+) -> Vec<u32> {
+    lower_bounds(tt, q, reverse, topology, stats)
+}
+
 fn lower_bounds(
-    tt: &ZeroCopyTimetable<'_>,
+    _tt: &ZeroCopyTimetable<'_>,
     request: &Query,
     reverse: bool,
     topology: &LowerBoundTopology,
-    deadline: Instant,
+    stats: &mut RaptorStats,
 ) -> Vec<u32> {
-    let n = tt.coordinates().len();
-    if Instant::now() >= deadline {
-        // Deadline expiration can disable pruning but must not manufacture
-        // unreachable labels or reject a valid timetable journey.
-        return vec![0; n];
-    }
     let graph = if reverse {
         &topology.forward
     } else {
         &topology.reverse
     };
-    let mut dist = vec![u32::MAX; n];
-    let mut heap = BinaryHeap::<Reverse<(u32, usize)>>::new();
+    let mut dist = vec![u32::MAX; graph.offsets.len() - 1];
+    let mut queue = Dial::new(LOWER_BOUND_HORIZON as usize, |label: &(u32, usize)| {
+        label.0 as usize
+    });
+    // Upstream uses a map of minimum destination offsets, then seeds in
+    // station-index order. Do not insert duplicate platform seeds.
+    let mut minimum = std::collections::BTreeMap::<usize, u32>::new();
     let terminals = if reverse {
         &request.access
     } else {
         &request.egress
     };
     for ep in terminals {
-        let stop = ep.stop.idx();
-        if ep.seconds < dist[stop] {
-            dist[stop] = ep.seconds;
-            heap.push(Reverse((ep.seconds, stop)));
+        let station = topology.stations[ep.stop.idx()];
+        minimum
+            .entry(station)
+            .and_modify(|d| *d = (*d).min(ep.seconds))
+            .or_insert(ep.seconds);
+    }
+    for (station, duration) in minimum {
+        // API endpoint offsets are <= 1 hour. Out-of-horizon offsets cannot
+        // contribute to a journey within Nigiri's five-day maximum.
+        if (duration as usize) < queue.n_buckets() {
+            dist[station] = duration;
+            queue.push((duration, station));
         }
     }
-    let mut visited = 0usize;
-    while let Some(Reverse((weight, at))) = heap.pop() {
-        // Nigiri's duration limit also bounds useful destination labels.
-        // Dijkstra is monotone: no stop with an optimistic distance already
-        // greater than the entire allowed journey can improve a legal route.
-        if weight > request.max_duration_seconds {
-            break;
-        }
-        visited += 1;
-        if (visited & 4095) == 0 && Instant::now() >= deadline {
-            return vec![0; n];
-        }
-        if weight != dist[at] {
-            continue;
-        }
-        for &(next, cost) in graph.successors(at) {
-            let next = next as usize;
-            let candidate = weight.saturating_add(cost);
-            if candidate <= request.max_duration_seconds && candidate < dist[next] {
-                dist[next] = candidate;
-                heap.push(Reverse((candidate, next)));
-            }
-        }
-        let footpaths = if reverse {
-            tt.footpaths_from(LocationIdx(at as u32))
-        } else {
-            tt.footpaths_to(LocationIdx(at as u32))
-        };
-        for fp in footpaths {
-            let next = fp.target().idx();
-            let candidate = weight.saturating_add(fp.seconds());
-            if candidate <= request.max_duration_seconds && candidate < dist[next] {
-                dist[next] = candidate;
-                heap.push(Reverse((candidate, next)));
-            }
-        }
-    }
-    dist
+    let work = dijkstra(
+        &graph.offsets,
+        &graph.edges,
+        &mut queue,
+        &mut dist,
+        u32::MAX,
+    );
+    stats.profile_lower_bound_nodes += work.settled;
+    stats.profile_lower_bound_edges += work.edges;
+    topology
+        .stations
+        .iter()
+        .map(|&station| dist[station])
+        .collect()
 }
 
 fn initial_destination_bound(anchor: i64, q: &Query, reverse: bool) -> i64 {
@@ -506,6 +565,23 @@ fn change_seconds(tt: &ZeroCopyTimetable<'_>, from: usize, to: usize) -> Option<
     )
 }
 
+fn change_seconds_for_search(
+    tt: &ZeroCopyTimetable<'_>,
+    from: usize,
+    to: usize,
+    sensitive: &[bool],
+) -> Option<u32> {
+    // Most footpaths have no pair-specific GTFS override. Nigiri's ordinary
+    // static transfer path is a direct time-array lookup, not a binary search
+    // over every country's transfer rules for each relaxed edge.
+    if !sensitive[from] || !sensitive[to] {
+        Some(tt.location_transfer_seconds()[from].max(tt.location_transfer_seconds()[to]))
+    } else {
+        change_seconds(tt, from, to)
+    }
+}
+
+
 fn routes_from_marked(
     tt: &ZeroCopyTimetable<'_>,
     marked: &[usize],
@@ -542,7 +618,7 @@ pub(crate) struct ProfileSearchState {
     // GTFS restricted stop-pair transfers make provenance significant.
     // Suppressing an event-local route solely from a previous anchor's time
     // is unsafe at those stops unless the prior path is also carried.
-    transfer_sensitive: Vec<bool>,
+    transfer_sensitive: Arc<Vec<bool>>,
     last_anchor: Option<i64>,
     // Best fully validated destination arrival/departure for <= k boardings.
     // This is Nigiri's time_at_dest_ analogue.
@@ -616,14 +692,10 @@ impl ProfileSearchState {
         let topology = precomputed
             .or(owned.as_ref())
             .expect("topology must be supplied or constructed");
-        let bounds = lower_bounds(tt, q, reverse, topology, deadline);
+        let bounds = lower_bounds(tt, q, reverse, topology, &mut stats);
         stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
         let invalid = if reverse { NEG_INF } else { INF };
-        let mut transfer_sensitive = vec![false; n];
-        for rule in tt.station_transfer_rules() {
-            transfer_sensitive[rule.from.idx()] = true;
-            transfer_sensitive[rule.to.idx()] = true;
-        }
+        let transfer_sensitive = Arc::clone(&topology.transfer_sensitive);
         Ok(Self {
             transports: Arc::clone(&topology.transports),
             rounds: (0..=q.max_boardings).map(|_| Round::new(n)).collect(),
@@ -737,10 +809,6 @@ impl ProfileSearchState {
         let mut q = q.clone();
         q.max_boardings = max_boardings;
         let starts = StartLabel::point(&q, anchor, self.reverse);
-        if Instant::now() >= self.deadline {
-            self.stats.profile_budget_exhausted = true;
-            return Ok(Vec::new());
-        }
         self.stats.profile_anchor_events += 1;
         self.stats.profile_start_labels += starts.len() as u64;
         let started = Instant::now();
@@ -857,6 +925,10 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
+        // Nigiri's CPU PONG completes a whole sweep before checking time.
+        // Classic profile search retains its existing inner cancellation.
+        let deadline = (!self.point_mode).then_some(self.deadline);
+        let is_timeout_reached = || deadline.is_some_and(|end| Instant::now() >= end);
         // Reset only the per-start competitiveness limit, not the arrival
         // matrix. Nigiri executes every start with a worst destination time
         // before updating it from transit and walking relaxations.
@@ -927,8 +999,8 @@ impl ProfileSearchState {
                 .or_insert(ep.seconds);
         }
         for k in 1..=q.max_boardings {
-            if marked.is_empty() || Instant::now() >= self.deadline {
-                if Instant::now() >= self.deadline {
+            if marked.is_empty() || is_timeout_reached() {
+                if is_timeout_reached() {
                     self.stats.profile_budget_exhausted = true;
                 }
                 break;
@@ -964,7 +1036,7 @@ impl ProfileSearchState {
                 let current = &mut after[0];
                 let started = Instant::now();
                 for route in routes {
-                    if Instant::now() >= self.deadline {
+                    if is_timeout_reached() {
                         self.stats.profile_budget_exhausted = true;
                         break;
                     }
@@ -978,7 +1050,7 @@ impl ProfileSearchState {
                         for step in 0..stops.len() {
                             self.stats.stop_events_scanned += 1;
                             if (self.stats.stop_events_scanned & 255) == 0
-                                && Instant::now() >= self.deadline
+                                && is_timeout_reached()
                             {
                                 self.stats.profile_budget_exhausted = true;
                                 break;
@@ -1169,6 +1241,12 @@ impl ProfileSearchState {
                             if !can_start || self.stop_stamps[loc] != self.stop_stamp {
                                 continue;
                             }
+                            // Nigiri raptor::update_route: after the marked
+                            // boarding guard, an unreachable lower bound
+                            // terminates this route scan before trip lookup.
+                            if self.bounds[loc] == u32::MAX {
+                                break;
+                            }
                             let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
                                 continue;
                             };
@@ -1317,11 +1395,15 @@ impl ProfileSearchState {
             // Only the final best ride state at each stop is expanded; the
             // footprint is at most three cells per stop and RAPTOR round.
             for &from in &improved_rides {
+                if is_timeout_reached() {
+                    self.stats.profile_budget_exhausted = true;
+                    break;
+                }
                 let Some(ride) = current.get(Stage::Ride, from, generation).copied() else {
                     continue;
                 };
                 let t = ride.time;
-                if let Some(change) = change_seconds(tt, from, from) {
+                if let Some(change) = change_seconds_for_search(tt, from, from, &self.transfer_sensitive) {
                     let ready = if reverse {
                         t.saturating_sub(i64::from(change))
                     } else {
@@ -1384,6 +1466,12 @@ impl ProfileSearchState {
                 };
                 for fp in paths {
                     self.stats.footpath_edges_examined += 1;
+                    if self.stats.footpath_edges_examined & 255 == 0
+                        && is_timeout_reached()
+                    {
+                        self.stats.profile_budget_exhausted = true;
+                        break;
+                    }
                     let to = fp.target().idx();
                     let seconds = fp.seconds();
                     if seconds == 0 {
@@ -1395,7 +1483,7 @@ impl ProfileSearchState {
                         t.saturating_add(i64::from(seconds))
                     };
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
-                    let ready = change_seconds(tt, walk_from, walk_to).map(|change| {
+                    let ready = change_seconds_for_search(tt, walk_from, walk_to, &self.transfer_sensitive).map(|change| {
                         if reverse {
                             at.min(t.saturating_sub(i64::from(change)))
                         } else {
@@ -2220,7 +2308,7 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
-    fn optimistic_distance_greater_than_journey_horizon_is_unreachable() {
+    fn lower_bound_horizon_is_global_and_query_duration_is_checked_by_search() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let graph = LowerBoundTopology::build(&tt);
@@ -2231,11 +2319,12 @@ mod compressed_timetable_profile_tests {
             &q,
             false,
             &graph,
-            Instant::now() + Duration::from_secs(5),
+            &mut RaptorStats::default(),
         );
-        // The first stop is eight hours from the destination by rail,
-        // and a five-minute query cannot possibly use that connection.
-        assert_eq!(bounds[0], u32::MAX);
+        // Nigiri's Dijkstra retains this eight-hour lower bound even for
+        // a five-minute query. The RAPTOR horizon rejects it subsequently.
+        assert_eq!(bounds[0], 8 * 3_600);
+        assert!(!can_reach(&bounds, 0, 0, 0, q.max_duration_seconds, false, INF));
         assert_eq!(bounds[1], 0);
     }
 
@@ -2284,12 +2373,35 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
-    fn expired_lower_bound_deadline_disables_only_pruning() {
+    fn preprocessing_is_not_truncated_by_the_sweep_deadline() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let graph = LowerBoundTopology::build(&tt);
-        let bounds = lower_bounds(&tt, &query(), false, &graph, Instant::now());
-        assert!(bounds.iter().all(|&d| d == 0));
+        let bounds = lower_bounds(&tt, &query(), false, &graph, &mut RaptorStats::default());
+        assert_eq!(bounds, vec![8 * 3_600, 0]);
+    }
+
+    #[test]
+    fn cpu_point_search_finishes_after_the_sweep_deadline() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = query();
+        let base = 20_000_i64 * 86_400;
+        for reverse in [false, true] {
+            let (anchor, bound) = if reverse {
+                (base + 17 * 3_600, base + 9 * 3_600)
+            } else {
+                (base + 9 * 3_600, base + 17 * 3_600)
+            };
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
+            state.deadline = Instant::now();
+            let journeys = state.execute_point(&tt, &q, anchor, 1, bound).unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert!(valid_journey(&tt, &q, &journeys[0]));
+            assert!(!state.stats().profile_budget_exhausted);
+        }
     }
 
     #[test]
@@ -2959,5 +3071,157 @@ mod immutable_path_tests {
             leg,
             crate::routing_common::raptor_query::Leg::Ride { route: 11, .. }
         )));
+    }
+}
+
+#[cfg(test)]
+mod lower_bound_graph_tests {
+    use super::*;
+    use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::timetable::{PackedFootpath, SourceIdx, TimetableOwned};
+
+    fn walking_graph(parents: &[LocationIdx], edges: &[(usize, usize, u32)]) -> TimetableOwned {
+        let mut tt = TimetableOwned::empty(20_000, 1);
+        tt.add_source("test", "lb-graph", "attempt").unwrap();
+        for (at, &parent) in parents.iter().enumerate() {
+            tt.coordinates.push(Default::default());
+            tt.location_id.push(Default::default());
+            tt.location_name.push(Default::default());
+            tt.location_source.push(SourceIdx(0));
+            tt.location_parent.push(parent);
+            tt.location_type.push(1);
+            tt.location_transfer_seconds.push(0);
+            tt.location_routes_offsets.push(0);
+            for &(from, to, seconds) in edges {
+                if from == at {
+                    tt.footpaths_out
+                        .push(PackedFootpath::new(LocationIdx(to as u32), seconds).unwrap());
+                }
+                if to == at {
+                    tt.footpaths_in
+                        .push(PackedFootpath::new(LocationIdx(from as u32), seconds).unwrap());
+                }
+            }
+            tt.footpaths_out_offsets.push(tt.footpaths_out.len() as u32);
+            tt.footpaths_in_offsets.push(tt.footpaths_in.len() as u32);
+        }
+        tt
+    }
+
+    fn request(from: usize, to: usize) -> Query {
+        Query {
+            departure_unix_seconds: 20_000_i64 * 86_400,
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(from as u32),
+                seconds: 7,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(to as u32),
+                seconds: 0,
+            }],
+            direct_walk_seconds: None,
+            max_boardings: 3,
+            max_duration_seconds: 86_400,
+        }
+    }
+
+    #[test]
+    fn station_graph_merges_nested_platforms_and_minimizes_parallel_edges() {
+        let owned = walking_graph(
+            &[
+                LocationIdx::INVALID,
+                LocationIdx(0),
+                LocationIdx(1),
+                LocationIdx::INVALID,
+                LocationIdx(3),
+                LocationIdx::INVALID,
+            ],
+            &[(1, 4, 120), (2, 3, 90), (0, 5, 500), (4, 5, 30), (1, 2, 10)],
+        );
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let graph = LowerBoundTopology::build(&tt);
+        // Upstream keeps root indices; non-root rows remain empty.
+        assert_eq!(graph.forward.offsets.len() - 1, 6);
+        assert!(graph.forward.successors(1).is_empty());
+        assert!(graph.forward.successors(2).is_empty());
+        assert_eq!(graph.forward.edges.len(), 3);
+        assert_eq!(graph.reverse.edges.len(), 3);
+        for reverse in [false, true] {
+            let mut stats = RaptorStats::default();
+            let bounds = lower_bounds(
+                &tt,
+                &request(2, 5),
+                reverse,
+                &graph,
+                &mut stats,
+            );
+            assert_eq!(
+                bounds,
+                if reverse {
+                    vec![7, 7, 7, 97, 97, 127]
+                } else {
+                    vec![120, 120, 120, 30, 30, 0]
+                }
+            );
+            assert_eq!(stats.profile_lower_bound_edges, 3);
+        }
+    }
+
+    #[test]
+    fn integer_bucket_search_matches_heap_dijkstra_on_directed_graphs() {
+        // Deterministic graphs exercise stale labels, unequal parallel costs,
+        // disconnected vertices, and exact sub-minute durations.
+        let n = 48;
+        let mut seed = 17_u32;
+        let mut edges = Vec::new();
+        for _ in 0..400 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let from = seed as usize % n;
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            let to = seed as usize % n;
+            let cost = (seed >> 16) % 1000 + 1;
+            edges.push((from, to, cost));
+        }
+        let owned = walking_graph(&vec![LocationIdx::INVALID; n], &edges);
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let graph = LowerBoundTopology::build(&tt);
+        for reverse in [false, true] {
+            let q = request(0, n - 1);
+            let start = if reverse { 0 } else { n - 1 };
+            let offset = if reverse { 7 } else { 0 };
+            let mut expected = vec![u32::MAX; n];
+            expected[start] = offset;
+            let mut heap = BinaryHeap::from([Reverse((offset, start))]);
+            while let Some(Reverse((weight, stop))) = heap.pop() {
+                if weight != expected[stop] {
+                    continue;
+                }
+                for &(from, to, cost) in &edges {
+                    let (from, to) = if reverse { (from, to) } else { (to, from) };
+                    let candidate = weight + cost;
+                    if from == stop && candidate < expected[to] {
+                        expected[to] = candidate;
+                        heap.push(Reverse((candidate, to)));
+                    }
+                }
+            }
+            let actual = lower_bounds(
+                &tt,
+                &q,
+                reverse,
+                &graph,
+                &mut RaptorStats::default(),
+            );
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn cyclic_station_metadata_cannot_hang_preprocessing() {
+        let groups = station_groups(&[LocationIdx(1), LocationIdx(0), LocationIdx(1)]);
+        assert_eq!(groups[0], groups[1]);
+        assert_eq!(groups[1], groups[2]);
     }
 }

@@ -153,6 +153,8 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.route_scan_ms += one.route_scan_ms;
     total.walking_ms += one.walking_ms;
     total.profile_lower_bounds_ms += one.profile_lower_bounds_ms;
+    total.profile_lower_bound_nodes += one.profile_lower_bound_nodes;
+    total.profile_lower_bound_edges += one.profile_lower_bound_edges;
     total.profile_searches += one.profile_searches;
     total.profile_journeys_reconstructed += one.profile_journeys_reconstructed;
     total.profile_journeys_rejected += one.profile_journeys_rejected;
