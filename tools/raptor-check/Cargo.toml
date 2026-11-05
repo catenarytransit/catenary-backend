@@ -10,3 +10,4 @@ publish = false
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
+rayon = "1.12.0"

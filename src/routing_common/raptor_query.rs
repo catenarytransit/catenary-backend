@@ -23,6 +23,12 @@ pub struct RaptorStats {
     pub labels_dominated: u64,
     pub round_copy_bytes: u64,
     pub route_scan_ms: f64,
+    /// Rounds whose routes were scanned concurrently (PONG remains ordered).
+    pub parallel_route_scan_rounds: u64,
+    /// Largest number of route-scan workers used by this query; zero if serial.
+    pub route_scan_workers: u64,
+    /// Included in route_scan_ms; excludes worker execution.
+    pub route_scan_merge_ms: f64,
     pub walking_ms: f64,
     /// Time spent constructing the destination-directed admissible lower
     /// bounds from Gentian's compressed route timing profiles and footpaths.

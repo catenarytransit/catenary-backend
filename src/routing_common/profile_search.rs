@@ -151,6 +151,9 @@ fn accumulate_stats(total: &mut RaptorStats, one: RaptorStats) {
     total.labels_dominated += one.labels_dominated;
     total.round_copy_bytes += one.round_copy_bytes;
     total.route_scan_ms += one.route_scan_ms;
+    total.parallel_route_scan_rounds += one.parallel_route_scan_rounds;
+    total.route_scan_workers = total.route_scan_workers.max(one.route_scan_workers);
+    total.route_scan_merge_ms += one.route_scan_merge_ms;
     total.walking_ms += one.walking_ms;
     total.profile_lower_bounds_ms += one.profile_lower_bounds_ms;
     total.profile_lower_bound_nodes += one.profile_lower_bound_nodes;
