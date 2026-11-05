@@ -239,11 +239,11 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
                 to_stop,
                 seconds,
             } => {
+                let reflexive_rule = tt.station_transfer_rule(LocationIdx(from_stop), LocationIdx(to_stop));
                 let reflexive_change = from_stop == to_stop
                     && tt.location_transfer_seconds().get(from_stop as usize)
-                        .is_some_and(|&change| change == seconds)
-                    && !tt.station_transfer_rule(LocationIdx(from_stop), LocationIdx(to_stop))
-                        .is_some_and(|rule| rule.prohibited());
+                        .is_some_and(|&change| change.max(reflexive_rule.map_or(0, |rule| rule.min_seconds)) == seconds)
+                    && !reflexive_rule.is_some_and(|rule| rule.prohibited());
                 if stop != Some(from_stop)
                     || !(reflexive_change || tt
                         .footpaths_from(LocationIdx(from_stop))

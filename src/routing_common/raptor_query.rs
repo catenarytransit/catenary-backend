@@ -29,8 +29,6 @@ pub struct RaptorStats {
     pub profile_lower_bounds_ms: f64,
     pub profile_lower_bound_nodes: u64,
     pub profile_lower_bound_edges: u64,
-    /// Preprocessing stopped early and unfinished distances remain optimistic.
-    pub profile_lower_bounds_truncated: bool,
     /// Number of point solves executed over timetable start events.
     pub profile_searches: u64,
     /// Shared-state timetable events processed (not full point searches).

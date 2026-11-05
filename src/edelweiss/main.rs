@@ -568,7 +568,7 @@ fn run_query(
         // A stable routing implementation marker distinguishes the Nigiri-
         // inspired compact solver from older deployed label-vector binaries.
         "routingEngine": if request.timetable_view {
-            "compact-raptor-nigiri-pong-v5"
+            "nigiri-raptor-labels-pong-v5"
         } else {
             "point-raptor"
         },

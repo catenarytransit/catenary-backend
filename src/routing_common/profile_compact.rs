@@ -1,4 +1,6 @@
-//! Nigiri-style compact round-array RAPTOR over Gentian's mmap timetable.
+//! Legacy event-profile scanner and shared lower-bound preprocessing.
+//! Live Edelweiss PONG uses nigiri_raptor.rs and nigiri_reconstruct.rs.
+//! This scanner remains for the separate classic profile API and regressions.
 //!
 //! Each (round, stop) has three *scalar* states: ride arrival, physical walk
 //! arrival, and transfer-ready time. The third state enforces GTFS stop-pair
@@ -6,6 +8,7 @@
 //! Accepted predecessor snapshots are immutable, and terminal journey
 //! reconstruction follows the captured boarding/footpath provenance.
 //! Forward profile anchors are evaluated latest-first.
+use crate::routing_common::dial::{Dial, dijkstra};
 use crate::routing_common::profile_compact_reconstruct::{reconstruct, valid_journey};
 use crate::routing_common::profile_search::StartLabel;
 use crate::routing_common::raptor_query::{
@@ -321,9 +324,17 @@ impl CsrGraph {
     }
 }
 impl LowerBoundTopology {
+    pub(crate) fn transport_index(&self) -> Arc<TransportIndex> {
+        Arc::clone(&self.transports)
+    }
+
+    pub(crate) fn transfer_sensitive(&self) -> Arc<Vec<bool>> {
+        Arc::clone(&self.transfer_sensitive)
+    }
+
     pub(crate) fn build(tt: &ZeroCopyTimetable<'_>) -> Self {
         let stations = station_groups(tt.location_parent());
-        let n = stations.iter().copied().max().map_or(0, |last| last + 1);
+        let n = tt.coordinates().len();
         let mut edges: Vec<(u32, u32, u32)> = Vec::new();
         for route_id in 0..tt.route_transport_ranges().len() {
             let route = RouteIdx(route_id as u32);
@@ -414,86 +425,30 @@ fn station_groups(parents: &[LocationIdx]) -> Vec<usize> {
             groups[from] = to;
         }
     }
-    let mut ids = vec![usize::MAX; parents.len()];
-    let mut count = 0;
     for at in 0..parents.len() {
         let representative = root(&mut groups, at);
-        if ids[representative] == usize::MAX {
-            ids[representative] = count;
-            count += 1;
-        }
         groups[at] = representative;
     }
     groups
-        .into_iter()
-        .map(|representative| ids[representative])
-        .collect()
 }
 
-/// Monotone integer buckets replace a comparison heap, as Nigiri's Dial
-/// queue does. Radix buckets retain exact seconds without allocating one
-/// bucket for every second of the five-day PING horizon.
-struct LowerBoundQueue {
-    buckets: [Vec<(u32, usize)>; 33],
-    last: u32,
-    len: usize,
-}
-impl Default for LowerBoundQueue {
-    fn default() -> Self {
-        Self {
-            buckets: std::array::from_fn(|_| Vec::new()),
-            last: 0,
-            len: 0,
-        }
-    }
-}
-impl LowerBoundQueue {
-    fn bucket(&self, key: u32) -> usize {
-        (u32::BITS - (key ^ self.last).leading_zeros()) as usize
-    }
-    fn push(&mut self, key: u32, stop: usize) {
-        debug_assert!(key >= self.last);
-        let bucket = self.bucket(key);
-        self.buckets[bucket].push((key, stop));
-        self.len += 1;
-    }
-    fn pop(&mut self) -> Option<(u32, usize)> {
-        if self.len == 0 {
-            return None;
-        }
-        if self.buckets[0].is_empty() {
-            let bucket = (1..33).find(|&i| !self.buckets[i].is_empty()).unwrap();
-            self.last = self.buckets[bucket].iter().map(|x| x.0).min().unwrap();
-            while let Some(label) = self.buckets[bucket].pop() {
-                let target = self.bucket(label.0);
-                self.buckets[target].push(label);
-            }
-        }
-        self.len -= 1;
-        self.buckets[0].pop()
-    }
-}
+// Nigiri routing/dijkstra.{h,cc}: a full Dial traversal, with the global
+// five-day bucket horizon. The request duration and wall timeout do not
+// truncate preprocessing. Query/PONG bounds are applied by the search.
+const LOWER_BOUND_HORIZON: u32 = 5 * 86_400;
 
-/// Dijkstra on Nigiri-style station groups and deduplicated directed edges.
-/// An interrupted search must not label unfinished vertices unreachable.
-fn lower_bounds(
-    tt: &ZeroCopyTimetable<'_>,
-    request: &Query,
-    reverse: bool,
-    topology: &LowerBoundTopology,
-    deadline: Instant,
-    stats: &mut RaptorStats,
+pub(crate) fn point_lower_bounds(
+    tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool,
+    topology: &LowerBoundTopology, stats: &mut RaptorStats,
 ) -> Vec<u32> {
-    lower_bounds_with_edge_limit(tt, request, reverse, topology, deadline, u64::MAX, stats)
+    lower_bounds(tt, q, reverse, topology, stats)
 }
 
-fn lower_bounds_with_edge_limit(
+fn lower_bounds(
     _tt: &ZeroCopyTimetable<'_>,
     request: &Query,
     reverse: bool,
     topology: &LowerBoundTopology,
-    deadline: Instant,
-    edge_limit: u64,
     stats: &mut RaptorStats,
 ) -> Vec<u32> {
     let graph = if reverse {
@@ -502,65 +457,41 @@ fn lower_bounds_with_edge_limit(
         &topology.reverse
     };
     let mut dist = vec![u32::MAX; graph.offsets.len() - 1];
-    let mut queue = LowerBoundQueue::default();
+    let mut queue = Dial::new(LOWER_BOUND_HORIZON as usize, |label: &(u32, usize)| {
+        label.0 as usize
+    });
+    // Upstream uses a map of minimum destination offsets, then seeds in
+    // station-index order. Do not insert duplicate platform seeds.
+    let mut minimum = std::collections::BTreeMap::<usize, u32>::new();
     let terminals = if reverse {
         &request.access
     } else {
         &request.egress
     };
     for ep in terminals {
-        let stop = topology.stations[ep.stop.idx()];
-        if ep.seconds <= request.max_duration_seconds && ep.seconds < dist[stop] {
-            dist[stop] = ep.seconds;
-            queue.push(ep.seconds, stop);
+        let station = topology.stations[ep.stop.idx()];
+        minimum
+            .entry(station)
+            .and_modify(|d| *d = (*d).min(ep.seconds))
+            .or_insert(ep.seconds);
+    }
+    for (station, duration) in minimum {
+        // API endpoint offsets are <= 1 hour. Out-of-horizon offsets cannot
+        // contribute to a journey within Nigiri's five-day maximum.
+        if (duration as usize) < queue.n_buckets() {
+            dist[station] = duration;
+            queue.push((duration, station));
         }
     }
-    let mut interrupted_at = None;
-    while let Some((weight, at)) = queue.pop() {
-        if weight != dist[at] {
-            continue;
-        }
-        if Instant::now() >= deadline {
-            interrupted_at = Some(weight);
-            break;
-        }
-        stats.profile_lower_bound_nodes += 1;
-        for &(next, cost) in graph.successors(at) {
-            if stats.profile_lower_bound_edges >= edge_limit {
-                interrupted_at = Some(weight);
-                break;
-            }
-            stats.profile_lower_bound_edges += 1;
-            if stats.profile_lower_bound_edges & 255 == 0 && Instant::now() >= deadline {
-                interrupted_at = Some(weight);
-                break;
-            }
-            let next = next as usize;
-            let candidate = weight.saturating_add(cost);
-            if candidate <= request.max_duration_seconds && candidate < dist[next] {
-                dist[next] = candidate;
-                queue.push(candidate, next);
-            }
-        }
-        if interrupted_at.is_some() {
-            break;
-        }
-    }
-    if let Some(floor) = interrupted_at {
-        // All unsettled shortest distances are >= this popped key, even if
-        // its outgoing edges were only partially relaxed. Settled vertices
-        // retain their exact distance. This preserves useful safe pruning.
-        stats.profile_lower_bounds_truncated = true;
-        for value in &mut dist {
-            *value = (*value).min(floor);
-        }
-    }
-    // An already expired preprocessing budget must yield zero bounds even
-    // when the queue was empty, rather than manufacture unreachability.
-    if stats.profile_lower_bound_nodes == 0 && Instant::now() >= deadline {
-        stats.profile_lower_bounds_truncated = true;
-        dist.fill(0);
-    }
+    let work = dijkstra(
+        &graph.offsets,
+        &graph.edges,
+        &mut queue,
+        &mut dist,
+        u32::MAX,
+    );
+    stats.profile_lower_bound_nodes += work.settled;
+    stats.profile_lower_bound_edges += work.edges;
     topology
         .stations
         .iter()
@@ -761,12 +692,7 @@ impl ProfileSearchState {
         let topology = precomputed
             .or(owned.as_ref())
             .expect("topology must be supplied or constructed");
-        // Lower bounds are an optional accelerator. Reserve search time
-        // even on a cold continental mmap, rather than spending all five
-        // seconds before the first PING can execute.
-        let bounds_deadline = (Instant::now() + (timeout / 10).min(Duration::from_millis(100)))
-            .min(deadline);
-        let bounds = lower_bounds(tt, q, reverse, topology, bounds_deadline, &mut stats);
+        let bounds = lower_bounds(tt, q, reverse, topology, &mut stats);
         stats.profile_lower_bounds_ms += bounds_started.elapsed().as_secs_f64() * 1_000.0;
         let invalid = if reverse { NEG_INF } else { INF };
         let transfer_sensitive = Arc::clone(&topology.transfer_sensitive);
@@ -864,13 +790,6 @@ impl ProfileSearchState {
         }
     }
 
-    /// A PING may use only part of the remaining request budget so PONG can
-    /// validate its completed candidates. The caller aggregates timeouts.
-    pub(crate) fn set_point_deadline(&mut self, deadline: Instant) {
-        self.deadline = deadline;
-        self.stats.profile_budget_exhausted = false;
-    }
-
     /// Nigiri's point execute(start_time, max_transfers, worst_time_at_dest).
     /// The caller resets arrivals once for ping and once before the sequence
     /// of pongs. Successive pongs retain scalar round arrivals and validated
@@ -890,10 +809,6 @@ impl ProfileSearchState {
         let mut q = q.clone();
         q.max_boardings = max_boardings;
         let starts = StartLabel::point(&q, anchor, self.reverse);
-        if Instant::now() >= self.deadline {
-            self.stats.profile_budget_exhausted = true;
-            return Ok(Vec::new());
-        }
         self.stats.profile_anchor_events += 1;
         self.stats.profile_start_labels += starts.len() as u64;
         let started = Instant::now();
@@ -1010,6 +925,10 @@ impl ProfileSearchState {
         self.parents.clear();
         let generation = self.generation;
         let reverse = self.reverse;
+        // Nigiri's CPU PONG completes a whole sweep before checking time.
+        // Classic profile search retains its existing inner cancellation.
+        let deadline = (!self.point_mode).then_some(self.deadline);
+        let is_timeout_reached = || deadline.is_some_and(|end| Instant::now() >= end);
         // Reset only the per-start competitiveness limit, not the arrival
         // matrix. Nigiri executes every start with a worst destination time
         // before updating it from transit and walking relaxations.
@@ -1080,8 +999,8 @@ impl ProfileSearchState {
                 .or_insert(ep.seconds);
         }
         for k in 1..=q.max_boardings {
-            if marked.is_empty() || Instant::now() >= self.deadline {
-                if Instant::now() >= self.deadline {
+            if marked.is_empty() || is_timeout_reached() {
+                if is_timeout_reached() {
                     self.stats.profile_budget_exhausted = true;
                 }
                 break;
@@ -1117,7 +1036,7 @@ impl ProfileSearchState {
                 let current = &mut after[0];
                 let started = Instant::now();
                 for route in routes {
-                    if Instant::now() >= self.deadline {
+                    if is_timeout_reached() {
                         self.stats.profile_budget_exhausted = true;
                         break;
                     }
@@ -1131,7 +1050,7 @@ impl ProfileSearchState {
                         for step in 0..stops.len() {
                             self.stats.stop_events_scanned += 1;
                             if (self.stats.stop_events_scanned & 255) == 0
-                                && Instant::now() >= self.deadline
+                                && is_timeout_reached()
                             {
                                 self.stats.profile_budget_exhausted = true;
                                 break;
@@ -1322,6 +1241,12 @@ impl ProfileSearchState {
                             if !can_start || self.stop_stamps[loc] != self.stop_stamp {
                                 continue;
                             }
+                            // Nigiri raptor::update_route: after the marked
+                            // boarding guard, an unreachable lower bound
+                            // terminates this route scan before trip lookup.
+                            if self.bounds[loc] == u32::MAX {
+                                break;
+                            }
                             let Some(ready) = previous.get(Stage::Ready, loc, generation) else {
                                 continue;
                             };
@@ -1470,7 +1395,7 @@ impl ProfileSearchState {
             // Only the final best ride state at each stop is expanded; the
             // footprint is at most three cells per stop and RAPTOR round.
             for &from in &improved_rides {
-                if Instant::now() >= self.deadline {
+                if is_timeout_reached() {
                     self.stats.profile_budget_exhausted = true;
                     break;
                 }
@@ -1542,7 +1467,7 @@ impl ProfileSearchState {
                 for fp in paths {
                     self.stats.footpath_edges_examined += 1;
                     if self.stats.footpath_edges_examined & 255 == 0
-                        && Instant::now() >= self.deadline
+                        && is_timeout_reached()
                     {
                         self.stats.profile_budget_exhausted = true;
                         break;
@@ -2383,7 +2308,7 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
-    fn optimistic_distance_greater_than_journey_horizon_is_unreachable() {
+    fn lower_bound_horizon_is_global_and_query_duration_is_checked_by_search() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let graph = LowerBoundTopology::build(&tt);
@@ -2394,44 +2319,13 @@ mod compressed_timetable_profile_tests {
             &q,
             false,
             &graph,
-            Instant::now() + Duration::from_secs(5),
             &mut RaptorStats::default(),
         );
-        // The first stop is eight hours from the destination by rail,
-        // and a five-minute query cannot possibly use that connection.
-        assert_eq!(bounds[0], u32::MAX);
+        // Nigiri's Dijkstra retains this eight-hour lower bound even for
+        // a five-minute query. The RAPTOR horizon rejects it subsequently.
+        assert_eq!(bounds[0], 8 * 3_600);
+        assert!(!can_reach(&bounds, 0, 0, 0, q.max_duration_seconds, false, INF));
         assert_eq!(bounds[1], 0);
-    }
-
-    #[test]
-    fn ping_timeout_does_not_poison_the_reserved_validation_budget() {
-        let bytes = daily_train().encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let q = query();
-        let base = 20_000_i64 * 86_400;
-        for reverse in [false, true] {
-            let (anchor, bound) = if reverse {
-                (base + 17 * 3_600, base + 9 * 3_600)
-            } else {
-                (base + 9 * 3_600, base + 17 * 3_600)
-            };
-            let mut state =
-                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
-                    .unwrap();
-            state.set_point_deadline(Instant::now());
-            assert!(
-                state
-                    .execute_point(&tt, &q, anchor, 1, bound)
-                    .unwrap()
-                    .is_empty()
-            );
-            assert!(state.stats().profile_budget_exhausted);
-            state.set_point_deadline(Instant::now() + Duration::from_secs(5));
-            let result = state.execute_point(&tt, &q, anchor, 1, bound).unwrap();
-            assert_eq!(result.len(), 1);
-            assert!(valid_journey(&tt, &q, &result[0]));
-            assert!(!state.stats().profile_budget_exhausted);
-        }
     }
 
     #[test]
@@ -2479,12 +2373,35 @@ mod compressed_timetable_profile_tests {
     }
 
     #[test]
-    fn expired_lower_bound_deadline_disables_only_pruning() {
+    fn preprocessing_is_not_truncated_by_the_sweep_deadline() {
         let bytes = daily_train().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let graph = LowerBoundTopology::build(&tt);
-        let bounds = lower_bounds(&tt, &query(), false, &graph, Instant::now(), &mut RaptorStats::default());
-        assert!(bounds.iter().all(|&d| d == 0));
+        let bounds = lower_bounds(&tt, &query(), false, &graph, &mut RaptorStats::default());
+        assert_eq!(bounds, vec![8 * 3_600, 0]);
+    }
+
+    #[test]
+    fn cpu_point_search_finishes_after_the_sweep_deadline() {
+        let bytes = daily_train().encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let q = query();
+        let base = 20_000_i64 * 86_400;
+        for reverse in [false, true] {
+            let (anchor, bound) = if reverse {
+                (base + 17 * 3_600, base + 9 * 3_600)
+            } else {
+                (base + 9 * 3_600, base + 17 * 3_600)
+            };
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
+            state.deadline = Instant::now();
+            let journeys = state.execute_point(&tt, &q, anchor, 1, bound).unwrap();
+            assert_eq!(journeys.len(), 1);
+            assert!(valid_journey(&tt, &q, &journeys[0]));
+            assert!(!state.stats().profile_budget_exhausted);
+        }
     }
 
     #[test]
@@ -3224,7 +3141,10 @@ mod lower_bound_graph_tests {
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let graph = LowerBoundTopology::build(&tt);
-        assert_eq!(graph.forward.offsets.len() - 1, 3);
+        // Upstream keeps root indices; non-root rows remain empty.
+        assert_eq!(graph.forward.offsets.len() - 1, 6);
+        assert!(graph.forward.successors(1).is_empty());
+        assert!(graph.forward.successors(2).is_empty());
         assert_eq!(graph.forward.edges.len(), 3);
         assert_eq!(graph.reverse.edges.len(), 3);
         for reverse in [false, true] {
@@ -3234,7 +3154,6 @@ mod lower_bound_graph_tests {
                 &request(2, 5),
                 reverse,
                 &graph,
-                Instant::now() + Duration::from_secs(5),
                 &mut stats,
             );
             assert_eq!(
@@ -3246,75 +3165,6 @@ mod lower_bound_graph_tests {
                 }
             );
             assert_eq!(stats.profile_lower_bound_edges, 3);
-            assert!(!stats.profile_lower_bounds_truncated);
-        }
-    }
-
-    #[test]
-    fn radix_queue_is_monotone_with_zero_edges_duplicates_and_large_second_keys() {
-        let mut queue = LowerBoundQueue::default();
-        for key in [500_001, 0, 1, 86_401, 255, 256, 0, 100, u32::MAX] {
-            queue.push(key, key as usize);
-        }
-        let mut popped = Vec::new();
-        while let Some((key, stop)) = queue.pop() {
-            assert_eq!(stop, key as usize);
-            popped.push(key);
-            if key == 1 {
-                queue.push(2, 2);
-                queue.push(1, 1);
-                // Avoid repeatedly reinserting the same key.
-                let same = queue.pop().unwrap();
-                assert_eq!(same.0, 1);
-                popped.push(same.0);
-            }
-        }
-        assert_eq!(
-            popped,
-            vec![0, 0, 1, 1, 2, 100, 255, 256, 86_401, 500_001, u32::MAX]
-        );
-    }
-
-    #[test]
-    fn truncated_dijkstra_never_uses_tentative_distances_as_lower_bounds() {
-        // At a partial expansion, B has tentative distance 100 although its
-        // actual shortest distance through C is 20. Returning 100 would
-        // incorrectly prune real journeys; unfinished vertices need the
-        // frontier floor. Include a disconnected vertex as well.
-        let owned = walking_graph(
-            &vec![LocationIdx::INVALID; 5],
-            &[(0, 1, 100), (0, 2, 10), (2, 1, 10), (1, 3, 1)],
-        );
-        let bytes = owned.encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let graph = LowerBoundTopology::build(&tt);
-        for reverse in [false, true] {
-            let q = request(0, 3);
-            let complete = lower_bounds(
-                &tt,
-                &q,
-                reverse,
-                &graph,
-                Instant::now() + Duration::from_secs(5),
-                &mut RaptorStats::default(),
-            );
-            for edge_limit in 0..=4 {
-                let mut stats = RaptorStats::default();
-                let partial = lower_bounds_with_edge_limit(
-                    &tt,
-                    &q,
-                    reverse,
-                    &graph,
-                    Instant::now() + Duration::from_secs(5),
-                    edge_limit,
-                    &mut stats,
-                );
-                assert!(partial.iter().zip(&complete).all(|(a, b)| a <= b));
-                if edge_limit < 4 {
-                    assert!(stats.profile_lower_bounds_truncated);
-                    assert_ne!(partial[4], u32::MAX);
-                }
-            }
         }
     }
 
@@ -3362,7 +3212,6 @@ mod lower_bound_graph_tests {
                 &q,
                 reverse,
                 &graph,
-                Instant::now() + Duration::from_secs(5),
                 &mut RaptorStats::default(),
             );
             assert_eq!(actual, expected);
@@ -3372,6 +3221,7 @@ mod lower_bound_graph_tests {
     #[test]
     fn cyclic_station_metadata_cannot_hang_preprocessing() {
         let groups = station_groups(&[LocationIdx(1), LocationIdx(0), LocationIdx(1)]);
-        assert_eq!(groups, vec![0, 0, 0]);
+        assert_eq!(groups[0], groups[1]);
+        assert_eq!(groups[1], groups[2]);
     }
 }

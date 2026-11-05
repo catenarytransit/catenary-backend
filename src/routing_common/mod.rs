@@ -1,5 +1,6 @@
 pub mod api;
 pub mod dijkstra;
+pub(crate) mod dial;
 pub mod extract;
 pub mod feed_policy;
 pub mod graph_loader;
@@ -19,6 +20,8 @@ pub mod ways;
 mod graph_tests;
 pub(crate) mod interval_estimate;
 pub(crate) mod pong;
+pub(crate) mod nigiri_raptor;
+pub(crate) mod nigiri_reconstruct;
 pub(crate) mod profile_compact;
 pub(crate) mod profile_compact_reconstruct;
 pub mod profile_search;

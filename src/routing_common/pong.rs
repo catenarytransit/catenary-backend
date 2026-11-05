@@ -1,16 +1,17 @@
 //! Static, no-via port of Nigiri's CPU PONG search.
 //!
-//! Upstream: motis-project/nigiri@1ccdf6972b854d17963b1d7843614446824b1e1a,
+//! Upstream: motis-project/nigiri@82e55cedfc184ea3a33082619ba937d172e9c575,
 //! src/routing/raptor/pong.cc. MIT license: third_party/nigiri-LICENSE.
-//! The control flow, oriented journey keys, validation cursor, weighted
-//! result count, lookahead and inclusive reverse bound follow that revision.
-//! Gentian keeps exact seconds, so Nigiri's one-minute cursor unit is one
-//! second here. OSR endpoints are intermodal: neither pass expands initial
-//! footpaths. Both directions reuse one set of compact RAPTOR round buffers.
-//! Previous-result PING limits and known-PONG reuse follow upstream
-//! 82e55cedfc184ea3a33082619ba937d172e9c575, pong.cc:288-292,362-375.
+//! The PING/PONG controller follows upstream's sweep order, known-result
+//! handling, weighted count and strict cursor validation. CPU wall time is
+//! checked between complete sweeps, never inside a point search.
+//! Gentian's adapter uses seconds and boardings (upstream uses minutes and
+//! transfers). Intermodal start footpaths are disabled in both directions.
+//! The static scan uses Nigiri's best_/tmp_/round_times_ label model.
+//! Only selected PONG matches are reconstructed, from round times and events.
 
-use crate::routing_common::profile_compact::{LowerBoundTopology, ProfileSearchState};
+use crate::routing_common::profile_compact::LowerBoundTopology;
+use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
 use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
 use crate::routing_common::raptor_query::{Journey, Leg, Query, RaptorStats, transport_event_second};
@@ -33,23 +34,13 @@ struct Candidate {
     start_time: i64,
     dest_time: i64,
     boardings: usize,
-    journey: Journey,
-    reconstructed: bool,
+    journey: Option<Journey>,
 }
 
 impl Candidate {
-    fn point(journey: Journey, start_time: i64, reverse: bool) -> Self {
-        Self {
-            start_time,
-            dest_time: if reverse {
-                journey.departure_unix_seconds
-            } else {
-                journey.arrival_unix_seconds
-            },
-            boardings: journey.boardings,
-            journey,
-            reconstructed: false,
-        }
+    fn point(point: PointJourney) -> Self {
+        Self { start_time: point.start_time, dest_time: point.dest_time,
+            boardings: point.boardings, journey: None }
     }
 
     /// nigiri::routing::journey::dominates, including opposite-oriented keys.
@@ -81,31 +72,6 @@ fn better(a: i64, b: i64, reverse: bool) -> bool {
 
 fn step(time: i64, seconds: i64, reverse: bool) -> i64 {
     if reverse { time.saturating_sub(seconds) } else { time.saturating_add(seconds) }
-}
-
-fn returnable_result(j: &Candidate, cursor: i64, reverse: bool, interrupted: bool) -> bool {
-    // A completed opposite search validates this candidate even if a later
-    // search times out before the whole sweep can advance the cursor. Never
-    // expose the unvalidated byproducts of an interrupted PONG.
-    j.reconstructed && (interrupted || better(j.dest_time, cursor, reverse))
-}
-
-fn direct_journey(request: &Query, max_travel_time: u32, arrive_by: bool) -> Option<Journey> {
-    let seconds = request
-        .direct_walk_seconds
-        .filter(|&d| d <= max_travel_time)?;
-    let reference = request.departure_unix_seconds;
-    let (departure, arrival) = if arrive_by {
-        (reference.saturating_sub(i64::from(seconds)), reference)
-    } else {
-        (reference, reference.saturating_add(i64::from(seconds)))
-    };
-    Some(Journey {
-        boardings: 0,
-        departure_unix_seconds: departure,
-        arrival_unix_seconds: arrival,
-        legs: vec![Leg::DirectWalk { seconds }],
-    })
 }
 
 /// get_fastest_direct: the supplied OSR duration takes precedence. Otherwise
@@ -161,11 +127,6 @@ pub(crate) fn route_pong_with_stats_precomputed(
     topology: Option<&LowerBoundTopology>,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
-    ensure!(
-        request.access.iter().chain(&request.egress)
-            .all(|ep| ep.stop.idx() < tt.coordinates().len()),
-        "OSR endpoint index out of bounds"
-    );
     let processing_start = Instant::now();
     let deadline = processing_start
         .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
@@ -191,34 +152,13 @@ pub(crate) fn route_pong_with_stats_precomputed(
     let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
     let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
 
-    // Transit includes both endpoint offsets and a nonnegative vehicle time.
-    // If even that optimistic sum cannot beat direct walking, every transit
-    // result would be filtered below. Avoid continental preprocessing and
-    // round-buffer allocation entirely for these very short trips.
-    let endpoint_floor = request.access.iter().map(|ep| ep.seconds).min()
-        .zip(request.egress.iter().map(|ep| ep.seconds).min())
-        .map(|(a, b)| u64::from(a) + u64::from(b));
-    if request.max_boardings == 0 || endpoint_floor.is_none()
-        || endpoint_floor.is_some_and(|floor| floor >= fastest_direct)
-    {
-        let direct = direct_journey(request, max_travel_time, arrive_by);
-        return Ok((direct.into_iter().collect(), RaptorStats {
-            pong_interval_from: Some(interval_from),
-            pong_interval_to: Some(interval_to),
-            ..RaptorStats::default()
-        }));
-    }
-
     let mut kernel_query = request.clone();
     kernel_query.max_boardings = request.max_boardings.min(MAX_BOARDINGS);
     kernel_query.max_duration_seconds = MAX_TRAVEL_TIME;
     // PING deliberately ignores fastest_direct and admits the extra day of
     // waiting. Apply duration/direct filtering only to validated pong keys.
     kernel_query.direct_walk_seconds = None;
-    let mut state = ProfileSearchState::new_with_topology(
-        tt, &kernel_query, interval_from, interval_to, arrive_by,
-        deadline.saturating_duration_since(Instant::now()), topology,
-    )?;
+    let mut state = NigiriRaptor::new(tt, &kernel_query, arrive_by, topology)?;
     let transports = state.transport_index();
     // kPruneWithPingBounds: reverse lower bounds start at zero. Swap vectors
     // when changing direction instead of allocating a second RAPTOR state.
@@ -229,9 +169,8 @@ pub(crate) fn route_pong_with_stats_precomputed(
     let mut backward_searches = 0;
     let mut known_result_hits = 0;
     let mut seeded_destination_bounds = 0;
-    let mut budget_exhausted = false;
 
-    'sweep: loop {
+    loop {
         let result_count = |include_too_slow: bool| {
             results.iter().filter(|j| {
                 better(j.dest_time, cursor, arrive_by)
@@ -265,23 +204,14 @@ pub(crate) fn route_pong_with_stats_precomputed(
         }
         let mut ping_query = kernel_query.clone();
         ping_query.max_duration_seconds = lookahead;
-        // Nigiri finishes the opposite search before checking its sweep
-        // timeout. Our kernel also polls inside a search, so reserve time
-        // for that validation instead of letting the first PING use it all.
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        let pong_reserve = (remaining / 3).min(Duration::from_secs(1));
-        state.set_point_deadline(deadline - pong_reserve);
         let ping = state.execute_point(
             tt, &ping_query, cursor, kernel_query.max_boardings,
             step(cursor, i64::from(lookahead), arrive_by),
         )?;
         if arrive_by { backward_searches += 1; } else { forward_searches += 1; }
-        let ping_exhausted = state.stats().profile_budget_exhausted;
-        budget_exhausted |= ping_exhausted;
-        state.set_point_deadline(deadline);
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
-            let candidate = Candidate::point(journey, cursor, arrive_by);
+            let candidate = Candidate::point(journey);
             if !results.iter().any(|old| old.dominates(&candidate)) {
                 pareto_add(&mut ping_results, candidate);
             }
@@ -313,28 +243,25 @@ pub(crate) fn route_pong_with_stats_precomputed(
                 ping_j.start_time,
             )?;
             if arrive_by { forward_searches += 1; } else { backward_searches += 1; }
-            if state.stats().profile_budget_exhausted {
-                budget_exhausted = true;
-                break 'sweep;
-            }
             for journey in pong {
-                pareto_add(&mut results, Candidate::point(journey, ping_j.dest_time, !arrive_by));
+                pareto_add(&mut results, Candidate::point(journey));
             }
             let matched = results.iter_mut().find(|pong_j| {
                 pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
             }).ok_or_else(|| anyhow::anyhow!(
                 "no pong for boardings={}, start_time={} found", ping_j.boardings, ping_j.dest_time
             ))?;
-            matched.reconstructed = true;
+            if matched.journey.is_none() {
+                state.stats_.profile_journeys_reconstructed += 1;
+                let point = PointJourney { start_time: matched.start_time,
+                    dest_time: matched.dest_time, boardings: matched.boardings };
+                let journey = crate::routing_common::nigiri_reconstruct::reconstruct(&state, tt, &kernel_query, point);
+                if journey.is_err() { state.stats_.profile_journeys_rejected += 1; }
+                matched.journey = Some(journey?);
+            }
             ping_j.start_time = matched.dest_time;
         }
         state.flip_point_direction(&mut other_lower_bounds);
-
-        if ping_exhausted {
-            // Completed PONG matches are usable, but an incomplete PING
-            // cannot establish coverage for advancing the paging cursor.
-            break;
-        }
 
         let first = ping_results.iter().map(|j| j.start_time)
             .min_by(|a, b| if arrive_by { b.cmp(a) } else { a.cmp(b) })
@@ -344,15 +271,16 @@ pub(crate) fn route_pong_with_stats_precomputed(
         cursor = next;
     }
 
-    // Only completed PONG matches count as output. An interrupted sweep
-    // retains validated matches without claiming coverage beyond its cursor.
+    // Only matched, reconstructed and cursor-validated journeys count as
+    // output. No near-Pareto route extras, fallback profile scan, duration
+    // ratio heuristic, or initial interval_estimator enlargement is applied.
     let before_filter = results.len();
     let mut journeys = results.into_iter().filter(|j| {
-        returnable_result(j, cursor, arrive_by, budget_exhausted)
+        j.journey.is_some() && better(j.dest_time, cursor, arrive_by)
             && j.travel_time() < fastest_direct
             && j.travel_time() <= u64::from(max_travel_time)
     }).map(|j| {
-        let mut journey = j.journey;
+        let mut journey = j.journey.unwrap();
         // Nigiri swaps start/destination keys after the opposite search.
         journey.departure_unix_seconds = if arrive_by { j.start_time } else { j.dest_time };
         journey.arrival_unix_seconds = if arrive_by { j.dest_time } else { j.start_time };
@@ -360,7 +288,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
     }).collect::<Vec<_>>();
     let mut stats = state.stats().clone();
     stats.profile_duration_filtered = (before_filter - journeys.len()) as u64;
-    stats.profile_budget_exhausted |= budget_exhausted || Instant::now() >= deadline;
+    stats.profile_budget_exhausted |= Instant::now() >= deadline;
     stats.pong_iterations = iterations;
     stats.pong_forward_searches = forward_searches;
     stats.pong_backward_searches = backward_searches;
@@ -377,8 +305,16 @@ pub(crate) fn route_pong_with_stats_precomputed(
             improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
         }
     }
-    if let Some(direct) = direct_journey(request, max_travel_time, arrive_by) {
-        journeys.push(direct);
+    if let Some(seconds) = request.direct_walk_seconds.filter(|&d| d <= max_travel_time) {
+        let (departure, arrival) = if arrive_by {
+            (reference.saturating_sub(i64::from(seconds)), reference)
+        } else {
+            (reference, reference.saturating_add(i64::from(seconds)))
+        };
+        journeys.push(Journey {
+            boardings: 0, departure_unix_seconds: departure,
+            arrival_unix_seconds: arrival, legs: vec![Leg::DirectWalk { seconds }],
+        });
     }
     sort_journeys_for_response(&mut journeys, arrive_by);
     Ok((journeys, stats))
@@ -504,82 +440,19 @@ mod tests {
         TimetableOwned, TimingProfileIdx, TrafficDays,
     };
 
-    #[test]
-    fn timeout_keeps_completed_pong_matches_without_advancing_coverage() {
-        for reverse in [false, true] {
-            let cursor = 100;
-            let dest_time = if reverse { 90 } else { 110 };
-            let mut result = Candidate {
-                start_time: if reverse { 80 } else { 120 },
-                dest_time,
-                boardings: 1,
-                journey: Journey {
-                    departure_unix_seconds: 80,
-                    arrival_unix_seconds: 120,
-                    boardings: 1,
-                    legs: Vec::new(),
-                },
-                reconstructed: true,
-            };
-            assert!(!returnable_result(&result, cursor, reverse, false));
-            assert!(returnable_result(&result, cursor, reverse, true));
-            result.reconstructed = false;
-            assert!(!returnable_result(&result, cursor, reverse, true));
-        }
-    }
-
-    #[test]
-    fn short_direct_walk_skips_all_transit_preprocessing_when_offsets_cannot_beat_it() {
-        let bytes = competing_trains(false).encode().unwrap();
-        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let reference = 20_000_i64 * 86_400 + 8 * 3_600;
-        for arrive_by in [false, true] {
-            let q = Query {
-                departure_unix_seconds: reference,
-                access: vec![WalkingEndpoint {
-                    stop: LocationIdx(0),
-                    seconds: 60,
-                }],
-                egress: vec![WalkingEndpoint {
-                    stop: LocationIdx(2),
-                    seconds: 30,
-                }],
-                direct_walk_seconds: Some(90),
-                max_boardings: 3,
-                max_duration_seconds: 3_600,
-            };
-            let (journeys, stats) = route_pong_with_stats_precomputed(
-                &tt,
-                &q,
-                ProfileOptions::default(),
-                arrive_by,
-                None,
-            )
-            .unwrap();
-            assert_eq!(journeys.len(), 1);
-            assert_eq!(journeys[0].boardings, 0);
-            assert_eq!(
-                journeys[0].departure_unix_seconds,
-                if arrive_by { reference - 90 } else { reference }
-            );
-            assert_eq!(
-                journeys[0].arrival_unix_seconds,
-                if arrive_by { reference } else { reference + 90 }
-            );
-            assert_eq!(stats.profile_searches, 0);
-            assert_eq!(stats.profile_lower_bound_edges, 0);
-            assert_eq!(stats.pong_iterations, 0);
-            assert!(!stats.profile_budget_exhausted);
-        }
-    }
-
     // A slow direct train (08:00-09:00) competes with a faster two-ride
     // connection (08:10-08:30). The next ping rediscovers a known PONG
     // candidate while another known result can bound its destination time.
-    fn competing_trains(prohibit_change: bool) -> TimetableOwned {
-        let mut tt = TimetableOwned::empty(20_000, 1);
+    fn timetable(trips: &[(u32, u32, u32, u32)], prohibit_change: bool) -> TimetableOwned {
+        let mut tt = TimetableOwned::empty(20_000, 2);
         tt.add_source("test", "pong-reuse", "attempt").unwrap();
-        for _ in 0..3 {
+        let n = trips
+            .iter()
+            .map(|t| t.0.max(t.1) + 1)
+            .max()
+            .unwrap_or(0)
+            .max(3);
+        for _ in 0..n {
             tt.coordinates.push(Default::default());
             tt.location_id.push(Default::default());
             tt.location_name.push(Default::default());
@@ -588,28 +461,22 @@ mod tests {
             tt.location_type.push(1);
             tt.location_transfer_seconds.push(0);
         }
-        tt.location_routes_offsets = vec![0, 2, 4, 6];
-        tt.location_routes = vec![
-            RouteIdx(0),
-            RouteIdx(1),
-            RouteIdx(1),
-            RouteIdx(2),
-            RouteIdx(0),
-            RouteIdx(2),
-        ];
-        tt.footpaths_out_offsets = vec![0; 4];
-        tt.footpaths_in_offsets = vec![0; 4];
+        tt.location_routes_offsets = vec![0];
+        for stop in 0..n {
+            for (r, &(from, to, _, _)) in trips.iter().enumerate() {
+                if from == stop || to == stop {
+                    tt.location_routes.push(RouteIdx(r as u32));
+                }
+            }
+            tt.location_routes_offsets
+                .push(tt.location_routes.len() as u32);
+        }
+        tt.footpaths_out_offsets = vec![0; n as usize + 1];
+        tt.footpaths_in_offsets = vec![0; n as usize + 1];
         let mut days = TrafficDays::default();
         days.set(0, true).unwrap();
         tt.bitfields.push(days);
-        for (r, (from, to, departure, duration)) in [
-            (0, 2, 8 * 3_600, 3_600),
-            (0, 1, 8 * 3_600 + 10 * 60, 10 * 60),
-            (1, 2, 8 * 3_600 + 25 * 60, 5 * 60),
-        ]
-        .into_iter()
-        .enumerate()
-        {
+        for (r, &(from, to, departure, duration)) in trips.iter().enumerate() {
             tt.route_stops.extend([
                 PackedStop::new(LocationIdx(from), true, true, true, true).unwrap(),
                 PackedStop::new(LocationIdx(to), true, true, true, true).unwrap(),
@@ -645,6 +512,307 @@ mod tests {
             });
         }
         tt
+    }
+
+    fn competing_trains(prohibit_change: bool) -> TimetableOwned {
+        timetable(
+            &[
+                (0, 2, 8 * 3_600, 3_600),
+                (0, 1, 8 * 3_600 + 10 * 60, 10 * 60),
+                (1, 2, 8 * 3_600 + 25 * 60, 5 * 60),
+            ],
+            prohibit_change,
+        )
+    }
+
+    #[test]
+    fn minute_aligned_pong_fixtures_for_native_comparison() {
+        let mut fixtures: Vec<(Vec<(u32, u32, u32, u32)>, u32, u32, u32, usize, u32, u32)> = vec![
+            (
+                vec![
+                    (0, 2, 8 * 3600, 3600),
+                    (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
+                    (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
+                ],
+                8 * 3600,
+                9 * 3600,
+                900,
+                1,
+                0,
+                0,
+            ),
+            // Nigiri test/routing/pong_gap_truncation_test.cc's fixture.
+            (
+                vec![
+                    (0, 2, 9 * 3600 + 59 * 60, 61 * 60),
+                    (0, 1, 10 * 3600 + 5 * 60, 15 * 60),
+                    (1, 2, 10 * 3600 + 30 * 60, 30 * 60),
+                    (0, 2, 15 * 3600, 30 * 60),
+                ],
+                10 * 3600,
+                16 * 3600,
+                180,
+                2,
+                0,
+                0,
+            ),
+            (
+                vec![
+                    (0, 1, 23 * 3600 + 55 * 60, 35 * 60),
+                    (1, 2, 24 * 3600 + 35 * 60, 20 * 60),
+                    (0, 2, 23 * 3600 + 50 * 60, 90 * 60),
+                ],
+                23 * 3600 + 40 * 60,
+                25 * 3600 + 30 * 60,
+                900,
+                1,
+                0,
+                0,
+            ),
+            (
+                vec![(0, 2, 8 * 3600, 3600), (0, 2, 8 * 3600 + 10 * 60, 50 * 60)],
+                8 * 3600,
+                9 * 3600,
+                900,
+                1,
+                0,
+                0,
+            ),
+            (
+                vec![
+                    (0, 2, 8 * 3600, 3600),
+                    (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
+                    (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
+                ],
+                8 * 3600 - 120,
+                9 * 3600 + 180,
+                900,
+                1,
+                120,
+                180,
+            ),
+        ];
+        let generated = std::env::var_os("CATENARY_NIGIRI_PARITY_INPUT");
+        if let Some(path) = &generated {
+            let input = std::fs::read_to_string(path).unwrap();
+            let mut values = input.split_whitespace().map(|x| x.parse::<u32>().unwrap());
+            let count = values.next().unwrap();
+            fixtures.clear();
+            for _ in 0..count {
+                let trips = values.next().unwrap();
+                let forward = values.next().unwrap();
+                let backward = values.next().unwrap();
+                let window = values.next().unwrap();
+                let minimum = values.next().unwrap() as usize;
+                let access = values.next().unwrap();
+                let egress = values.next().unwrap();
+                let rows = (0..trips)
+                    .map(|_| {
+                        (
+                            values.next().unwrap(),
+                            values.next().unwrap(),
+                            values.next().unwrap(),
+                            values.next().unwrap(),
+                        )
+                    })
+                    .collect();
+                fixtures.push((rows, forward, backward, window, minimum, access, egress));
+            }
+            assert!(values.next().is_none());
+        }
+        let base = 20_000_i64 * 86_400;
+        let mut output = Vec::new();
+        for (case, (trips, forward, backward, window, minimum, access, egress)) in
+            fixtures.iter().enumerate()
+        {
+            let bytes = timetable(trips, false).encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            for reverse in [false, true] {
+                let q = Query {
+                    departure_unix_seconds: base
+                        + i64::from(if reverse { *backward } else { *forward }),
+                    access: vec![WalkingEndpoint {
+                        stop: LocationIdx(0),
+                        seconds: *access,
+                    }],
+                    egress: vec![WalkingEndpoint {
+                        stop: LocationIdx((tt.coordinates().len() - 1) as u32),
+                        seconds: *egress,
+                    }],
+                    direct_walk_seconds: None,
+                    max_boardings: 3,
+                    max_duration_seconds: 4 * 86_400,
+                };
+                let (journeys, _) = route_pong_with_stats_precomputed(
+                    &tt,
+                    &q,
+                    ProfileOptions {
+                        search_window_seconds: *window,
+                        min_itineraries: *minimum,
+                        ..ProfileOptions::default()
+                    },
+                    reverse,
+                    None,
+                )
+                .unwrap();
+                assert!(
+                    generated.is_some() || !journeys.is_empty(),
+                    "case={case}, reverse={reverse}"
+                );
+                let mut keys = journeys
+                    .iter()
+                    .map(|j| {
+                        assert!(valid_journey(&tt, &q, j));
+                        (
+                            j.boardings,
+                            j.departure_unix_seconds - base,
+                            j.arrival_unix_seconds - base,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                if generated.is_none() && case == 1 && !reverse {
+                    assert_eq!(
+                        keys,
+                        vec![
+                            (1, 15 * 3600, 15 * 3600 + 30 * 60),
+                            (2, 10 * 3600 + 5 * 60, 11 * 3600)
+                        ]
+                    );
+                }
+                for (boardings, departure, arrival) in keys {
+                    output.push(format!(
+                        "{case} {} {boardings} {departure} {arrival}\n",
+                        u8::from(reverse)
+                    ));
+                }
+            }
+        }
+        if let Some(path) = std::env::var_os("CATENARY_NIGIRI_PARITY_OUTPUT") {
+            std::fs::write(path, output.concat()).unwrap();
+        }
+    }
+
+    #[test]
+    fn scalar_labels_apply_pair_minima_before_boarding_and_reconstruct_once() {
+        for minimum in [300, 480] {
+            let mut owned = competing_trains(false);
+            owned.station_transfer_rules.push(StationTransferRule {
+                from: LocationIdx(1),
+                to: LocationIdx(1),
+                min_seconds: minimum,
+                flags: 0,
+            });
+            let bytes = owned.encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            let base = 20_000_i64 * 86_400;
+            for reverse in [false, true] {
+                let q = Query {
+                    departure_unix_seconds: base + if reverse { 9 * 3600 } else { 8 * 3600 },
+                    access: vec![WalkingEndpoint {
+                        stop: LocationIdx(0),
+                        seconds: 0,
+                    }],
+                    egress: vec![WalkingEndpoint {
+                        stop: LocationIdx(2),
+                        seconds: 0,
+                    }],
+                    direct_walk_seconds: None,
+                    max_boardings: 3,
+                    max_duration_seconds: 4 * 86_400,
+                };
+                let (journeys, stats) = route_pong_with_stats_precomputed(
+                    &tt,
+                    &q,
+                    ProfileOptions {
+                        min_itineraries: 1,
+                        ..ProfileOptions::default()
+                    },
+                    reverse,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(journeys.len(), if minimum == 300 { 2 } else { 1 });
+                assert!(journeys.iter().all(|j| valid_journey(&tt, &q, j)));
+                assert_eq!(stats.profile_journeys_reconstructed, journeys.len() as u64);
+                assert_eq!(stats.profile_terminal_reconstruction_reused, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_round_time_contains_transfer_readiness_without_losing_physical_walk() {
+        use crate::routing_common::timetable::PackedFootpath;
+        for minimum in [300, 301] {
+            let mut owned = timetable(
+                &[
+                    (0, 1, 8 * 3600, 10 * 60),
+                    (2, 3, 8 * 3600 + 15 * 60, 15 * 60),
+                ],
+                false,
+            );
+            owned.location_transfer_seconds[1] = 120;
+            owned.location_transfer_seconds[2] = 120;
+            owned.footpaths_out = vec![PackedFootpath::new(LocationIdx(2), 149).unwrap()];
+            owned.footpaths_out_offsets = vec![0, 0, 1, 1, 1];
+            owned.footpaths_in = vec![PackedFootpath::new(LocationIdx(1), 149).unwrap()];
+            owned.footpaths_in_offsets = vec![0, 0, 0, 1, 1];
+            owned.station_transfer_rules.push(StationTransferRule {
+                from: LocationIdx(1),
+                to: LocationIdx(2),
+                min_seconds: minimum,
+                flags: 0,
+            });
+            let bytes = owned.encode().unwrap();
+            let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+            let base = 20_000_i64 * 86_400;
+            for reverse in [false, true] {
+                let q = Query {
+                    departure_unix_seconds: base
+                        + if reverse {
+                            8 * 3600 + 30 * 60
+                        } else {
+                            8 * 3600
+                        },
+                    access: vec![WalkingEndpoint {
+                        stop: LocationIdx(0),
+                        seconds: 0,
+                    }],
+                    egress: vec![WalkingEndpoint {
+                        stop: LocationIdx(3),
+                        seconds: 0,
+                    }],
+                    direct_walk_seconds: None,
+                    max_boardings: 3,
+                    max_duration_seconds: 4 * 86_400,
+                };
+                let (journeys, stats) = route_pong_with_stats_precomputed(
+                    &tt,
+                    &q,
+                    ProfileOptions {
+                        min_itineraries: 1,
+                        ..ProfileOptions::default()
+                    },
+                    reverse,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(journeys.len(), usize::from(minimum == 300));
+                for j in journeys {
+                    assert!(valid_journey(&tt, &q, &j));
+                    assert_eq!(j.boardings, 2);
+                    assert!(j.legs.iter().any(|leg| matches!(
+                        leg,
+                        Leg::Transfer {
+                            from_stop: 1,
+                            to_stop: 2,
+                            seconds: 149
+                        }
+                    )));
+                }
+                assert_eq!(stats.profile_journeys_rejected, 0);
+            }
+        }
     }
 
     #[test]

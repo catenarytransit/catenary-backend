@@ -1,8 +1,14 @@
 //! Compile the production routing modules without OSR, Postgres or GTFS imports.
+#[path = "../../../src/routing_common/dial.rs"]
+pub mod dial;
 #[path = "../../../src/routing_common/interval_estimate.rs"]
 pub mod interval_estimate;
 #[path = "../../../src/routing_common/pong.rs"]
 pub mod pong;
+#[path = "../../../src/routing_common/nigiri_raptor.rs"]
+pub mod nigiri_raptor;
+#[path = "../../../src/routing_common/nigiri_reconstruct.rs"]
+pub mod nigiri_reconstruct;
 #[path = "../../../src/routing_common/profile_compact.rs"]
 pub mod profile_compact;
 #[path = "../../../src/routing_common/profile_compact_reconstruct.rs"]
@@ -21,8 +27,11 @@ pub mod transfer_optimizer;
 pub mod transport_index;
 
 pub mod routing_common {
+    pub use crate::dial;
     pub use crate::interval_estimate;
     pub use crate::pong;
+    pub use crate::nigiri_raptor;
+    pub use crate::nigiri_reconstruct;
     pub use crate::profile_compact;
     pub use crate::profile_compact_reconstruct;
     pub use crate::profile_search;
