@@ -54,7 +54,7 @@ tokio-postgres = { version = "0.7.16", features = [
 ] }
 rust_decimal = "1.32.0"
 serde_json = "1.0"
-actix-web = "4.12"
+actix-web = "4.18"
 regress = "0.10"
 color-eyre = { version = "0.6.5", features = ["url", "issue-url"] }
 itertools = "0.14.0"
@@ -91,7 +91,7 @@ unwire-gtfs-rt = { git = "https://github.com/catenarytransit/unwire-gtfs-rt" }
 rtc-quebec-gtfs-rt = "0.5.0"
 dmfr-dataset-reader = "0.2.5"
 uuid = { version = "1.15", features = ["v4", "fast-rng", "macro-diagnostics"] }
-zip = "9.1"
+zip = "9.4"
 git2 = "0.20"
 zip-extract = "0.4.1"
 serde_derive = "1.0.197"
@@ -119,7 +119,7 @@ rstar = "0.12"
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros"] }
 tilejson = "0.4.4"
 tile-grid = "0.6"
-zstd-safe = "7.2.4"
+zstd-safe = "8.2"
 hitbox = "0.1.1"
 cached = { version = "0.55", features = [
     "async_tokio_rt_multi_thread",
@@ -217,7 +217,7 @@ zerocopy = { version = "0.7", features = ["derive"] }
 memmap2 = "0.9"
 toml = "0.8"
 tinypointers = "0.2.2"
-fast-float = "0.2.0"
+fast-float2 = "0.2.4"
 itoa = "1.0.18"
 parking_lot = "0.12.5"
 marta-gtfs-rt = { git = "https://github.com/catenarytransit/marta-gtfs-rt", version = "0.1.0" }

@@ -74,7 +74,7 @@ fn format_coordinate_precise(val: f64, zoom: u8) -> f64 {
     // Parse via fast_float, which implements the Eisel-Lemire algorithm.
     // This uses 128-bit integer multiplications against exact powers of 10,
     // providing identical bitwise precision to a standard decimal parser.
-    fast_float::parse(&buf[..total_len]).unwrap_or(val)
+    fast_float2::parse(&buf[..total_len]).unwrap_or(val)
 }
 
 fn perpendicular_distance_sq(pt: [f64; 2], line_start: [f64; 2], line_end: [f64; 2]) -> f64 {
