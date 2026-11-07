@@ -272,7 +272,7 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let utc_day_today = i32::try_from(Utc::now().timestamp().div_euclid(86_400))
+    let utc_day_today = i32::try_from(catenary_time::utc_now().timestamp().div_euclid(86_400))
         .context("current UTC day exceeds i32 range")?;
     let (first_utc_day, day_count) =
         resolve_horizon(args.first_utc_day, args.day_count, utc_day_today)?;

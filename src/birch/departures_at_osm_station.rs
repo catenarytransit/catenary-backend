@@ -342,7 +342,7 @@ pub async fn departures_at_osm_station(
         }
     };
 
-    let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(chrono_tz::UTC);
+    let stop_tz = catenary_time::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(catenary_time::UTC);
 
     let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap_or_default();
     let greater_than_date_time = gt_utc.with_timezone(&stop_tz);
@@ -794,7 +794,7 @@ pub async fn departures_at_osm_station(
                         };
                         
                         // Parse Timezone
-                        let timezone = match chrono_tz::Tz::from_str(meta.timezone.as_str()) {
+                        let timezone = match catenary_time::Tz::from_str(meta.timezone.as_str()) {
                             Ok(tz) => tz,
                             Err(_) => continue,
                         };
@@ -1476,8 +1476,8 @@ async fn fetch_chateau_data_optimized(
         let s_ids_1 = service_ids.clone();
         let s_ids_2 = service_ids.clone();
         let (start_date, end_date) = date_filter.unwrap_or((
-            chrono::Utc::now().date_naive() - chrono::Duration::days(1),
-            chrono::Utc::now().date_naive() + chrono::Duration::days(1),
+            catenary_time::utc_now().date_naive() - chrono::Duration::days(1),
+            catenary_time::utc_now().date_naive() + chrono::Duration::days(1),
         ));
 
         tokio::join!(

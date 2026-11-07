@@ -4,7 +4,7 @@ use catenary::aspen_dataset::AspenisedStopTimeUpdate;
 use catenary::compact_formats::CompactItineraryPatternRow;
 use catenary::models::{CompressedTrip, ItineraryPatternMeta};
 use chrono::{Datelike, TimeZone, Utc};
-use chrono_tz::Tz;
+use catenary_time::Tz;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -94,7 +94,7 @@ pub fn calculate_delay(
                                                 Some(timescheduled) => {
                                                     let mut guesses_date_times = vec![];
 
-                                                    let now = Utc::now();
+                                                    let now = catenary_time::utc_now();
 
                                                     let now_in_tz =
                                                         now.with_timezone(&timezone.unwrap());

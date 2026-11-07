@@ -37,7 +37,7 @@ pub async fn insert_tile(
             x: x,
             y: y,
             mvt_data: data,
-            added_time: chrono::Utc::now(),
+            added_time: catenary_time::utc_now(),
         })
         .execute(conn)
         .await?;

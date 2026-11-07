@@ -343,7 +343,7 @@ pub async fn shapes_intercity_rail(
                         z,
                         category_clone,
                         mvt_bytes_clone,
-                        chrono::Utc::now(),
+                        catenary_time::utc_now(),
                     )
                     .await;
                     if let Err(err) = insert_tile {

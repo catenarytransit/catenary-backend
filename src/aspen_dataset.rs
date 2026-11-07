@@ -25,7 +25,7 @@ impl ItineraryPatternInternalCache {
     pub fn new() -> Self {
         ItineraryPatternInternalCache {
             itinerary_patterns: AHashMap::new(),
-            last_time_full_refreshed: chrono::Utc::now(),
+            last_time_full_refreshed: catenary_time::utc_now(),
         }
     }
 }
@@ -40,7 +40,7 @@ impl CompressedTripInternalCache {
     pub fn new() -> Self {
         CompressedTripInternalCache {
             compressed_trips: AHashMap::new(),
-            last_time_full_refreshed: chrono::Utc::now(),
+            last_time_full_refreshed: catenary_time::utc_now(),
         }
     }
 }

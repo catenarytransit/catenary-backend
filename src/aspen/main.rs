@@ -223,7 +223,7 @@ impl AspenRpc for AspenServer {
         agency_name: String,
     ) -> Option<catenary::sbb_formation_types::SbbFormationData> {
         let date =
-            operation_date.unwrap_or_else(|| chrono::Utc::now().format("%Y-%m-%d").to_string());
+            operation_date.unwrap_or_else(|| catenary_time::utc_now().format("%Y-%m-%d").to_string());
         let evu = sbb_downloads::evu_for_agency_name(&agency_name)?;
         let key = sbb_downloads::formation_cache_key(&date, evu, train_number);
         let guard = self.sbb_formation_cache.read().await;
@@ -1791,7 +1791,7 @@ impl AspenRpc for AspenServer {
             }
         }
 
-        let now = chrono::Utc::now();
+        let now = catenary_time::utc_now();
         let t_start_str = (now - chrono::Duration::minutes(15))
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let t_end_str = (now + chrono::Duration::minutes(25))

@@ -291,7 +291,7 @@ pub fn load_store_from_disk() -> HashMap<String, Option<SbbFormationData>> {
         return HashMap::new();
     }
 
-    let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
+    let cutoff = catenary_time::utc_now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
     let deleted_directories = delete_expired_cache_directories(cutoff);
     if deleted_directories > 0 {
         tracing::info!(
@@ -896,7 +896,7 @@ async fn order_train_requests(
     no_formation_retry_after: &mut HashMap<String, Instant>,
 ) -> Vec<TrainRequest> {
     let now = Instant::now();
-    let now_unix = chrono::Utc::now().timestamp();
+    let now_unix = catenary_time::utc_now().timestamp();
     let cached_states = {
         let read_guard = store.read().await;
         read_guard
@@ -1384,7 +1384,7 @@ pub async fn bg_fetch_sbb_formations(
 }
 
 async fn evict_old_entries(store: &SbbFormationStore) {
-    let cutoff = chrono::Utc::now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
+    let cutoff = catenary_time::utc_now().date_naive() - chrono::Duration::hours(EVICTION_HOURS);
 
     let evicted = {
         let mut write_guard = store.write().await;

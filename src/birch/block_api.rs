@@ -139,7 +139,7 @@ pub async fn block_api(
 
     //get tz
 
-    let tz = chrono_tz::Tz::from_str_insensitive(itin_metas[0].timezone.as_str()).unwrap();
+    let tz = catenary_time::Tz::from_str_insensitive(itin_metas[0].timezone.as_str()).unwrap();
 
     //sort itin rows into a HashMap of vecs
 

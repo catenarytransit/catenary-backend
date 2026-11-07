@@ -113,7 +113,7 @@ async fn get_mta_trips(
 ) -> Result<gtfs_realtime::FeedMessage, Box<dyn std::error::Error + Sync + Send>> {
     let resp = client
         .get(url)
-        .header("x-api-key", "hvThsOlHmP2XzvYWlKKC17YPcq07meIg2V2RPLbC")
+        .header("x-api-key", std::env::var("MTA_API_KEY")?)
         .send()
         .await?
         .error_for_status()?;
@@ -310,7 +310,7 @@ fn find_static_trip<'a>(gtfs: &'a Gtfs, train: &MtaTrain) -> Option<&'a Trip> {
         return candidates.first().copied();
     }
 
-    let midnight = chrono_tz::America::New_York
+    let midnight = catenary_time::America::New_York
         .from_local_datetime(&service_date.and_hms_opt(0, 0, 0)?)
         .earliest()?
         .timestamp();

@@ -20,7 +20,7 @@ use crate::schema::gtfs::trips_compressed as trips_compressed_pg_schema;
 use ahash::AHashMap;
 use chrono::Datelike;
 use chrono::TimeZone;
-use chrono_tz::Tz;
+use catenary_time::Tz;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;
@@ -665,7 +665,7 @@ pub async fn fetch_trip_information(
                                 timezone: stop
                                     .map(|x| {
                                         x.timezone.as_ref().map(|tz_str| {
-                                            chrono_tz::Tz::from_str_insensitive(tz_str.as_str())
+                                            catenary_time::Tz::from_str_insensitive(tz_str.as_str())
                                                 .unwrap()
                                         })
                                     })
@@ -734,15 +734,15 @@ pub async fn fetch_trip_information(
                                 agency_id = selected_agency.agency_id.clone();
                                 agency_name = selected_agency.agency_name.clone();
 
-                                chrono_tz::Tz::from_str_insensitive(
+                                catenary_time::Tz::from_str_insensitive(
                                     selected_agency.agency_timezone.as_str(),
                                 )
-                                .unwrap_or(chrono_tz::UTC)
+                                .unwrap_or(catenary_time::UTC)
                             } else {
-                                chrono_tz::UTC
+                                catenary_time::UTC
                             }
                         }
-                        _ => chrono_tz::UTC,
+                        _ => catenary_time::UTC,
                     };
 
                     let mut shape_polyline = None;
@@ -1008,7 +1008,7 @@ pub async fn fetch_trip_information(
         t.add("convert_polyline");
     }
 
-    let tz = chrono_tz::Tz::from_str_insensitive(itin_meta.timezone.as_str());
+    let tz = catenary_time::Tz::from_str_insensitive(itin_meta.timezone.as_str());
 
     if let Err(_) = &tz {
         eprintln!("Could not parse timezone {}", itin_meta.timezone.as_str());
@@ -1072,7 +1072,7 @@ pub async fn fetch_trip_information(
     } else {
         // make an array from 7 days in the past to 7 days in the future, chrono naive days
 
-        let now = chrono::Utc::now();
+        let now = catenary_time::utc_now();
         let now = timezone.from_utc_datetime(&now.naive_utc());
 
         let now_date = now.date_naive();
@@ -1192,7 +1192,7 @@ pub async fn fetch_trip_information(
             platform_info: None,
             osm_station_id: stop.osm_station_id,
             timezone: match stop.timezone.as_ref() {
-                Some(tz) => match chrono_tz::Tz::from_str_insensitive(tz) {
+                Some(tz) => match catenary_time::Tz::from_str_insensitive(tz) {
                     Ok(tz) => Some(tz),
                     Err(_) => None,
                 },
@@ -1680,7 +1680,7 @@ pub async fn fetch_trip_information(
                                                                     };
 
                                                                     let stop_timezone = match &stop {
-                                                                        StopPostgresOrAspen::Postgres(stop) =>stop.timezone.as_ref().map(|pg_timezone| chrono_tz::Tz::from_str_insensitive(&pg_timezone).ok()).flatten(),
+                                                                        StopPostgresOrAspen::Postgres(stop) =>stop.timezone.as_ref().map(|pg_timezone| catenary_time::Tz::from_str_insensitive(&pg_timezone).ok()).flatten(),
                                                                         StopPostgresOrAspen::Aspen(_) => {
                                                                             reference_stop.timezone
                                                                         }

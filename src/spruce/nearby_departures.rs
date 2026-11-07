@@ -757,7 +757,7 @@ async fn fetch_chateau_intermediate(
         let t_to_find_schedule_for = catenary::TripToFindScheduleFor {
             trip_id: trip.trip_id.clone(),
             chateau: chateau.clone(),
-            timezone: chrono_tz::Tz::from_str(timezone_str).unwrap_or(chrono_tz::UTC),
+            timezone: catenary_time::Tz::from_str(timezone_str).unwrap_or(catenary_time::UTC),
             time_since_start_of_service_date: chrono::TimeDelta::new(time_since_start.into(), 0)
                 .unwrap(),
             frequency: freq_converted.clone(),
@@ -800,7 +800,7 @@ async fn fetch_chateau_intermediate(
                     let t = ValidTripSet {
                         chateau_id: chateau.clone(),
                         trip_id: CompactString::from(trip.trip_id.as_str()),
-                        timezone: chrono_tz::Tz::from_str(timezone_str).ok(),
+                        timezone: catenary_time::Tz::from_str(timezone_str).ok(),
                         frequencies: freq_converted.clone(),
                         trip_service_date: date.0,
                         itinerary_options: Arc::new(itin_options.clone()),

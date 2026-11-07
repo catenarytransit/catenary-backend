@@ -1980,7 +1980,7 @@ pub async fn gtfs_process_feed(
         }
     }
 
-    let today = chrono::Utc::now().naive_utc().date();
+    let today = catenary_time::utc_now().naive_utc().date();
 
     let number_of_days = match feed_id {
         "f-gtfs~de" => 7,

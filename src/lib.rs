@@ -624,7 +624,7 @@ impl CalendarUnified {
 pub struct TripToFindScheduleFor {
     pub trip_id: String,
     pub chateau: String,
-    pub timezone: chrono_tz::Tz,
+    pub timezone: catenary_time::Tz,
     pub time_since_start_of_service_date: chrono::Duration,
     pub frequency: Option<Vec<gtfs_structures::Frequency>>,
     pub itinerary_id: String,
@@ -637,7 +637,7 @@ pub fn find_service_ranges(
     input_time: chrono::DateTime<chrono::Utc>,
     back_duration: chrono::Duration,
     forward_duration: chrono::Duration,
-) -> Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)> {
+) -> Vec<(chrono::NaiveDate, chrono::DateTime<catenary_time::Tz>)> {
     let start_chrono = input_time - back_duration;
 
     let additional_lookback = match &trip_instance.frequency {
@@ -693,7 +693,7 @@ pub fn find_service_ranges(
 
             (*nd, starting_time)
         })
-        .collect::<Vec<(chrono::NaiveDate, chrono::DateTime<chrono_tz::Tz>)>>();
+        .collect::<Vec<(chrono::NaiveDate, chrono::DateTime<catenary_time::Tz>)>>();
 
     results
 }
@@ -751,7 +751,7 @@ mod test_calendar {
         let trip_instance = TripToFindScheduleFor {
             trip_id: "11499201".to_string(),
             chateau: "orangecountytransportationauthority".to_string(),
-            timezone: chrono_tz::Tz::UTC,
+            timezone: catenary_time::Tz::UTC,
             time_since_start_of_service_date: chrono::Duration::zero(),
             frequency: None,
             itinerary_id: "9936372064990961207".to_string(),

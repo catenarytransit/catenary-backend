@@ -15,7 +15,7 @@ pub async fn telecharger_gtfs(
     client: reqwest::Client,
 ) -> Result<Vec<u8>, Box<dyn Error + Sync + Send>> {
     // --- 1. Génération du Hash ---
-    let now = Utc::now();
+    let now = catenary_time::utc_now();
     let date_iso8601 = now.format("%Y%m%dT%H%MZ").to_string();
     let salted_secret = format!("{}{}", secret, date_iso8601);
     let mut hasher = Sha256::new();
@@ -29,8 +29,6 @@ pub async fn telecharger_gtfs(
         .append_pair("hash", &hash_value)
         .append_pair("file", file_id)
         .append_pair("key", key);
-
-    println!("Téléchargement depuis : {}", url);
 
     // --- 3. Requête HTTP et Récupération des Octets ---
 
@@ -56,23 +54,23 @@ pub async fn recuperer_les_donnees_sto(
     client: &reqwest::Client,
     feed_id: &str,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {
-    let le_cle_publique = "CF6C513F1E672F014212DEE34F14E980";
-    let secret = "FA56F1BC6524315CF452A0BA7BA3B855745E9A8C27CB3C3753271D1EFC4D218E";
+    let le_cle_publique = std::env::var("STO_API_KEY")?;
+    let secret = std::env::var("STO_API_SECRET")?;
 
     let donnes_vehicle =
-        telecharger_gtfs("vehicule", le_cle_publique, secret, client.clone()).await;
+        telecharger_gtfs("vehicule", &le_cle_publique, &secret, client.clone()).await;
 
     if let Err(erreur) = &donnes_vehicle {
         eprintln!("{:?}", erreur);
     }
 
-    let donnes_voyage = telecharger_gtfs("trip", le_cle_publique, secret, client.clone()).await;
+    let donnes_voyage = telecharger_gtfs("trip", &le_cle_publique, &secret, client.clone()).await;
 
     if let Err(erreur) = &donnes_voyage {
         eprintln!("{:?}", erreur);
     }
 
-    let donnes_alert = telecharger_gtfs("alert", le_cle_publique, secret, client.clone()).await;
+    let donnes_alert = telecharger_gtfs("alert", &le_cle_publique, &secret, client.clone()).await;
 
     if let Err(erreur) = &donnes_alert {
         eprintln!("{:?}", erreur);
@@ -118,29 +116,33 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_gtfs_fetching() {
+    #[ignore = "requires STO credentials and a live network endpoint"]
+    async fn test_gtfs_fetching() -> Result<(), Box<dyn Error + Sync + Send>> {
         let client = reqwest::Client::new();
 
-        let le_cle_publique = "CF6C513F1E672F014212DEE34F14E980";
-        let secret = "FA56F1BC6524315CF452A0BA7BA3B855745E9A8C27CB3C3753271D1EFC4D218E";
+        let le_cle_publique = std::env::var("STO_API_KEY")?;
+        let secret = std::env::var("STO_API_SECRET")?;
 
         let donnes_vehicle =
-            telecharger_gtfs("vehicule", le_cle_publique, secret, client.clone()).await;
+            telecharger_gtfs("vehicule", &le_cle_publique, &secret, client.clone()).await;
 
         if let Err(erreur) = &donnes_vehicle {
             eprintln!("{:?}", erreur);
         }
 
-        let donnes_voyage = telecharger_gtfs("trip", le_cle_publique, secret, client.clone()).await;
+        let donnes_voyage =
+            telecharger_gtfs("trip", &le_cle_publique, &secret, client.clone()).await;
 
         if let Err(erreur) = &donnes_voyage {
             eprintln!("{:?}", erreur);
         }
 
-        let donnes_alert = telecharger_gtfs("alert", le_cle_publique, secret, client.clone()).await;
+        let donnes_alert =
+            telecharger_gtfs("alert", &le_cle_publique, &secret, client.clone()).await;
 
         if let Err(erreur) = &donnes_alert {
             eprintln!("{:?}", erreur);
         }
+        Ok(())
     }
 }

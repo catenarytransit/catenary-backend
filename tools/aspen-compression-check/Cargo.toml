@@ -10,6 +10,7 @@ publish = false
 ahash = { version = "0.8.12", features = ["serde"] }
 bincode = { version = "2.0", features = ["serde"] }
 chrono = { version = "0.4.45", features = ["serde"] }
+catenary-time = { path = "../../crates/catenary-time" }
 compact_str = { version = "0.9.0", features = ["serde"] }
 ecow = { version = "0.2.3", features = ["serde"] }
 gtfs-realtime = "0.2.0"

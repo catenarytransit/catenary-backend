@@ -406,7 +406,7 @@ pub async fn departures_at_stop(
 
     //compute new scheduled time for the stop for trip modifications
 
-    let stop_tz = chrono_tz::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(chrono_tz::UTC);
+    let stop_tz = catenary_time::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(catenary_time::UTC);
 
     // Convert bounds to DateTime in stop tz (start anchor for service search) and UTC for comparisons
     let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap_or_default();
@@ -690,7 +690,7 @@ pub async fn departures_at_stop(
                 },
             };
 
-            let timezone = match chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str()) {
+            let timezone = match catenary_time::Tz::from_str(itin_for_this_trip.timezone.as_str()) {
                 Ok(tz) => tz,
                 Err(_) => continue,
             };
@@ -737,7 +737,7 @@ pub async fn departures_at_stop(
                         let t = ValidTripSet {
                             chateau_id: chateau_id.clone(),
                             trip_id: (&trip_compressed.trip_id).into(),
-                            timezone: chrono_tz::Tz::from_str(itin_for_this_trip.timezone.as_str())
+                            timezone: catenary_time::Tz::from_str(itin_for_this_trip.timezone.as_str())
                                 .ok(),
                             frequencies: freq_converted.clone(),
                             trip_service_date: date.0,

@@ -456,7 +456,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 format!(
                     "Checking selected feeds for updates.\n{}\nStarted: {}",
                     discord_scope,
-                    chrono::Utc::now().to_rfc3339()
+                    catenary_time::utc_now().to_rfc3339()
                 )
             } else {
                 format!(
@@ -467,7 +467,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         .filter(|feed| feed.spec == dmfr::FeedSpec::Gtfs)
                         .count(),
                     discord_scope,
-                    chrono::Utc::now().to_rfc3339()
+                    catenary_time::utc_now().to_rfc3339()
                 )
             };
             let hook_result = Webhook::new(discord_log_env.as_str())
@@ -551,7 +551,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     total_downloaded_bytes.map(|x| bytefmt::format(x)),
                     total_downloaded_bytes_to_import.map(|x| bytefmt::format(x)),
                     discord_scope,
-                    chrono::Utc::now().to_rfc3339()
+                    catenary_time::utc_now().to_rfc3339()
                 )))
                 .send();
 
@@ -599,7 +599,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             "Error feeds page {} of {}, `{}`:\n{}",
                             page_num,
                             page_count,
-                            chrono::Utc::now().to_rfc3339(),
+                            catenary_time::utc_now().to_rfc3339(),
                             error_feeds_text,
                         ))
                         .send();
@@ -820,7 +820,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                 let mut attempt_ids = AHashMap::new();
                 for (feed_id, _) in check_for_stops_ids.iter() {
                     let attempt_id =
-                        format!("{}-{}", feed_id, chrono::Utc::now().timestamp_millis());
+                        format!("{}-{}", feed_id, catenary_time::utc_now().timestamp_millis());
                     attempt_ids.insert(feed_id.clone(), attempt_id);
                 }
                 attempt_ids
@@ -865,7 +865,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                 "Processing {} feed(s).\n{}\nStarted: {}",
                                 total_feeds_to_process,
                                 discord_scope,
-                                chrono::Utc::now().to_rfc3339()
+                                catenary_time::utc_now().to_rfc3339()
                             )),
                     )
                     .send();
@@ -951,7 +951,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             }
                         }
 
-                        let start_time = chrono::Utc::now().timestamp_millis();
+                        let start_time = catenary_time::utc_now().timestamp_millis();
 
                         // call function to process GTFS feed, accepting feed_id, diesel pool args, chateau_id, attempt_id
                         let gtfs_process_result = gtfs_process_feed(
@@ -994,8 +994,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         .unwrap()
                                 ),
                                 ingest_start_unix_time_ms: start_time,
-                                ingest_end_unix_time_ms: chrono::Utc::now().timestamp_millis(),
-                                ingest_duration_ms: (chrono::Utc::now().timestamp_millis()
+                                ingest_end_unix_time_ms: catenary_time::utc_now().timestamp_millis(),
+                                ingest_duration_ms: (catenary_time::utc_now().timestamp_millis()
                                     - start_time)
                                     as i32,
                                 ingesting_in_progress: false,
@@ -1454,7 +1454,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                         updated_feeds_count,
                         scheduled_feeds_count,
                         discord_scope,
-                        chrono::Utc::now().to_rfc3339()
+                        catenary_time::utc_now().to_rfc3339()
                     )),
             )
             .send();

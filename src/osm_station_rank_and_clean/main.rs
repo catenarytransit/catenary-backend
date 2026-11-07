@@ -404,7 +404,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .unwrap_or(0)
         + 1;
 
-    let run_start_time = Utc::now();
+    let run_start_time = catenary_time::utc_now();
     let new_run = OsmStationsRankingRunInsert {
         run_id,
         time_start: run_start_time,
@@ -1097,7 +1097,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             // Update run as ended
             diesel::update(runs_dsl::osm_stations_ranking_runs.filter(runs_dsl::run_id.eq(run_id)))
                 .set((
-                    runs_dsl::time_end.eq(Utc::now()),
+                    runs_dsl::time_end.eq(catenary_time::utc_now()),
                     runs_dsl::allowed_spatial_query.eq(true),
                 ))
                 .execute(tx)
@@ -1124,7 +1124,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     })
     .await?;
 
-    let duration = Utc::now() - run_start_time;
+    let duration = catenary_time::utc_now() - run_start_time;
     println!(
         "Ranking run completed successfully in {}s.",
         duration.num_seconds()
