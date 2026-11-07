@@ -1320,8 +1320,8 @@ pub async fn new_rt_data(
                         );
 
                     use std::str::FromStr;
-                    let tz = chrono_tz::Tz::from_str("Europe/Paris").unwrap_or(chrono_tz::UTC);
-                    let today = chrono::Utc::now().with_timezone(&tz).naive_local().date();
+                    let tz = catenary_time::Tz::from_str("Europe/Paris").unwrap_or(catenary_time::UTC);
+                    let today = catenary_time::utc_now().with_timezone(&tz).naive_local().date();
 
                     let mut trips_by_short_name: AHashMap<
                         String,
@@ -2425,7 +2425,7 @@ pub async fn new_rt_data(
 
                         let timezone = itinerary_meta
                             .map(|itinerary_meta| {
-                                chrono_tz::Tz::from_str(itinerary_meta.timezone.as_str()).ok()
+                                catenary_time::Tz::from_str(itinerary_meta.timezone.as_str()).ok()
                             })
                             .flatten();
 
@@ -4399,7 +4399,7 @@ pub async fn new_rt_data(
         compressed_trip_internal_cache,
         itinerary_pattern_internal_cache: ItineraryPatternInternalCache {
             itinerary_patterns: accumulated_itinerary_patterns,
-            last_time_full_refreshed: chrono::Utc::now(),
+            last_time_full_refreshed: catenary_time::utc_now(),
         },
         last_updated_time_ms: catenary::duration_since_unix_epoch().as_millis() as u64,
         trip_updates_lookup_by_route_id_to_trip_update_ids:

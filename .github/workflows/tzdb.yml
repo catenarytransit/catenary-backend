@@ -1,0 +1,44 @@
+name: Jiff timezone database
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path crates/catenary-time/Cargo.toml
+      - name: Require current IANA data
+        run: |
+          latest=$(curl --fail --silent --show-error --retry 3 https://data.iana.org/time-zones/tzdb/version)
+          grep -F "Some(\"$latest\")" crates/jiff-tzdb/tzname.rs
+  update:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Regenerate from latest IANA release
+        run: |
+          latest=$(curl --fail --silent --show-error --retry 3 https://data.iana.org/time-zones/tzdb/version)
+          if ! grep -Fq "Some(\"$latest\")" crates/jiff-tzdb/tzname.rs; then
+            python3 tools/update_jiff_tzdb.py "$latest"
+          fi
+      - run: cargo test --manifest-path crates/catenary-time/Cargo.toml
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automated/update-jiff-tzdb
+          commit-message: Update bundled Jiff timezone database
+          title: Update bundled Jiff timezone database
+          body: Regenerated from the latest IANA data release. Rebuild and deploy all consumers together and regenerate affected compiled timetables.
+          add-paths: crates/jiff-tzdb

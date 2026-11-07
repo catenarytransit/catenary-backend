@@ -190,7 +190,7 @@ impl LiveLocationsWebSocket {
         }
 
         if let Some(params) = &self.trajectory_subscription {
-            let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+            let update_timestamp = catenary_time::utc_now().timestamp_millis() as u64;
             let client_ref = params.client_reference.clone();
             for chateau_id in &removed {
                 if !crate::trajectories::ALLOWED_CHATEAUX.contains(&chateau_id.as_str()) {
@@ -615,7 +615,7 @@ impl LiveLocationsWebSocket {
         let aspen_chateau_cache = self.aspen_chateau_cache.clone();
         let manager = self.aspen_client_manager.clone();
 
-        let now_ms = chrono::Utc::now().timestamp_millis();
+        let now_ms = catenary_time::utc_now().timestamp_millis();
         let look_ahead_ms = 90000;
         let latency_buffer_ms = 15000;
         let start_time_ms = now_ms - latency_buffer_ms;
@@ -633,7 +633,7 @@ impl LiveLocationsWebSocket {
 
         self.trajectory_request_generation = self.trajectory_request_generation.wrapping_add(1);
         let current_gen = self.trajectory_request_generation;
-        let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+        let update_timestamp = catenary_time::utc_now().timestamp_millis() as u64;
 
         let chateaus = self
             .subscribed_chateaus
@@ -783,7 +783,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                     }
                     Ok(ClientMessage::UnsubscribeTrajectories) => {
                         if let Some(params) = &self.trajectory_subscription {
-                            let update_timestamp = chrono::Utc::now().timestamp_millis() as u64;
+                            let update_timestamp = catenary_time::utc_now().timestamp_millis() as u64;
                             let client_ref = params.client_reference.clone();
                             for chateau in &self.subscribed_chateaus {
                                 let msg = ServerMessage::Buffer {

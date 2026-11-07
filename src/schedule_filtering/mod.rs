@@ -244,7 +244,7 @@ mod tests {
 
     #[tokio::test]
     async fn filter_amtrak() {
-        let now = chrono::Utc::now();
+        let now = catenary_time::utc_now();
 
         let today = chrono::NaiveDate::from_ymd(now.year(), now.month(), now.day());
 

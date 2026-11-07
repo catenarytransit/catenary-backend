@@ -910,7 +910,7 @@ pub async fn gtfs_process_large_feed(
 
         let mut agency_gtfs = crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(agency_gtfs);
 
-        let today = chrono::Utc::now().naive_utc().date();
+        let today = catenary_time::utc_now().naive_utc().date();
         let mut agency_gtfs = minimum_day_filter(agency_gtfs, today - chrono::Duration::days(7));
 
         if agency_gtfs.trips.is_empty() {

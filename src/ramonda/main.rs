@@ -312,7 +312,7 @@ async fn index(
 async fn index_root() -> HttpResponse {
     HttpResponse::Ok().body(format!(
         "Hello World from Catenary Ramonda! {}",
-        Utc::now().to_rfc3339()
+        catenary_time::utc_now().to_rfc3339()
     ))
 }
 

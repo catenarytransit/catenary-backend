@@ -1,0 +1,8 @@
+[package]
+name = "jiff-tzdb"
+version = "0.1.9"
+edition = "2021"
+license = "Unlicense OR MIT"
+description = "Jiff bundled timezone data, regenerated for Catenary"
+[lib]
+path = "lib.rs"

@@ -1,5 +1,5 @@
 use chrono::{TimeZone, Utc};
-use chrono_tz::US::Pacific;
+use catenary_time::US::Pacific;
 use futures::stream::{self, StreamExt};
 use gtfs_realtime::FeedEntity;
 use itertools::Itertools;

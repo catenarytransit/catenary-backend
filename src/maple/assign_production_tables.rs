@@ -57,7 +57,7 @@ pub async fn assign_production_tables(
     }
     .flatten();
 
-    let now: NaiveDate = Utc::now().naive_utc().date();
+    let now: NaiveDate = catenary_time::utc_now().naive_utc().date();
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -218,7 +218,7 @@ pub async fn assign_production_tables(
         .map(|feed_time_range| feed_time_range.attempt_id.clone())
         .collect();
 
-    let now: NaiveDate = Utc::now().naive_utc().date();
+    let now: NaiveDate = catenary_time::utc_now().naive_utc().date();
 
     // feed_time_ranges is ordered newest ingest -> oldest ingest. Pick the first
     // range that actually contains today. A future feed remains in production but

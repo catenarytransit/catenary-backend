@@ -1,5 +1,5 @@
 use chrono::{Datelike, Timelike};
-use chrono_tz::Europe::Berlin;
+use catenary_time::Europe::Berlin;
 use diesel::prelude::*;
 use diesel_async::RunQueryDsl;
 use scc::HashMap as SccHashMap;
@@ -157,7 +157,7 @@ pub async fn assign_trips_for_dresden(
     use log::debug;
 
     debug!("Starting assign_trips_for_dresden...");
-    let now_berlin = chrono::Utc::now().with_timezone(&Berlin);
+    let now_berlin = catenary_time::utc_now().with_timezone(&Berlin);
     let today = now_berlin.date_naive();
     let time_of_day_secs = now_berlin.time().num_seconds_from_midnight() as i32;
     let current_time_ms = now_berlin.timestamp_millis() as u64;

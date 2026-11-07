@@ -232,7 +232,7 @@ pub async fn get_single_chateau_trajectories(
                     Ok(Ok(trajectories)) => {
                         let now_ms = catenary::duration_since_unix_epoch().as_millis() as u64;
                         let res = tokio::task::spawn_blocking(move || {
-                            let now = chrono::Utc::now();
+                            let now = catenary_time::utc_now();
                             let t_start_str = (now - chrono::Duration::minutes(2))
                                 .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                             let t_end_str = (now + chrono::Duration::minutes(3))
@@ -534,7 +534,7 @@ pub async fn get_trajectories(
                                 let now_ms =
                                     catenary::duration_since_unix_epoch().as_millis() as u64;
                                 let res = tokio::task::spawn_blocking(move || {
-                                    let now = chrono::Utc::now();
+                                    let now = catenary_time::utc_now();
                                     let t_start_str = (now - chrono::Duration::minutes(2))
                                         .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
                                     let t_end_str = (now + chrono::Duration::minutes(3))

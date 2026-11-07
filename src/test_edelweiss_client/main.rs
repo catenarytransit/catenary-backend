@@ -1,6 +1,6 @@
 use catenary::routing_common::api::{EdelweissServiceClient, RoutingRequest, TravelMode};
 use chrono::{Datelike, TimeZone, Utc};
-use chrono_tz::America::Los_Angeles;
+use catenary_time::America::Los_Angeles;
 use clap::Parser;
 use rand::Rng;
 use tarpc::{client, context};
@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let time = if let Some(t) = args.time {
         t
     } else {
-        let now = Utc::now().with_timezone(&Los_Angeles);
+        let now = catenary_time::utc_now().with_timezone(&Los_Angeles);
         let days_until_monday = (7 - now.weekday().num_days_from_monday()) % 7;
         let days_until_monday = if days_until_monday == 0 {
             7

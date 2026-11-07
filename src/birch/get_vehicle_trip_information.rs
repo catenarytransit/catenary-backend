@@ -26,7 +26,7 @@ use catenary::trip_logic::{
 };
 use chrono::Datelike;
 use chrono::TimeZone;
-use chrono_tz::Tz;
+use catenary_time::Tz;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;

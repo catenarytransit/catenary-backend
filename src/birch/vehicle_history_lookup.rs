@@ -227,7 +227,7 @@ fn parse_date_range(
 fn gtfs_start_time_to_unix_start_time(
     operation_date: NaiveDate,
     gtfs_start_time: u32,
-    timezone: &chrono_tz::Tz,
+    timezone: &catenary_time::Tz,
 ) -> Result<u64, LookupError> {
     let local_noon = operation_date.and_hms_opt(12, 0, 0).ok_or_else(|| {
         LookupError::Internal("Invalid vehicle history operation date".to_string())
@@ -1006,7 +1006,7 @@ pub async fn vehicle_history_lookup(
         Ok(value) => value,
         Err(error) => return error.into_response(),
     };
-    let agency_timezone = match resolved_agency.timezone.parse::<chrono_tz::Tz>() {
+    let agency_timezone = match resolved_agency.timezone.parse::<catenary_time::Tz>() {
         Ok(timezone) => timezone,
         Err(_) => {
             return LookupError::Internal(format!(

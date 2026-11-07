@@ -173,7 +173,7 @@ fn guess_trip_id(
 
     let gtfs_stop = get_closest_gtfs_stop(gtfs, matched_api_stop.lat, matched_api_stop.lon)?;
 
-    let now = chrono::Utc::now();
+    let now = catenary_time::utc_now();
     let seconds_since_midnight = (now.timestamp() % 86400) as u32;
 
     let candidates = gtfs

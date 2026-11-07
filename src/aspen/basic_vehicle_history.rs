@@ -211,8 +211,8 @@ fn collect_observations(
 fn local_service_start(
     service_date: NaiveDate,
     gtfs_start_time: u32,
-    timezone: chrono_tz::Tz,
-) -> Option<DateTime<chrono_tz::Tz>> {
+    timezone: catenary_time::Tz,
+) -> Option<DateTime<catenary_time::Tz>> {
     let service_day_offset = u64::from(gtfs_start_time / (24 * 60 * 60));
     let seconds_after_midnight = gtfs_start_time % (24 * 60 * 60);
     let local_date = service_date.checked_add_days(Days::new(service_day_offset))?;
@@ -239,8 +239,8 @@ fn infer_operation_date(
     let observed_at = observed_at_unix
         .and_then(|timestamp| i64::try_from(timestamp).ok())
         .and_then(|timestamp| DateTime::<Utc>::from_timestamp(timestamp, 0))
-        .unwrap_or_else(Utc::now);
-    let Some(timezone) = agency_timezone.and_then(|value| value.parse::<chrono_tz::Tz>().ok())
+        .unwrap_or_else(catenary_time::utc_now);
+    let Some(timezone) = agency_timezone.and_then(|value| value.parse::<catenary_time::Tz>().ok())
     else {
         return observed_at.date_naive();
     };
@@ -713,7 +713,7 @@ mod tests {
     use super::*;
 
     fn toronto_timestamp(year: i32, month: u32, day: u32, hour: u32, minute: u32) -> u64 {
-        let timezone = "America/Toronto".parse::<chrono_tz::Tz>().unwrap();
+        let timezone = "America/Toronto".parse::<catenary_time::Tz>().unwrap();
         timezone
             .with_ymd_and_hms(year, month, day, hour, minute, 0)
             .single()

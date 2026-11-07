@@ -1181,8 +1181,8 @@ async fn fetch_chateau_data(
                     let is_last_stop = row.stop_sequence == itinerary_meta.row_count - 1;
 
                     for date in &valid_service_dates {
-                        let tz = chrono_tz::Tz::from_str_insensitive(&itinerary_meta.timezone)
-                            .unwrap_or(chrono_tz::UTC);
+                        let tz = catenary_time::Tz::from_str_insensitive(&itinerary_meta.timezone)
+                            .unwrap_or(catenary_time::UTC);
                         let midnight_ts = tz
                             .from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap())
                             .single()
@@ -1306,7 +1306,7 @@ async fn fetch_chateau_data(
                                                         .or(static_stop.interpolated_time_since_start)
                                                         .unwrap_or(0);
                                                      
-                                                     let tz = chrono_tz::Tz::from_str_insensitive(&itinerary_meta.timezone).unwrap_or(chrono_tz::UTC);
+                                                     let tz = catenary_time::Tz::from_str_insensitive(&itinerary_meta.timezone).unwrap_or(catenary_time::UTC);
                                                      
                                                      let implied_start_timestamp = (u_time as i64) - (trip.start_time as i64 + offset as i64);
                                                      // Allow for up to 20 hours of delay/early carrying over days, though matching exact date is usually enough

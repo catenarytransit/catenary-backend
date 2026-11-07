@@ -218,7 +218,7 @@ fn resolve_active_dates(
     if dates.is_empty() {
         // Return dummy? Or handles gracefully?
         // Use unix epoch or something safe
-        let now = chrono::Utc::now().naive_utc().date();
+        let now = catenary_time::utc_now().naive_utc().date();
         return (now, now, dates);
     }
 

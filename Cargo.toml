@@ -146,7 +146,7 @@ fasthash = "0.4.0"
 clap = { version = "4.5", features = ["derive", "env"] }
 rgb = "0.8"
 amtrak-gtfs-rt = "0.9.1"
-chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
+catenary-time = { path = "crates/catenary-time" }
 ping = "0.7.0"
 online = { version = "4.0.2", features = ["tokio-runtime"] }
 chicago-gtfs-rt = "0.5.4"

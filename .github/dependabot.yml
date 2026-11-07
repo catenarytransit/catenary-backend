@@ -9,3 +9,8 @@ updates:
     directory: "/" # Location of package manifests
     schedule:
       interval: "daily"
+
+  - package-ecosystem: "cargo"
+    directory: "/crates/catenary-time"
+    schedule:
+      interval: "daily"

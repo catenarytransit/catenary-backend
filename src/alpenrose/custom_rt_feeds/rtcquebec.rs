@@ -51,8 +51,8 @@ pub async fn fetch_rtc_data(
 
                 //current hour quebec time
 
-                let current_hour = chrono::Utc::now()
-                    .with_timezone(&chrono_tz::America::Montreal)
+                let current_hour = catenary_time::utc_now()
+                    .with_timezone(&catenary_time::America::Montreal)
                     .time()
                     .hour();
 
