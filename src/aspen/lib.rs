@@ -23,6 +23,10 @@ use std::net::IpAddr;
 use std::net::SocketAddr;
 use tarpc::{client, tokio_serde::formats::Bincode};
 
+#[path = "feed_timestamps.rs"]
+pub mod feed_timestamps;
+pub use feed_timestamps::GtfsRtTimestamps;
+
 #[derive(serde::Deserialize, Clone, serde::Serialize, Debug)]
 pub struct TripsSelectionResponse {
     pub trip_updates: AHashMap<String, AspenisedTripUpdate>,
@@ -203,6 +207,9 @@ pub trait AspenRpc {
         operation_date: Option<String>,
         agency_name: String,
     ) -> Option<crate::sbb_formation_types::SbbFormationData>;
+
+    /// Publisher header timestamps in Unix seconds; absent data/timestamps are None.
+    async fn get_gtfs_rt_timestamps(realtime_feed_id: String) -> GtfsRtTimestamps;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

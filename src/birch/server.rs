@@ -1035,6 +1035,7 @@ async fn main() -> std::io::Result<()> {
             .service(route_at_point::routes_at_point)
             .service(proxy_for_watchduty_tiles)
             .service(gtfs_rt_api::gtfs_rt)
+            .service(gtfs_rt_api::gtfs_rt_timestamps)
             .service(shapes_local_rail)
             .service(shapes_local_rail_meta)
             .service(shapes_intercity_rail)
