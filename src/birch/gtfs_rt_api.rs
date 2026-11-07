@@ -20,6 +20,61 @@ enum ConvertedFormat {
     Ron,
 }
 
+#[derive(Deserialize)]
+struct GtfsRtTimestampsQuery {
+    feed_id: String,
+}
+
+/// Return publisher header timestamps for all three GTFS-RT categories.
+#[actix_web::get("/gtfs_rt_timestamps")]
+async fn gtfs_rt_timestamps(
+    etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,
+    query: web::Query<GtfsRtTimestampsQuery>,
+    etcd_connection_options: web::Data<Arc<Option<etcd_client::ConnectOptions>>>,
+    etcd_reuser: web::Data<Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>>,
+) -> impl Responder {
+    let mut etcd = match catenary::get_etcd_client(
+        &etcd_connection_ips,
+        &etcd_connection_options,
+        &etcd_reuser,
+    )
+    .await
+    {
+        Ok(etcd) => etcd,
+        Err(_) => {
+            return HttpResponse::ServiceUnavailable()
+                .insert_header(("Cache-Control", "no-store"))
+                .json(serde_json::json!({"error": "Could not connect to etcd"}));
+        }
+    };
+
+    let Some(node) = get_node_for_realtime_feed_id(&mut etcd, &query.feed_id).await else {
+        return HttpResponse::NotFound()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(serde_json::json!({"error": "Could not find assigned node"}));
+    };
+    let client = match catenary::aspen::lib::spawn_aspen_client_from_ip(&node.socket).await {
+        Ok(client) => client,
+        Err(_) => {
+            return HttpResponse::ServiceUnavailable()
+                .insert_header(("Cache-Control", "no-store"))
+                .json(serde_json::json!({"error": "Could not connect to Aspen"}));
+        }
+    };
+
+    match client
+        .get_gtfs_rt_timestamps(tarpc::context::current(), query.into_inner().feed_id)
+        .await
+    {
+        Ok(timestamps) => HttpResponse::Ok()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(timestamps),
+        Err(_) => HttpResponse::ServiceUnavailable()
+            .insert_header(("Cache-Control", "no-store"))
+            .json(serde_json::json!({"error": "Aspen request failed"})),
+    }
+}
+
 #[actix_web::get("/gtfs_rt")]
 async fn gtfs_rt(
     etcd_connection_ips: web::Data<Arc<EtcdConnectionIps>>,

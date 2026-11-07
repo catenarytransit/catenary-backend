@@ -593,6 +593,15 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_gtfs_rt_timestamps(
+        self,
+        _: context::Context,
+        realtime_feed_id: String,
+    ) -> GtfsRtTimestamps {
+        feed_timestamps::get_gtfs_rt_timestamps(&self.authoritative_gtfs_rt_store, &realtime_feed_id)
+            .await
+    }
+
     async fn get_gtfs_rt_compressed(
         self,
         _: context::Context,
