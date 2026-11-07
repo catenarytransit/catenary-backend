@@ -907,15 +907,12 @@ pub async fn departures_at_stop(
                                             trip_deleted = true;
                                         } else {
                                             let relevant_stop_time_update =
-                                                trip_update.stop_time_update.iter().find(|x| {
-
-                                                    match &x.stop_id {
-                                                        None => false,
-                                                        Some(stop_id_compare) => {
-                                                            stop_id_compare.as_ref() == itin_option.stop_id.as_str()
-                                                        }
-                                                    }
-                                                });
+                                                catenary::stop_matching::find_stop_time_update(
+                                                    &trip_update.stop_time_update,
+                                                    itin_option.gtfs_stop_sequence,
+                                                    itin_option.stop_id.as_str(),
+                                                    valid_trip.itinerary_options.iter().map(|r| r.stop_id.as_str()),
+                                                );
 
                                             if let Some(relevant_stop_time_update) =
                                                 relevant_stop_time_update
@@ -1156,17 +1153,12 @@ pub async fn departures_at_stop(
                                             {
                                                 trip_deleted = true;
                                             } else {
-                                                let relevant_stop_time_update = trip_update
-                                                    .stop_time_update
-                                                    .iter()
-                                                    .find(|x| {
-                                                        match &x.stop_id {
-                                                            Some(stop_id_compare) => {
-                                                                &itin_option.stop_id.as_str() == &stop_id_compare.as_ref()
-                                                            },
-                                                            None => false
-                                                        }
-                                                    });
+                                                let relevant_stop_time_update = catenary::stop_matching::find_stop_time_update(
+                                                    &trip_update.stop_time_update,
+                                                    itin_option.gtfs_stop_sequence,
+                                                    itin_option.stop_id.as_str(),
+                                                    valid_trip.itinerary_options.iter().map(|r| r.stop_id.as_str()),
+                                                );
 
                                                 if let Some(relevant_stop_time_update) =
                                                     relevant_stop_time_update
