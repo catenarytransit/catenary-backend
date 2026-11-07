@@ -1291,10 +1291,13 @@ async fn fetch_chateau_data(
                                                 if let Some(u_time) = update_time {
                                                     if let Some(static_stop) = rows.iter().find(|r| {
                                                      if let Some(seq) = stu.stop_sequence {
-                                                         if r.gtfs_stop_sequence == seq as u32 { return true; }
+                                                         return r.gtfs_stop_sequence == u32::from(seq);
                                                      }
                                                      if let Some(sid) = &stu.stop_id {
-                                                          return crate::stop_matching::rt_stop_matches_scheduled_simple(sid, r.stop_id.as_str());
+                                                         return catenary::stop_matching::rt_stop_matches_scheduled_simple(sid, r.stop_id.as_str())
+                                                             && rows.iter().filter(|candidate| {
+                                                                 catenary::stop_matching::rt_stop_matches_scheduled_simple(sid, candidate.stop_id.as_str())
+                                                             }).take(2).count() == 1;
                                                      }
                                                      false
                                                  }) {
@@ -1327,18 +1330,12 @@ async fn fetch_chateau_data(
 
                         if let Some(update) = active_update {
                             let timer_looking_at_rt_alerts = std::time::Instant::now();
-                            if let Some(stu) = update.stop_time_update.iter().find(|s| {
-                                s.stop_sequence == Some(row.gtfs_stop_sequence as u16)
-                                    || s.stop_id
-                                        .as_ref()
-                                        .map(|sid| {
-                                            crate::stop_matching::rt_stop_matches_scheduled_simple(
-                                                sid,
-                                                row.stop_id.as_str(),
-                                            )
-                                        })
-                                        .unwrap_or(false)
-                            }) {
+                            if let Some(stu) = catenary::stop_matching::find_stop_time_update(
+                                &update.stop_time_update,
+                                row.gtfs_stop_sequence,
+                                row.stop_id.as_str(),
+                                rows.iter().map(|r| r.stop_id.as_str()),
+                            ) {
                                 if let Some(d) = &stu.departure {
                                     if let Some(t) = d.time {
                                         rt_dep = Some(t as u64);
