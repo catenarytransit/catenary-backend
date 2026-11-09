@@ -1,5 +1,6 @@
 use crate::routing_common::metadata_index::MetadataIndex;
 use crate::routing_common::pong;
+pub use crate::routing_common::pong::{PongControl, PongObserver};
 use crate::routing_common::profile_search::ProfileOptions;
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
@@ -17,7 +18,7 @@ use std::{
     time::Instant,
 };
 
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 pub struct Coordinates {
     pub lat: f64,
     pub lon: f64,
@@ -566,13 +567,38 @@ impl Router {
         arrive_by: bool,
         options: ProfileOptions,
     ) -> Result<RoutingResponse> {
+        self.route_profile_observed(
+            selection,
+            unix_seconds,
+            access,
+            egress,
+            direct_walk_seconds,
+            arrive_by,
+            options,
+            &pong::PongControl::default(),
+            &mut |_, _| Ok(()),
+        )
+    }
+
+    pub fn route_profile_observed(
+        &self,
+        selection: RoutingSelection,
+        unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+        arrive_by: bool,
+        options: ProfileOptions,
+        control: &pong::PongControl<'_>,
+        observer: &mut pong::PongObserver<'_>,
+    ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
         let precomputed = self
             .transit
             .iter()
             .find(|region| region.id == selection.transit_region)
             .context("routing region disappeared")?;
-        let (journeys, raptor_stats) = pong::route_pong_with_stats_precomputed(
+        let (journeys, raptor_stats) = pong::route_pong_observed(
             &tt,
             &Query {
                 departure_unix_seconds: unix_seconds,
@@ -585,6 +611,8 @@ impl Router {
             options,
             arrive_by,
             Some(&precomputed.lower_bound_topology),
+            control,
+            observer,
         )?;
         Ok(RoutingResponse {
             selection,
