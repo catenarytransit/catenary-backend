@@ -24,6 +24,9 @@ use std::time::{Duration, Instant};
 
 const DAY: u32 = 86_400;
 const MAX_TRAVEL_TIME: u32 = 5 * DAY;
+// Nigiri pong.cc (4701529b): six days avoids returning the same weekday in
+// the following/previous week. This bounds the cursor, not a trip's duration.
+const MAX_LOOK_AHEAD: u32 = 6 * DAY;
 const MAX_BOARDINGS: usize = 15; // nigiri::routing::kMaxTransfers + 1
 
 /// The key is in *search direction*, separately from reconstructed physical
@@ -149,6 +152,10 @@ pub(crate) fn route_pong_with_stats_precomputed(
         .clamp(timetable_from, timetable_to);
     let interval_to = interval_to.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
         .clamp(timetable_from, timetable_to);
+    let lookahead_end = step(
+        if arrive_by { interval_to } else { interval_from },
+        i64::from(MAX_LOOK_AHEAD), arrive_by,
+    );
     let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
     let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
 
@@ -182,6 +189,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
         // byproducts only after their destination key is behind the cursor.
         if (!better(cursor, end_time, arrive_by)
             && result_count(true) + result_count(false) >= 2 * options.min_itineraries)
+            || !better(cursor, lookahead_end, arrive_by)
             || cursor < timetable_from || cursor >= timetable_to
             || Instant::now() >= deadline
         {
@@ -277,6 +285,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
     let before_filter = results.len();
     let mut journeys = results.into_iter().filter(|j| {
         j.journey.is_some() && better(j.dest_time, cursor, arrive_by)
+            && better(j.dest_time, lookahead_end, arrive_by)
             && j.travel_time() < fastest_direct
             && j.travel_time() <= u64::from(max_travel_time)
     }).map(|j| {
@@ -294,8 +303,9 @@ pub(crate) fn route_pong_with_stats_precomputed(
     stats.pong_backward_searches = backward_searches;
     stats.pong_known_result_hits = known_result_hits;
     stats.pong_seeded_destination_bounds = seeded_destination_bounds;
-    stats.pong_interval_from = Some(if arrive_by { cursor.saturating_add(1) } else { interval_from });
-    stats.pong_interval_to = Some(if arrive_by { interval_to } else { cursor });
+    let searched_until = if better(lookahead_end, cursor, arrive_by) { lookahead_end } else { cursor };
+    stats.pong_interval_from = Some(if arrive_by { searched_until.saturating_add(1) } else { interval_from });
+    stats.pong_interval_to = Some(if arrive_by { interval_to } else { searched_until });
 
     // Nigiri's final forward-only refinement replaces the middle vehicle in
     // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
@@ -690,6 +700,43 @@ mod tests {
         }
         if let Some(path) = std::env::var_os("CATENARY_NIGIRI_PARITY_OUTPUT") {
             std::fs::write(path, output.concat()).unwrap();
+        }
+    }
+
+    #[test]
+    fn six_day_cursor_cap_filters_boundary_and_clamps_interval_in_both_directions() {
+        let mut owned = timetable(&[(0, 2, 8 * 3_600, 600)], false);
+        owned.day_count = 20;
+        for calendar in owned.bitfields.iter_mut().skip(1) {
+            for day in 0..20 { calendar.set(day, true).unwrap(); }
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        for reverse in [false, true] {
+            // One daily train cannot meet the requested 16 connections in
+            // six days, forcing termination by the cap rather than count.
+            let reference = base + 10 * i64::from(DAY) + 8 * 3_600 + if reverse { 600 } else { 0 };
+            let q = Query {
+                departure_unix_seconds: reference,
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None, max_boardings: 1, max_duration_seconds: DAY,
+            };
+            let (journeys, stats) = route_pong_with_stats_precomputed(
+                &tt, &q, ProfileOptions { min_itineraries: 16, timeout_seconds: 30, ..ProfileOptions::default() },
+                reverse, None,
+            ).unwrap();
+            let cap = step(reference + i64::from(reverse), i64::from(MAX_LOOK_AHEAD), reverse);
+            assert_eq!(journeys.len(), 6);
+            assert!(journeys.iter().all(|j| {
+                valid_journey(&tt, &q, j) && better(
+                    if reverse { j.arrival_unix_seconds } else { j.departure_unix_seconds }, cap, reverse,
+                )
+            }));
+            assert_eq!(if reverse { stats.pong_interval_from } else { stats.pong_interval_to },
+                Some(cap + i64::from(reverse)));
+            assert!(!stats.profile_budget_exhausted);
         }
     }
 

@@ -773,12 +773,9 @@ impl ProfileSearchState {
                 if k != 0 && better(rows[k - 1][stop], *time, self.reverse) {
                     *time = rows[k - 1][stop];
                 }
-                // A scalar ping bound cannot encode a prohibited or minimum
-                // stop-pair transfer. Keep the existing provenance-sensitive
-                // GTFS validation authoritative at those locations.
-                if self.transfer_sensitive[stop] {
-                    *time = if self.reverse { INF } else { NEG_INF };
-                }
+                // No realtime time-dependent footpaths exist in this static
+                // adapter. Stored GTFS rules do not trigger Nigiri's TD-only
+                // pass-all override.
             }
             rows.push(row);
         }
@@ -1093,7 +1090,7 @@ impl ProfileSearchState {
                                         && within_ping_bounds(
                                             self.ping_bounds.as_ref(), self.bounds_last_round,
                                             k, loc, event, reverse,
-                                            tt.location_transfer_seconds()[loc],
+                                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(tt, loc, self.transfer_sensitive[loc]),
                                         )
                                         && can_reach(
                                             &self.bounds,
@@ -1443,7 +1440,7 @@ impl ProfileSearchState {
                         && within_ping_bounds(
                             self.ping_bounds.as_ref(), self.bounds_last_round,
                             k, from, ready, reverse,
-                            tt.location_transfer_seconds()[from],
+                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(tt, from, self.transfer_sensitive[from]),
                         )
                         && can_reach(
                             &self.bounds,
@@ -1567,7 +1564,7 @@ impl ProfileSearchState {
                         && within_ping_bounds(
                             self.ping_bounds.as_ref(), self.bounds_last_round,
                             k, to, ready, reverse,
-                            tt.location_transfer_seconds()[to],
+                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(tt, to, self.transfer_sensitive[to]),
                         )
                         && can_reach(
                             &self.bounds,

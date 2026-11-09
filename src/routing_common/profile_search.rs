@@ -62,7 +62,7 @@ pub struct ProfileOptions {
     /// Requested timetable interval before any connection-count expansion.
     pub search_window_seconds: u32,
     /// Classic rRAPTOR expansion limit. PONG follows the timetable horizon
-    /// and shared timeout instead of the interval estimator.
+    /// and shared timeout, with a six-day cursor cap, instead of the interval estimator.
     pub max_search_window_seconds: u32,
     pub min_itineraries: usize,
     pub timeout_seconds: u32,
