@@ -648,6 +648,8 @@ pub(crate) struct ProfileSearchState {
     point_destination_bound: Option<i64>,
     ping_bounds: Option<PingBounds>,
     bounds_last_round: usize,
+    #[cfg(test)]
+    footpath_early_pruning: bool,
 }
 impl ProfileSearchState {
     #[cfg(test)]
@@ -729,6 +731,8 @@ impl ProfileSearchState {
             point_destination_bound: None,
             ping_bounds: None,
             bounds_last_round: 0,
+            #[cfg(test)]
+            footpath_early_pruning: true,
         })
     }
 
@@ -1398,6 +1402,12 @@ impl ProfileSearchState {
                 }
             }
 
+            // Point-mode ping retains labels before destination pruning for
+            // its opposite-direction bounds. Only classic rRAPTOR may skip
+            // those writes here.
+            let prune_footpaths = !self.point_mode;
+            #[cfg(test)]
+            let prune_footpaths = prune_footpaths && self.footpath_early_pruning;
             let (before, after) = self.rounds.split_at_mut(k);
             let current = &mut after[0];
             let mut changed_ready = Vec::new();
@@ -1475,6 +1485,21 @@ impl ProfileSearchState {
                     tt.footpaths_from(LocationIdx(from as u32))
                 };
                 for fp in paths {
+                    let seconds = fp.seconds();
+                    let at = if reverse {
+                        t.saturating_sub(i64::from(seconds))
+                    } else {
+                        t.saturating_add(i64::from(seconds))
+                    };
+                    // Incoming and outgoing lists are validated in ascending
+                    // raw walking duration. Once the physical walk is strictly
+                    // worse than this round's destination bound, every later
+                    // walk also fails can_reach(). Transfer minima only make
+                    // readiness worse; they need not preserve the raw ordering.
+                    // Keep equality, matching can_reach's inclusive bound.
+                    if prune_footpaths && better(self.time_at_dest[k], at, reverse) {
+                        break;
+                    }
                     self.stats.footpath_edges_examined += 1;
                     if self.stats.footpath_edges_examined & 255 == 0
                         && is_timeout_reached()
@@ -1483,15 +1508,9 @@ impl ProfileSearchState {
                         break;
                     }
                     let to = fp.target().idx();
-                    let seconds = fp.seconds();
                     if seconds == 0 {
                         continue;
                     }
-                    let at = if reverse {
-                        t.saturating_sub(i64::from(seconds))
-                    } else {
-                        t.saturating_add(i64::from(seconds))
-                    };
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
                     let ready = change_seconds_for_search(tt, walk_from, walk_to, &self.transfer_sensitive).map(|change| {
                         if reverse {
@@ -2105,6 +2124,150 @@ mod compressed_timetable_profile_tests {
             tt.footpaths_in_offsets = vec![0, 0, 0, 1];
         }
         tt
+    }
+
+    #[test]
+    fn classic_footpath_early_exit_preserves_frontiers_across_anchors() {
+        use crate::routing_common::timetable::PackedFootpath;
+
+        let mut owned = daily_train();
+        for _ in 2..6 {
+            owned.coordinates.push(Default::default());
+            owned.location_id.push(Default::default());
+            owned.location_name.push(Default::default());
+            owned.location_source.push(SourceIdx(0));
+            owned.location_parent.push(LocationIdx::INVALID);
+            owned.location_type.push(1);
+            owned.location_transfer_seconds.push(0);
+            owned
+                .location_routes_offsets
+                .push(owned.location_routes.len() as u32);
+        }
+        // The first edge has a long effective transfer time. It must not
+        // terminate the raw-duration scan before the equal-bound second edge.
+        owned.location_transfer_seconds[2] = 600;
+        owned.footpaths_out_offsets = vec![0];
+        owned.footpaths_in_offsets = vec![0];
+        for stop in 0..6 {
+            for (other, seconds) in [(2, 60), (3, 120), (4, 180), (5, 240)] {
+                if stop == 1 {
+                    owned
+                        .footpaths_out
+                        .push(PackedFootpath::new(LocationIdx(other), seconds).unwrap());
+                } else if stop == other {
+                    owned
+                        .footpaths_out
+                        .push(PackedFootpath::new(LocationIdx(0), seconds).unwrap());
+                }
+                if stop == 0 {
+                    owned
+                        .footpaths_in
+                        .push(PackedFootpath::new(LocationIdx(other), seconds).unwrap());
+                } else if stop == other {
+                    owned
+                        .footpaths_in
+                        .push(PackedFootpath::new(LocationIdx(1), seconds).unwrap());
+                }
+            }
+            owned
+                .footpaths_out_offsets
+                .push(owned.footpaths_out.len() as u32);
+            owned
+                .footpaths_in_offsets
+                .push(owned.footpaths_in.len() as u32);
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let frontier = |state: &ProfileSearchState| {
+            let mut keys: Vec<_> = state
+                .result()
+                .iter()
+                .map(|j| {
+                    (
+                        j.departure_unix_seconds,
+                        j.arrival_unix_seconds,
+                        j.boardings,
+                    )
+                })
+                .collect();
+            keys.sort_unstable();
+            keys
+        };
+        for reverse in [false, true] {
+            let mut q = query();
+            q.max_boardings = 3;
+            let ends = vec![
+                WalkingEndpoint {
+                    stop: LocationIdx(if reverse { 0 } else { 1 }),
+                    seconds: 120,
+                },
+                WalkingEndpoint {
+                    stop: LocationIdx(3),
+                    seconds: 0,
+                },
+            ];
+            if reverse {
+                q.access = ends;
+            } else {
+                q.egress = ends;
+            }
+            let mut pruned = ProfileSearchState::new(
+                &tt,
+                &q,
+                base,
+                base + 4 * 86_400,
+                reverse,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+            let mut full = ProfileSearchState::new(
+                &tt,
+                &q,
+                base,
+                base + 4 * 86_400,
+                reverse,
+                Duration::from_secs(5),
+            )
+            .unwrap();
+            full.footpath_early_pruning = false;
+            // First retain bounds in the correct profile order, then reverse
+            // that order to exercise the interval-extension reset as well.
+            let days = if reverse { [0, 1, 0] } else { [1, 0, 2] };
+            for (iteration, day) in days.into_iter().enumerate() {
+                let anchor = base + day * 86_400 + if reverse { 17 * 3600 } else { 9 * 3600 };
+                // A tighter three-boarding bound must not suppress the
+                // one-boarding journey, including its equal-time table walk.
+                pruned.time_at_dest[3] = if reverse { anchor + 1 } else { anchor - 1 };
+                full.time_at_dest[3] = pruned.time_at_dest[3];
+                pruned.extend(&tt, &q, &[anchor]).unwrap();
+                full.extend(&tt, &q, &[anchor]).unwrap();
+                assert!(!pruned.stats.profile_budget_exhausted);
+                assert!(!full.stats.profile_budget_exhausted);
+                assert!(!frontier(&full).is_empty());
+                assert_eq!(frontier(&pruned), frontier(&full));
+                assert_eq!(pruned.time_at_dest, full.time_at_dest);
+                assert_eq!(pruned.profile_ride, full.profile_ride);
+                assert_eq!(pruned.profile_ready, full.profile_ready);
+                if iteration == 0 {
+                    let expected = if reverse {
+                        anchor - 8 * 3600 - 120
+                    } else {
+                        anchor + 8 * 3600 + 120
+                    };
+                    assert_eq!(pruned.time_at_dest[1], expected);
+                    assert_eq!(
+                        pruned.rounds[1]
+                            .get(Stage::Walk, 3, pruned.generation)
+                            .unwrap()
+                            .time,
+                        expected,
+                        "equal-time walk was pruned: reverse={reverse}",
+                    );
+                }
+            }
+            assert!(pruned.stats.footpath_edges_examined < full.stats.footpath_edges_examined);
+        }
     }
 
     #[test]

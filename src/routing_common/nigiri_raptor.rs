@@ -1075,11 +1075,17 @@ mod parallel_tests {
 
     #[test]
     fn unsorted_footpaths_fail_validation() {
-        let mut tt = with_dense_footpaths(network(4, 16), 16);
-        // Swap the first stop's two shortest edges.
-        tt.footpaths_out.swap(0, 1);
-        let bytes = tt.encode().unwrap();
-        assert!(ZeroCopyTimetable::new(&bytes).is_err());
+        for reverse in [false, true] {
+            let mut tt = with_dense_footpaths(network(4, 16), 16);
+            // Swap the first stop's two shortest edges in either direction.
+            if reverse {
+                tt.footpaths_in.swap(0, 1);
+            } else {
+                tt.footpaths_out.swap(0, 1);
+            }
+            // Encoding validates the timetable before writing its bytes.
+            assert!(tt.encode().is_err());
+        }
     }
 
     fn step_limit(anchor: i64, reverse: bool) -> i64 {
