@@ -45,6 +45,12 @@ validating the timetable, checking routing sources, building metadata indexes,
 building lower-bound topology, and loading platform metadata. A final message
 reports the total startup time and HTTP bind address.
 
+The timetable router and embedded OSR graphs load concurrently on separate
+threads. Startup logs report each loader's elapsed time and their combined wall
+time. Both loaders finish before errors are propagated, precomputed OSR matches
+are checked, or HTTP and CLI queries run. Individual regions within each loader
+retain their existing loading order.
+
 - `GET /` returns JSON identifying Edelweiss, its package version, and API paths.
 - `GET /health` returns HTTP 200 with
   `{"service":"edelweiss","status":"ok"}` and `Cache-Control: no-store`.
