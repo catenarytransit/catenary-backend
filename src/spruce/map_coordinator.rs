@@ -46,11 +46,11 @@ pub struct AspenisedVehiclePositionOutput {
     pub position: Option<CatenaryRtVehiclePosition>,
     pub timestamp: Option<u64>,
     pub route_type: i16,
-    pub current_stop_sequence: Option<u32>,
-    pub current_status: Option<i32>,
-    pub congestion_level: Option<i32>,
-    pub occupancy_status: Option<i32>,
-    pub occupancy_percentage: Option<u32>,
+    pub current_stop_sequence: Option<u16>,
+    pub current_status: Option<u8>,
+    pub congestion_level: Option<u8>,
+    pub occupancy_status: Option<u8>,
+    pub occupancy_percentage: Option<u8>,
 }
 
 pub fn convert_to_output(input: &AspenisedVehiclePosition) -> AspenisedVehiclePositionOutput {

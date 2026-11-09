@@ -2323,11 +2323,11 @@ pub async fn new_rt_data(
                                     None => 3,
                                 },
                             },
-                            current_status: vehicle_pos.current_status,
-                            current_stop_sequence: vehicle_pos.current_stop_sequence,
-                            occupancy_status: vehicle_pos.occupancy_status,
-                            occupancy_percentage: vehicle_pos.occupancy_percentage,
-                            congestion_level: vehicle_pos.congestion_level,
+                            current_status: vehicle_pos.current_status.map(|x| x as u8),
+                            current_stop_sequence: vehicle_pos.current_stop_sequence.map(|x| x as u16),
+                            occupancy_status: vehicle_pos.occupancy_status.map(|x| x as u8),
+                            occupancy_percentage: vehicle_pos.occupancy_percentage.map(|x| x as u8),
+                            congestion_level: vehicle_pos.congestion_level.map(|x| x as u8),
                             consist: None,
                         };
 
