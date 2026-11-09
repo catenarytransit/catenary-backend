@@ -4,6 +4,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod footpath_debug;
 mod motis_response;
+mod startup;
 
 use actix_web::{App, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
@@ -574,14 +575,39 @@ async fn main() -> Result<()> {
             "Warning: no PostgreSQL URL configured; route colours and other GTFS metadata will be unavailable"
         );
     }
-    eprintln!("Edelweiss startup: loading router");
-    let router = Arc::new(Router::load(
-        &args.regions_config,
-        &args.catenary_config,
-        settings,
-    )?);
-    eprintln!("Edelweiss startup: loading in-process OSR graphs");
-    let osr = Arc::new(NativeOsr::load(&args.catenary_config, args.osr_workers)?);
+    let parallel_started = Instant::now();
+    eprintln!("Edelweiss startup: loading router and in-process OSR graphs concurrently");
+    // Both loaders only read their input files. Use a dedicated scoped thread
+    // so startup overlaps even when Rayon's pool has only one worker.
+    let (router, osr) = startup::load_concurrently(
+        || {
+            let started = Instant::now();
+            let result = Router::load(&args.regions_config, &args.catenary_config, settings);
+            eprintln!(
+                "Edelweiss startup: router load finished in {:.3}s (success: {})",
+                started.elapsed().as_secs_f64(),
+                result.is_ok(),
+            );
+            result
+        },
+        || {
+            let started = Instant::now();
+            let result = NativeOsr::load(&args.catenary_config, args.osr_workers);
+            eprintln!(
+                "Edelweiss startup: in-process OSR load finished in {:.3}s (success: {})",
+                started.elapsed().as_secs_f64(),
+                result.is_ok(),
+            );
+            result
+        },
+    );
+    eprintln!(
+        "Edelweiss startup: concurrent router/OSR load finished in {:.3}s",
+        parallel_started.elapsed().as_secs_f64(),
+    );
+    // Join both loaders before propagating errors or checking graph matches.
+    let router = Arc::new(router.context("loading timetable router")?);
+    let osr = Arc::new(osr.context("loading in-process OSR graphs")?);
     for region in &router.transit {
         let tt = region.timetable.view()?;
         // Log incompatibility once at load, not for every candidate stop.
