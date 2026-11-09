@@ -1009,6 +1009,9 @@ fn add_footpaths(tt: &mut TimetableOwned, mut transfers: Vec<Vec<(u32, u32)>>) -
         // Keep the fastest edge for each directed stop pair.
         edges.sort_unstable_by_key(|&(to, seconds)| (to, seconds));
         edges.dedup_by_key(|entry| entry.0);
+        // Store by ascending duration (ties by target) so RAPTOR can stop
+        // scanning a stop's footpaths early once they cannot improve.
+        edges.sort_unstable_by_key(|&(to, seconds)| (seconds, to));
         for &(to, seconds) in edges.iter() {
             ensure!((to as usize) < incoming.len(), "unknown footpath target");
             ensure!(seconds > 0, "nonpositive OSR transfer duration");
@@ -1023,7 +1026,7 @@ fn add_footpaths(tt: &mut TimetableOwned, mut transfers: Vec<Vec<(u32, u32)>>) -
             .push(as_u32(tt.footpaths_out.len())?);
     }
     for edges in &mut incoming {
-        edges.sort_unstable();
+        edges.sort_unstable_by_key(|&(from, seconds)| (seconds, from));
         for &(from, seconds) in edges.iter() {
             tt.footpaths_in
                 .push(PackedFootpath::new(LocationIdx(from), seconds)?);

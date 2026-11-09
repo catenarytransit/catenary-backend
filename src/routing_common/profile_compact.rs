@@ -3091,6 +3091,10 @@ mod lower_bound_graph_tests {
     use crate::routing_common::timetable::{PackedFootpath, SourceIdx, TimetableOwned};
 
     fn walking_graph(parents: &[LocationIdx], edges: &[(usize, usize, u32)]) -> TimetableOwned {
+        // Footpaths must be stored by ascending duration (checked by validate()).
+        let mut edges = edges.to_vec();
+        edges.sort_by_key(|&(_, _, seconds)| seconds);
+        let edges = &edges[..];
         let mut tt = TimetableOwned::empty(20_000, 1);
         tt.add_source("test", "lb-graph", "attempt").unwrap();
         for (at, &parent) in parents.iter().enumerate() {

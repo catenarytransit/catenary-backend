@@ -101,6 +101,8 @@ pub(crate) struct NigiriRaptor {
     pub(crate) stats_: RaptorStats,
     route_workers: usize,
     route_buffers: Vec<RouteBuffer>,
+    /// Footpath early pruning (see `update_footpaths`); only disabled by tests/benchmarks.
+    early_prune: bool,
 }
 
 impl NigiriRaptor {
@@ -175,6 +177,7 @@ impl NigiriRaptor {
             bounds_last_k_: 0,
             stats_: stats,
             route_workers,
+            early_prune: true,
             route_buffers: Vec::new(),
         })
     }
@@ -514,6 +517,7 @@ impl NigiriRaptor {
         }
     }
     fn update_footpaths(&mut self, tt: &ZeroCopyTimetable<'_>, k: usize) {
+        let prune = self.early_prune && self.bounds_last_k_ != 0;
         for from in self.prev_station_mark_.indices() {
             let tmp = self.tmp_[from];
             if tmp == self.invalid() {
@@ -525,6 +529,24 @@ impl NigiriRaptor {
                 tt.footpaths_from(LocationIdx(from as u32))
             };
             for fp in paths {
+                // Early pruning: footpaths are stored sorted by ascending walk
+                // time (validated on load), and every effective transfer
+                // duration is >= the raw walk time. Once even the raw walk
+                // cannot beat the destination bound for this round, neither
+                // this edge nor any later (longer) one can pass `reachable()`
+                // in `update_ready`, so the rest of the list is skipped.
+                // Not applied while ping round labels are being retained
+                // (`bounds_last_k_ == 0`): `update_ready` stores those labels
+                // before destination pruning, so skipping would change them.
+                if prune
+                    && better(
+                        self.time_at_dest_[k],
+                        shift_delta(tmp, fp.seconds(), self.reverse),
+                        self.reverse,
+                    )
+                {
+                    break;
+                }
                 self.stats_.footpath_edges_examined += 1;
                 let to = fp.target().idx();
                 let (a, b) = if self.reverse { (to, from) } else { (from, to) };
@@ -956,6 +978,108 @@ mod parallel_tests {
             assert_eq!(parallel.stats_.route_scan_workers, 4);
             assert_eq!(serial.stats_.parallel_route_scan_rounds, 0);
         });
+    }
+
+    // Several footpaths per stop, stored by ascending duration as the compiler
+    // and `validate()` require. Long edges that early pruning skips go to
+    // targets that also have shorter alternatives or are simply far away.
+    fn with_dense_footpaths(mut tt: TimetableOwned, stops: usize) -> TimetableOwned {
+        tt.footpaths_out.clear();
+        tt.footpaths_in.clear();
+        tt.footpaths_out_offsets = vec![0];
+        tt.footpaths_in_offsets = vec![0];
+        let mut incoming = vec![Vec::<(u32, u32)>::new(); stops];
+        for from in 0..stops {
+            let mut edges: Vec<(u32, u32)> = (1..=6u32)
+                .map(|d| {
+                    (
+                        (from as u32 + d * 7) % stops as u32,
+                        60 + d * 75 + (from as u32 % 5),
+                    )
+                })
+                .filter(|&(to, _)| to as usize != from)
+                .collect();
+            edges.sort_by_key(|&(to, secs)| (secs, to));
+            for &(to, secs) in &edges {
+                tt.footpaths_out
+                    .push(PackedFootpath::new(LocationIdx(to), secs).unwrap());
+                incoming[to as usize].push((from as u32, secs));
+            }
+            tt.footpaths_out_offsets.push(tt.footpaths_out.len() as u32);
+        }
+        for edges in &mut incoming {
+            edges.sort_by_key(|&(from, secs)| (secs, from));
+            for &(from, secs) in edges.iter() {
+                tt.footpaths_in
+                    .push(PackedFootpath::new(LocationIdx(from), secs).unwrap());
+            }
+            tt.footpaths_in_offsets.push(tt.footpaths_in.len() as u32);
+        }
+        tt
+    }
+
+    #[test]
+    fn early_pruning_preserves_labels_and_skips_footpaths() {
+        let stops = 256;
+        let bytes = with_dense_footpaths(network(160, stops), stops)
+            .encode()
+            .unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let topology = LowerBoundTopology::build(&tt);
+        let q = query(stops);
+        let mut pruned = NigiriRaptor::new(&tt, &q, false, Some(&topology)).unwrap();
+        let mut full = NigiriRaptor::new(&tt, &q, false, Some(&topology)).unwrap();
+        full.early_prune = false;
+        let mut pruned_lb = vec![0; tt.coordinates().len()];
+        let mut full_lb = pruned_lb.clone();
+        for reverse in [false, true] {
+            if pruned.reverse != reverse {
+                pruned.flip_point_direction(&mut pruned_lb);
+                full.flip_point_direction(&mut full_lb);
+            }
+            let anchor = q.departure_unix_seconds + if reverse { 4 * 3600 } else { 0 };
+            pruned.reset_point_arrivals();
+            full.reset_point_arrivals();
+            // Ping pass (no bounds): retained round labels must be untouched.
+            let limit = step_limit(anchor, reverse);
+            let a = pruned
+                .execute_point(&tt, &q, anchor, q.max_boardings, limit)
+                .unwrap();
+            let b = full
+                .execute_point(&tt, &q, anchor, q.max_boardings, limit)
+                .unwrap();
+            assert!(!a.is_empty());
+            assert_eq!(frontier(&a), frontier(&b));
+            assert_eq!(pruned.round_times_, full.round_times_);
+            // Pong pass (with ping bounds): pruning is active.
+            let bounds_a = pruned.fill_ping_bounds(3);
+            let bounds_b = full.fill_ping_bounds(3);
+            pruned.flip_point_direction(&mut pruned_lb);
+            full.flip_point_direction(&mut full_lb);
+            pruned.set_ping_bounds(bounds_a);
+            full.set_ping_bounds(bounds_b);
+            let anchor = anchor + if reverse { -1800 } else { 3 * 3600 };
+            let direction = pruned.reverse;
+            let limit = step_limit(anchor, direction);
+            let a = pruned.execute_point(&tt, &q, anchor, 3, limit).unwrap();
+            let b = full.execute_point(&tt, &q, anchor, 3, limit).unwrap();
+            assert_eq!(frontier(&a), frontier(&b));
+            assert_eq!(pruned.best_, full.best_);
+            assert_eq!(pruned.round_times_, full.round_times_);
+            assert_eq!(pruned.time_at_dest_, full.time_at_dest_);
+            pruned.flip_point_direction(&mut pruned_lb);
+            full.flip_point_direction(&mut full_lb);
+        }
+        assert!(pruned.stats_.footpath_edges_examined <= full.stats_.footpath_edges_examined);
+    }
+
+    #[test]
+    fn unsorted_footpaths_fail_validation() {
+        let mut tt = with_dense_footpaths(network(4, 16), 16);
+        // Swap the first stop's two shortest edges.
+        tt.footpaths_out.swap(0, 1);
+        let bytes = tt.encode().unwrap();
+        assert!(ZeroCopyTimetable::new(&bytes).is_err());
     }
 
     fn step_limit(anchor: i64, reverse: bool) -> i64 {

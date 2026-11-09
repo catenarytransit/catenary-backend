@@ -887,6 +887,19 @@ impl ZeroCopyTimetable<'_> {
                 return Err(FormatError::Index);
             }
         }
+        // RAPTOR early pruning requires each stop's footpaths in ascending
+        // walk time. Timetables compiled before this ordering must be rebuilt.
+        for (offsets, paths) in [
+            (self.footpaths_out_offsets(), self.footpaths_out()),
+            (self.footpaths_in_offsets(), self.footpaths_in()),
+        ] {
+            for w in offsets.windows(2) {
+                let run = &paths[w[0] as usize..w[1] as usize];
+                if run.windows(2).any(|p| p[0].seconds() > p[1].seconds()) {
+                    return Err(FormatError::Layout);
+                }
+            }
+        }
         let profiles = self
             .timing_profile_offsets()
             .len()
