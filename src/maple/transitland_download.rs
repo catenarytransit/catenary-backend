@@ -565,6 +565,13 @@ pub async fn download_return_eligible_feeds(
             .unwrap_or(64),
     };
 
+    let skip_feed_ids_env: HashSet<String> = std::env::var("SKIP_FEED_IDS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
     let total_bytes_downloaded: Arc<Mutex<usize>> = Arc::new(Mutex::new(0));
 
     if !std::path::Path::new(gtfs_temp_storage).exists() {
@@ -581,6 +588,7 @@ pub async fn download_return_eligible_feeds(
                 .iter()
                 .filter(|(_, feed)| {
                     !feeds_to_discard.contains(&feed.id)
+                        && !skip_feed_ids_env.contains(&feed.id)
                         && match feed.spec {
                             dmfr::FeedSpec::Gtfs => true,
                             _ => false,
