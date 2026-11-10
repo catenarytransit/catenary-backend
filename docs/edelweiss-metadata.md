@@ -71,3 +71,22 @@ route ID, exact pattern/shape/agency provenance, direction shape fallback,
 non-detailed serialization bypass and distinct compiled response identities.
 The plan check disables sequential scans **only inside this isolated fixture**
 to verify index eligibility. It is not a production query-plan benchmark.
+
+## Stop timezones
+
+The shared MOTIS plan builder used by HTTP and WebSocket responses includes
+`timezone` on every leg's `from` and `to`, every `intermediateStops` entry,
+and the plan's coordinate endpoints. It is an IANA identifier such as
+`America/Los_Angeles`, or null when no zone can be resolved.
+
+The timezone is resolved from the location coordinates with the existing
+`tzf-rs` boundary database, initialized once per process. This works with
+existing compiled timetables without PostgreSQL metadata or a timetable rebuild.
+It represents civil time at the stop rather than the GTFS service timezone used
+to interpret schedule offsets. All event timestamps remain UTC instants.
+
+Clients should format boarding, alighting, and intermediate events using that
+stop's timezone at the event instant (including daylight saving). Journey summary
+start and end clocks use the first boarding and last alighting stop zones,
+respectively, even when access/egress legs are present. Direct street journeys
+use their coordinate endpoint zones.
