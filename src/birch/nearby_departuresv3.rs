@@ -301,6 +301,12 @@ pub async fn nearby_from_coords_v3(
 
     let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
 
+    let number_of_unique_osm_stations = stops
+        .iter()
+        .filter_map(|s| s.osm_station_id)
+        .collect::<AHashSet<_>>()
+        .len();
+
     for stop in &stops {
         let stop_point = geo::Point::new(
             stop.point.as_ref().unwrap().x,
@@ -325,14 +331,14 @@ pub async fn nearby_from_coords_v3(
             if number_of_osm_stations > 50 && dist > 2000.0 {
                 continue;
             }
+            if number_of_osm_stations > 100 && dist > 1000.0 {
+                continue;
+            }
         }
         if number_of_osm_stations > 100 && dist > 2000.0 {
             continue;
         }
-        if number_of_osm_stations > 200 && dist > 1500.0 {
-            continue;
-        }
-        if stop_dist_map.len() > 400 && dist > 3000.0 {
+        if number_of_osm_stations > 200 && dist > 1000.0 {
             continue;
         }
 
