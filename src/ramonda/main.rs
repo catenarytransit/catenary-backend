@@ -1,3 +1,4 @@
+mod nearby;
 use actix::prelude::*;
 use actix_web::{App, Error, HttpRequest, HttpResponse, HttpServer, web};
 use actix_web_actors::ws;
@@ -23,6 +24,15 @@ static GLOBAL: Jemalloc = Jemalloc;
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMessage {
+    #[serde(rename = "nearby_departures")]
+    NearbyDepartures {
+        request_id: String,
+        #[serde(flatten)]
+        params: catenary::nearby_departures::NearbyFromCoordsV3,
+        progressive: Option<bool>,
+    },
+    #[serde(rename = "cancel_nearby_departures")]
+    CancelNearbyDepartures,
     #[serde(rename = "subscribe_trip")]
     SubscribeTrip {
         chateau: String,
@@ -64,6 +74,9 @@ pub struct RamondaWebSocket {
         std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
     pub aspen_client_manager: Arc<AspenClientManager>,
     pub subscriptions: std::collections::HashMap<(String, QueryTripInformationParams), Option<u64>>,
+    pub nearby_generation: u64,
+    pub nearby_fetch: Option<SpawnHandle>,
+    pub nearby_loaded: bool,
     pub hb: std::time::Instant,
     pub aspen_endpoint_cache:
         std::collections::HashMap<String, (std::net::SocketAddr, std::time::Instant)>,
@@ -93,6 +106,9 @@ impl RamondaWebSocket {
             aspen_chateau_cache,
             aspen_client_manager,
             subscriptions: std::collections::HashMap::new(),
+            nearby_generation: 0,
+            nearby_fetch: None,
+            nearby_loaded: false,
             hb: std::time::Instant::now(),
             aspen_endpoint_cache: std::collections::HashMap::new(),
             in_progress_trip_fetches: std::collections::HashMap::new(),
@@ -226,6 +242,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
                 match msg {
+                    Ok(ClientMessage::NearbyDepartures { request_id, params, progressive }) => {
+                        self.fetch_nearby(request_id, params, progressive, ctx);
+                    }
+                    Ok(ClientMessage::CancelNearbyDepartures) => self.cancel_nearby(ctx),
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
                         self.subscriptions.remove(&(chateau, params));
                     }
