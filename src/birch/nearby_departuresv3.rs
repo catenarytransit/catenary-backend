@@ -72,6 +72,8 @@ pub struct NearbyDeparturesDebug {
     pub stops_fetch_time_ms: u128,
     pub etcd_connection_time_ms: u128,
     pub pipeline_processing_time_ms: u128,
+    pub initial_stop_count: Option<usize>,
+    pub initial_osm_station_count: Option<usize>,
 }
 
 // --- Long Distance Structs ---
@@ -251,6 +253,8 @@ pub async fn nearby_from_coords_v3(
                 stops_fetch_time_ms: stops_fetch_time.as_millis(),
                 etcd_connection_time_ms: 0,
                 pipeline_processing_time_ms: 0,
+                initial_stop_count: Some(0),
+                initial_osm_station_count: Some(0),
             },
         });
     }
@@ -290,10 +294,10 @@ pub async fn nearby_from_coords_v3(
                 continue;
             }
         }
-        if number_of_osm_stations > 100 && dist > 2500.0 {
+        if number_of_osm_stations > 100 && dist > 2000.0 {
             continue;
         }
-        if number_of_osm_stations > 200 && dist > 3000.0 {
+        if number_of_osm_stations > 200 && dist > 1500.0 {
             continue;
         }
         if stop_dist_map.len() > 400 && dist > 3000.0 {
@@ -609,6 +613,8 @@ pub async fn nearby_from_coords_v3(
             stops_fetch_time_ms: stops_fetch_time.as_millis(),
             etcd_connection_time_ms: etcd_connection_time.as_millis(),
             pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
+            initial_stop_count: Some(stops.len()),
+            initial_osm_station_count: Some(number_of_osm_stations),
         },
     })
 }
