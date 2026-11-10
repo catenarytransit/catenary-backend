@@ -66,6 +66,68 @@ where
     Ok(batches.into_iter().flatten().collect())
 }
 
+// Compute one policy per request. Station density counts physical OSM stations,
+// rather than platforms or duplicate GTFS records at the same station.
+#[derive(Clone, Copy, Debug)]
+struct DepartureDistanceLimits {
+    bus_m: f64,
+    other_m: f64,
+}
+
+impl DepartureDistanceLimits {
+    fn new(radius_m: f64, stop_count: usize, station_count: usize) -> Self {
+        let other_m = radius_m.min(match station_count {
+            201.. => 1000.0,
+            101.. => 2000.0,
+            _ => radius_m,
+        });
+        // The former output-only 2 km cap subsumes the old 4 km/2.5 km
+        // bus tiers. Apply it here, then tighten it for dense stop clusters.
+        let bus_m = other_m
+            .min(match stop_count {
+                801.. => 1000.0,
+                501.. => 1500.0,
+                51.. => 2000.0,
+                _ => radius_m,
+            })
+            .min(match station_count {
+                101.. => 1000.0,
+                1.. => 2000.0,
+                _ => radius_m,
+            });
+        Self { bus_m, other_m }
+    }
+
+    fn allows(self, route_type: i16, distance_m: f64) -> bool {
+        // Include GTFS extended bus, coach and trolleybus route types.
+        let is_bus = matches!(route_type, 3 | 11 | 200..=209 | 700..=799 | 800);
+        distance_m.is_finite()
+            && distance_m <= if is_bus { self.bus_m } else { self.other_m }
+    }
+
+    fn allows_stop(
+        self,
+        primary: Option<i16>,
+        route_types: &[Option<i16>],
+        children_route_types: &[Option<i16>],
+        distance_m: f64,
+    ) -> bool {
+        // Mixed stops must survive if any mode is eligible. The actual route
+        // is checked again before loading itinerary rows and trips.
+        let mut modes = route_types
+            .iter()
+            .chain(children_route_types)
+            .flatten()
+            .copied()
+            .chain(primary)
+            .peekable();
+        if modes.peek().is_none() {
+            return distance_m.is_finite() && distance_m <= self.other_m;
+        }
+        modes.any(|mode| self.allows(mode, distance_m))
+    }
+}
+
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoordsV3 {
     lat: f64,
@@ -296,16 +358,17 @@ pub async fn nearby_from_coords_v3(
         HashMap::new();
     let mut station_group_metadata: HashMap<(String, StationKey), (String, f64, f64, f64)> =
         HashMap::new();
-    let mut stop_dist_map: HashMap<String, f64> = HashMap::new();
-    let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
-
-    let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+    let mut stop_dist_map: HashMap<(String, String), f64> = HashMap::new();
+    let mut stop_full_info_map: HashMap<(String, String), catenary::models::Stop> = HashMap::new();
 
     let number_of_unique_osm_stations = stops
         .iter()
         .filter_map(|s| s.osm_station_id)
         .collect::<AHashSet<_>>()
         .len();
+
+    let distance_limits =
+        DepartureDistanceLimits::new(radius, stops.len(), number_of_unique_osm_stations);
 
     for stop in &stops {
         let stop_point = geo::Point::new(
@@ -314,36 +377,18 @@ pub async fn nearby_from_coords_v3(
         );
         let dist = Haversine.distance(input_point, stop_point);
 
-        // Distance filtering
-        if stop.primary_route_type == Some(3) {
-            if stops.len() > 100 && dist > 4000.0 {
-                continue;
-            }
-            if stops.len() > 300 && dist > 2500.0 {
-                continue;
-            }
-            if stops.len() > 500 && dist > 1500.0 {
-                continue;
-            }
-            if stops.len() > 800 && dist > 1000.0 {
-                continue;
-            }
-            if number_of_osm_stations > 50 && dist > 2000.0 {
-                continue;
-            }
-            if number_of_osm_stations > 100 && dist > 1000.0 {
-                continue;
-            }
-        }
-        if number_of_osm_stations > 100 && dist > 2000.0 {
-            continue;
-        }
-        if number_of_osm_stations > 200 && dist > 1000.0 {
+        if !distance_limits.allows_stop(
+            stop.primary_route_type,
+            &stop.route_types,
+            &stop.children_route_types,
+            dist,
+        ) {
             continue;
         }
 
-        stop_dist_map.insert(stop.gtfs_id.clone(), dist);
-        stop_full_info_map.insert(stop.gtfs_id.clone(), stop.clone());
+        let stop_key = (stop.chateau.clone(), stop.gtfs_id.clone());
+        stop_dist_map.insert(stop_key.clone(), dist);
+        stop_full_info_map.insert(stop_key, stop.clone());
 
         let key = if let Some(osm_id) = stop.osm_station_id {
             StationKey::Osm(osm_id)
@@ -406,18 +451,6 @@ pub async fn nearby_from_coords_v3(
             })
             .collect(),
     );
-    let stop_platform_map_all: Arc<HashMap<String, Option<String>>> = Arc::new(
-        stops
-            .iter()
-            .map(|s| (s.gtfs_id.clone(), s.platform_code.clone()))
-            .collect(),
-    );
-    let stop_name_map_all: Arc<HashMap<String, Option<String>>> = Arc::new(
-        stops
-            .iter()
-            .map(|s| (s.gtfs_id.clone(), s.name.clone()))
-            .collect(),
-    );
     let stop_full_info_map_arc = Arc::new(stop_full_info_map);
     let stop_dist_map_arc = Arc::new(stop_dist_map);
 
@@ -432,10 +465,34 @@ pub async fn nearby_from_coords_v3(
         let chateau_clone = chateau.clone();
         let ld_arc_clone = long_distance_chateaux_arc.clone();
         let stop_to_key_map = stop_to_key_map_all.clone();
-        let stop_platform_map = stop_platform_map_all.clone();
-        let stop_name_map = stop_name_map_all.clone();
-        let full_info_map_clone = stop_full_info_map_arc.clone();
-        let stop_dist_map_clone = stop_dist_map_arc.clone();
+        // GTFS stop IDs are scoped to a chateau. Do not let another feed's
+        // identically named stop overwrite its distance or mode metadata.
+        let full_info_map_clone: Arc<HashMap<String, catenary::models::Stop>> = Arc::new(
+            stop_full_info_map_arc
+                .iter()
+                .filter(|((c, _), _)| c == &chateau)
+                .map(|((_, id), stop)| (id.clone(), stop.clone()))
+                .collect(),
+        );
+        let stop_dist_map_clone = Arc::new(
+            stop_dist_map_arc
+                .iter()
+                .filter(|((c, _), _)| c == &chateau)
+                .map(|((_, id), distance)| (id.clone(), *distance))
+                .collect(),
+        );
+        let stop_platform_map = Arc::new(
+            full_info_map_clone
+                .iter()
+                .map(|(id, stop)| (id.clone(), stop.platform_code.clone()))
+                .collect(),
+        );
+        let stop_name_map = Arc::new(
+            full_info_map_clone
+                .iter()
+                .map(|(id, stop)| (id.clone(), stop.name.clone()))
+                .collect(),
+        );
 
         chateau_futures.push(async move {
             fetch_chateau_data(
@@ -450,6 +507,7 @@ pub async fn nearby_from_coords_v3(
                 stop_name_map,
                 full_info_map_clone,
                 stop_dist_map_clone,
+                distance_limits,
                 skip_realtime,
                 rt_timeout_ms,
             )
@@ -595,11 +653,6 @@ pub async fn nearby_from_coords_v3(
 
     // B. Local Output Generation
     let mut local_output: Vec<DepartureRouteGroupExportV3> = Vec::new();
-    let has_rail = ld_output.iter().any(|g| g.osm_station_id.is_some());
-    let many_stops = stops.len() > 50;
-    let limit_buses = has_rail || many_stops;
-    let bus_cutoff_m = 2000.0;
-
     for (r_key, headsigns) in local_departures {
         let (route, a_name) = local_route_meta.get(&r_key).unwrap();
         let mut min_dist = 9999999.0;
@@ -613,16 +666,14 @@ pub async fn nearby_from_coords_v3(
 
         for (_, items) in &sorted_headsigns {
             for item in items {
-                if let Some(d) = stop_dist_map_arc.get(item.stop_id.as_str()) {
+                if let Some(d) =
+                    stop_dist_map_arc.get(&(r_key.chateau.clone(), item.stop_id.to_string()))
+                {
                     if *d < min_dist {
                         min_dist = *d;
                     }
                 }
             }
-        }
-
-        if limit_buses && route.route_type == 3 && min_dist > bus_cutoff_m {
-            continue;
         }
 
         local_output.push(DepartureRouteGroupExportV3 {
@@ -669,6 +720,7 @@ async fn fetch_chateau_data(
     stop_name_map: Arc<HashMap<String, Option<String>>>,
     stop_full_info_map: Arc<HashMap<String, catenary::models::Stop>>,
     stop_dist_map: Arc<HashMap<String, f64>>,
+    distance_limits: DepartureDistanceLimits,
     skip_realtime: bool,
     rt_timeout_ms: u64,
 ) -> Option<(
@@ -787,7 +839,7 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> = load_pattern_batches(
+    let mut itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> = load_pattern_batches(
         &direction_pattern_ids,
         &query_slots,
         |pattern_batch| async {
@@ -805,6 +857,51 @@ async fn fetch_chateau_data(
     )
     .await
     .unwrap_or_default();
+
+    // Resolve actual route modes before any itinerary-row or trip lookup.
+    // primary_route_type cannot distinguish the bus and metro at a shared stop.
+    let candidate_route_ids: Vec<CompactString> = itin_meta_list
+        .iter()
+        .map(|meta| meta.route_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let routes_result: Vec<catenary::models::Route> = {
+        let mut conn = pool.get().await.unwrap();
+        catenary::schema::gtfs::routes::dsl::routes
+            .filter(catenary::schema::gtfs::routes::chateau.eq(&chateau))
+            .filter(catenary::schema::gtfs::routes::route_id.eq_any(&candidate_route_ids))
+            .select(catenary::models::Route::as_select())
+            .load(&mut conn)
+            .await
+            .unwrap_or_default()
+    };
+    let route_types: HashMap<_, _> = routes_result
+        .iter()
+        .map(|route| (route.route_id.as_str(), route.route_type))
+        .collect();
+    let mut direction_distances: HashMap<&str, f64> = HashMap::new();
+    for row in &direction_rows_list {
+        if let Some(distance) = stop_dist_map.get(row.stop_id.as_str()) {
+            direction_distances
+                .entry(row.direction_pattern_id.as_str())
+                .and_modify(|closest| *closest = closest.min(*distance))
+                .or_insert(*distance);
+        }
+    }
+    itin_meta_list.retain(|meta| {
+        let distance = meta
+            .direction_pattern_id
+            .as_deref()
+            .and_then(|id| direction_distances.get(id));
+        match (route_types.get(meta.route_id.as_str()), distance) {
+            (Some(mode), Some(distance)) => distance_limits.allows(*mode, *distance),
+            _ => false,
+        }
+    });
+    if itin_meta_list.is_empty() {
+        return None;
+    }
 
     let filtered_itinerary_ids: Vec<String> = itin_meta_list
         .iter()
@@ -832,9 +929,8 @@ async fn fetch_chateau_data(
     let pool_clone = pool.clone();
     let chateau_clone_itin = chateau.clone();
     let chateau_clone_dm = chateau.clone();
-    let chateau_clone_routes = chateau.clone();
 
-    let (itins_result, direction_meta_result, routes_result) = tokio::join!(
+    let (mut itins_result, direction_meta_result) = tokio::join!(
         async {
             load_pattern_batches(
                 &filtered_itinerary_ids,
@@ -885,17 +981,28 @@ async fn fetch_chateau_data(
             .await
             .unwrap_or_default()
         },
-        async {
-            let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::routes::dsl::routes
-                .filter(catenary::schema::gtfs::routes::chateau.eq(chateau_clone_routes))
-                .filter(catenary::schema::gtfs::routes::route_id.eq_any(&route_ids))
-                .select(catenary::models::Route::as_select())
-                .load::<catenary::models::Route>(&mut conn)
-                .await
-                .unwrap_or_default()
-        }
     );
+
+    // A retained itinerary can still contain a distant bus row when a closer
+    // stop made its direction eligible. Exclude each row before fetching trips
+    // and before the service-date/realtime loops.
+    let itinerary_modes: HashMap<_, _> = itin_meta_list
+        .iter()
+        .filter_map(|meta| {
+            route_types
+                .get(meta.route_id.as_str())
+                .map(|mode| (meta.itinerary_pattern_id.as_str(), *mode))
+        })
+        .collect();
+    itins_result.retain(|row| {
+        match (
+            itinerary_modes.get(row.itinerary_pattern_id.as_str()),
+            stop_dist_map.get(row.stop_id.as_str()),
+        ) {
+            (Some(mode), Some(distance)) => distance_limits.allows(*mode, *distance),
+            _ => false,
+        }
+    });
 
     // Extract ACTUAL itinerary IDs that match the stop
     let actual_itinerary_ids: Vec<String> = itins_result
@@ -1712,5 +1819,75 @@ mod pattern_batch_tests {
         .await;
         assert!(matches!(result, Err(diesel::result::Error::NotFound)));
         assert_eq!(slots.available_permits(), PATTERN_QUERY_CONCURRENCY);
+    }
+}
+
+#[cfg(test)]
+mod distance_limit_tests {
+    use super::DepartureDistanceLimits;
+
+    #[test]
+    fn mixed_stop_keeps_metro_but_rejects_bus_beyond_dense_bus_radius() {
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 10);
+        assert!(limits.allows_stop(Some(1), &[Some(1), Some(3)], &[], 1500.0));
+        assert!(limits.allows(1, 1500.0));
+        assert!(!limits.allows(3, 1500.0));
+        assert!(!limits.allows_stop(Some(3), &[Some(3)], &[], 1500.0));
+        // A parent's child modes can also preserve eligible rail service.
+        assert!(limits.allows_stop(Some(3), &[], &[Some(1)], 1500.0));
+    }
+
+    #[test]
+    fn bus_cutoffs_are_inclusive_and_tighten_with_density() {
+        for (stops, stations, cutoff) in [
+            (50, 0, 5000.0),
+            (51, 0, 2000.0),
+            (500, 0, 2000.0),
+            (501, 0, 1500.0),
+            (800, 0, 1500.0),
+            (801, 0, 1000.0),
+            (1, 100, 2000.0),
+            (1, 101, 1000.0),
+        ] {
+            let limits = DepartureDistanceLimits::new(5000.0, stops, stations);
+            assert!(limits.allows(3, cutoff), "{stops} stops, {stations} stations");
+            assert!(!limits.allows(3, cutoff + 0.1));
+        }
+    }
+
+    #[test]
+    fn extended_bus_modes_use_the_same_cutoff() {
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 0);
+        for mode in [3, 11, 200, 209, 700, 701, 799, 800] {
+            assert!(limits.allows(mode, 1000.0));
+            assert!(!limits.allows(mode, 1000.1));
+        }
+        for mode in [0, 1, 2, 100, 400, 900] {
+            assert!(limits.allows(mode, 1500.0));
+        }
+    }
+
+    #[test]
+    fn requested_radius_caps_every_mode_including_unknown_stops() {
+        let limits = DepartureDistanceLimits::new(500.0, 1000, 300);
+        for mode in [0, 1, 2, 3, 700] {
+            assert!(limits.allows(mode, 500.0));
+            assert!(!limits.allows(mode, 500.1));
+            assert!(!limits.allows(mode, f64::NAN));
+            assert!(!limits.allows(mode, f64::INFINITY));
+        }
+        assert!(limits.allows_stop(None, &[], &[], 500.0));
+        assert!(!limits.allows_stop(None, &[None], &[], 500.1));
+    }
+
+    #[test]
+    fn station_density_tightens_the_non_bus_radius_at_existing_boundaries() {
+        for (stations, cutoff) in [
+            (100, 5000.0), (101, 2000.0), (200, 2000.0), (201, 1000.0),
+        ] {
+            let limits = DepartureDistanceLimits::new(5000.0, 1, stations);
+            assert!(limits.allows(1, cutoff));
+            assert!(!limits.allows(1, cutoff + 0.1));
+        }
     }
 }
