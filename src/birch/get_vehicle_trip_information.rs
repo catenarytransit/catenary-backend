@@ -24,9 +24,9 @@ use catenary::trip_logic::{
     ResponseForGtfsVehicle, StopTimeIntroduction, StopTimeRefresh, TripIntroductionInformation,
     fetch_trip_information, fetch_trip_rt_update,
 };
+use catenary_time::Tz;
 use chrono::Datelike;
 use chrono::TimeZone;
-use catenary_time::Tz;
 use compact_str::CompactString;
 use diesel::ExpressionMethods;
 use diesel::SelectableHelper;

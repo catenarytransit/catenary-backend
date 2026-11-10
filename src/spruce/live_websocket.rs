@@ -783,7 +783,8 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                     }
                     Ok(ClientMessage::UnsubscribeTrajectories) => {
                         if let Some(params) = &self.trajectory_subscription {
-                            let update_timestamp = catenary_time::utc_now().timestamp_millis() as u64;
+                            let update_timestamp =
+                                catenary_time::utc_now().timestamp_millis() as u64;
                             let client_ref = params.client_reference.clone();
                             for chateau in &self.subscribed_chateaus {
                                 let msg = ServerMessage::Buffer {

@@ -7,8 +7,8 @@ use catenary::routing_common::timetable::{
     RouteIdx, TimetableOwned, TimingProfileIdx, TrafficDays, TransportIdx, TripIdx,
     TripTransportRange,
 };
-use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use catenary_time::Tz;
+use chrono::{Datelike, Duration, NaiveDate, TimeZone, Utc};
 use fallible_iterator::FallibleIterator;
 use postgres::{Client, Row, types::ToSql};
 use prost::Message;

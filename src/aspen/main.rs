@@ -222,8 +222,8 @@ impl AspenRpc for AspenServer {
         operation_date: Option<String>,
         agency_name: String,
     ) -> Option<catenary::sbb_formation_types::SbbFormationData> {
-        let date =
-            operation_date.unwrap_or_else(|| catenary_time::utc_now().format("%Y-%m-%d").to_string());
+        let date = operation_date
+            .unwrap_or_else(|| catenary_time::utc_now().format("%Y-%m-%d").to_string());
         let evu = sbb_downloads::evu_for_agency_name(&agency_name)?;
         let key = sbb_downloads::formation_cache_key(&date, evu, train_number);
         let guard = self.sbb_formation_cache.read().await;
@@ -598,8 +598,11 @@ impl AspenRpc for AspenServer {
         _: context::Context,
         realtime_feed_id: String,
     ) -> GtfsRtTimestamps {
-        feed_timestamps::get_gtfs_rt_timestamps(&self.authoritative_gtfs_rt_store, &realtime_feed_id)
-            .await
+        feed_timestamps::get_gtfs_rt_timestamps(
+            &self.authoritative_gtfs_rt_store,
+            &realtime_feed_id,
+        )
+        .await
     }
 
     async fn get_gtfs_rt_compressed(

@@ -3,8 +3,8 @@ use catenary::CalendarUnified;
 use catenary::aspen_dataset::AspenisedStopTimeUpdate;
 use catenary::compact_formats::CompactItineraryPatternRow;
 use catenary::models::{CompressedTrip, ItineraryPatternMeta};
-use chrono::{Datelike, TimeZone, Utc};
 use catenary_time::Tz;
+use chrono::{Datelike, TimeZone, Utc};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

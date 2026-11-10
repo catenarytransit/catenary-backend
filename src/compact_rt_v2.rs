@@ -969,7 +969,11 @@ mod tests {
                 id: entity.id.clone(),
                 is_deleted: entity.is_deleted,
                 trip_update: entity.trip_update.as_ref().map(|tu| CompactTripUpdateV2 {
-                    trip: feed.descriptors.get(tu.trip_index as usize).unwrap().to_owned(),
+                    trip: feed
+                        .descriptors
+                        .get(tu.trip_index as usize)
+                        .unwrap()
+                        .to_owned(),
                     vehicle: tu.vehicle.clone(),
                     stop_start: tu.stop_start,
                     stop_len: tu.stop_len,

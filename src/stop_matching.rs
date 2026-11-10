@@ -88,8 +88,12 @@ pub fn find_stop_time_update<'a, 's>(
 mod tests {
     use super::*;
 
-    fn update(sequence: Option<u16>, stop_id: Option<&str>, time: i64) -> crate::aspen_dataset::AspenisedStopTimeUpdate {
-        use crate::aspen_dataset::{AspenisedStopTimeUpdate, AspenStopTimeEvent};
+    fn update(
+        sequence: Option<u16>,
+        stop_id: Option<&str>,
+        time: i64,
+    ) -> crate::aspen_dataset::AspenisedStopTimeUpdate {
+        use crate::aspen_dataset::{AspenStopTimeEvent, AspenisedStopTimeUpdate};
         AspenisedStopTimeUpdate {
             stop_sequence: sequence,
             stop_id: stop_id.map(Into::into),
@@ -112,47 +116,99 @@ mod tests {
     fn loop_terminus_keeps_start_and_end_predictions_separate() {
         // These visits may have different stop_headsigns, but share the stop ID.
         let stops = ["terminus", "middle", "terminus"];
-        let updates = [update(Some(1), Some("terminus"), 36000), update(Some(3), Some("terminus"), 37500)];
+        let updates = [
+            update(Some(1), Some("terminus"), 36000),
+            update(Some(3), Some("terminus"), 37500),
+        ];
         for (sequence, scheduled_time) in [(1, 36000), (3, 37500)] {
-            let prediction = find_stop_time_update(&updates, sequence, "terminus", stops.into_iter()).unwrap();
-            assert_eq!(prediction.departure.as_ref().unwrap().time.unwrap() - scheduled_time, 0);
+            let prediction =
+                find_stop_time_update(&updates, sequence, "terminus", stops.into_iter()).unwrap();
+            assert_eq!(
+                prediction.departure.as_ref().unwrap().time.unwrap() - scheduled_time,
+                0
+            );
         }
         let reversed = [updates[1].clone(), updates[0].clone()];
-        assert_eq!(find_stop_time_update(&reversed, 1, "terminus", stops.into_iter()).unwrap().stop_sequence, Some(1));
+        assert_eq!(
+            find_stop_time_update(&reversed, 1, "terminus", stops.into_iter())
+                .unwrap()
+                .stop_sequence,
+            Some(1)
+        );
     }
 
     #[test]
     fn wrong_sequence_cannot_match_by_stop_id() {
         let updates = [update(Some(1), Some("terminus"), 36000)];
-        assert!(find_stop_time_update(&updates, 3, "terminus", ["terminus", "terminus"].into_iter()).is_none());
+        assert!(
+            find_stop_time_update(
+                &updates,
+                3,
+                "terminus",
+                ["terminus", "terminus"].into_iter()
+            )
+            .is_none()
+        );
         // Comparing as u32 also prevents a large static sequence wrapping to u16.
-        assert!(find_stop_time_update(&updates, 65537, "terminus", ["terminus"].into_iter()).is_none());
+        assert!(
+            find_stop_time_update(&updates, 65537, "terminus", ["terminus"].into_iter()).is_none()
+        );
     }
 
     #[test]
     fn sequence_only_updates_are_supported() {
         let updates = [update(Some(3), None, 37500)];
-        assert!(find_stop_time_update(&updates, 3, "terminus", ["terminus", "terminus"].into_iter()).is_some());
+        assert!(
+            find_stop_time_update(
+                &updates,
+                3,
+                "terminus",
+                ["terminus", "terminus"].into_iter()
+            )
+            .is_some()
+        );
     }
 
     #[test]
     fn unsequenced_update_requires_unambiguous_stop() {
         let updates = [update(None, Some("terminus"), 36000)];
-        assert!(find_stop_time_update(&updates, 1, "terminus", ["terminus", "middle", "terminus"].into_iter()).is_none());
-        assert!(find_stop_time_update(&updates, 1, "terminus", ["terminus", "middle"].into_iter()).is_some());
+        assert!(
+            find_stop_time_update(
+                &updates,
+                1,
+                "terminus",
+                ["terminus", "middle", "terminus"].into_iter()
+            )
+            .is_none()
+        );
+        assert!(
+            find_stop_time_update(&updates, 1, "terminus", ["terminus", "middle"].into_iter())
+                .is_some()
+        );
     }
 
     #[test]
     fn exact_sequence_precedes_unsequenced_fallback() {
-        let updates = [update(None, Some("stop"), 36000), update(Some(2), Some("stop"), 36120)];
-        assert_eq!(find_stop_time_update(&updates, 2, "stop", ["stop"].into_iter()).unwrap().stop_sequence, Some(2));
+        let updates = [
+            update(None, Some("stop"), 36000),
+            update(Some(2), Some("stop"), 36120),
+        ];
+        assert_eq!(
+            find_stop_time_update(&updates, 2, "stop", ["stop"].into_iter())
+                .unwrap()
+                .stop_sequence,
+            Some(2)
+        );
     }
 
     #[test]
     fn unsequenced_platform_suffix_preserves_unique_fallback() {
         let updates = [update(None, Some("8833001_7"), 36000)];
         assert!(find_stop_time_update(&updates, 1, "8833001", ["8833001"].into_iter()).is_some());
-        assert!(find_stop_time_update(&updates, 1, "8833001", ["8833001", "8833001_7"].into_iter()).is_none());
+        assert!(
+            find_stop_time_update(&updates, 1, "8833001", ["8833001", "8833001_7"].into_iter())
+                .is_none()
+        );
     }
 
     #[test]

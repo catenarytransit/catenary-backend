@@ -101,8 +101,7 @@ impl DepartureDistanceLimits {
     fn allows(self, route_type: i16, distance_m: f64) -> bool {
         // Include GTFS extended bus, coach and trolleybus route types.
         let is_bus = matches!(route_type, 3 | 11 | 200..=209 | 700..=799 | 800);
-        distance_m.is_finite()
-            && distance_m <= if is_bus { self.bus_m } else { self.other_m }
+        distance_m.is_finite() && distance_m <= if is_bus { self.bus_m } else { self.other_m }
     }
 
     fn allows_stop(
@@ -1850,7 +1849,10 @@ mod distance_limit_tests {
             (1, 101, 1000.0),
         ] {
             let limits = DepartureDistanceLimits::new(5000.0, stops, stations);
-            assert!(limits.allows(3, cutoff), "{stops} stops, {stations} stations");
+            assert!(
+                limits.allows(3, cutoff),
+                "{stops} stops, {stations} stations"
+            );
             assert!(!limits.allows(3, cutoff + 0.1));
         }
     }
@@ -1882,9 +1884,7 @@ mod distance_limit_tests {
 
     #[test]
     fn station_density_tightens_the_non_bus_radius_at_existing_boundaries() {
-        for (stations, cutoff) in [
-            (100, 5000.0), (101, 2000.0), (200, 2000.0), (201, 1000.0),
-        ] {
+        for (stations, cutoff) in [(100, 5000.0), (101, 2000.0), (200, 2000.0), (201, 1000.0)] {
             let limits = DepartureDistanceLimits::new(5000.0, 1, stations);
             assert!(limits.allows(1, cutoff));
             assert!(!limits.allows(1, cutoff + 0.1));

@@ -342,7 +342,8 @@ pub async fn departures_at_osm_station(
         }
     };
 
-    let stop_tz = catenary_time::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(catenary_time::UTC);
+    let stop_tz =
+        catenary_time::Tz::from_str_insensitive(&stop_tz_txt).unwrap_or(catenary_time::UTC);
 
     let gt_utc = chrono::DateTime::from_timestamp(greater_than_time as i64, 0).unwrap_or_default();
     let greater_than_date_time = gt_utc.with_timezone(&stop_tz);

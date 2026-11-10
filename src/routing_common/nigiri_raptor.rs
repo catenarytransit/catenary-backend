@@ -265,7 +265,11 @@ impl NigiriRaptor {
             return true;
         };
         let bound = bounds.rows[self.bounds_last_k_ - k][stop];
-        let compensated = shift_delta(bound, bound_transfer_seconds(tt, stop, self.transfer_sensitive[stop]), self.reverse);
+        let compensated = shift_delta(
+            bound,
+            bound_transfer_seconds(tt, stop, self.transfer_sensitive[stop]),
+            self.reverse,
+        );
         !better(compensated, time, self.reverse)
     }
     fn reachable(&self, k: usize, stop: usize, time: DeltaTime) -> bool {
@@ -559,10 +563,14 @@ impl NigiriRaptor {
 /// PING label. Gentian also stores reflexive GTFS minima separately: use the
 /// same finite change as update_transfers, rather than disabling the bound.
 pub(crate) fn bound_transfer_seconds(
-    tt: &ZeroCopyTimetable<'_>, stop: usize, has_rule: bool,
+    tt: &ZeroCopyTimetable<'_>,
+    stop: usize,
+    has_rule: bool,
 ) -> u32 {
     let station = tt.location_transfer_seconds()[stop];
-    if !has_rule { return station; }
+    if !has_rule {
+        return station;
+    }
     tt.station_transfer_rule(LocationIdx(stop as u32), LocationIdx(stop as u32))
         .filter(|rule| !rule.prohibited())
         .map_or(station, |rule| station.max(rule.min_seconds))
@@ -927,9 +935,24 @@ mod parallel_tests {
         let mut owned = network(2, 4);
         owned.station_transfer_rules.clear();
         owned.station_transfer_rules.extend([
-            StationTransferRule { from: LocationIdx(1), to: LocationIdx(1), min_seconds: 480, flags: 0 },
-            StationTransferRule { from: LocationIdx(1), to: LocationIdx(2), min_seconds: 900, flags: 0 },
-            StationTransferRule { from: LocationIdx(2), to: LocationIdx(3), min_seconds: 0, flags: 1 },
+            StationTransferRule {
+                from: LocationIdx(1),
+                to: LocationIdx(1),
+                min_seconds: 480,
+                flags: 0,
+            },
+            StationTransferRule {
+                from: LocationIdx(1),
+                to: LocationIdx(2),
+                min_seconds: 900,
+                flags: 0,
+            },
+            StationTransferRule {
+                from: LocationIdx(2),
+                to: LocationIdx(3),
+                min_seconds: 0,
+                flags: 1,
+            },
         ]);
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
@@ -940,7 +963,12 @@ mod parallel_tests {
             let bounds = state.fill_ping_bounds(2);
             // Row zero is copied, higher rows fold by min/max. Neither a
             // finite minimum nor a prohibition is a TD-footpath exception.
-            assert!(bounds.rows.iter().all(|row| row.iter().all(|&t| t == 1_000)));
+            assert!(
+                bounds
+                    .rows
+                    .iter()
+                    .all(|row| row.iter().all(|&t| t == 1_000))
+            );
             state.set_ping_bounds(bounds);
             state.reverse = !reverse;
             state.bounds_last_k_ = 2;

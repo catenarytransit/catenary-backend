@@ -67,8 +67,8 @@ impl DescriptorStrings {
                 Some(value) => match dictionary.get(value.as_str()) {
                     Some(&id) => id,
                     None => {
-                        let id = u32::try_from(ends.len() + 1)
-                            .expect("too many descriptor strings");
+                        let id =
+                            u32::try_from(ends.len() + 1).expect("too many descriptor strings");
                         data.push_str(&value);
                         ends.push(
                             u32::try_from(data.len())
@@ -272,8 +272,14 @@ mod tests {
         let original_bytes = crate::bincode_serialize(&trips).unwrap().len();
         let store = CompactTripDescriptorStore::new(trips);
         assert!(crate::bincode_serialize(&store).unwrap().len() < original_bytes);
-        assert!(matches!(store.route_id.indices, DescriptorIndices::Uniform(1)));
-        assert!(matches!(store.start_date.indices, DescriptorIndices::Uniform(1)));
+        assert!(matches!(
+            store.route_id.indices,
+            DescriptorIndices::Uniform(1)
+        ));
+        assert!(matches!(
+            store.start_date.indices,
+            DescriptorIndices::Uniform(1)
+        ));
         assert!(matches!(store.trip_id.indices, DescriptorIndices::Absent));
         assert!(store.modified_trip.is_absent());
         assert_eq!(store.start_date.data, "20261103");

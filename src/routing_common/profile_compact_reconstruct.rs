@@ -37,13 +37,14 @@ pub(super) fn reconstruct_validated_snapshot(
     stats: &mut RaptorStats,
 ) -> Option<Journey> {
     stats.profile_journeys_reconstructed += 1;
-    let journey = reconstruct_snapshot(parents, snapshot, event, stop, reverse, seconds)
-        .and_then(|mut journey| {
+    let journey = reconstruct_snapshot(parents, snapshot, event, stop, reverse, seconds).and_then(
+        |mut journey| {
             if !point_mode {
                 optimize_same_trip_endpoint_walks(tt, q, &mut journey);
             }
             valid_journey(tt, q, &journey).then_some(journey)
-        });
+        },
+    );
     if journey.is_none() {
         stats.profile_journeys_rejected += 1;
     }
@@ -239,16 +240,22 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
                 to_stop,
                 seconds,
             } => {
-                let reflexive_rule = tt.station_transfer_rule(LocationIdx(from_stop), LocationIdx(to_stop));
+                let reflexive_rule =
+                    tt.station_transfer_rule(LocationIdx(from_stop), LocationIdx(to_stop));
                 let reflexive_change = from_stop == to_stop
-                    && tt.location_transfer_seconds().get(from_stop as usize)
-                        .is_some_and(|&change| change.max(reflexive_rule.map_or(0, |rule| rule.min_seconds)) == seconds)
+                    && tt
+                        .location_transfer_seconds()
+                        .get(from_stop as usize)
+                        .is_some_and(|&change| {
+                            change.max(reflexive_rule.map_or(0, |rule| rule.min_seconds)) == seconds
+                        })
                     && !reflexive_rule.is_some_and(|rule| rule.prohibited());
                 if stop != Some(from_stop)
-                    || !(reflexive_change || tt
-                        .footpaths_from(LocationIdx(from_stop))
-                        .iter()
-                        .any(|f| f.target().0 == to_stop && f.seconds() == seconds))
+                    || !(reflexive_change
+                        || tt
+                            .footpaths_from(LocationIdx(from_stop))
+                            .iter()
+                            .any(|f| f.target().0 == to_stop && f.seconds() == seconds))
                 {
                     return false;
                 }

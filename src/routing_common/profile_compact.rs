@@ -448,8 +448,11 @@ fn station_groups(parents: &[LocationIdx]) -> Vec<usize> {
 const LOWER_BOUND_HORIZON: u32 = 5 * 86_400;
 
 pub(crate) fn point_lower_bounds(
-    tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool,
-    topology: &LowerBoundTopology, stats: &mut RaptorStats,
+    tt: &ZeroCopyTimetable<'_>,
+    q: &Query,
+    reverse: bool,
+    topology: &LowerBoundTopology,
+    stats: &mut RaptorStats,
 ) -> Vec<u32> {
     lower_bounds(tt, q, reverse, topology, stats)
 }
@@ -590,7 +593,6 @@ fn change_seconds_for_search(
         change_seconds(tt, from, to)
     }
 }
-
 
 fn routes_from_marked(
     tt: &ZeroCopyTimetable<'_>,
@@ -813,7 +815,10 @@ impl ProfileSearchState {
         max_boardings: usize,
         worst_time_at_dest: i64,
     ) -> Result<Vec<Journey>> {
-        ensure!(max_boardings < self.rounds.len(), "point boarding budget exceeds buffers");
+        ensure!(
+            max_boardings < self.rounds.len(),
+            "point boarding budget exceeds buffers"
+        );
         self.point_mode = true;
         self.point_destination_bound = Some(worst_time_at_dest);
         self.bounds_last_round = max_boardings;
@@ -843,8 +848,16 @@ impl ProfileSearchState {
                 continue;
             }
             let dominates = |a: &Journey, b: &Journey| {
-                let a_time = if self.reverse { a.departure_unix_seconds } else { a.arrival_unix_seconds };
-                let b_time = if self.reverse { b.departure_unix_seconds } else { b.arrival_unix_seconds };
+                let a_time = if self.reverse {
+                    a.departure_unix_seconds
+                } else {
+                    a.arrival_unix_seconds
+                };
+                let b_time = if self.reverse {
+                    b.departure_unix_seconds
+                } else {
+                    b.arrival_unix_seconds
+                };
                 a.boardings <= b.boardings && !better(b_time, a_time, self.reverse)
             };
             if frontier.iter().any(|old| dominates(old, journey)) {
@@ -943,7 +956,8 @@ impl ProfileSearchState {
         // Reset only the per-start competitiveness limit, not the arrival
         // matrix. Nigiri executes every start with a worst destination time
         // before updating it from transit and walking relaxations.
-        let worst = self.point_destination_bound
+        let worst = self
+            .point_destination_bound
             .unwrap_or_else(|| initial_destination_bound(anchor, q, reverse));
         for bound in &mut self.time_at_dest {
             if better(worst, *bound, reverse) {
@@ -980,7 +994,14 @@ impl ProfileSearchState {
                     self.time_at_dest[0],
                 )
                 && (self.transfer_sensitive[ep.stop.idx()]
-                    || !dominated_by_profile_with_mode(&self.profile_ready, 0, ep.stop.idx(), t, reverse, self.point_mode))
+                    || !dominated_by_profile_with_mode(
+                        &self.profile_ready,
+                        0,
+                        ep.stop.idx(),
+                        t,
+                        reverse,
+                        self.point_mode,
+                    ))
                 && self.rounds[0].put_linked(
                     Stage::Ready,
                     ep.stop.idx(),
@@ -1060,9 +1081,7 @@ impl ProfileSearchState {
                         let mut onboard: Option<Onboard<'_>> = None;
                         for step in 0..stops.len() {
                             self.stats.stop_events_scanned += 1;
-                            if (self.stats.stop_events_scanned & 255) == 0
-                                && is_timeout_reached()
-                            {
+                            if (self.stats.stop_events_scanned & 255) == 0 && is_timeout_reached() {
                                 self.stats.profile_budget_exhausted = true;
                                 break;
                             }
@@ -1377,11 +1396,16 @@ impl ProfileSearchState {
                 let Some(journey) = journey else {
                     continue;
                 };
-                if !self.point_mode || !better(self.time_at_dest[k], if reverse {
-                    journey.departure_unix_seconds
-                } else {
-                    journey.arrival_unix_seconds
-                }, reverse)
+                if !self.point_mode
+                    || !better(
+                        self.time_at_dest[k],
+                        if reverse {
+                            journey.departure_unix_seconds
+                        } else {
+                            journey.arrival_unix_seconds
+                        },
+                        reverse,
+                    )
                 {
                     let metric = if reverse {
                         journey.departure_unix_seconds
@@ -1420,7 +1444,9 @@ impl ProfileSearchState {
                     continue;
                 };
                 let t = ride.time;
-                if let Some(change) = change_seconds_for_search(tt, from, from, &self.transfer_sensitive) {
+                if let Some(change) =
+                    change_seconds_for_search(tt, from, from, &self.transfer_sensitive)
+                {
                     let ready = if reverse {
                         t.saturating_sub(i64::from(change))
                     } else {
@@ -1438,9 +1464,17 @@ impl ProfileSearchState {
                     }
                     if (lower..=upper).contains(&ready)
                         && within_ping_bounds(
-                            self.ping_bounds.as_ref(), self.bounds_last_round,
-                            k, from, ready, reverse,
-                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(tt, from, self.transfer_sensitive[from]),
+                            self.ping_bounds.as_ref(),
+                            self.bounds_last_round,
+                            k,
+                            from,
+                            ready,
+                            reverse,
+                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(
+                                tt,
+                                from,
+                                self.transfer_sensitive[from],
+                            ),
                         )
                         && can_reach(
                             &self.bounds,
@@ -1452,7 +1486,14 @@ impl ProfileSearchState {
                             self.time_at_dest[k],
                         )
                         && (self.transfer_sensitive[from]
-                            || !dominated_by_profile_with_mode(&self.profile_ready, k, from, ready, reverse, self.point_mode))
+                            || !dominated_by_profile_with_mode(
+                                &self.profile_ready,
+                                k,
+                                from,
+                                ready,
+                                reverse,
+                                self.point_mode,
+                            ))
                         && !dominated_by_lower_round(
                             before,
                             Stage::Ready,
@@ -1498,9 +1539,7 @@ impl ProfileSearchState {
                         break;
                     }
                     self.stats.footpath_edges_examined += 1;
-                    if self.stats.footpath_edges_examined & 255 == 0
-                        && is_timeout_reached()
-                    {
+                    if self.stats.footpath_edges_examined & 255 == 0 && is_timeout_reached() {
                         self.stats.profile_budget_exhausted = true;
                         break;
                     }
@@ -1509,17 +1548,20 @@ impl ProfileSearchState {
                         continue;
                     }
                     let (walk_from, walk_to) = if reverse { (to, from) } else { (from, to) };
-                    let ready = change_seconds_for_search(tt, walk_from, walk_to, &self.transfer_sensitive).map(|change| {
-                        if reverse {
-                            at.min(t.saturating_sub(i64::from(change)))
-                        } else {
-                            at.max(t.saturating_add(i64::from(change)))
-                        }
-                    });
+                    let ready =
+                        change_seconds_for_search(tt, walk_from, walk_to, &self.transfer_sensitive)
+                            .map(|change| {
+                                if reverse {
+                                    at.min(t.saturating_sub(i64::from(change)))
+                                } else {
+                                    at.max(t.saturating_add(i64::from(change)))
+                                }
+                            });
                     // Nigiri update_footpaths has the same pre-pruning
                     // round_times_ write as update_transfers. Save the legal
                     // transfer-ready time, independently of physical walks.
-                    if self.point_mode && self.ping_bounds.is_none()
+                    if self.point_mode
+                        && self.ping_bounds.is_none()
                         && let Some(ready) = ready
                     {
                         let saved = &mut self.profile_ready[k][to];
@@ -1562,9 +1604,17 @@ impl ProfileSearchState {
                     };
                     if (lower..=upper).contains(&ready)
                         && within_ping_bounds(
-                            self.ping_bounds.as_ref(), self.bounds_last_round,
-                            k, to, ready, reverse,
-                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(tt, to, self.transfer_sensitive[to]),
+                            self.ping_bounds.as_ref(),
+                            self.bounds_last_round,
+                            k,
+                            to,
+                            ready,
+                            reverse,
+                            crate::routing_common::nigiri_raptor::bound_transfer_seconds(
+                                tt,
+                                to,
+                                self.transfer_sensitive[to],
+                            ),
                         )
                         && can_reach(
                             &self.bounds,
@@ -1576,7 +1626,14 @@ impl ProfileSearchState {
                             self.time_at_dest[k],
                         )
                         && (self.transfer_sensitive[to]
-                            || !dominated_by_profile_with_mode(&self.profile_ready, k, to, ready, reverse, self.point_mode))
+                            || !dominated_by_profile_with_mode(
+                                &self.profile_ready,
+                                k,
+                                to,
+                                ready,
+                                reverse,
+                                self.point_mode,
+                            ))
                         && !dominated_by_lower_round(
                             before,
                             Stage::Ready,
@@ -1692,11 +1749,16 @@ impl ProfileSearchState {
                     optimize_same_trip_endpoint_walks(tt, q, &mut journey);
                 }
                 if valid_journey(tt, q, &journey)
-                    && (!self.point_mode || (!better(self.time_at_dest[k], if reverse {
-                        journey.departure_unix_seconds
-                    } else {
-                        journey.arrival_unix_seconds
-                    }, reverse)))
+                    && (!self.point_mode
+                        || (!better(
+                            self.time_at_dest[k],
+                            if reverse {
+                                journey.departure_unix_seconds
+                            } else {
+                                journey.arrival_unix_seconds
+                            },
+                            reverse,
+                        )))
                 {
                     let metric = if reverse {
                         journey.departure_unix_seconds
@@ -2104,20 +2166,25 @@ mod compressed_timetable_profile_tests {
         tt.location_parent.push(LocationIdx::INVALID);
         tt.location_type.push(1);
         tt.location_transfer_seconds.push(0);
-        tt.location_routes_offsets.push(tt.location_routes.len() as u32);
+        tt.location_routes_offsets
+            .push(tt.location_routes.len() as u32);
         if reverse {
             // Unavailable initial table walk in the forward validation:
             // stop 2 -> train's boarding stop 0.
-            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(0), 60).unwrap());
+            tt.footpaths_out
+                .push(PackedFootpath::new(LocationIdx(0), 60).unwrap());
             tt.footpaths_out_offsets = vec![0, 0, 0, 1];
-            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
+            tt.footpaths_in
+                .push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
             tt.footpaths_in_offsets = vec![0, 1, 1, 1];
         } else {
             // Unavailable initial table walk in the reverse validation:
             // train's alighting stop 1 -> stop 2.
-            tt.footpaths_out.push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
+            tt.footpaths_out
+                .push(PackedFootpath::new(LocationIdx(2), 60).unwrap());
             tt.footpaths_out_offsets = vec![0, 0, 1, 1];
-            tt.footpaths_in.push(PackedFootpath::new(LocationIdx(1), 60).unwrap());
+            tt.footpaths_in
+                .push(PackedFootpath::new(LocationIdx(1), 60).unwrap());
             tt.footpaths_in_offsets = vec![0, 0, 0, 1];
         }
         tt
@@ -2286,9 +2353,16 @@ mod compressed_timetable_profile_tests {
                     stop: LocationIdx(if reverse { 0 } else { 1 }),
                     seconds: 600,
                 },
-                WalkingEndpoint { stop: LocationIdx(2), seconds: 0 },
+                WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                },
             ];
-            if reverse { q.access = offsets; } else { q.egress = offsets; }
+            if reverse {
+                q.access = offsets;
+            } else {
+                q.egress = offsets;
+            }
             // The table path costs 60 seconds, but the actual OSR offset
             // from/to the train costs 600. Previously ping chose the table
             // shortcut and pong could not match the one-boarding journey.
@@ -2306,9 +2380,16 @@ mod compressed_timetable_profile_tests {
             .unwrap();
             assert_eq!(journeys.len(), 1);
             assert_eq!(journeys[0].boardings, 1);
-            assert_eq!(journeys[0].departure_unix_seconds, departure - if reverse { 600 } else { 0 });
-            assert_eq!(journeys[0].arrival_unix_seconds, arrival + if reverse { 0 } else { 600 });
-            assert!(journeys[0].legs.iter().all(|leg| !matches!(leg,
+            assert_eq!(
+                journeys[0].departure_unix_seconds,
+                departure - if reverse { 600 } else { 0 }
+            );
+            assert_eq!(
+                journeys[0].arrival_unix_seconds,
+                arrival + if reverse { 0 } else { 600 }
+            );
+            assert!(journeys[0].legs.iter().all(|leg| !matches!(
+                leg,
                 crate::routing_common::raptor_query::Leg::Transfer { .. }
             )));
             assert!(valid_journey(&tt, &q, &journeys[0]));
@@ -2331,14 +2412,17 @@ mod compressed_timetable_profile_tests {
             } else {
                 (departure, arrival, arrival + 60)
             };
-            let mut state = ProfileSearchState::new(
-                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
-            )
-            .unwrap();
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
             state.execute_point(&tt, &q, anchor, 3, bound).unwrap();
             // Stop 2 cannot improve the destination bound. Nigiri still
             // saves its round time before pruning the active frontier.
-            assert!(state.rounds[1].get(Stage::Ready, 2, state.generation).is_none());
+            assert!(
+                state.rounds[1]
+                    .get(Stage::Ready, 2, state.generation)
+                    .is_none()
+            );
             let saved = state.fill_ping_bounds(2);
             assert_eq!(saved.rows[1][2], expected);
             assert_eq!(saved.rows[1][if reverse { 1 } else { 0 }], anchor);
@@ -2361,10 +2445,9 @@ mod compressed_timetable_profile_tests {
             } else {
                 (departure, arrival)
             };
-            let mut state = ProfileSearchState::new(
-                &tt, &q, anchor, anchor, reverse, Duration::from_secs(5),
-            )
-            .unwrap();
+            let mut state =
+                ProfileSearchState::new(&tt, &q, anchor, anchor, reverse, Duration::from_secs(5))
+                    .unwrap();
             // PONG retains shared buffers while executing successively
             // smaller candidate transfer budgets. The last call has two
             // reached-stop rows inside a state with four allocated rows.
@@ -2379,7 +2462,10 @@ mod compressed_timetable_profile_tests {
                         && j.departure_unix_seconds == departure
                         && j.arrival_unix_seconds == arrival
                 }));
-                assert_eq!(&state.profile_ready[budget + 1..], inactive_ready.as_slice());
+                assert_eq!(
+                    &state.profile_ready[budget + 1..],
+                    inactive_ready.as_slice()
+                );
                 assert_eq!(&state.profile_ride[budget + 1..], inactive_ride.as_slice());
             }
         }
@@ -2484,17 +2570,19 @@ mod compressed_timetable_profile_tests {
         let graph = LowerBoundTopology::build(&tt);
         let mut q = query();
         q.max_duration_seconds = 5 * 60;
-        let bounds = lower_bounds(
-            &tt,
-            &q,
-            false,
-            &graph,
-            &mut RaptorStats::default(),
-        );
+        let bounds = lower_bounds(&tt, &q, false, &graph, &mut RaptorStats::default());
         // Nigiri's Dijkstra retains this eight-hour lower bound even for
         // a five-minute query. The RAPTOR horizon rejects it subsequently.
         assert_eq!(bounds[0], 8 * 3_600);
-        assert!(!can_reach(&bounds, 0, 0, 0, q.max_duration_seconds, false, INF));
+        assert!(!can_reach(
+            &bounds,
+            0,
+            0,
+            0,
+            q.max_duration_seconds,
+            false,
+            INF
+        ));
         assert_eq!(bounds[1], 0);
     }
 
@@ -3323,13 +3411,7 @@ mod lower_bound_graph_tests {
         assert_eq!(graph.reverse.edges.len(), 3);
         for reverse in [false, true] {
             let mut stats = RaptorStats::default();
-            let bounds = lower_bounds(
-                &tt,
-                &request(2, 5),
-                reverse,
-                &graph,
-                &mut stats,
-            );
+            let bounds = lower_bounds(&tt, &request(2, 5), reverse, &graph, &mut stats);
             assert_eq!(
                 bounds,
                 if reverse {
@@ -3381,13 +3463,7 @@ mod lower_bound_graph_tests {
                     }
                 }
             }
-            let actual = lower_bounds(
-                &tt,
-                &q,
-                reverse,
-                &graph,
-                &mut RaptorStats::default(),
-            );
+            let actual = lower_bounds(&tt, &q, reverse, &graph, &mut RaptorStats::default());
             assert_eq!(actual, expected);
         }
     }

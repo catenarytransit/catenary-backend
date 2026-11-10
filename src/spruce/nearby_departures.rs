@@ -1504,7 +1504,10 @@ async fn render_chateau_response(
                             &update.stop_time_update,
                             row.gtfs_stop_sequence,
                             row.stop_id.as_str(),
-                            valid_trip.itinerary_options.iter().map(|r| r.stop_id.as_str()),
+                            valid_trip
+                                .itinerary_options
+                                .iter()
+                                .map(|r| r.stop_id.as_str()),
                         ) {
                             if let Some(d) = &stu.departure {
                                 if let Some(t) = d.time {

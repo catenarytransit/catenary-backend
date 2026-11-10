@@ -1,6 +1,6 @@
 pub mod api;
-pub mod dijkstra;
 pub(crate) mod dial;
+pub mod dijkstra;
 pub mod extract;
 pub mod feed_policy;
 pub mod graph_loader;
@@ -19,9 +19,9 @@ pub mod ways;
 #[cfg(test)]
 mod graph_tests;
 pub(crate) mod interval_estimate;
-pub(crate) mod pong;
 pub(crate) mod nigiri_raptor;
 pub(crate) mod nigiri_reconstruct;
+pub(crate) mod pong;
 pub(crate) mod profile_compact;
 pub(crate) mod profile_compact_reconstruct;
 pub mod profile_search;
@@ -30,5 +30,5 @@ pub mod raptor_query;
 pub mod route_manager;
 pub(crate) mod transport_index;
 
-pub mod osr_graph_identity;
 pub mod native_osr;
+pub mod osr_graph_identity;

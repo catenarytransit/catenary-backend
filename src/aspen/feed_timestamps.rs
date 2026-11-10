@@ -74,7 +74,10 @@ mod tests {
                 .unwrap();
         }
         store
-            .insert_async(("other".to_owned(), GtfsRtType::TripUpdates), feed(Some(999)))
+            .insert_async(
+                ("other".to_owned(), GtfsRtType::TripUpdates),
+                feed(Some(999)),
+            )
             .await
             .unwrap();
         assert_eq!(

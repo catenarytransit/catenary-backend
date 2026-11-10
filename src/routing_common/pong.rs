@@ -10,18 +10,20 @@
 //! The static scan uses Nigiri's best_/tmp_/round_times_ label model.
 //! Only selected PONG matches are reconstructed, from round times and events.
 
-use crate::routing_common::profile_compact::LowerBoundTopology;
 use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
+use crate::routing_common::profile_compact::LowerBoundTopology;
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
 use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
-use crate::routing_common::raptor_query::{Journey, Leg, Query, RaptorStats, transport_event_second};
+use crate::routing_common::raptor_query::{
+    Journey, Leg, Query, RaptorStats, transport_event_second,
+};
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Result, ensure};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::time::{Duration, Instant};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 const DAY: u32 = 86_400;
 const MAX_TRAVEL_TIME: u32 = 5 * DAY;
@@ -43,8 +45,12 @@ struct Candidate {
 
 impl Candidate {
     fn point(point: PointJourney) -> Self {
-        Self { start_time: point.start_time, dest_time: point.dest_time,
-            boardings: point.boardings, journey: None }
+        Self {
+            start_time: point.start_time,
+            dest_time: point.dest_time,
+            boardings: point.boardings,
+            journey: None,
+        }
     }
 
     /// nigiri::routing::journey::dominates, including opposite-oriented keys.
@@ -75,7 +81,11 @@ fn better(a: i64, b: i64, reverse: bool) -> bool {
 }
 
 fn step(time: i64, seconds: i64, reverse: bool) -> i64 {
-    if reverse { time.saturating_sub(seconds) } else { time.saturating_add(seconds) }
+    if reverse {
+        time.saturating_sub(seconds)
+    } else {
+        time.saturating_add(seconds)
+    }
 }
 
 /// get_fastest_direct: the supplied OSR duration takes precedence. Otherwise
@@ -85,10 +95,17 @@ fn fastest_direct(tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool) -> Optio
     if q.direct_walk_seconds.is_some() {
         return q.direct_walk_seconds;
     }
-    let (starts, ends) = if reverse { (&q.egress, &q.access) } else { (&q.access, &q.egress) };
+    let (starts, ends) = if reverse {
+        (&q.egress, &q.access)
+    } else {
+        (&q.access, &q.egress)
+    };
     let mut targets = HashMap::<u32, u32>::new();
     for ep in ends {
-        targets.entry(ep.stop.0).and_modify(|d| *d = (*d).min(ep.seconds)).or_insert(ep.seconds);
+        targets
+            .entry(ep.stop.0)
+            .and_modify(|d| *d = (*d).min(ep.seconds))
+            .or_insert(ep.seconds);
     }
     let mut distances = HashMap::<u32, u32>::new();
     let mut heap = BinaryHeap::new();
@@ -107,7 +124,11 @@ fn fastest_direct(tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool) -> Optio
         if let Some(&offset) = targets.get(&stop) {
             best = best.min(distance.saturating_add(offset));
         }
-        let paths = if reverse { tt.footpaths_to(LocationIdx(stop)) } else { tt.footpaths_from(LocationIdx(stop)) };
+        let paths = if reverse {
+            tt.footpaths_to(LocationIdx(stop))
+        } else {
+            tt.footpaths_from(LocationIdx(stop))
+        };
         for path in paths {
             if !targets.contains_key(&path.target().0) {
                 continue;
@@ -180,45 +201,86 @@ pub(crate) fn route_pong_with_stats_precomputed(
     arrive_by: bool,
     topology: Option<&LowerBoundTopology>,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
-    route_pong_observed(tt, request, options, arrive_by, topology,
-        &PongControl::default(), &mut |_, _| Ok(()))
+    route_pong_observed(
+        tt,
+        request,
+        options,
+        arrive_by,
+        topology,
+        &PongControl::default(),
+        &mut |_, _| Ok(()),
+    )
 }
 
 pub(crate) fn route_pong_observed(
-    tt: &ZeroCopyTimetable<'_>, request: &Query, options: ProfileOptions,
-    arrive_by: bool, topology: Option<&LowerBoundTopology>,
-    control: &PongControl<'_>, observer: &mut PongObserver<'_>,
+    tt: &ZeroCopyTimetable<'_>,
+    request: &Query,
+    options: ProfileOptions,
+    arrive_by: bool,
+    topology: Option<&LowerBoundTopology>,
+    control: &PongControl<'_>,
+    observer: &mut PongObserver<'_>,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
     let processing_start = Instant::now();
     let local_deadline = processing_start
         .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
         .unwrap_or(processing_start);
-    let deadline = control.deadline.unwrap_or(local_deadline).min(local_deadline);
+    let deadline = control
+        .deadline
+        .unwrap_or(local_deadline)
+        .min(local_deadline);
     let max_travel_time = options.max_journey_duration_seconds.min(MAX_TRAVEL_TIME);
     let lookahead = max_travel_time.saturating_add(DAY).min(MAX_TRAVEL_TIME);
-    let fastest_direct = fastest_direct(tt, request, arrive_by).map(u64::from).unwrap_or(u64::MAX);
+    let fastest_direct = fastest_direct(tt, request, arrive_by)
+        .map(u64::from)
+        .unwrap_or(u64::MAX);
     let reference = request.departure_unix_seconds;
     let timetable_from = i64::from(tt.header().first_utc_day) * i64::from(DAY);
-    let timetable_to = timetable_from.saturating_add(i64::from(tt.header().day_count) * i64::from(DAY));
-    ensure!(timetable_from < timetable_to, "PONG requires a nonempty timetable interval");
+    let timetable_to =
+        timetable_from.saturating_add(i64::from(tt.header().day_count) * i64::from(DAY));
+    ensure!(
+        timetable_from < timetable_to,
+        "PONG requires a nonempty timetable interval"
+    );
     // Half-open, as in MOTIS get_start_time. Include the exact requested
     // arrive-by second; forward searches exclude the far endpoint.
     let (interval_from, interval_to) = if arrive_by {
-        (reference.checked_sub(i64::from(options.search_window_seconds)), reference.checked_add(1))
+        (
+            reference.checked_sub(i64::from(options.search_window_seconds)),
+            reference.checked_add(1),
+        )
     } else {
-        (Some(reference), reference.checked_add(i64::from(options.search_window_seconds)))
+        (
+            Some(reference),
+            reference.checked_add(i64::from(options.search_window_seconds)),
+        )
     };
-    let interval_from = interval_from.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
+    let interval_from = interval_from
+        .ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
         .clamp(timetable_from, timetable_to);
-    let interval_to = interval_to.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
+    let interval_to = interval_to
+        .ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
         .clamp(timetable_from, timetable_to);
     let lookahead_end = step(
-        if arrive_by { interval_to } else { interval_from },
-        i64::from(MAX_LOOK_AHEAD), arrive_by,
+        if arrive_by {
+            interval_to
+        } else {
+            interval_from
+        },
+        i64::from(MAX_LOOK_AHEAD),
+        arrive_by,
     );
-    let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
-    let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
+    let mut cursor = if arrive_by {
+        interval_to.saturating_sub(1)
+    } else {
+        interval_from
+    };
+    let end_time = if arrive_by {
+        interval_from.saturating_sub(1)
+    } else {
+        interval_to
+    };
 
     let mut kernel_query = request.clone();
     kernel_query.max_boardings = request.max_boardings.min(MAX_BOARDINGS);
@@ -240,26 +302,41 @@ pub(crate) fn route_pong_observed(
 
     loop {
         let result_count = |include_too_slow: bool| {
-            results.iter().filter(|j| {
-                better(j.dest_time, cursor, arrive_by)
-                    && (include_too_slow || (j.travel_time() < fastest_direct
-                        && j.travel_time() <= u64::from(max_travel_time)))
-            }).count()
+            results
+                .iter()
+                .filter(|j| {
+                    better(j.dest_time, cursor, arrive_by)
+                        && (include_too_slow
+                            || (j.travel_time() < fastest_direct
+                                && j.travel_time() <= u64::from(max_travel_time)))
+                })
+                .count()
         };
         // Preserve the upstream weighted count, including unvalidated-path
         // byproducts only after their destination key is behind the cursor.
         let enough_results = if control.require_reconstructed_count {
-            results.iter().filter(|j| j.journey.is_some()
-                && better(j.dest_time, cursor, arrive_by)
-                && better(j.dest_time, lookahead_end, arrive_by)
-                && j.travel_time() < fastest_direct
-                && j.travel_time() <= u64::from(max_travel_time)).count() >= options.min_itineraries
-        } else { result_count(true) + result_count(false) >= 2 * options.min_itineraries };
-        if (!control.continue_until_budget && !better(cursor, end_time, arrive_by)
+            results
+                .iter()
+                .filter(|j| {
+                    j.journey.is_some()
+                        && better(j.dest_time, cursor, arrive_by)
+                        && better(j.dest_time, lookahead_end, arrive_by)
+                        && j.travel_time() < fastest_direct
+                        && j.travel_time() <= u64::from(max_travel_time)
+                })
+                .count()
+                >= options.min_itineraries
+        } else {
+            result_count(true) + result_count(false) >= 2 * options.min_itineraries
+        };
+        if (!control.continue_until_budget
+            && !better(cursor, end_time, arrive_by)
             && enough_results)
             || !better(cursor, lookahead_end, arrive_by)
-            || cursor < timetable_from || cursor >= timetable_to
-            || Instant::now() >= deadline || control.is_cancelled()
+            || cursor < timetable_from
+            || cursor >= timetable_to
+            || Instant::now() >= deadline
+            || control.is_cancelled()
         {
             break;
         }
@@ -281,10 +358,17 @@ pub(crate) fn route_pong_observed(
         let mut ping_query = kernel_query.clone();
         ping_query.max_duration_seconds = lookahead;
         let ping = state.execute_point(
-            tt, &ping_query, cursor, kernel_query.max_boardings,
+            tt,
+            &ping_query,
+            cursor,
+            kernel_query.max_boardings,
             step(cursor, i64::from(lookahead), arrive_by),
         )?;
-        if arrive_by { backward_searches += 1; } else { forward_searches += 1; }
+        if arrive_by {
+            backward_searches += 1;
+        } else {
+            forward_searches += 1;
+        }
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
             let candidate = Candidate::point(journey);
@@ -316,40 +400,75 @@ pub(crate) fn route_pong_observed(
                 continue;
             }
             let pong = state.execute_point(
-                tt, &kernel_query, ping_j.dest_time, ping_j.boardings,
+                tt,
+                &kernel_query,
+                ping_j.dest_time,
+                ping_j.boardings,
                 ping_j.start_time,
             )?;
-            if arrive_by { forward_searches += 1; } else { backward_searches += 1; }
+            if arrive_by {
+                forward_searches += 1;
+            } else {
+                backward_searches += 1;
+            }
             for journey in pong {
                 pareto_add(&mut results, Candidate::point(journey));
             }
-            let matched = results.iter_mut().find(|pong_j| {
-                pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
-            }).ok_or_else(|| anyhow::anyhow!(
-                "no pong for boardings={}, start_time={} found", ping_j.boardings, ping_j.dest_time
-            ))?;
+            let matched = results
+                .iter_mut()
+                .find(|pong_j| {
+                    pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                })
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no pong for boardings={}, start_time={} found",
+                        ping_j.boardings,
+                        ping_j.dest_time
+                    )
+                })?;
             if matched.journey.is_none() {
                 state.stats_.profile_journeys_reconstructed += 1;
-                let point = PointJourney { start_time: matched.start_time,
-                    dest_time: matched.dest_time, boardings: matched.boardings };
-                let journey = crate::routing_common::nigiri_reconstruct::reconstruct(&state, tt, &kernel_query, point);
-                if journey.is_err() { state.stats_.profile_journeys_rejected += 1; }
+                let point = PointJourney {
+                    start_time: matched.start_time,
+                    dest_time: matched.dest_time,
+                    boardings: matched.boardings,
+                };
+                let journey = crate::routing_common::nigiri_reconstruct::reconstruct(
+                    &state,
+                    tt,
+                    &kernel_query,
+                    point,
+                );
+                if journey.is_err() {
+                    state.stats_.profile_journeys_rejected += 1;
+                }
                 matched.journey = Some(journey?);
             }
             ping_j.start_time = matched.dest_time;
         }
         state.flip_point_direction(&mut other_lower_bounds);
 
-        let first = ping_results.iter().map(|j| j.start_time)
+        let first = ping_results
+            .iter()
+            .map(|j| j.start_time)
             .min_by(|a, b| if arrive_by { b.cmp(a) } else { a.cmp(b) })
             .expect("nonempty ping results");
         let next = step(first, 1, arrive_by);
-        ensure!(better(cursor, next, arrive_by), "no pong progress: start_time={cursor}, next={next}");
+        ensure!(
+            better(cursor, next, arrive_by),
+            "no pong progress: start_time={cursor}, next={next}"
+        );
         cursor = next;
         ensure!(!control.is_cancelled(), "routing request cancelled");
         if control.emit_updates {
-            let snapshot = validated_journeys(&results, cursor, lookahead_end, arrive_by,
-                fastest_direct, max_travel_time);
+            let snapshot = validated_journeys(
+                &results,
+                cursor,
+                lookahead_end,
+                arrive_by,
+                fastest_direct,
+                max_travel_time,
+            );
             if !snapshot.is_empty() {
                 let mut progress = state.stats().clone();
                 progress.pong_iterations = iterations;
@@ -357,8 +476,16 @@ pub(crate) fn route_pong_observed(
                 progress.pong_backward_searches = backward_searches;
                 progress.pong_known_result_hits = known_result_hits;
                 progress.pong_seeded_destination_bounds = seeded_destination_bounds;
-                let searched = if better(lookahead_end, cursor, arrive_by) { lookahead_end } else { cursor };
-                progress.pong_interval_from = Some(if arrive_by { searched.saturating_add(1) } else { interval_from });
+                let searched = if better(lookahead_end, cursor, arrive_by) {
+                    lookahead_end
+                } else {
+                    cursor
+                };
+                progress.pong_interval_from = Some(if arrive_by {
+                    searched.saturating_add(1)
+                } else {
+                    interval_from
+                });
                 progress.pong_interval_to = Some(if arrive_by { interval_to } else { searched });
                 observer(&snapshot, &progress)?;
             }
@@ -370,8 +497,14 @@ pub(crate) fn route_pong_observed(
     // output. No near-Pareto route extras, fallback profile scan, duration
     // ratio heuristic, or initial interval_estimator enlargement is applied.
     let before_filter = results.len();
-    let mut journeys = validated_journeys(&results, cursor, lookahead_end, arrive_by,
-        fastest_direct, max_travel_time);
+    let mut journeys = validated_journeys(
+        &results,
+        cursor,
+        lookahead_end,
+        arrive_by,
+        fastest_direct,
+        max_travel_time,
+    );
     let mut stats = state.stats().clone();
     stats.profile_duration_filtered = (before_filter - journeys.len()) as u64;
     stats.profile_budget_exhausted |= Instant::now() >= deadline;
@@ -380,9 +513,21 @@ pub(crate) fn route_pong_observed(
     stats.pong_backward_searches = backward_searches;
     stats.pong_known_result_hits = known_result_hits;
     stats.pong_seeded_destination_bounds = seeded_destination_bounds;
-    let searched_until = if better(lookahead_end, cursor, arrive_by) { lookahead_end } else { cursor };
-    stats.pong_interval_from = Some(if arrive_by { searched_until.saturating_add(1) } else { interval_from });
-    stats.pong_interval_to = Some(if arrive_by { interval_to } else { searched_until });
+    let searched_until = if better(lookahead_end, cursor, arrive_by) {
+        lookahead_end
+    } else {
+        cursor
+    };
+    stats.pong_interval_from = Some(if arrive_by {
+        searched_until.saturating_add(1)
+    } else {
+        interval_from
+    });
+    stats.pong_interval_to = Some(if arrive_by {
+        interval_to
+    } else {
+        searched_until
+    });
 
     // Nigiri's final forward-only refinement replaces the middle vehicle in
     // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
@@ -392,15 +537,20 @@ pub(crate) fn route_pong_observed(
             improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
         }
     }
-    if let Some(seconds) = request.direct_walk_seconds.filter(|&d| d <= max_travel_time) {
+    if let Some(seconds) = request
+        .direct_walk_seconds
+        .filter(|&d| d <= max_travel_time)
+    {
         let (departure, arrival) = if arrive_by {
             (reference.saturating_sub(i64::from(seconds)), reference)
         } else {
             (reference, reference.saturating_add(i64::from(seconds)))
         };
         journeys.push(Journey {
-            boardings: 0, departure_unix_seconds: departure,
-            arrival_unix_seconds: arrival, legs: vec![Leg::DirectWalk { seconds }],
+            boardings: 0,
+            departure_unix_seconds: departure,
+            arrival_unix_seconds: arrival,
+            legs: vec![Leg::DirectWalk { seconds }],
         });
     }
     sort_journeys_for_response(&mut journeys, arrive_by);
@@ -411,9 +561,16 @@ fn alternative_walks(tt: &ZeroCopyTimetable<'_>, stop: u32, outgoing: bool) -> H
     // lookup_footpath with kExact: a reflexive connection includes the
     // station change time; a non-reflexive connection uses its footpath.
     let mut walks = HashMap::from([(stop, tt.location_transfer_seconds()[stop as usize])]);
-    let paths = if outgoing { tt.footpaths_from(LocationIdx(stop)) } else { tt.footpaths_to(LocationIdx(stop)) };
+    let paths = if outgoing {
+        tt.footpaths_from(LocationIdx(stop))
+    } else {
+        tt.footpaths_to(LocationIdx(stop))
+    };
     for path in paths {
-        walks.entry(path.target().0).and_modify(|d| *d = (*d).min(path.seconds())).or_insert(path.seconds());
+        walks
+            .entry(path.target().0)
+            .and_modify(|d| *d = (*d).min(path.seconds()))
+            .or_insert(path.seconds());
     }
     walks
 }
@@ -423,9 +580,11 @@ fn change_time(tt: &ZeroCopyTimetable<'_>, from: u32, to: u32) -> Option<u32> {
     if rule.is_some_and(|r| r.prohibited()) {
         return None;
     }
-    Some(tt.location_transfer_seconds()[from as usize]
-        .max(tt.location_transfer_seconds()[to as usize])
-        .max(rule.map_or(0, |r| r.min_seconds)))
+    Some(
+        tt.location_transfer_seconds()[from as usize]
+            .max(tt.location_transfer_seconds()[to as usize])
+            .max(rule.map_or(0, |r| r.min_seconds)),
+    )
 }
 
 /// Static counterpart of get_earliest_alternative/get_direct_journeys. FIFO
@@ -443,43 +602,86 @@ fn earliest_alternative(
 ) -> Option<[Leg; 3]> {
     let boarding = alternative_walks(tt, from, true);
     let alighting = alternative_walks(tt, to, false);
-    let from_routes = boarding.keys().flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied()).collect::<HashSet<_>>();
-    let to_routes = alighting.keys().flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied()).collect::<HashSet<_>>();
-    let mut routes = from_routes.intersection(&to_routes).copied().collect::<Vec<_>>();
+    let from_routes = boarding
+        .keys()
+        .flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied())
+        .collect::<HashSet<_>>();
+    let to_routes = alighting
+        .keys()
+        .flat_map(|&s| tt.routes_at(LocationIdx(s)).iter().copied())
+        .collect::<HashSet<_>>();
+    let mut routes = from_routes
+        .intersection(&to_routes)
+        .copied()
+        .collect::<Vec<_>>();
     routes.sort_unstable_by_key(|r| r.0);
     let mut best = None;
     let mut best_arrival = i64::MAX;
     for route in routes {
-        if Instant::now() >= deadline { break; }
+        if Instant::now() >= deadline {
+            break;
+        }
         // direct.cc::for_each_pair: first boarding, next alighting, then
         // continue after that pair. Repeated stop indices remain distinct.
         let mut board_position: Option<usize> = None;
         for (pos, stop) in tt.stops_on(route).iter().enumerate() {
             if let Some(board_pos) = board_position {
-                let Some(&egress) = alighting.get(&stop.location().0).filter(|_| stop.inbound()) else { continue; };
+                let Some(&egress) = alighting.get(&stop.location().0).filter(|_| stop.inbound())
+                else {
+                    continue;
+                };
                 board_position = None;
                 let board = tt.stops_on(route)[board_pos];
                 let access = boarding[&board.location().0];
-                let Some(change_before) = change_time(tt, from, board.location().0) else { continue; };
-                let Some(change_after) = change_time(tt, stop.location().0, to) else { continue; };
+                let Some(change_before) = change_time(tt, from, board.location().0) else {
+                    continue;
+                };
+                let Some(change_after) = change_time(tt, stop.location().0, to) else {
+                    continue;
+                };
                 let ready = from_arrival.saturating_add(i64::from(access.max(change_before)));
                 let limit = to_departure.saturating_sub(i64::from(egress.max(change_after)));
                 for chain in transports.chains(route) {
-                    let Some(selected) = chain.select(tt, board_pos * 2, ready, false, limit, 0, stats) else { continue; };
-                    let midnight = (i64::from(tt.header().first_utc_day) + selected.start_day as i64) * i64::from(DAY);
-                    let Some(arrival) = transport_event_second(tt, route, selected.transport, pos, true, midnight) else { continue; };
+                    let Some(selected) =
+                        chain.select(tt, board_pos * 2, ready, false, limit, 0, stats)
+                    else {
+                        continue;
+                    };
+                    let midnight = (i64::from(tt.header().first_utc_day)
+                        + selected.start_day as i64)
+                        * i64::from(DAY);
+                    let Some(arrival) =
+                        transport_event_second(tt, route, selected.transport, pos, true, midnight)
+                    else {
+                        continue;
+                    };
                     let walk_arrival = arrival.saturating_add(i64::from(egress));
-                    if arrival > limit || walk_arrival >= best_arrival { continue; }
+                    if arrival > limit || walk_arrival >= best_arrival {
+                        continue;
+                    }
                     best_arrival = walk_arrival;
                     best = Some([
-                        Leg::Transfer { from_stop: from, to_stop: board.location().0, seconds: access },
-                        Leg::Ride {
-                            from_stop: board.location().0, to_stop: stop.location().0,
-                            route: route.0, transport: selected.transport.0, service_day: selected.start_day as u16,
-                            board_stop_index: board_pos, alight_stop_index: pos,
-                            departure_unix_seconds: selected.event, arrival_unix_seconds: arrival,
+                        Leg::Transfer {
+                            from_stop: from,
+                            to_stop: board.location().0,
+                            seconds: access,
                         },
-                        Leg::Transfer { from_stop: stop.location().0, to_stop: to, seconds: egress },
+                        Leg::Ride {
+                            from_stop: board.location().0,
+                            to_stop: stop.location().0,
+                            route: route.0,
+                            transport: selected.transport.0,
+                            service_day: selected.start_day as u16,
+                            board_stop_index: board_pos,
+                            alight_stop_index: pos,
+                            departure_unix_seconds: selected.event,
+                            arrival_unix_seconds: arrival,
+                        },
+                        Leg::Transfer {
+                            from_stop: stop.location().0,
+                            to_stop: to,
+                            seconds: egress,
+                        },
                     ]);
                 }
             } else if stop.outbound() && boarding.contains_key(&stop.location().0) {
@@ -498,14 +700,39 @@ fn improve_middle_rides(
     stats: &mut RaptorStats,
     deadline: Instant,
 ) {
-    if journey.legs.len() < 5 { return; }
+    if journey.legs.len() < 5 {
+        return;
+    }
     for i in 0..=journey.legs.len() - 5 {
         let (
-            Leg::Ride { to_stop: from, arrival_unix_seconds: arrival, .. },
-            Leg::Transfer { .. }, Leg::Ride { .. }, Leg::Transfer { .. },
-            Leg::Ride { from_stop: to, departure_unix_seconds: departure, .. },
-        ) = (&journey.legs[i], &journey.legs[i + 1], &journey.legs[i + 2], &journey.legs[i + 3], &journey.legs[i + 4]) else { continue; };
-        let Some(replacement) = earliest_alternative(tt, transports, *from, *to, *arrival, *departure, stats, deadline) else { continue; };
+            Leg::Ride {
+                to_stop: from,
+                arrival_unix_seconds: arrival,
+                ..
+            },
+            Leg::Transfer { .. },
+            Leg::Ride { .. },
+            Leg::Transfer { .. },
+            Leg::Ride {
+                from_stop: to,
+                departure_unix_seconds: departure,
+                ..
+            },
+        ) = (
+            &journey.legs[i],
+            &journey.legs[i + 1],
+            &journey.legs[i + 2],
+            &journey.legs[i + 3],
+            &journey.legs[i + 4],
+        )
+        else {
+            continue;
+        };
+        let Some(replacement) = earliest_alternative(
+            tt, transports, *from, *to, *arrival, *departure, stats, deadline,
+        ) else {
+            continue;
+        };
         let mut improved = journey.clone();
         for (offset, leg) in replacement.into_iter().enumerate() {
             improved.legs[i + 1 + offset] = leg;
@@ -793,7 +1020,9 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         for reverse in [false, true] {
             let q = Query {
-                departure_unix_seconds: 20_010_i64 * 86_400 + 8 * 3_600 + if reverse { 600 } else { 0 },
+                departure_unix_seconds: 20_010_i64 * 86_400
+                    + 8 * 3_600
+                    + if reverse { 600 } else { 0 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
                     seconds: 0,
@@ -812,7 +1041,8 @@ mod tests {
                 timeout_seconds: 30,
                 ..ProfileOptions::default()
             };
-            let (http, _) = route_pong_with_stats_precomputed(&tt, &q, options, reverse, None).unwrap();
+            let (http, _) =
+                route_pong_with_stats_precomputed(&tt, &q, options, reverse, None).unwrap();
             let mut snapshots = Vec::new();
             let (streamed, stats) = route_pong_observed(
                 &tt,
@@ -885,7 +1115,9 @@ mod tests {
         let mut owned = timetable(&[(0, 2, 8 * 3_600, 600)], false);
         owned.day_count = 20;
         for calendar in owned.bitfields.iter_mut().skip(1) {
-            for day in 0..20 { calendar.set(day, true).unwrap(); }
+            for day in 0..20 {
+                calendar.set(day, true).unwrap();
+            }
         }
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
@@ -896,23 +1128,56 @@ mod tests {
             let reference = base + 10 * i64::from(DAY) + 8 * 3_600 + if reverse { 600 } else { 0 };
             let q = Query {
                 departure_unix_seconds: reference,
-                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-                direct_walk_seconds: None, max_boardings: 1, max_duration_seconds: DAY,
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 1,
+                max_duration_seconds: DAY,
             };
             let (journeys, stats) = route_pong_with_stats_precomputed(
-                &tt, &q, ProfileOptions { min_itineraries: 16, timeout_seconds: 30, ..ProfileOptions::default() },
-                reverse, None,
-            ).unwrap();
-            let cap = step(reference + i64::from(reverse), i64::from(MAX_LOOK_AHEAD), reverse);
+                &tt,
+                &q,
+                ProfileOptions {
+                    min_itineraries: 16,
+                    timeout_seconds: 30,
+                    ..ProfileOptions::default()
+                },
+                reverse,
+                None,
+            )
+            .unwrap();
+            let cap = step(
+                reference + i64::from(reverse),
+                i64::from(MAX_LOOK_AHEAD),
+                reverse,
+            );
             assert_eq!(journeys.len(), 6);
             assert!(journeys.iter().all(|j| {
-                valid_journey(&tt, &q, j) && better(
-                    if reverse { j.arrival_unix_seconds } else { j.departure_unix_seconds }, cap, reverse,
-                )
+                valid_journey(&tt, &q, j)
+                    && better(
+                        if reverse {
+                            j.arrival_unix_seconds
+                        } else {
+                            j.departure_unix_seconds
+                        },
+                        cap,
+                        reverse,
+                    )
             }));
-            assert_eq!(if reverse { stats.pong_interval_from } else { stats.pong_interval_to },
-                Some(cap + i64::from(reverse)));
+            assert_eq!(
+                if reverse {
+                    stats.pong_interval_from
+                } else {
+                    stats.pong_interval_to
+                },
+                Some(cap + i64::from(reverse))
+            );
             assert!(!stats.profile_budget_exhausted);
         }
     }

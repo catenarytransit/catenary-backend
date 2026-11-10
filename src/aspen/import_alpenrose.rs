@@ -1320,8 +1320,12 @@ pub async fn new_rt_data(
                         );
 
                     use std::str::FromStr;
-                    let tz = catenary_time::Tz::from_str("Europe/Paris").unwrap_or(catenary_time::UTC);
-                    let today = catenary_time::utc_now().with_timezone(&tz).naive_local().date();
+                    let tz =
+                        catenary_time::Tz::from_str("Europe/Paris").unwrap_or(catenary_time::UTC);
+                    let today = catenary_time::utc_now()
+                        .with_timezone(&tz)
+                        .naive_local()
+                        .date();
 
                     let mut trips_by_short_name: AHashMap<
                         String,
@@ -2324,7 +2328,9 @@ pub async fn new_rt_data(
                                 },
                             },
                             current_status: vehicle_pos.current_status.map(|x| x as u8),
-                            current_stop_sequence: vehicle_pos.current_stop_sequence.map(|x| x as u16),
+                            current_stop_sequence: vehicle_pos
+                                .current_stop_sequence
+                                .map(|x| x as u16),
                             occupancy_status: vehicle_pos.occupancy_status.map(|x| x as u8),
                             occupancy_percentage: vehicle_pos.occupancy_percentage.map(|x| x as u8),
                             congestion_level: vehicle_pos.congestion_level.map(|x| x as u8),

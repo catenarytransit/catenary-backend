@@ -58,8 +58,11 @@ pub fn append_expanding_match(
         // rejects every raw candidate. Do not accept those wider matches until
         // their explicit radius is reached (and never accept beyond 1 km).
         Ok((!matched.distance_to_way.is_empty()
-            && matched.distance_to_way.iter().all(|&d| f64::from(d) <= radius))
-            .then_some(index))
+            && matched
+                .distance_to_way
+                .iter()
+                .all(|&d| f64::from(d) <= radius))
+        .then_some(index))
     })
 }
 
@@ -89,7 +92,8 @@ pub fn route_expanding_matches(
     if indices.is_empty() {
         return Ok(targets.iter().map(|_| missing()).collect());
     }
-    let paths = router.route_one_to_many_cached(origins, origin, destinations, &indices, options)?;
+    let paths =
+        router.route_one_to_many_cached(origins, origin, destinations, &indices, options)?;
     ensure!(paths.len() == indices.len(), "OSR result count mismatch");
     let mut paths = paths.into_iter();
     Ok(targets
@@ -642,11 +646,13 @@ mod expanding_match_tests {
     #[test]
     fn native_errors_are_propagated() {
         let mut attempts = 0;
-        assert!(expanding_match::<()>(|_| {
-            attempts += 1;
-            anyhow::bail!("native lookup failed")
-        })
-        .is_err());
+        assert!(
+            expanding_match::<()>(|_| {
+                attempts += 1;
+                anyhow::bail!("native lookup failed")
+            })
+            .is_err()
+        );
         assert_eq!(attempts, 1);
     }
 }

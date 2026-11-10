@@ -819,8 +819,11 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
             let attempt_ids: AHashMap<String, String> = {
                 let mut attempt_ids = AHashMap::new();
                 for (feed_id, _) in check_for_stops_ids.iter() {
-                    let attempt_id =
-                        format!("{}-{}", feed_id, catenary_time::utc_now().timestamp_millis());
+                    let attempt_id = format!(
+                        "{}-{}",
+                        feed_id,
+                        catenary_time::utc_now().timestamp_millis()
+                    );
                     attempt_ids.insert(feed_id.clone(), attempt_id);
                 }
                 attempt_ids
@@ -994,7 +997,8 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                         .unwrap()
                                 ),
                                 ingest_start_unix_time_ms: start_time,
-                                ingest_end_unix_time_ms: catenary_time::utc_now().timestamp_millis(),
+                                ingest_end_unix_time_ms: catenary_time::utc_now()
+                                    .timestamp_millis(),
                                 ingest_duration_ms: (catenary_time::utc_now().timestamp_millis()
                                     - start_time)
                                     as i32,

@@ -264,7 +264,9 @@ pub(crate) fn reconstruct(
     // order for either search direction. Internal transfers leave PONG's
     // departure/arrival keys untouched and retain both scheduled vehicles.
     crate::routing_common::transfer_optimizer::optimize_internal_transfers_with_importance(
-        tt, &state.importance, &mut journey,
+        tt,
+        &state.importance,
+        &mut journey,
     );
     ensure!(
         valid_journey(tt, q, &journey),
