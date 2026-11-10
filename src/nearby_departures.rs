@@ -704,7 +704,7 @@ impl PreparedNearby {
                 sorted_headsigns.insert(h, items);
             }
 
-            for (_, items) in &sorted_headsigns {
+            for items in sorted_headsigns.values() {
                 for item in items {
                     if let Some(d) =
                         stop_dist_map_arc.get(&(r_key.chateau.clone(), item.stop_id.to_string()))
@@ -1620,9 +1620,7 @@ async fn fetch_chateau_data(
                                 .flatten()
                         });
 
-                        if !route_info_map.contains_key(&route_id.to_string()) {
-                            route_info_map.insert(
-                                route_id.to_string(),
+                        route_info_map.entry(route_id.to_string()).or_insert_with(|| {
                                 RouteInfoExport {
                                     short_name: route.short_name.clone().map(|x| x.to_string()),
                                     long_name: route.long_name.clone(),
@@ -1630,9 +1628,8 @@ async fn fetch_chateau_data(
                                     color: route.color.clone().map(|x| x.to_string()),
                                     text_color: route.text_color.clone().map(|x| x.to_string()),
                                     route_type: route.route_type as i32,
-                                },
-                            );
-                        }
+                                }
+                        });
 
                         let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
 
@@ -1724,10 +1721,8 @@ async fn fetch_chateau_data(
                                 .or_default()
                                 .push(item);
 
-                            if !stop_output_map.contains_key(row.stop_id.as_str()) {
-                                if let Some(s) = stop_full_info_map.get(row.stop_id.as_str()) {
-                                    stop_output_map.insert(
-                                        row.stop_id.to_string(),
+                            if let Some(s) = stop_full_info_map.get(row.stop_id.as_str()) {
+                                stop_output_map.entry(row.stop_id.to_string()).or_insert_with(|| {
                                         StopOutputV3 {
                                             gtfs_id: CompactString::from(s.gtfs_id.as_str()),
                                             name: s.name.clone().unwrap_or_default(),
@@ -1738,9 +1733,8 @@ async fn fetch_chateau_data(
                                                 .timezone
                                                 .clone()
                                                 .unwrap_or("ETC/Utc".to_string()),
-                                        },
-                                    );
-                                }
+                                        }
+                                });
                             }
                         }
                     }
@@ -1759,8 +1753,8 @@ async fn fetch_chateau_data(
     );
 
     // Filter closest stop for Local
-    for (_route_key, headsigns_map) in local_departures.iter_mut() {
-        for (_headsign, items) in headsigns_map.iter_mut() {
+    for headsigns_map in local_departures.values_mut() {
+        for items in headsigns_map.values_mut() {
             if items.is_empty() {
                 continue;
             }
