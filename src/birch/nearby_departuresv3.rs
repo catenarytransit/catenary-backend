@@ -17,7 +17,7 @@ use diesel::sql_query;
 use diesel::sql_types::Bool;
 use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
-use futures::stream::StreamExt;
+use futures::stream::{StreamExt, TryStreamExt};
 use geo::{Distance, Haversine};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -33,6 +33,38 @@ use catenary::aspen::lib::AspenRpcClient;
 use catenary::aspen_dataset::{AspenisedAlert, AspenisedTripUpdate};
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_calendar_structure_from_pg;
+
+// Keep large ANY predicates small while bounding the total database fan-out per chateau.
+const PATTERN_QUERY_BATCH_SIZE: usize = 128;
+const PATTERN_QUERY_CONCURRENCY: usize = 4;
+
+async fn load_pattern_batches<Id, Row, Load, LoadFuture>(
+    ids: &[Id],
+    query_slots: &tokio::sync::Semaphore,
+    load: Load,
+) -> diesel::QueryResult<Vec<Row>>
+where
+    Id: Clone,
+    Load: Fn(Vec<Id>) -> LoadFuture,
+    LoadFuture: std::future::Future<Output = diesel::QueryResult<Vec<Row>>>,
+{
+    let batches: Vec<Vec<Row>> = futures::stream::iter(ids.chunks(PATTERN_QUERY_BATCH_SIZE))
+        .map(|batch| {
+            let load = &load;
+            async move {
+                // Acquire before checking out a connection. All simultaneous pattern
+                // lookups in this chateau share this limit, including tokio::join! branches.
+                let _slot = query_slots.acquire().await.expect("query semaphore closed");
+                load(batch.to_vec()).await
+            }
+        })
+        .buffer_unordered(PATTERN_QUERY_CONCURRENCY)
+        .try_collect()
+        .await?;
+
+    // Propagate any failed batch rather than returning an incomplete set of rows.
+    Ok(batches.into_iter().flatten().collect())
+}
 
 #[derive(Deserialize, Clone, Debug)]
 struct NearbyFromCoordsV3 {
@@ -640,6 +672,8 @@ async fn fetch_chateau_data(
     HashMap<String, RouteInfoExport>,
     HashMap<String, StopOutputV3>,
 )> {
+    let query_slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
+
     // 1. Determine Date Window
     let lookback_days = match chateau.as_str() {
         "sncb" | "schweiz" | "sncf" | "deutschland" => 2,
@@ -706,21 +740,29 @@ async fn fetch_chateau_data(
         }
     }
 
+    // A stop can be selected for several direction/headsign pairs. Keep batches
+    // disjoint so splitting SQL ANY predicates cannot introduce duplicate rows.
+    final_stop_ids.sort_unstable();
+    final_stop_ids.dedup();
+
     let t_v3_fetch = Instant::now();
 
     // 3. Optimized Fetch Pipeline (The "OSM-ification")
     // Instead of fetching all trips then filtering, we calculate Active Services first.
 
     // A. Fetch Direction & Itinerary Meta
-    let mut dir_conn = pool.get().await.unwrap();
     let direction_rows_list: Vec<catenary::models::DirectionPatternRow> =
-        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
-            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&final_stop_ids))
-            .select(catenary::models::DirectionPatternRow::as_select())
-            .load(&mut dir_conn)
-            .await
-            .unwrap_or_default();
+        load_pattern_batches(&final_stop_ids, &query_slots, |stop_batch| async {
+            let mut conn = pool.get().await.unwrap();
+            catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
+                .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(&chateau))
+                .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(stop_batch))
+                .select(catenary::models::DirectionPatternRow::as_select())
+                .load(&mut conn)
+                .await
+        })
+        .await
+        .unwrap_or_default();
 
     if direction_rows_list.is_empty() {
         return None;
@@ -733,18 +775,24 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let mut meta_conn = pool.get().await.unwrap();
-    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
-        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau.clone()))
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                    .eq_any(&direction_pattern_ids),
-            )
-            .select(catenary::models::ItineraryPatternMeta::as_select())
-            .load(&mut meta_conn)
-            .await
-            .unwrap_or_default();
+    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> = load_pattern_batches(
+        &direction_pattern_ids,
+        &query_slots,
+        |pattern_batch| async {
+            let mut conn = pool.get().await.unwrap();
+            catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+                .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(&chateau))
+                .filter(
+                    catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
+                        .eq_any(pattern_batch),
+                )
+                .select(catenary::models::ItineraryPatternMeta::as_select())
+                .load(&mut conn)
+                .await
+        },
+    )
+    .await
+    .unwrap_or_default();
 
     let filtered_itinerary_ids: Vec<String> = itin_meta_list
         .iter()
@@ -763,44 +811,67 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let route_ids: Vec<CompactString> = itin_meta_list.iter().map(|m| m.route_id.clone()).collect();
+    let route_ids: Vec<CompactString> = itin_meta_list
+        .iter()
+        .map(|m| m.route_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
     let pool_clone = pool.clone();
-    let chateau_clone_trips = chateau.clone();
     let chateau_clone_itin = chateau.clone();
     let chateau_clone_dm = chateau.clone();
     let chateau_clone_routes = chateau.clone();
 
     let (itins_result, direction_meta_result, routes_result) = tokio::join!(
         async {
-            let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone_itin))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids),
-                )
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&direction_stop_ids),
-                )
-                .select(catenary::models::ItineraryPatternRow::as_select())
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default()
+            load_pattern_batches(
+                &filtered_itinerary_ids,
+                &query_slots,
+                |itinerary_batch| async {
+                    let mut conn = pool_clone.get().await.unwrap();
+                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern::chateau
+                                .eq(&chateau_clone_itin),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                                .eq_any(itinerary_batch),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::itinerary_pattern::stop_id
+                                .eq_any(&direction_stop_ids),
+                        )
+                        .select(catenary::models::ItineraryPatternRow::as_select())
+                        .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+                        .await
+                },
+            )
+            .await
+            .unwrap_or_default()
         },
         async {
-            let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                .filter(
-                    catenary::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_clone_dm),
-                )
-                .filter(
-                    catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
-                        .eq_any(&direction_pattern_ids),
-                )
-                .select(catenary::models::DirectionPatternMeta::as_select())
-                .load::<catenary::models::DirectionPatternMeta>(&mut conn)
-                .await
-                .unwrap_or_default()
+            load_pattern_batches(
+                &direction_pattern_ids,
+                &query_slots,
+                |pattern_batch| async {
+                    let mut conn = pool_clone.get().await.unwrap();
+                    catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern_meta::chateau
+                                .eq(&chateau_clone_dm),
+                        )
+                        .filter(
+                            catenary::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                                .eq_any(pattern_batch),
+                        )
+                        .select(catenary::models::DirectionPatternMeta::as_select())
+                        .load::<catenary::models::DirectionPatternMeta>(&mut conn)
+                        .await
+                },
+            )
+            .await
+            .unwrap_or_default()
         },
         async {
             let mut conn = pool_clone.get().await.unwrap();
@@ -822,22 +893,27 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let trips_compressed_raw: Vec<catenary::models::CompressedTrip> = {
-        let mut conn = pool_clone.get().await.unwrap();
-        catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-            .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_clone_trips))
-            .filter(catenary::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
-            .select(catenary::models::CompressedTrip::as_select())
-            .load::<catenary::models::CompressedTrip>(&mut conn)
-            .await
-            .unwrap_or_default()
-    };
-
-    let approved_itins: HashSet<&str> = actual_itinerary_ids.iter().map(|s| s.as_str()).collect();
-    let trips_compressed_result: Vec<catenary::models::CompressedTrip> = trips_compressed_raw
-        .into_iter()
-        .filter(|t| approved_itins.contains(t.itinerary_pattern_id.as_str()))
-        .collect();
+    // Query only itineraries that actually serve these stops. The existing
+    // (chateau, itinerary_pattern_id) index supports each batch directly.
+    let trips_compressed_result: Vec<catenary::models::CompressedTrip> = load_pattern_batches(
+        &actual_itinerary_ids,
+        &query_slots,
+        |itinerary_batch| async {
+            let mut conn = pool.get().await.unwrap();
+            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(&chateau))
+                .filter(catenary::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
+                .filter(
+                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                        .eq_any(itinerary_batch),
+                )
+                .select(catenary::models::CompressedTrip::as_select())
+                .load(&mut conn)
+                .await
+        },
+    )
+    .await
+    .unwrap_or_default();
 
     // println!(
     //     "V3_OPT: Fetch for {} took {}ms. Found {} trips (filtered by {} itins).",
@@ -1040,18 +1116,24 @@ async fn fetch_chateau_data(
 
     let mut itinerary_final_station_name = HashMap::new();
     if chateau == "île~de~france~mobilités" && !filtered_itinerary_ids.is_empty() {
-        let mut conn = pool.get().await.unwrap();
-        let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau.clone()))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids),
-                )
-                .select(catenary::models::ItineraryPatternRow::as_select())
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default();
+        let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> = load_pattern_batches(
+            &filtered_itinerary_ids,
+            &query_slots,
+            |itinerary_batch| async {
+                let mut conn = pool.get().await.unwrap();
+                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(&chateau))
+                    .filter(
+                        catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
+                            .eq_any(itinerary_batch),
+                    )
+                    .select(catenary::models::ItineraryPatternRow::as_select())
+                    .load(&mut conn)
+                    .await
+            },
+        )
+        .await
+        .unwrap_or_default();
 
         let mut itinerary_last_stop_id = HashMap::new();
         for row in &itin_rows_all {
@@ -1071,6 +1153,7 @@ async fn fetch_chateau_data(
             .collect();
 
         if !last_stop_ids.is_empty() {
+            let mut conn = pool.get().await.unwrap();
             let stop_names: Vec<(String, Option<String>)> =
                 catenary::schema::gtfs::stops::dsl::stops
                     .filter(catenary::schema::gtfs::stops::chateau.eq(chateau.clone()))
@@ -1305,9 +1388,9 @@ async fn fetch_chateau_data(
                                                         .or(static_stop.arrival_time_since_start)
                                                         .or(static_stop.interpolated_time_since_start)
                                                         .unwrap_or(0);
-                                                     
+
                                                      let tz = catenary_time::Tz::from_str_insensitive(&itinerary_meta.timezone).unwrap_or(catenary_time::UTC);
-                                                     
+
                                                      let implied_start_timestamp = (u_time as i64) - (trip.start_time as i64 + offset as i64);
                                                      // Allow for up to 20 hours of delay/early carrying over days, though matching exact date is usually enough
                                                      // effectively we check if the implied service date is the same as the candidate date
@@ -1544,4 +1627,78 @@ async fn fetch_chateau_data(
         route_info_map,
         stop_output_map,
     ))
+}
+
+#[cfg(test)]
+mod pattern_batch_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn batches_preserve_all_ids_at_boundaries_and_skip_empty_input() {
+        for count in [0, 1, 127, 128, 129, 513] {
+            let ids: Vec<usize> = (0..count).collect();
+            let slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
+            let calls = AtomicUsize::new(0);
+            let mut rows = load_pattern_batches(&ids, &slots, |batch| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                assert!(!batch.is_empty());
+                assert!(batch.len() <= PATTERN_QUERY_BATCH_SIZE);
+                async move { Ok(batch) }
+            })
+            .await
+            .unwrap();
+            rows.sort_unstable();
+            assert_eq!(rows, ids);
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                count.div_ceil(PATTERN_QUERY_BATCH_SIZE)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn simultaneous_loaders_share_the_concurrency_limit() {
+        let ids: Vec<usize> = (0..PATTERN_QUERY_BATCH_SIZE * 9).collect();
+        let slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
+        let active = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let load = |batch: Vec<usize>| {
+            let active = &active;
+            let peak = &peak;
+            async move {
+                let running = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(running, Ordering::SeqCst);
+                // Keep each batch in flight while the other batches are polled.
+                tokio::task::yield_now().await;
+                active.fetch_sub(1, Ordering::SeqCst);
+                Ok(batch)
+            }
+        };
+        let (first, second) = tokio::join!(
+            load_pattern_batches(&ids, &slots, &load),
+            load_pattern_batches(&ids, &slots, &load),
+        );
+        assert_eq!(first.unwrap().len(), ids.len());
+        assert_eq!(second.unwrap().len(), ids.len());
+        assert_eq!(peak.load(Ordering::SeqCst), PATTERN_QUERY_CONCURRENCY);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(slots.available_permits(), PATTERN_QUERY_CONCURRENCY);
+    }
+
+    #[tokio::test]
+    async fn a_failed_batch_does_not_return_partial_rows() {
+        let ids: Vec<usize> = (0..PATTERN_QUERY_BATCH_SIZE * 2).collect();
+        let slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
+        let result = load_pattern_batches(&ids, &slots, |batch| async move {
+            if batch[0] == PATTERN_QUERY_BATCH_SIZE {
+                Err(diesel::result::Error::NotFound)
+            } else {
+                Ok(batch)
+            }
+        })
+        .await;
+        assert!(matches!(result, Err(diesel::result::Error::NotFound)));
+        assert_eq!(slots.available_permits(), PATTERN_QUERY_CONCURRENCY);
+    }
 }
