@@ -214,14 +214,9 @@ impl NigiriRaptor {
                     *value = best(*value, rows[k - 1][at], self.reverse);
                 }
             }
-            // The wire adapter retains pair-specific GTFS transfers. Their
-            // extra durations are not encoded by Nigiri's per-station bound
-            // compensation; keep bounds permissive at these stops only.
-            for (at, &sensitive) in self.transfer_sensitive.iter().enumerate() {
-                if sensitive {
-                    row[at] = if self.reverse { INF } else { NEG_INF };
-                }
-            }
+            // Nigiri fill_bounds only disables bounds for realtime,
+            // direction/profile-specific time-dependent footpaths. This
+            // static adapter has none; finite GTFS rules are not TD paths.
             rows.push(row);
         }
         PingBounds { rows }
@@ -270,7 +265,7 @@ impl NigiriRaptor {
             return true;
         };
         let bound = bounds.rows[self.bounds_last_k_ - k][stop];
-        let compensated = shift_delta(bound, tt.location_transfer_seconds()[stop], self.reverse);
+        let compensated = shift_delta(bound, bound_transfer_seconds(tt, stop, self.transfer_sensitive[stop]), self.reverse);
         !better(compensated, time, self.reverse)
     }
     fn reachable(&self, k: usize, stop: usize, time: DeltaTime) -> bool {
@@ -405,6 +400,7 @@ impl NigiriRaptor {
                 .as_ref()
                 .map(|b| &b.rows[self.bounds_last_k_ - k][..]),
             transports: &self.transports,
+            transfer_sensitive: &self.transfer_sensitive,
         };
         if !parallel {
             let tmp = &mut self.tmp_;
@@ -559,6 +555,19 @@ impl NigiriRaptor {
     }
 }
 
+/// Nigiri within_bounds compensates for the station change already in the
+/// PING label. Gentian also stores reflexive GTFS minima separately: use the
+/// same finite change as update_transfers, rather than disabling the bound.
+pub(crate) fn bound_transfer_seconds(
+    tt: &ZeroCopyTimetable<'_>, stop: usize, has_rule: bool,
+) -> u32 {
+    let station = tt.location_transfer_seconds()[stop];
+    if !has_rule { return station; }
+    tt.station_transfer_rule(LocationIdx(stop as u32), LocationIdx(stop as u32))
+        .filter(|rule| !rule.prohibited())
+        .map_or(station, |rule| station.max(rule.min_seconds))
+}
+
 /// Wire adapter: put pair-specific GTFS minima/prohibitions into the same
 /// single transfer duration consumed by Nigiri's scalar round labels.
 pub(crate) fn transfer_duration(
@@ -595,6 +604,7 @@ struct RouteScan<'a> {
     destination_bound: DeltaTime,
     ping_bounds: Option<&'a [DeltaTime]>,
     transports: &'a TransportIndex,
+    transfer_sensitive: &'a [bool],
 }
 impl RouteScan<'_> {
     fn update_route(
@@ -638,7 +648,7 @@ impl RouteScan<'_> {
                             !better(
                                 shift_delta(
                                     row[loc],
-                                    tt.location_transfer_seconds()[loc],
+                                    bound_transfer_seconds(tt, loc, self.transfer_sensitive[loc]),
                                     self.reverse,
                                 ),
                                 by_transport,
@@ -913,6 +923,34 @@ mod parallel_tests {
     }
 
     #[test]
+    fn static_transfer_rules_keep_finite_folded_ping_bounds() {
+        let mut owned = network(2, 4);
+        owned.station_transfer_rules.clear();
+        owned.station_transfer_rules.extend([
+            StationTransferRule { from: LocationIdx(1), to: LocationIdx(1), min_seconds: 480, flags: 0 },
+            StationTransferRule { from: LocationIdx(1), to: LocationIdx(2), min_seconds: 900, flags: 0 },
+            StationTransferRule { from: LocationIdx(2), to: LocationIdx(3), min_seconds: 0, flags: 1 },
+        ]);
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        for reverse in [false, true] {
+            let mut state = NigiriRaptor::new(&tt, &query(4), reverse, None).unwrap();
+            state.round_times_[0].fill(1_000);
+            state.round_times_[1].fill(if reverse { 900 } else { 1_100 });
+            let bounds = state.fill_ping_bounds(2);
+            // Row zero is copied, higher rows fold by min/max. Neither a
+            // finite minimum nor a prohibition is a TD-footpath exception.
+            assert!(bounds.rows.iter().all(|row| row.iter().all(|&t| t == 1_000)));
+            state.set_ping_bounds(bounds);
+            state.reverse = !reverse;
+            state.bounds_last_k_ = 2;
+            let edge = shift_delta(1_000, 480, state.reverse);
+            assert!(state.within_bounds(&tt, 1, 1, edge));
+            assert!(!state.within_bounds(&tt, 1, 1, shift_delta(edge, 1, state.reverse)));
+        }
+    }
+
+    #[test]
     fn parallel_rounds_match_serial_labels_with_reuse_bounds_and_direction_changes() {
         let bytes = network(160, 256).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
@@ -1075,11 +1113,17 @@ mod parallel_tests {
 
     #[test]
     fn unsorted_footpaths_fail_validation() {
-        let mut tt = with_dense_footpaths(network(4, 16), 16);
-        // Swap the first stop's two shortest edges.
-        tt.footpaths_out.swap(0, 1);
-        let bytes = tt.encode().unwrap();
-        assert!(ZeroCopyTimetable::new(&bytes).is_err());
+        for reverse in [false, true] {
+            let mut tt = with_dense_footpaths(network(4, 16), 16);
+            // Swap the first stop's two shortest edges in either direction.
+            if reverse {
+                tt.footpaths_in.swap(0, 1);
+            } else {
+                tt.footpaths_out.swap(0, 1);
+            }
+            // Encoding validates the timetable before writing its bytes.
+            assert!(tt.encode().is_err());
+        }
     }
 
     fn step_limit(anchor: i64, reverse: bool) -> i64 {

@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, ensure};
+use catenary::routing_common::native_osr::{append_expanding_match, route_expanding_matches};
 use clap::Parser;
 use osr_ffi::{Profile, ffi};
 use serde::{Deserialize, Serialize};
@@ -265,7 +266,8 @@ fn run_request(
         ..origin_options.clone()
     };
     let raw_origin = router.get_raw_match(&origin, 250.0)?;
-    router.append_lookup_match(
+    let origin_index = append_expanding_match(
+        router,
         source_matches.pin_mut(),
         &origin,
         &origin_options,
@@ -274,7 +276,8 @@ fn run_request(
     let mut target_indices = Vec::with_capacity(targets.len());
     for target in &targets {
         let raw = router.get_raw_match(target, 250.0)?;
-        target_indices.push(router.append_lookup_match(
+        target_indices.push(append_expanding_match(
+            router,
             target_matches.pin_mut(),
             target,
             &destination_options,
@@ -288,11 +291,12 @@ fn run_request(
     let paths = if target_indices.is_empty() {
         Vec::new()
     } else {
-        router.route_one_to_many_cached(
+        route_expanding_matches(
+            router,
             source_matches
                 .as_ref()
                 .context("null OSR source match store")?,
-            0,
+            origin_index,
             target_matches
                 .as_ref()
                 .context("null OSR destination match store")?,

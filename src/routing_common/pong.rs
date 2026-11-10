@@ -21,9 +21,13 @@ use anyhow::{Result, ensure};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 const DAY: u32 = 86_400;
 const MAX_TRAVEL_TIME: u32 = 5 * DAY;
+// Nigiri pong.cc (4701529b): six days avoids returning the same weekday in
+// the following/previous week. This bounds the cursor, not a trip's duration.
+const MAX_LOOK_AHEAD: u32 = 6 * DAY;
 const MAX_BOARDINGS: usize = 15; // nigiri::routing::kMaxTransfers + 1
 
 /// The key is in *search direction*, separately from reconstructed physical
@@ -119,6 +123,56 @@ fn fastest_direct(tt: &ZeroCopyTimetable<'_>, q: &Query, reverse: bool) -> Optio
     (best != u32::MAX).then_some(best)
 }
 
+/// Request-local controls. No search state survives the call. A streaming
+/// observer receives replacement snapshots only after cursor validation.
+#[derive(Default)]
+pub struct PongControl<'a> {
+    pub deadline: Option<Instant>,
+    pub cancelled: Option<&'a AtomicBool>,
+    /// Streaming can keep looking past the initial minimum until the budget
+    /// or the timetable/lookahead boundary is reached.
+    pub continue_until_budget: bool,
+    pub emit_updates: bool,
+    /// Count-based HTTP pages must not count unreconstructed side products.
+    pub require_reconstructed_count: bool,
+}
+impl PongControl<'_> {
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+}
+
+pub type PongObserver<'a> = dyn FnMut(&[Journey], &RaptorStats) -> Result<()> + 'a;
+
+fn validated_journeys(
+    results: &[Candidate],
+    cursor: i64,
+    lookahead_end: i64,
+    reverse: bool,
+    fastest_direct: u64,
+    max_travel_time: u32,
+) -> Vec<Journey> {
+    let mut journeys = results
+        .iter()
+        .filter(|j| {
+            j.journey.is_some()
+                && better(j.dest_time, cursor, reverse)
+                && better(j.dest_time, lookahead_end, reverse)
+                && j.travel_time() < fastest_direct
+                && j.travel_time() <= u64::from(max_travel_time)
+        })
+        .map(|j| {
+            let mut journey = j.journey.clone().unwrap();
+            journey.departure_unix_seconds = if reverse { j.start_time } else { j.dest_time };
+            journey.arrival_unix_seconds = if reverse { j.dest_time } else { j.start_time };
+            journey
+        })
+        .collect::<Vec<_>>();
+    sort_journeys_for_response(&mut journeys, reverse);
+    journeys
+}
+
 pub(crate) fn route_pong_with_stats_precomputed(
     tt: &ZeroCopyTimetable<'_>,
     request: &Query,
@@ -126,11 +180,21 @@ pub(crate) fn route_pong_with_stats_precomputed(
     arrive_by: bool,
     topology: Option<&LowerBoundTopology>,
 ) -> Result<(Vec<Journey>, RaptorStats)> {
+    route_pong_observed(tt, request, options, arrive_by, topology,
+        &PongControl::default(), &mut |_, _| Ok(()))
+}
+
+pub(crate) fn route_pong_observed(
+    tt: &ZeroCopyTimetable<'_>, request: &Query, options: ProfileOptions,
+    arrive_by: bool, topology: Option<&LowerBoundTopology>,
+    control: &PongControl<'_>, observer: &mut PongObserver<'_>,
+) -> Result<(Vec<Journey>, RaptorStats)> {
     options.validate()?;
     let processing_start = Instant::now();
-    let deadline = processing_start
+    let local_deadline = processing_start
         .checked_add(Duration::from_secs(u64::from(options.timeout_seconds)))
         .unwrap_or(processing_start);
+    let deadline = control.deadline.unwrap_or(local_deadline).min(local_deadline);
     let max_travel_time = options.max_journey_duration_seconds.min(MAX_TRAVEL_TIME);
     let lookahead = max_travel_time.saturating_add(DAY).min(MAX_TRAVEL_TIME);
     let fastest_direct = fastest_direct(tt, request, arrive_by).map(u64::from).unwrap_or(u64::MAX);
@@ -149,6 +213,10 @@ pub(crate) fn route_pong_with_stats_precomputed(
         .clamp(timetable_from, timetable_to);
     let interval_to = interval_to.ok_or_else(|| anyhow::anyhow!("PONG interval timestamp overflow"))?
         .clamp(timetable_from, timetable_to);
+    let lookahead_end = step(
+        if arrive_by { interval_to } else { interval_from },
+        i64::from(MAX_LOOK_AHEAD), arrive_by,
+    );
     let mut cursor = if arrive_by { interval_to.saturating_sub(1) } else { interval_from };
     let end_time = if arrive_by { interval_from.saturating_sub(1) } else { interval_to };
 
@@ -180,10 +248,18 @@ pub(crate) fn route_pong_with_stats_precomputed(
         };
         // Preserve the upstream weighted count, including unvalidated-path
         // byproducts only after their destination key is behind the cursor.
-        if (!better(cursor, end_time, arrive_by)
-            && result_count(true) + result_count(false) >= 2 * options.min_itineraries)
+        let enough_results = if control.require_reconstructed_count {
+            results.iter().filter(|j| j.journey.is_some()
+                && better(j.dest_time, cursor, arrive_by)
+                && better(j.dest_time, lookahead_end, arrive_by)
+                && j.travel_time() < fastest_direct
+                && j.travel_time() <= u64::from(max_travel_time)).count() >= options.min_itineraries
+        } else { result_count(true) + result_count(false) >= 2 * options.min_itineraries };
+        if (!control.continue_until_budget && !better(cursor, end_time, arrive_by)
+            && enough_results)
+            || !better(cursor, lookahead_end, arrive_by)
             || cursor < timetable_from || cursor >= timetable_to
-            || Instant::now() >= deadline
+            || Instant::now() >= deadline || control.is_cancelled()
         {
             break;
         }
@@ -228,6 +304,7 @@ pub(crate) fn route_pong_with_stats_precomputed(
         state.flip_point_direction(&mut other_lower_bounds);
         state.set_ping_bounds(ping_bounds);
         for ping_j in &mut ping_results {
+            ensure!(!control.is_cancelled(), "routing request cancelled");
             // Nigiri pong.cc:362-375. An earlier pong may already have
             // established the latest departure for this arrival/boarding
             // pair. Reuse its oriented key instead of searching again.
@@ -269,23 +346,32 @@ pub(crate) fn route_pong_with_stats_precomputed(
         let next = step(first, 1, arrive_by);
         ensure!(better(cursor, next, arrive_by), "no pong progress: start_time={cursor}, next={next}");
         cursor = next;
+        ensure!(!control.is_cancelled(), "routing request cancelled");
+        if control.emit_updates {
+            let snapshot = validated_journeys(&results, cursor, lookahead_end, arrive_by,
+                fastest_direct, max_travel_time);
+            if !snapshot.is_empty() {
+                let mut progress = state.stats().clone();
+                progress.pong_iterations = iterations;
+                progress.pong_forward_searches = forward_searches;
+                progress.pong_backward_searches = backward_searches;
+                progress.pong_known_result_hits = known_result_hits;
+                progress.pong_seeded_destination_bounds = seeded_destination_bounds;
+                let searched = if better(lookahead_end, cursor, arrive_by) { lookahead_end } else { cursor };
+                progress.pong_interval_from = Some(if arrive_by { searched.saturating_add(1) } else { interval_from });
+                progress.pong_interval_to = Some(if arrive_by { interval_to } else { searched });
+                observer(&snapshot, &progress)?;
+            }
+        }
     }
 
+    ensure!(!control.is_cancelled(), "routing request cancelled");
     // Only matched, reconstructed and cursor-validated journeys count as
     // output. No near-Pareto route extras, fallback profile scan, duration
     // ratio heuristic, or initial interval_estimator enlargement is applied.
     let before_filter = results.len();
-    let mut journeys = results.into_iter().filter(|j| {
-        j.journey.is_some() && better(j.dest_time, cursor, arrive_by)
-            && j.travel_time() < fastest_direct
-            && j.travel_time() <= u64::from(max_travel_time)
-    }).map(|j| {
-        let mut journey = j.journey.unwrap();
-        // Nigiri swaps start/destination keys after the opposite search.
-        journey.departure_unix_seconds = if arrive_by { j.start_time } else { j.dest_time };
-        journey.arrival_unix_seconds = if arrive_by { j.dest_time } else { j.start_time };
-        journey
-    }).collect::<Vec<_>>();
+    let mut journeys = validated_journeys(&results, cursor, lookahead_end, arrive_by,
+        fastest_direct, max_travel_time);
     let mut stats = state.stats().clone();
     stats.profile_duration_filtered = (before_filter - journeys.len()) as u64;
     stats.profile_budget_exhausted |= Instant::now() >= deadline;
@@ -294,8 +380,9 @@ pub(crate) fn route_pong_with_stats_precomputed(
     stats.pong_backward_searches = backward_searches;
     stats.pong_known_result_hits = known_result_hits;
     stats.pong_seeded_destination_bounds = seeded_destination_bounds;
-    stats.pong_interval_from = Some(if arrive_by { cursor.saturating_add(1) } else { interval_from });
-    stats.pong_interval_to = Some(if arrive_by { interval_to } else { cursor });
+    let searched_until = if better(lookahead_end, cursor, arrive_by) { lookahead_end } else { cursor };
+    stats.pong_interval_from = Some(if arrive_by { searched_until.saturating_add(1) } else { interval_from });
+    stats.pong_interval_to = Some(if arrive_by { interval_to } else { searched_until });
 
     // Nigiri's final forward-only refinement replaces the middle vehicle in
     // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
@@ -690,6 +777,143 @@ mod tests {
         }
         if let Some(path) = std::env::var_os("CATENARY_NIGIRI_PARITY_OUTPUT") {
             std::fs::write(path, output.concat()).unwrap();
+        }
+    }
+
+    #[test]
+    fn streaming_emits_validated_snapshots_and_continues_past_initial_minimum() {
+        let mut owned = timetable(&[(0, 2, 8 * 3_600, 600)], false);
+        owned.day_count = 20;
+        for calendar in owned.bitfields.iter_mut().skip(1) {
+            for day in 0..20 {
+                calendar.set(day, true).unwrap();
+            }
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: 20_010_i64 * 86_400 + 8 * 3_600 + if reverse { 600 } else { 0 },
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 1,
+                max_duration_seconds: DAY,
+            };
+            let options = ProfileOptions {
+                min_itineraries: 1,
+                search_window_seconds: 1,
+                timeout_seconds: 30,
+                ..ProfileOptions::default()
+            };
+            let (http, _) = route_pong_with_stats_precomputed(&tt, &q, options, reverse, None).unwrap();
+            let mut snapshots = Vec::new();
+            let (streamed, stats) = route_pong_observed(
+                &tt,
+                &q,
+                options,
+                reverse,
+                None,
+                &PongControl {
+                    continue_until_budget: true,
+                    emit_updates: true,
+                    ..Default::default()
+                },
+                &mut |journeys, stats| {
+                    assert!(journeys.iter().all(|j| valid_journey(&tt, &q, j)));
+                    assert!(journeys.iter().all(|j| if reverse {
+                        j.arrival_unix_seconds >= stats.pong_interval_from.unwrap()
+                    } else {
+                        j.departure_unix_seconds < stats.pong_interval_to.unwrap()
+                    }));
+                    snapshots.push(journeys.len());
+                    Ok(())
+                },
+            )
+            .unwrap();
+            assert!(http.len() < streamed.len());
+            assert_eq!(streamed.len(), 6);
+            assert_eq!(snapshots.first(), Some(&1));
+            assert_eq!(snapshots.last(), Some(&streamed.len()));
+            assert!(stats.pong_iterations > 1);
+            let cancelled = AtomicBool::new(false);
+            let result = route_pong_observed(
+                &tt,
+                &q,
+                options,
+                reverse,
+                None,
+                &PongControl {
+                    cancelled: Some(&cancelled),
+                    continue_until_budget: true,
+                    emit_updates: true,
+                    ..Default::default()
+                },
+                &mut |_, _| {
+                    cancelled.store(true, Ordering::Relaxed);
+                    Ok(())
+                },
+            );
+            assert!(result.unwrap_err().to_string().contains("cancelled"));
+            let (expired, stats) = route_pong_observed(
+                &tt,
+                &q,
+                options,
+                reverse,
+                None,
+                &PongControl {
+                    deadline: Some(Instant::now()),
+                    ..Default::default()
+                },
+                &mut |_, _| panic!("expired request must not publish"),
+            )
+            .unwrap();
+            assert!(expired.is_empty());
+            assert!(stats.profile_budget_exhausted);
+            assert_eq!(stats.pong_iterations, 0);
+        }
+    }
+
+    #[test]
+    fn six_day_cursor_cap_filters_boundary_and_clamps_interval_in_both_directions() {
+        let mut owned = timetable(&[(0, 2, 8 * 3_600, 600)], false);
+        owned.day_count = 20;
+        for calendar in owned.bitfields.iter_mut().skip(1) {
+            for day in 0..20 { calendar.set(day, true).unwrap(); }
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        for reverse in [false, true] {
+            // One daily train cannot meet the requested 16 connections in
+            // six days, forcing termination by the cap rather than count.
+            let reference = base + 10 * i64::from(DAY) + 8 * 3_600 + if reverse { 600 } else { 0 };
+            let q = Query {
+                departure_unix_seconds: reference,
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None, max_boardings: 1, max_duration_seconds: DAY,
+            };
+            let (journeys, stats) = route_pong_with_stats_precomputed(
+                &tt, &q, ProfileOptions { min_itineraries: 16, timeout_seconds: 30, ..ProfileOptions::default() },
+                reverse, None,
+            ).unwrap();
+            let cap = step(reference + i64::from(reverse), i64::from(MAX_LOOK_AHEAD), reverse);
+            assert_eq!(journeys.len(), 6);
+            assert!(journeys.iter().all(|j| {
+                valid_journey(&tt, &q, j) && better(
+                    if reverse { j.arrival_unix_seconds } else { j.departure_unix_seconds }, cap, reverse,
+                )
+            }));
+            assert_eq!(if reverse { stats.pong_interval_from } else { stats.pong_interval_to },
+                Some(cap + i64::from(reverse)));
+            assert!(!stats.profile_budget_exhausted);
         }
     }
 

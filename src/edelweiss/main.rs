@@ -4,17 +4,25 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod footpath_debug;
 mod motis_response;
+mod pagination;
+mod startup;
+mod websocket;
 
-use actix_web::{App, HttpResponse, HttpServer, web};
+use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
 use catenary::routing_common::native_osr::{Endpoint as StreetEndpoint, NativeOsr};
 use catenary::routing_common::profile_search::ProfileOptions;
-use catenary::routing_common::raptor_query::WalkingEndpoint;
+use catenary::routing_common::raptor_query::{Journey, RaptorStats, WalkingEndpoint};
+use catenary::routing_common::route_manager::PongControl;
 use catenary::routing_common::route_manager::{Coordinates, Router, RouterSettings};
 use catenary::routing_common::timetable::LocationIdx;
 use clap::Parser;
 use osr_ffi::Profile;
+use pagination::{PageOptions, Side};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use std::time::Instant;
 use std::{fs, path::PathBuf, sync::Arc};
 
@@ -43,7 +51,7 @@ struct Args {
     enable_footpath_debug: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Endpoint {
     stop: u32,
     seconds: u32,
@@ -69,8 +77,10 @@ impl StreetMode {
         }
     }
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 struct Request {
+    #[serde(flatten)]
+    page: PageOptions,
     from: Coordinates,
     to: Coordinates,
     #[serde(default)]
@@ -180,7 +190,8 @@ fn osr_access(
         StreetMode::Walk => pedestrian_speed,
         StreetMode::Bike => cycling_speed,
     });
-    let radius = speed * f64::from(max_seconds) + 2.0 * 250.0;
+    let radius = speed * f64::from(max_seconds)
+        + 2.0 * catenary::routing_common::native_osr::MAX_ENDPOINT_MATCH_METERS;
     let nearest = router.nearest_stops(transit_region, point, 4096, radius)?;
     let tt = router.timetable_for(transit_region)?;
     let targets = nearest
@@ -251,7 +262,109 @@ fn run_query(
     url: Option<&str>,
     osr: &NativeOsr,
 ) -> Result<(serde_json::Value, QueryTimings)> {
+    run_query_observed(
+        router,
+        request,
+        url,
+        osr,
+        false,
+        &AtomicBool::new(false),
+        &mut |_| Ok(()),
+    )
+}
+
+fn request_id(request: &Request) -> Result<String> {
+    request.page.validate()?;
+    if let Some(id) = &request.page.request_id {
+        return Ok(id.clone());
+    }
+    let mut identity = request.clone();
+    identity.page.request_id = None;
+    pagination::digest(&identity)
+}
+
+fn query_key(request: &Request) -> Result<String> {
+    let mut value = serde_json::to_value(request)?;
+    let object = value.as_object_mut().unwrap();
+    for field in [
+        "request_id",
+        "page_cursor",
+        "number_of_results_before",
+        "number_of_results_after",
+        "departure_unix_seconds",
+        "arrival_unix_seconds",
+    ] {
+        object.remove(field);
+    }
+    pagination::digest(&value)
+}
+
+fn run_query_observed(
+    router: &Router,
+    mut request: Request,
+    url: Option<&str>,
+    osr: &NativeOsr,
+    streaming: bool,
+    cancelled: &AtomicBool,
+    observer: &mut dyn FnMut(serde_json::Value) -> Result<()>,
+) -> Result<(serde_json::Value, QueryTimings)> {
     let query_start = Instant::now();
+    request.page.validate()?;
+    let key = query_key(&request)?;
+    let request_id = request_id(&request)?;
+    if let Some((side, time)) = request.page.cursor(&key)? {
+        let (before, after) = (
+            request.page.number_of_results_before.unwrap_or(0),
+            request.page.number_of_results_after.unwrap_or(0),
+        );
+        anyhow::ensure!(
+            match side {
+                Side::Before => after == 0,
+                Side::After => before == 0,
+            },
+            "page_cursor direction conflicts with before/after counts"
+        );
+        let count = if before + after > 0 {
+            before.max(after)
+        } else {
+            request.min_itineraries.unwrap_or(5)
+        };
+        request.page.number_of_results_before = Some(if side == Side::Before { count } else { 0 });
+        request.page.number_of_results_after = Some(if side == Side::After { count } else { 0 });
+        request.departure_unix_seconds = (side == Side::After).then_some(time);
+        request.arrival_unix_seconds = (side == Side::Before).then_some(time);
+    }
+    // Keep streaming output bounded even when a fast timetable can be swept
+    // far beyond the original minimum before the wall budget expires.
+    if streaming
+        && request.page.number_of_results_before.is_none()
+        && request.page.number_of_results_after.is_none()
+    {
+        let count = request.min_itineraries.unwrap_or(16);
+        request.page.number_of_results_before = Some(if request.arrival_unix_seconds.is_some() {
+            count
+        } else {
+            0
+        });
+        request.page.number_of_results_after = Some(if request.arrival_unix_seconds.is_some() {
+            0
+        } else {
+            count
+        });
+    }
+    request.page.validate()?;
+    anyhow::ensure!(
+        request.timetable_view
+            || (!streaming
+                && request.page.number_of_results_before.is_none()
+                && request.page.number_of_results_after.is_none()
+                && request.page.page_cursor.is_none()),
+        "streaming and pagination require timetable_view=true"
+    );
+    anyhow::ensure!(
+        !cancelled.load(Ordering::Relaxed),
+        "routing request cancelled"
+    );
     let origin = request.from;
     let destination = request.to;
     let detailed_legs = request.detailed_legs;
@@ -395,7 +508,6 @@ fn run_query(
     let to = egress.0?;
     let direct = direct.0?;
 
-    let phase = Instant::now();
     let profile_defaults = ProfileOptions::default();
     let options = ProfileOptions {
         search_window_seconds: request
@@ -423,68 +535,273 @@ fn run_query(
             .comparison_window_seconds
             .unwrap_or(profile_defaults.comparison_window_seconds),
     };
-    let mut routing = if request.timetable_view {
-        router.route_profile_with_access(
-            selection,
-            request_time,
-            from,
-            to,
-            direct,
-            arrive_by,
-            options,
-        )?
-    } else if arrive_by {
-        router.route_arrive_by_with_access(selection, request_time, from, to, direct)?
-    } else {
-        router.route_with_access(selection, request_time, from, to, direct)?
+    options.validate()?;
+    let route_started = Instant::now();
+    let deadline = route_started + Duration::from_secs(u64::from(options.timeout_seconds));
+    let paged = request.page.number_of_results_before.is_some()
+        || request.page.number_of_results_after.is_some();
+    // Enrich only new/changed journeys, with one cache shared by partial and
+    // final responses. Snapshot transport never forces repeated OSR geometry
+    // or PostgreSQL metadata work for an unchanged itinerary.
+    let timetable = router.timetable_for(&selection.transit_region)?;
+    let index = router.metadata_for(&selection.transit_region)?;
+    let platform = router.platform_metadata_for(&selection.transit_region)?;
+    let mut cache = HashMap::<String, serde_json::Value>::new();
+    let mut template = None;
+    let mut metadata_total = 0.0;
+    let mut rendering_total = 0.0;
+    let mut render = |journeys: &[Journey], stats: &RaptorStats| -> Result<serde_json::Value> {
+        anyhow::ensure!(
+            !cancelled.load(Ordering::Relaxed),
+            "routing request cancelled"
+        );
+        let start = Instant::now();
+        let ids = journeys
+            .iter()
+            .map(pagination::journey_id)
+            .collect::<Result<Vec<_>>>()?;
+        let missing = journeys
+            .iter()
+            .zip(&ids)
+            .filter(|(_, id)| !cache.contains_key(*id))
+            .map(|(j, _)| j.clone())
+            .collect::<Vec<_>>();
+        if template.is_none() || !missing.is_empty() {
+            let (response, metadata_ms) = motis_response::build(
+                &timetable,
+                index,
+                platform,
+                &missing,
+                origin,
+                destination,
+                &selection.origin_osr_region,
+                &selection.destination_osr_region,
+                osr,
+                url,
+                detailed_legs,
+                access_mode.name(),
+                egress_mode.name(),
+                access_mode.name(),
+                pedestrian_speed,
+                cycling_speed,
+            )?;
+            metadata_total += metadata_ms;
+            for (is_direct, field) in [(false, "itineraries"), (true, "direct")] {
+                for (journey, value) in missing
+                    .iter()
+                    .filter(|j| (j.boardings == 0) == is_direct)
+                    .zip(response[field].as_array().unwrap())
+                {
+                    let id = pagination::journey_id(journey)?;
+                    let mut value = value.clone();
+                    value["id"] = serde_json::json!(id);
+                    cache.insert(id, value);
+                }
+            }
+            template = Some(response);
+        }
+        let mut response = template.as_ref().unwrap().clone();
+        for (is_direct, field) in [(false, "itineraries"), (true, "direct")] {
+            response[field] = serde_json::Value::Array(
+                journeys
+                    .iter()
+                    .zip(&ids)
+                    .filter(|(j, _)| (j.boardings == 0) == is_direct)
+                    .map(|(_, id)| cache[id].clone())
+                    .collect(),
+            );
+        }
+        // Evict entries that disappeared from the current replacement snapshot.
+        cache.retain(|id, _| ids.contains(id));
+        let (before, after) = pagination::cursors(journeys, &key)?;
+        response["requestId"] = serde_json::json!(request_id);
+        response["previousPageCursor"] = serde_json::json!(before);
+        response["nextPageCursor"] = serde_json::json!(after);
+        response["debugOutput"] = serde_json::json!({
+            "raptor":stats, "timetableView":request.timetable_view, "arriveBy":arrive_by,
+            "routingEngine":if request.timetable_view { "nigiri-raptor-labels-pong-v5" } else { "point-raptor" },
+        });
+        rendering_total += milliseconds(start);
+        Ok(response)
     };
-    timings.raptor_ms = milliseconds(phase);
-    catenary::routing_common::profile_search::sort_journeys_for_response(
-        &mut routing.journeys,
-        arrive_by,
-    );
-
-    let phase = Instant::now();
-    let timetable = router.timetable_for(&routing.selection.transit_region)?;
-    let index = router.metadata_for(&routing.selection.transit_region)?;
-    let (mut response, metadata_ms) = motis_response::build(
-        &timetable,
-        index,
-        router.platform_metadata_for(&routing.selection.transit_region)?,
-        &routing.journeys,
-        origin,
-        destination,
-        &routing.selection.origin_osr_region,
-        &routing.selection.destination_osr_region,
-        osr,
-        url,
-        detailed_legs,
-        access_mode.name(),
-        egress_mode.name(),
-        access_mode.name(),
-        pedestrian_speed,
-        cycling_speed,
-    )?;
-    // Keep MOTIS-compatible response shape but never hide an incomplete
-    // timetable profile behind an unconditional empty debugOutput.
-    response["debugOutput"] = serde_json::json!({
-        "raptor": routing.raptor_stats,
-        "timetableView": request.timetable_view,
-        "arriveBy": arrive_by,
-        // A stable routing implementation marker distinguishes the Nigiri-
-        // inspired compact solver from older deployed label-vector binaries.
-        "routingEngine": if request.timetable_view {
-            "nigiri-raptor-labels-pong-v5"
+    let mut completed = Vec::<Journey>::new();
+    let mut side_stats = serde_json::Map::new();
+    let mut last_snapshot = Vec::<String>::new();
+    let mut publish = |journeys: &[Journey], stats: &RaptorStats| -> Result<()> {
+        if !streaming {
+            return Ok(());
+        }
+        let ids = journeys
+            .iter()
+            .map(pagination::journey_id)
+            .collect::<Result<Vec<_>>>()?;
+        if ids != last_snapshot {
+            observer(render(journeys, stats)?)?;
+            last_snapshot = ids;
+        }
+        Ok(())
+    };
+    let mut final_stats = RaptorStats::default();
+    if request.timetable_view {
+        // Each side gets a fresh RAPTOR state. Shared deadline and fair slices
+        // prevent one side from consuming the other side's entire budget.
+        let mut sides = if paged {
+            let mut result = Vec::new();
+            if let Some(n) = request.page.number_of_results_after.filter(|&n| n > 0) {
+                result.push((Side::After, request_time, n));
+            }
+            if let Some(n) = request.page.number_of_results_before.filter(|&n| n > 0) {
+                let time = if arrive_by {
+                    request_time
+                } else {
+                    request_time
+                        .checked_sub(1)
+                        .context("before timestamp overflow")?
+                };
+                result.push((Side::Before, time, n));
+            }
+            result
         } else {
-            "point-raptor"
-        },
-    });
-    timings.metadata_ms = metadata_ms;
-    timings.response_build_ms = milliseconds(phase);
+            vec![(
+                if arrive_by { Side::Before } else { Side::After },
+                request_time,
+                options.min_itineraries,
+            )]
+        };
+        if arrive_by {
+            sides.reverse();
+        }
+        let total_sides = sides.len();
+        for (i, &(side, time, count)) in sides.iter().enumerate() {
+            anyhow::ensure!(
+                !cancelled.load(Ordering::Relaxed),
+                "routing request cancelled"
+            );
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                final_stats.profile_budget_exhausted = true;
+                break;
+            }
+            let control = PongControl {
+                deadline: Some(Instant::now() + remaining / (total_sides - i) as u32),
+                cancelled: Some(cancelled),
+                continue_until_budget: streaming,
+                emit_updates: streaming,
+                require_reconstructed_count: paged,
+            };
+            let side_options = ProfileOptions {
+                min_itineraries: count,
+                // A one-second seed window avoids waiting for a broad profile
+                // interval before fulfilling a count-based scrolling request.
+                search_window_seconds: if paged {
+                    1
+                } else {
+                    options.search_window_seconds
+                },
+                ..options
+            };
+            let reverse = side == Side::Before;
+            let merge = |part: &[Journey]| -> Result<Vec<Journey>> {
+                let mut combined = completed.clone();
+                combined.extend(if paged {
+                    pagination::select_page(part, side, time, count)
+                } else {
+                    part.to_vec()
+                });
+                let mut seen = HashSet::new();
+                let mut unique = Vec::new();
+                let mut has_direct = false;
+                for journey in combined {
+                    if journey.boardings == 0 {
+                        if has_direct {
+                            continue;
+                        }
+                        has_direct = true;
+                    }
+                    if seen.insert(pagination::journey_id(&journey)?) {
+                        unique.push(journey);
+                    }
+                }
+                catenary::routing_common::profile_search::sort_journeys_for_response(
+                    &mut unique,
+                    arrive_by,
+                );
+                Ok(unique)
+            };
+            let routing = router.route_profile_observed(
+                selection.clone(),
+                time,
+                from.clone(),
+                to.clone(),
+                direct,
+                reverse,
+                side_options,
+                &control,
+                &mut |part, stats| publish(&merge(part)?, stats),
+            )?;
+            let merged = merge(&routing.journeys)?;
+            completed = merged;
+            final_stats.profile_budget_exhausted |= routing.raptor_stats.profile_budget_exhausted;
+            side_stats.insert(
+                if reverse { "before" } else { "after" }.into(),
+                serde_json::to_value(&routing.raptor_stats)?,
+            );
+            let exhausted = final_stats.profile_budget_exhausted;
+            final_stats = routing.raptor_stats;
+            final_stats.profile_budget_exhausted |= exhausted;
+            publish(&completed, &final_stats)?;
+        }
+    } else {
+        let routing = if arrive_by {
+            router.route_arrive_by_with_access(selection.clone(), request_time, from, to, direct)?
+        } else {
+            router.route_with_access(selection.clone(), request_time, from, to, direct)?
+        };
+        completed = routing.journeys;
+        final_stats = routing.raptor_stats;
+    }
+    drop(publish);
+    let mut response = render(&completed, &final_stats)?;
+    drop(render);
+    response["debugOutput"]["pages"] = serde_json::Value::Object(side_stats);
+    timings.raptor_ms = milliseconds(route_started) - rendering_total;
+    timings.metadata_ms = metadata_total;
+    timings.response_build_ms = rendering_total;
     timings.query_total_ms = milliseconds(query_start);
     attach_query_timings(&mut response, &timings);
 
     Ok((response, timings))
+}
+
+async fn route_ws(
+    state: web::Data<State>,
+    request: HttpRequest,
+    payload: web::Payload,
+) -> Result<HttpResponse, actix_web::Error> {
+    let state = state.into_inner();
+    let runner: Arc<websocket::Runner> = Arc::new(move |query, request_id, cancelled, observer| {
+        let mut request: Request = serde_json::from_value(query)?;
+        anyhow::ensure!(
+            request
+                .page
+                .request_id
+                .as_ref()
+                .is_none_or(|id| id == &request_id),
+            "query request_id must match envelope requestId"
+        );
+        request.page.request_id = Some(request_id);
+        let (answer, _) = run_query_observed(
+            &state.router,
+            request,
+            state.database_url.as_deref(),
+            &state.osr,
+            true,
+            &cancelled,
+            observer,
+        )?;
+        Ok(answer)
+    });
+    websocket::start(request, payload, runner)
 }
 
 // These endpoints are served only after Router::load succeeds. Health checks
@@ -495,7 +812,8 @@ async fn index() -> HttpResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "endpoints": {
             "health": "/health",
-            "route": "/v1/route"
+            "route": "/v1/route",
+            "routeWebSocket": "/v1/route/ws"
         }
     }))
 }
@@ -512,6 +830,14 @@ async fn health() -> HttpResponse {
 async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResponse {
     let state = state.into_inner();
     let request = payload.into_inner();
+    let id = match request_id(&request) {
+        Ok(id) => id,
+        Err(error) => {
+            return HttpResponse::UnprocessableEntity().json(serde_json::json!({
+                "requestId":request.page.request_id, "error":error.to_string(),
+            }));
+        }
+    };
     let result = web::block(move || {
         run_query(
             &state.router,
@@ -523,8 +849,10 @@ async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResp
     .await;
     match result {
         Ok(Ok((answer, _timings))) => HttpResponse::Ok().json(answer),
-        Ok(Err(err)) => HttpResponse::UnprocessableEntity().body(err.to_string()),
-        Err(err) => HttpResponse::InternalServerError().body(err.to_string()),
+        Ok(Err(err)) => HttpResponse::UnprocessableEntity()
+            .json(serde_json::json!({"requestId":id,"error":err.to_string()})),
+        Err(err) => HttpResponse::InternalServerError()
+            .json(serde_json::json!({"requestId":id,"error":err.to_string()})),
     }
 }
 
@@ -574,14 +902,39 @@ async fn main() -> Result<()> {
             "Warning: no PostgreSQL URL configured; route colours and other GTFS metadata will be unavailable"
         );
     }
-    eprintln!("Edelweiss startup: loading router");
-    let router = Arc::new(Router::load(
-        &args.regions_config,
-        &args.catenary_config,
-        settings,
-    )?);
-    eprintln!("Edelweiss startup: loading in-process OSR graphs");
-    let osr = Arc::new(NativeOsr::load(&args.catenary_config, args.osr_workers)?);
+    let parallel_started = Instant::now();
+    eprintln!("Edelweiss startup: loading router and in-process OSR graphs concurrently");
+    // Both loaders only read their input files. Use a dedicated scoped thread
+    // so startup overlaps even when Rayon's pool has only one worker.
+    let (router, osr) = startup::load_concurrently(
+        || {
+            let started = Instant::now();
+            let result = Router::load(&args.regions_config, &args.catenary_config, settings);
+            eprintln!(
+                "Edelweiss startup: router load finished in {:.3}s (success: {})",
+                started.elapsed().as_secs_f64(),
+                result.is_ok(),
+            );
+            result
+        },
+        || {
+            let started = Instant::now();
+            let result = NativeOsr::load(&args.catenary_config, args.osr_workers);
+            eprintln!(
+                "Edelweiss startup: in-process OSR load finished in {:.3}s (success: {})",
+                started.elapsed().as_secs_f64(),
+                result.is_ok(),
+            );
+            result
+        },
+    );
+    eprintln!(
+        "Edelweiss startup: concurrent router/OSR load finished in {:.3}s",
+        parallel_started.elapsed().as_secs_f64(),
+    );
+    // Join both loaders before propagating errors or checking graph matches.
+    let router = Arc::new(router.context("loading timetable router")?);
+    let osr = Arc::new(osr.context("loading in-process OSR graphs")?);
     for region in &router.transit {
         let tt = region.timetable.view()?;
         // Log incompatibility once at load, not for every candidate stop.
@@ -649,7 +1002,8 @@ async fn main() -> Result<()> {
             .app_data(state.clone())
             .route("/", web::get().to(index))
             .route("/health", web::get().to(health))
-            .route("/v1/route", web::post().to(route));
+            .route("/v1/route", web::post().to(route))
+            .route("/v1/route/ws", web::get().to(route_ws));
         if enable_footpath_debug {
             app.route(
                 "/v1/debug/footpaths",
@@ -674,6 +1028,28 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_identity_tracks_query_and_cursors_allow_new_counts() {
+        let mut request: Request = serde_json::from_value(serde_json::json!({
+            "from":{"lat":33.6,"lon":-117.8}, "to":{"lat":34.0,"lon":-118.2},
+            "departure_unix_seconds":1793500000, "numberOfResultsBefore":2,
+            "numberOfResultsAfter":6,
+        }))
+        .unwrap();
+        request.page.validate().unwrap();
+        let key = query_key(&request).unwrap();
+        let id = request_id(&request).unwrap();
+        assert_eq!(id, request_id(&request.clone()).unwrap());
+        request.page.number_of_results_after = Some(10);
+        request.departure_unix_seconds = Some(1793501000);
+        assert_eq!(key, query_key(&request).unwrap());
+        assert_ne!(id, request_id(&request).unwrap());
+        request.page.request_id = Some("client-page-2".into());
+        assert_eq!(request_id(&request).unwrap(), "client-page-2");
+        request.to.lat += 0.1;
+        assert_ne!(key, query_key(&request).unwrap());
+    }
 
     #[actix_web::test]
     async fn service_endpoints_work_without_routing_dependencies() {
