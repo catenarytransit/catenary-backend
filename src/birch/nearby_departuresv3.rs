@@ -703,7 +703,7 @@ pub async fn nearby_from_coords_v3(
             etcd_connection_time_ms: etcd_connection_time.as_millis(),
             pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
             initial_stop_count: Some(stops.len()),
-            initial_osm_station_count: Some(number_of_osm_stations),
+            initial_osm_station_count: Some(number_of_unique_osm_stations),
         },
     })
 }
