@@ -190,7 +190,8 @@ fn osr_access(
         StreetMode::Walk => pedestrian_speed,
         StreetMode::Bike => cycling_speed,
     });
-    let radius = speed * f64::from(max_seconds) + 2.0 * 250.0;
+    let radius = speed * f64::from(max_seconds)
+        + 2.0 * catenary::routing_common::native_osr::MAX_ENDPOINT_MATCH_METERS;
     let nearest = router.nearest_stops(transit_region, point, 4096, radius)?;
     let tt = router.timetable_for(transit_region)?;
     let targets = nearest
