@@ -13,10 +13,10 @@ use std::{
 };
 
 /// Maximum endpoint snap distance, including locations inside large buildings or fields.
-pub const MAX_ENDPOINT_MATCH_METERS: f64 = 1000.0;
+pub const MAX_ENDPOINT_MATCH_METERS: f64 = 2000.0;
 
 fn expanding_match<T>(mut attempt: impl FnMut(f64) -> Result<Option<T>>) -> Result<Option<T>> {
-    for radius in [100.0, 500.0, MAX_ENDPOINT_MATCH_METERS] {
+    for radius in [100.0, 500.0, 1000.0, MAX_ENDPOINT_MATCH_METERS] {
         if let Some(value) = attempt(radius)? {
             return Ok(Some(value));
         }
