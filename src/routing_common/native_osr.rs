@@ -12,6 +12,98 @@ use std::{
     sync::{Condvar, Mutex},
 };
 
+/// Maximum endpoint snap distance, including locations inside large buildings or fields.
+pub const MAX_ENDPOINT_MATCH_METERS: f64 = 1000.0;
+
+fn expanding_match<T>(mut attempt: impl FnMut(f64) -> Result<Option<T>>) -> Result<Option<T>> {
+    for radius in [100.0, 500.0, MAX_ENDPOINT_MATCH_METERS] {
+        if let Some(value) = attempt(radius)? {
+            return Ok(Some(value));
+        }
+    }
+    Ok(None)
+}
+
+/// Append a usable match at the first successful radius, or return None. Saved raw candidates
+/// cover the initial 100 m; wider retries always query the live graph. Empty
+/// native buckets are retained in the store, so callers must use the returned index.
+pub fn append_expanding_match(
+    router: &ffi::Router,
+    mut store: std::pin::Pin<&mut ffi::MatchStore>,
+    point: &ffi::Coordinate,
+    options: &ffi::MatchOptions,
+    initial_raw: &[ffi::RawWayCandidate],
+) -> Result<Option<u32>> {
+    // All buckets in a native store must share options. Restrict each attempt
+    // through its raw candidates while keeping the store's distance limit fixed.
+    let options = ffi::MatchOptions {
+        max_match_distance_meters: MAX_ENDPOINT_MATCH_METERS,
+        ..options.clone()
+    };
+    expanding_match(|radius| {
+        let mut raw: Vec<ffi::RawWayCandidate> = if radius == 100.0 {
+            initial_raw.to_vec()
+        } else {
+            router.get_raw_match(point, radius)?
+        };
+        raw.retain(|c| f64::from(c.distance_to_way) <= radius);
+        // Empty raw input makes OSR perform its own geometric lookup at the
+        // options limit, which would skip our smaller-radius attempts.
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        let index = router.append_lookup_match(store.as_mut(), point, &options, &raw)?;
+        let matched = router.export_match(store.as_ref().get_ref(), index)?;
+        // OSR may expand internally when profile/level/direction filtering
+        // rejects every raw candidate. Do not accept those wider matches until
+        // their explicit radius is reached (and never accept beyond 1 km).
+        Ok((!matched.distance_to_way.is_empty()
+            && matched.distance_to_way.iter().all(|&d| f64::from(d) <= radius))
+            .then_some(index))
+    })
+}
+
+/// Route only endpoints with a usable bounded match, preserving target order.
+pub fn route_expanding_matches(
+    router: &ffi::Router,
+    origins: &ffi::MatchStore,
+    origin: Option<u32>,
+    destinations: &ffi::MatchStore,
+    targets: &[Option<u32>],
+    options: &ffi::RoutingOptions,
+) -> Result<Vec<ffi::RouteResult>> {
+    let missing = || ffi::RouteResult {
+        found: false,
+        cost: 0,
+        duration_seconds: 0,
+        distance_meters: 0.0,
+        uses_elevator: false,
+        elevation_up: 0,
+        elevation_down: 0,
+        segments: Vec::new(),
+    };
+    let Some(origin) = origin else {
+        return Ok(targets.iter().map(|_| missing()).collect());
+    };
+    let indices: Vec<_> = targets.iter().flatten().copied().collect();
+    if indices.is_empty() {
+        return Ok(targets.iter().map(|_| missing()).collect());
+    }
+    let paths = router.route_one_to_many_cached(origins, origin, destinations, &indices, options)?;
+    ensure!(paths.len() == indices.len(), "OSR result count mismatch");
+    let mut paths = paths.into_iter();
+    Ok(targets
+        .iter()
+        .map(|target| {
+            if target.is_some() {
+                paths.next().expect("validated OSR result count")
+            } else {
+                missing()
+            }
+        })
+        .collect())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Endpoint {
     pub point: Coordinates,
@@ -225,7 +317,8 @@ impl NativeOsr {
         let mut destinations = router.create_match_store();
         let (point, raw) =
             graph.match_input(tt, metadata, origin, options.max_match_distance_meters)?;
-        router.append_lookup_match(origins.pin_mut(), &point, &match_options, &raw)?;
+        let origin_index =
+            append_expanding_match(router, origins.pin_mut(), &point, &match_options, &raw)?;
         let destination_options = ffi::MatchOptions {
             reverse: true,
             ..match_options
@@ -234,7 +327,8 @@ impl NativeOsr {
         for &target in targets {
             let (point, raw) =
                 graph.match_input(tt, metadata, target, options.max_match_distance_meters)?;
-            indices.push(router.append_lookup_match(
+            indices.push(append_expanding_match(
+                router,
                 destinations.pin_mut(),
                 &point,
                 &destination_options,
@@ -244,9 +338,10 @@ impl NativeOsr {
         if indices.is_empty() {
             return Ok(Vec::new());
         }
-        let paths = router.route_one_to_many_cached(
+        let paths = route_expanding_matches(
+            router,
             origins.as_ref().context("null OSR source matches")?,
-            0,
+            origin_index,
             destinations
                 .as_ref()
                 .context("null OSR destination matches")?,
@@ -511,5 +606,47 @@ mod tests {
         assert_eq!(bike.bike_speed_meters_per_second, 7.0);
         assert_eq!(bike.foot_speed_meters_per_second, 0.0);
         assert!(routing_options(Profile::Foot, 0, 600, f32::NAN, 7.0, false).is_err());
+    }
+}
+
+#[cfg(test)]
+mod expanding_match_tests {
+    use super::*;
+
+    #[test]
+    fn stops_at_first_usable_radius() {
+        for expected in [100.0, 500.0, 1000.0] {
+            let mut visited = Vec::new();
+            let result = expanding_match(|radius| {
+                visited.push(radius);
+                Ok((radius >= expected).then_some(radius))
+            })
+            .unwrap();
+            assert_eq!(result, Some(expected));
+            assert_eq!(visited.last(), Some(&expected));
+        }
+    }
+
+    #[test]
+    fn empty_matches_stop_at_one_kilometre() {
+        let mut visited = Vec::new();
+        let result = expanding_match::<()>(|radius| {
+            visited.push(radius);
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(result, None);
+        assert_eq!(visited, [100.0, 500.0, 1000.0]);
+    }
+
+    #[test]
+    fn native_errors_are_propagated() {
+        let mut attempts = 0;
+        assert!(expanding_match::<()>(|_| {
+            attempts += 1;
+            anyhow::bail!("native lookup failed")
+        })
+        .is_err());
+        assert_eq!(attempts, 1);
     }
 }
