@@ -33,6 +33,93 @@ use crate::make_calendar_structure_from_pg;
 const PATTERN_QUERY_BATCH_SIZE: usize = 128;
 const PATTERN_QUERY_CONCURRENCY: usize = 4;
 
+// Each HTTP/WS load has its own trace; concurrent chateaux and batches add
+// records without serializing database work.
+#[derive(Serialize, Clone, Debug)]
+pub struct NearbySqlTiming {
+    pub chateau: Option<String>,
+    pub query: &'static str,
+    // Milliseconds since the request began. Concurrent queries overlap.
+    pub started_ms: f64,
+    pub pool_wait_ms: f64,
+    pub query_ms: f64,
+    pub input_ids: usize,
+    pub returned_rows: usize,
+    pub success: bool,
+}
+
+type SharedSqlTimings = Arc<std::sync::Mutex<Vec<NearbySqlTiming>>>;
+
+fn sql_timing<Row>(
+    request_started: Instant,
+    chateau: Option<String>,
+    query: &'static str,
+    input_ids: usize,
+    checkout_started: Instant,
+    sql_started: Instant,
+    result: &diesel::QueryResult<Vec<Row>>,
+) -> NearbySqlTiming {
+    let finished = Instant::now();
+    NearbySqlTiming {
+        chateau,
+        query,
+        started_ms: checkout_started.duration_since(request_started).as_secs_f64() * 1000.0,
+        pool_wait_ms: sql_started.duration_since(checkout_started).as_secs_f64() * 1000.0,
+        query_ms: finished.duration_since(sql_started).as_secs_f64() * 1000.0,
+        input_ids,
+        returned_rows: result.as_ref().map_or(0, Vec::len),
+        success: result.is_ok(),
+    }
+}
+
+fn record_sql_timing<Row>(
+    timings: &SharedSqlTimings,
+    request_started: Instant,
+    chateau: Option<String>,
+    query: &'static str,
+    input_ids: usize,
+    checkout_started: Instant,
+    sql_started: Instant,
+    result: &diesel::QueryResult<Vec<Row>>,
+) {
+    let record = sql_timing(
+        request_started, chateau, query, input_ids, checkout_started, sql_started, result,
+    );
+    timings.lock().expect("nearby SQL timing mutex poisoned").push(record);
+}
+
+fn snapshot_sql_timings(timings: &SharedSqlTimings) -> Vec<NearbySqlTiming> {
+    let mut records = timings.lock().expect("nearby SQL timing mutex poisoned").clone();
+    records.sort_by(|a, b| {
+        a.started_ms.total_cmp(&b.started_ms)
+            .then_with(|| a.chateau.cmp(&b.chateau))
+            .then_with(|| a.query.cmp(b.query))
+    });
+    records
+}
+
+// A record is emitted for each SQL query, including every parallel batch.
+// Capture the chateau and batch size before Diesel consumes query parameters.
+macro_rules! timed_nearby_sql {
+    ($timings:expr, $request_started:expr, $chateau:expr, $name:literal, $inputs:expr, $pool:expr, $query:expr, $row:ty) => {{
+        let input_ids = $inputs;
+        let timing_chateau: Option<String> = if $chateau.is_empty() {
+            None
+        } else {
+            Some($chateau.to_string())
+        };
+        let checkout_started = Instant::now();
+        let mut conn = $pool.get().await.unwrap();
+        let sql_started = Instant::now();
+        let result = $query.load::<$row>(&mut conn).await;
+        record_sql_timing(
+            &$timings, $request_started, timing_chateau, $name, input_ids,
+            checkout_started, sql_started, &result,
+        );
+        result
+    }};
+}
+
 async fn load_pattern_batches<Id, Row, Load, LoadFuture>(
     ids: &[Id],
     query_slots: &tokio::sync::Semaphore,
@@ -162,6 +249,7 @@ pub struct NearbyDeparturesDebug {
     pub pipeline_processing_time_ms: u128,
     pub initial_stop_count: Option<usize>,
     pub initial_osm_station_count: Option<usize>,
+    pub sql_queries: Vec<NearbySqlTiming>,
 }
 
 // --- Long Distance Structs ---
@@ -268,12 +356,19 @@ pub async fn prepare_nearby(
         query.lon, query.lat, spatial_resolution
     );
     let stops_start = Instant::now();
-    let stops = crate::schema::gtfs::stops::dsl::stops
+    let stops_result = crate::schema::gtfs::stops::dsl::stops
         .filter(sql::<Bool>(&where_query))
         .select(crate::models::Stop::as_select())
         .load::<crate::models::Stop>(&mut conn)
-        .await.map_err(|e| e.to_string())?;
-    Ok(PreparedNearby { query, stops, start, db_connection_time, stops_fetch_time: stops_start.elapsed() })
+        .await;
+    let stop_sql_timing = sql_timing(
+        start, None, "nearby_spatial_stops", 1, connection_start, stops_start, &stops_result,
+    );
+    let stops = stops_result.map_err(|e| e.to_string())?;
+    Ok(PreparedNearby {
+        query, stops, start, db_connection_time, stops_fetch_time: stops_start.elapsed(),
+        stop_sql_timing,
+    })
 }
 
 pub struct PreparedNearby {
@@ -282,6 +377,7 @@ pub struct PreparedNearby {
     start: Instant,
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
+    stop_sql_timing: NearbySqlTiming,
 }
 
 impl NearbyFromCoordsV3 {
@@ -330,6 +426,7 @@ impl PreparedNearby {
         let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
 
         let start = self.start;
+        let sql_timings: SharedSqlTimings = Arc::new(std::sync::Mutex::new(vec![self.stop_sql_timing.clone()]));
         let db_connection_time = self.db_connection_time;
         let limit_per_station = query.limit_per_station.unwrap_or(10);
         let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
@@ -383,6 +480,7 @@ impl PreparedNearby {
                     pipeline_processing_time_ms: 0,
                     initial_stop_count: Some(0),
                     initial_osm_station_count: Some(0),
+                    sql_queries: snapshot_sql_timings(&sql_timings),
                 },
             });
         }
@@ -532,6 +630,7 @@ impl PreparedNearby {
             );
 
             let selection = selection.clone();
+            let sql_timings_for_chateau = sql_timings.clone();
             chateau_futures.push(async move {
                 fetch_chateau_data(
                     pool,
@@ -549,6 +648,8 @@ impl PreparedNearby {
                     skip_realtime,
                     rt_timeout_ms,
                     selection,
+                    sql_timings_for_chateau,
+                    start,
                 )
                 .await
             });
@@ -744,6 +845,7 @@ impl PreparedNearby {
                 pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
                 initial_stop_count: Some(stops.len()),
                 initial_osm_station_count: Some(number_of_unique_osm_stations),
+                sql_queries: snapshot_sql_timings(&sql_timings),
             },
         })
     }
@@ -765,6 +867,8 @@ async fn fetch_chateau_data(
     skip_realtime: bool,
     rt_timeout_ms: u64,
     selection: RouteSelection,
+    sql_timings: SharedSqlTimings,
+    request_started: Instant,
 ) -> Option<(
     HashMap<(String, StationKey), Vec<DepartureItem>>,
     HashMap<
