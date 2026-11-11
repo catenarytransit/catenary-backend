@@ -72,6 +72,11 @@ struct Args {
     #[arg(long)]
     elastic_url: Option<String>,
 
+    /// Do not index OSM stations in Elasticsearch or query Cypress for admin names.
+    /// Station import into PostgreSQL remains enabled.
+    #[arg(long, default_value_t = false)]
+    skip_elasticsearch: bool,
+
     /// Cypress API URL for reverse geocoding
     #[arg(long, default_value = "http://localhost:3000")]
     cypress_url: String,
@@ -1311,15 +1316,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     println!("Connecting to Elasticsearch at {:?}...", es_urls);
 
-    // Connect to Elasticsearch
-    let elasticclient = match catenary::elasticutils::elastic_connect(&es_urls) {
-        Ok(client) => Some(client),
-        Err(e) => {
-            println!(
-                "Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.",
-                e
-            );
-            None
+    // Postgres-only imports do not need Elasticsearch or Cypress. Keep the
+    // default import behavior unchanged for production invocations.
+    let elasticclient = if args.skip_elasticsearch {
+        println!("Skipping Elasticsearch indexing and Cypress enrichment");
+        None
+    } else {
+        match catenary::elasticutils::elastic_connect(&es_urls) {
+            Ok(client) => Some(client),
+            Err(e) => {
+                println!(
+                    "Warning: Could not connect to Elasticsearch: {}. ES indexing skipped.",
+                    e
+                );
+                None
+            }
         }
     };
 
