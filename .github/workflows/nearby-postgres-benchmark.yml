@@ -1,83 +1,222 @@
-name: Nearby Departures PostgreSQL benchmark
+name: Swiss Nearby Departures real GTFS benchmark
 
 on:
   pull_request:
     paths:
       - 'src/nearby_departures.rs'
-      - 'benchmarks/nearby_postgres.py'
+      - 'benchmarks/nearby_full.py'
       - 'benchmarks/swiss_landmarks.json'
       - '.github/workflows/nearby-postgres-benchmark.yml'
   workflow_dispatch:
     inputs:
-      fixture:
-        description: 'synthetic runs without secrets; imported uses a pre-populated Swiss GTFS database'
-        required: true
-        default: synthetic
-        type: choice
-        options:
-          - synthetic
-          - imported
       rounds:
-        description: 'Timed alternating runs for each landmark'
+        description: 'Measured HTTP requests per landmark, per build'
         required: true
-        default: '7'
+        default: '3'
         type: string
+
+concurrency:
+  group: swiss-nearby-benchmark-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  nearby-sql:
+  swiss-maple-birch:
+    name: Swiss Maple ingest and baseline-versus-PR Birch benchmark
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 300
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
+      PGPASSWORD: postgres
+      CC: gcc-14
+      CXX: g++-14
+      OSR_BUILD_JOBS: '2'
+      BENCH_ROUNDS: ${{ inputs.rounds || '3' }}
     services:
       postgres:
-        image: postgres:16
+        image: postgis/postgis:15-3.3
         env:
-          POSTGRES_DB: nearby_benchmark
+          POSTGRES_DB: catenary
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
+        ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U postgres -d nearby_benchmark"
+          --health-cmd "pg_isready -U postgres -d catenary"
           --health-interval 5s
           --health-timeout 5s
-          --health-retries 10
+          --health-retries 15
+      etcd:
+        image: quay.io/coreos/etcd:v3.5.9
+        env:
+          ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+          ETCD_ADVERTISE_CLIENT_URLS: http://0.0.0.0:2379
+        ports: ['2379:2379']
+      elasticsearch:
+        image: elasticsearch:8.11.1
+        env:
+          discovery.type: single-node
+          xpack.security.enabled: 'false'
+          ES_JAVA_OPTS: '-Xms512m -Xmx512m'
+        ports: ['9200:9200']
+        options: >-
+          --health-cmd="curl -fsS http://localhost:9200/_cluster/health"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR including baseline revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout Transitland Atlas feed catalog
+        uses: actions/checkout@v4
+        with:
+          repository: catenarytransit/transitland-atlas
+          path: transitland-atlas
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install benchmark dependencies
-        run: python -m pip install 'psycopg[binary]==3.2.3'
-      - name: Run query parity and latency benchmark
-        env:
-          SYNTHETIC_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/nearby_benchmark
-          IMPORTED_DATABASE_URL: ${{ secrets.NEARBY_BENCH_DATABASE_URL }}
-          BENCH_MODE: ${{ inputs.fixture || 'synthetic' }}
-          BENCH_ROUNDS: ${{ inputs.rounds || '7' }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: swiss-nearby-gcc14
+          cache-on-failure: true
+          cache-targets: true
+      - name: Install Rust and PostgreSQL dependencies
         run: |
           set -euo pipefail
-          if [ "$BENCH_MODE" = imported ]; then
-            if [ -z "$IMPORTED_DATABASE_URL" ]; then
-              echo "Missing repository secret NEARBY_BENCH_DATABASE_URL for imported Swiss dataset" >&2
-              exit 1
-            fi
-            DATABASE_URL="$IMPORTED_DATABASE_URL"
-          else
-            DATABASE_URL="$SYNTHETIC_DATABASE_URL"
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-14 g++-14 build-essential binutils lld libtbb-dev \
+            protobuf-compiler libpq-dev libssl-dev pkg-config cmake ninja-build \
+            libcoinutils-dev coinor-libcbc-dev postgresql-client \
+            libboost-all-dev libzstd-dev liblz4-dev jq
+          python -m pip install 'psycopg[binary]==3.2.3'
+          if ! command -v diesel >/dev/null 2>&1; then
+            cargo install diesel_cli --no-default-features --features postgres --locked
           fi
-          python benchmarks/nearby_postgres.py \
-            --database-url "$DATABASE_URL" \
-            --mode "$BENCH_MODE" \
+      - name: Record exact revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD > /tmp/nearby-candidate-sha
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git rev-parse HEAD^1 > /tmp/nearby-baseline-sha
+          else
+            git rev-parse HEAD^ > /tmp/nearby-baseline-sha
+          fi
+          mkdir -p benchmark-results
+          printf 'Baseline: %s\nCandidate: %s\n' \
+            "$(cat /tmp/nearby-baseline-sha)" \
+            "$(cat /tmp/nearby-candidate-sha)" | tee benchmark-results/commits.txt
+      - name: Compile PR Birch and Maple from one revision
+        run: |
+          set -euo pipefail
+          cargo build --release --bin maple --bin birch
+          mkdir -p benchmark-bin
+          cp target/release/birch benchmark-bin/candidate-birch
+          cp target/release/maple benchmark-bin/maple
+      - name: Compile baseline Birch on same runner
+        run: |
+          set -euo pipefail
+          git worktree add --detach /tmp/catenary-nearby-baseline "$(cat /tmp/nearby-baseline-sha)"
+          (
+            cd /tmp/catenary-nearby-baseline
+            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build --release --bin birch
+          )
+          cp target/release/birch benchmark-bin/baseline-birch
+          test -x benchmark-bin/baseline-birch
+          test -x benchmark-bin/candidate-birch
+      - name: Configure Maple and Birch for Swiss-only import
+        run: |
+          set -euo pipefail
+          mkdir -p temp/gtfs_zip temp/gtfs_uncompressed
+          cat > catenaryconfig.toml <<'EOF'
+          [maple]
+          transitland = "./transitland-atlas"
+          use_girolle = false
+          no_elastic = false
+          delete_before_ingest = false
+          threads_gtfs = 2
+          force_ingest_all = true
+          bypass_temp_delete = false
+          gtfs_zip_temp = "./temp/gtfs_zip"
+          gtfs_uncompressed_temp = "./temp/gtfs_uncompressed"
+          only_feed_ids = ["f-u0-switzerland"]
+
+          [postgres]
+          database_url = "postgres://postgres:postgres@localhost:5432/catenary"
+          max_connections = 64
+
+          [birch]
+          worker_amount = 4
+          etcd_urls = ["localhost:2379"]
+
+          [aspen]
+          etcd_urls = ["localhost:2379"]
+          channels = 4
+          port = 40427
+
+          [elasticsearch]
+          url = "http://localhost:9200"
+          EOF
+          python - <<'PY'
+          import tomllib
+          with open("catenaryconfig.toml", "rb") as file:
+              conf = tomllib.load(file)
+          assert conf["maple"]["only_feed_ids"] == ["f-u0-switzerland"]
+          PY
+      - name: Migrate production PostgreSQL schema
+        run: |
+          set -euo pipefail
+          diesel migration run
+      - name: Run Maple with only f-u0-switzerland
+        run: |
+          set -euo pipefail
+          export ONLY_FEED_IDS=f-u0-switzerland
+          ./benchmark-bin/maple > benchmark-results/maple.log 2>&1 || {
+            tail -n 180 benchmark-results/maple.log
+            exit 1
+          }
+          tail -n 60 benchmark-results/maple.log
+      - name: Verify imported Swiss GTFS and analyze tables
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            SELECT onestop_feed_id, chateau, count(*) AS stops
+            FROM gtfs.stops GROUP BY 1,2 ORDER BY 3 DESC;
+          " | tee benchmark-results/import-summary.txt
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            SELECT onestop_feed_id, chateau, count(*) AS trips
+            FROM gtfs.trips_compressed GROUP BY 1,2 ORDER BY 3 DESC;
+          " | tee -a benchmark-results/import-summary.txt
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            ANALYZE gtfs.stops;
+            ANALYZE gtfs.direction_pattern;
+            ANALYZE gtfs.itinerary_pattern;
+            ANALYZE gtfs.itinerary_pattern_meta;
+            ANALYZE gtfs.trips_compressed;
+          "
+      - name: Compare full HTTP responses and endpoint latency
+        run: |
+          set -euo pipefail
+          python benchmarks/nearby_full.py \
+            --baseline-binary benchmark-bin/baseline-birch \
+            --candidate-binary benchmark-bin/candidate-birch \
+            --baseline-ref "$(cat /tmp/nearby-baseline-sha)" \
+            --candidate-ref "$(cat /tmp/nearby-candidate-sha)" \
             --rounds "$BENCH_ROUNDS" \
-            --output nearby-benchmark.json
-      - name: Upload machine-readable results
+            --minimum-populated 5 \
+            --output-dir benchmark-results
+      - name: Upload full benchmark diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: nearby-postgres-benchmark
-          path: nearby-benchmark.json
-          if-no-files-found: warn
+          name: swiss-maple-nearby-benchmark
+          path: benchmark-results/
+          if-no-files-found: ignore
+          retention-days: 14
