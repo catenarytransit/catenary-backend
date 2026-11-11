@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/nearby_departures.rs'
       - 'src/maple/gtfs_process.rs'
+      - 'src/osmstationimport/main.rs'
       - 'benchmarks/nearby_full.py'
       - 'benchmarks/swiss_landmarks.json'
       - '.github/workflows/nearby-postgres-benchmark.yml'
@@ -25,7 +26,7 @@ permissions:
 
 jobs:
   swiss-maple-birch:
-    name: Swiss Maple ingest and baseline-versus-PR Birch benchmark
+    name: Swiss OSM + Maple ingest and baseline-versus-PR Birch benchmark
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     env:
@@ -135,10 +136,11 @@ jobs:
       - name: Compile PR Birch and Maple from one revision
         run: |
           set -euo pipefail
-          cargo build --release --bin maple --bin birch
+          cargo build --release --bin maple --bin birch --bin osmstationimport
           mkdir -p benchmark-bin
           cp target/release/birch benchmark-bin/candidate-birch
           cp target/release/maple benchmark-bin/maple
+          cp target/release/osmstationimport benchmark-bin/osmstationimport
       - name: Compile baseline Birch on same runner
         run: |
           set -euo pipefail
@@ -193,6 +195,38 @@ jobs:
         run: |
           set -euo pipefail
           diesel migration run
+      - name: Download European rail station OSM PBF
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p temp/osm-stations benchmark-results
+          curl --fail --location --retry 4 --retry-delay 5 --retry-all-errors \
+            https://github.com/catenarytransit/osm-filter/releases/download/latest/railstations-europe-latest.osm.pbf \
+            --output temp/osm-stations/railstations-europe-latest.osm.pbf
+          test -s temp/osm-stations/railstations-europe-latest.osm.pbf
+          sha256sum temp/osm-stations/railstations-europe-latest.osm.pbf \
+            | tee benchmark-results/osm-extract-sha256.txt
+          du -h temp/osm-stations/railstations-europe-latest.osm.pbf
+      - name: Import European OSM stations into PostgreSQL before Maple
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The matching stage of Maple reads gtfs.osm_stations. Only the
+          # PostgreSQL OSM import is required; the Cypress/ES enrichment pass
+          # is irrelevant to this scheduled-departure benchmark.
+          ./benchmark-bin/osmstationimport \
+            --file temp/osm-stations/railstations-europe-latest.osm.pbf \
+            --skip-elasticsearch > benchmark-results/osm-station-import.log 2>&1 || {
+              tail -n 150 benchmark-results/osm-station-import.log
+              exit 1
+            }
+          tail -n 45 benchmark-results/osm-station-import.log
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc \
+            'SELECT COUNT(*) FROM gtfs.osm_stations' \
+            | tee benchmark-results/osm-station-count.txt
+          test "$(cat benchmark-results/osm-station-count.txt)" -gt 0
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
+            'ANALYZE gtfs.osm_stations'
       - name: Run Maple with only f-u0-switzerland
         run: |
           set -euo pipefail
@@ -221,6 +255,33 @@ jobs:
             ANALYZE gtfs.itinerary_pattern_meta;
             ANALYZE gtfs.trips_compressed;
           "
+      - name: Verify Swiss GTFS-to-OSM station associations for both versions
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The baseline and experiment intentionally use exactly the same
+          # OSM-enriched database. Verify Maple actually persisted matches;
+          # merely importing the OSM PBF is insufficient for this benchmark.
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "
+            SELECT onestop_feed_id, chateau,
+                   COUNT(*) AS gtfs_stops,
+                   COUNT(*) FILTER (WHERE osm_station_id IS NOT NULL) AS matched_stops,
+                   COUNT(DISTINCT osm_station_id) AS distinct_osm_stations,
+                   COUNT(*) FILTER (WHERE osm_platform_id IS NOT NULL) AS matched_platforms
+            FROM gtfs.stops
+            WHERE onestop_feed_id = 'f-u0-switzerland'
+            GROUP BY onestop_feed_id, chateau;
+          " | tee benchmark-results/osm-match-summary.txt
+          matched="$(psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "
+            SELECT COUNT(*) FROM gtfs.stops
+            WHERE onestop_feed_id = 'f-u0-switzerland'
+              AND osm_station_id IS NOT NULL;
+          ")
+          if [ "$matched" -le 0 ]; then
+            echo "No Swiss GTFS stops matched OSM stations; benchmark is invalid" >&2
+            exit 1
+          fi
+          echo "Successfully matched $matched Swiss stops to OSM stations"
       - name: Compare full HTTP responses and endpoint latency
         run: |
           set -euo pipefail
