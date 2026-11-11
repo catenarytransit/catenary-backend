@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'src/nearby_departures.rs'
+      - 'src/maple/gtfs_process.rs'
       - 'benchmarks/nearby_full.py'
       - 'benchmarks/swiss_landmarks.json'
       - '.github/workflows/nearby-postgres-benchmark.yml'
@@ -33,6 +34,8 @@ jobs:
       CC: gcc-14
       CXX: g++-14
       OSR_BUILD_JOBS: '2'
+      # Shape matching is unnecessary for validating Swiss nearby departures.
+      SKIP_PFAEDLE: '1'
       BENCH_ROUNDS: ${{ inputs.rounds || '3' }}
     services:
       postgres:
@@ -67,11 +70,27 @@ jobs:
           --health-retries=15
 
     steps:
-      - name: Checkout PR including baseline revision
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: false
+      - name: Checkout PR including baseline revision (without broken pfaedle submodule)
+        # The repository contains a temp/pfaedle gitlink without a .gitmodules
+        # URL. actions/checkout credential cleanup runs git submodule foreach,
+        # which fails even with submodule initialization disabled. Ordinary Git
+        # checkout does not initialize this unused submodule.
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REF_NAME: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin https://github.com/catenarytransit/catenary-backend.git
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "refs/pull/${PR_NUMBER}/merge"
+          else
+            git fetch --no-tags origin "$REF_NAME"
+          fi
+          git checkout --force --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
       - name: Checkout Transitland Atlas feed catalog
         uses: actions/checkout@v4
         with:
@@ -178,6 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           export ONLY_FEED_IDS=f-u0-switzerland
+          test "$SKIP_PFAEDLE" = 1
           ./benchmark-bin/maple > benchmark-results/maple.log 2>&1 || {
             tail -n 180 benchmark-results/maple.log
             exit 1
