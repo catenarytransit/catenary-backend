@@ -1,0 +1,98 @@
+[
+  {
+    "id": "zurich-hb",
+    "name": "Zürich HB",
+    "lat": 47.37818,
+    "lon": 8.54019
+  },
+  {
+    "id": "geneve-cornavin",
+    "name": "Genève-Cornavin",
+    "lat": 46.21015,
+    "lon": 6.14244
+  },
+  {
+    "id": "bern-hb",
+    "name": "Bern Bahnhof",
+    "lat": 46.94872,
+    "lon": 7.43945
+  },
+  {
+    "id": "basel-sbb",
+    "name": "Basel SBB",
+    "lat": 47.54742,
+    "lon": 7.58956
+  },
+  {
+    "id": "lausanne-gare",
+    "name": "Lausanne Gare",
+    "lat": 46.51679,
+    "lon": 6.62909
+  },
+  {
+    "id": "luzern-bahnhof",
+    "name": "Luzern Bahnhof",
+    "lat": 47.05022,
+    "lon": 8.31019
+  },
+  {
+    "id": "interlaken-ost",
+    "name": "Interlaken Ost",
+    "lat": 46.69051,
+    "lon": 7.86935
+  },
+  {
+    "id": "zermatt-bahnhof",
+    "name": "Zermatt Bahnhof",
+    "lat": 46.02318,
+    "lon": 7.74833
+  },
+  {
+    "id": "st-moritz-bahnhof",
+    "name": "St. Moritz Bahnhof",
+    "lat": 46.49775,
+    "lon": 9.84568
+  },
+  {
+    "id": "lugano-stazione",
+    "name": "Lugano Stazione",
+    "lat": 46.00595,
+    "lon": 8.94717
+  },
+  {
+    "id": "winterthur-hb",
+    "name": "Winterthur Bahnhof",
+    "lat": 47.50024,
+    "lon": 8.72423
+  },
+  {
+    "id": "schaffhausen-bahnhof",
+    "name": "Schaffhausen Bahnhof",
+    "lat": 47.69767,
+    "lon": 8.6348
+  },
+  {
+    "id": "montreux-gare",
+    "name": "Montreux Gare",
+    "lat": 46.43597,
+    "lon": 6.91062
+  },
+  {
+    "id": "chur-bahnhof",
+    "name": "Chur Bahnhof",
+    "lat": 46.85358,
+    "lon": 9.53232
+  },
+  {
+    "id": "brig-bahnhof",
+    "name": "Brig Bahnhof",
+    "lat": 46.31964,
+    "lon": 7.98794
+  },
+  {
+    "id": "olten-bahnhof",
+    "name": "Olten Bahnhof",
+    "lat": 47.35181,
+    "lon": 7.90794
+  }
+]
