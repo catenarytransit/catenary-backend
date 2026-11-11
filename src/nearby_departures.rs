@@ -368,6 +368,7 @@ pub async fn prepare_nearby(
     Ok(PreparedNearby {
         query, stops, start, db_connection_time, stops_fetch_time: stops_start.elapsed(),
         stop_sql_timing,
+        priority_sql_timings: Arc::new(std::sync::Mutex::new(Vec::new())),
     })
 }
 
@@ -378,6 +379,7 @@ pub struct PreparedNearby {
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
     stop_sql_timing: NearbySqlTiming,
+    priority_sql_timings: SharedSqlTimings,
 }
 
 impl NearbyFromCoordsV3 {
@@ -426,7 +428,9 @@ impl PreparedNearby {
         let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
 
         let start = self.start;
-        let sql_timings: SharedSqlTimings = Arc::new(std::sync::Mutex::new(vec![self.stop_sql_timing.clone()]));
+        let mut initial_sql_timings = vec![self.stop_sql_timing.clone()];
+        initial_sql_timings.extend(snapshot_sql_timings(&self.priority_sql_timings));
+        let sql_timings: SharedSqlTimings = Arc::new(std::sync::Mutex::new(initial_sql_timings));
         let db_connection_time = self.db_connection_time;
         let limit_per_station = query.limit_per_station.unwrap_or(10);
         let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
@@ -1189,16 +1193,18 @@ async fn fetch_chateau_data(
         let s_ids1 = service_ids_vec.clone();
         let s_ids2 = service_ids_vec;
 
+        let sql_timings_calendar = sql_timings.clone();
+        let sql_timings_calendar_dates = sql_timings.clone();
         tokio::join!(
             async move {
-                timed_nearby_sql!(sql_timings, request_started, &chateau, "calendar", s_ids1.len(), pool_cal1, crate::schema::gtfs::calendar::dsl::calendar
+                timed_nearby_sql!(sql_timings_calendar, request_started, &chateau_cal1, "calendar", s_ids1.len(), pool_cal1, crate::schema::gtfs::calendar::dsl::calendar
                     .filter(crate::schema::gtfs::calendar::chateau.eq(chateau_cal1))
                     .filter(crate::schema::gtfs::calendar::service_id.eq_any(&s_ids1))
                     .select(crate::models::Calendar::as_select()), crate::models::Calendar)
                     .unwrap_or_default()
             },
             async move {
-                timed_nearby_sql!(sql_timings, request_started, &chateau, "calendar_dates", s_ids2.len(), pool_cal2, crate::schema::gtfs::calendar_dates::dsl::calendar_dates
+                timed_nearby_sql!(sql_timings_calendar_dates, request_started, &chateau_cal2, "calendar_dates", s_ids2.len(), pool_cal2, crate::schema::gtfs::calendar_dates::dsl::calendar_dates
                     .filter(crate::schema::gtfs::calendar_dates::chateau.eq(chateau_cal2))
                     .filter(crate::schema::gtfs::calendar_dates::service_id.eq_any(&s_ids2))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
@@ -2058,20 +2064,32 @@ impl PreparedNearby {
                 }
             }
         }
+        let priority_timings = self.priority_sql_timings.clone();
+        let request_started = self.start;
         let parts: Vec<Vec<RouteCandidate>> = futures::stream::iter(by_chateau)
             .map(|(chateau, distances)| {
                 let pool = pool.clone();
+                let priority_timings = priority_timings.clone();
                 async move {
                     use crate::schema::gtfs::{direction_pattern as rows, direction_pattern_meta as meta};
-                    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
                     let ids: Vec<String> = distances.keys().cloned().collect();
-                    let rows: Vec<(CompactString, Option<CompactString>, Option<i16>)> = rows::table
+                    let input_ids = ids.len();
+                    let checkout_started = Instant::now();
+                    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+                    let sql_started = Instant::now();
+                    let sql_result = rows::table
                         .inner_join(meta::table.on(rows::chateau.eq(meta::chateau)
                             .and(rows::direction_pattern_id.eq(meta::direction_pattern_id))))
                         .filter(rows::chateau.eq(&chateau))
                         .filter(rows::stop_id.eq_any(ids))
                         .select((rows::stop_id, meta::route_id, meta::route_type))
-                        .load(&mut conn).await.map_err(|e| e.to_string())?;
+                        .load::<(CompactString, Option<CompactString>, Option<i16>)>(&mut conn).await;
+                    record_sql_timing(
+                        &priority_timings, request_started, Some(chateau.clone()),
+                        "priority_direction_route_join", input_ids,
+                        checkout_started, sql_started, &sql_result,
+                    );
+                    let rows = sql_result.map_err(|e| e.to_string())?;
                     Ok::<_, String>(rows.into_iter().filter_map(|(stop, route, mode)| {
                         let distance = *distances.get(stop.as_str())?;
                         let mode = mode?;
