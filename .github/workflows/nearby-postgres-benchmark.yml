@@ -276,7 +276,7 @@ jobs:
             SELECT COUNT(*) FROM gtfs.stops
             WHERE onestop_feed_id = 'f-u0-switzerland'
               AND osm_station_id IS NOT NULL;
-          ")
+          ")"
           if [ "$matched" -le 0 ]; then
             echo "No Swiss GTFS stops matched OSM stations; benchmark is invalid" >&2
             exit 1
