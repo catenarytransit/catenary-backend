@@ -1,72 +1,39 @@
-# Nearby Departures SQL benchmark
+# Full Swiss Nearby Departures benchmark
 
-This benchmark compares the **existing direction-first metadata query followed by
-the itinerary-row query** to the **new selected-stop-first join**. It does not
-time the whole HTTP request, the full Rust pipeline, Aspen, or the spatial
-selection phase.
+This workflow benchmarks the **real Birch HTTP endpoint**, using a real GTFS import, not synthetic data or an isolated SQL query. It follows the repo's Southern California integration-test pattern, but imports **only** Transitland feed `f-u0-switzerland` using the normal Maple binary.
 
-## Reproducible CI (synthetic Swiss-shaped dataset)
+## GitHub Actions
 
-The `Nearby Departures PostgreSQL benchmark` workflow runs on pull requests
-and can be run manually through **Actions → Nearby Departures PostgreSQL
-benchmark → Run workflow**. It uses PostgreSQL 16 and the 16 versioned Swiss
-landmark coordinates in `swiss_landmarks.json`.
+Run [Swiss Nearby Departures real GTFS benchmark](../.github/workflows/nearby-postgres-benchmark.yml) from the Actions tab, or let the PR trigger it. The job:
 
-The default synthetic fixture is generated deterministically: 72 stop IDs per
-landmark, 24 directions per landmark, 1,200 itineraries per landmark, and 22
-stop occurrences per itinerary. It is **not Swiss GTFS**. Each landmark is
-benchmarked separately using the same stop and direction IDs, with two warmup
-runs and seven timed runs that alternate query order. The benchmark **fails**
-if the old and new result multisets differ. It writes
-`nearby-benchmark.json` as a downloadable workflow artifact.
+1. Starts PostGIS PostgreSQL 15, etcd, and Elasticsearch as service containers.
+2. Checks out `transitland-atlas`, builds Maple/Birch, and runs the actual Diesel migrations.
+3. Configures `[maple].only_feed_ids = ["f-u0-switzerland"]`, also sets `ONLY_FEED_IDS`, and imports through Maple.
+4. Asserts the required static tables are populated, the château is `schweiz`, and that `trips_compressed` contains *only* the requested source feed.
+5. Builds both the baseline Birch (PR base commit) and candidate Birch (PR merge commit) on the **same runner**; both binaries read the **same imported PostgreSQL database**.
+6. Selects a deterministic 09:00 Europe/Zurich GTFS service day from the **imported calendar**, and sends identical URL parameters to both implementations, including `skip_realtime=true` to isolate static-schedule correctness and query speed.
+7. Makes warmup requests and then repeated HTTP requests at **16 Swiss railway landmarks** from `swiss_landmarks.json`. Each request measures client wall time plus the existing detailed server timing instrumentation.
+8. Canonicalizes responses (excluding `debug` timings and ignoring irrelevant JSON array ordering), asserts baseline/candidate parity across sampled requests, reports per-location median latency, and fails on mismatches.
+9. Uploads JSON benchmark results, baseline/candidate responses, Maple logs, Birch logs, exact revision SHAs, and a Markdown results table as a GitHub Actions artifact. The table is also written to the workflow job summary.
 
-For an identical SQL comparison on a baseline commit vs PR commit, run the
-workflow on each ref with the same workflow, fixture and rounds. For this PR,
-the same workflow also measures the old and new SQL plans side by side on
-the same database snapshot, so you need not compare different runner hosts
-to establish the query-level improvement. Results from different GitHub
-runners should not be treated as a controlled A/B test.
+The GitHub workflow produces concrete timing results only **after** Maple has successfully downloaded and ingested the actual Swiss feed. The CI run may require significant build time and network download capacity.
 
-## Real imported Swiss GTFS
+The SQL-only test in `nearby_postgres.py` is no longer used by this workflow; the complete HTTP test is `nearby_full.py`.
 
-A **real-world** benchmark requires importing Swiss GTFS into a PostgreSQL
-database with the production `gtfs` schema first, including `stops`,
-`direction_pattern`, `itinerary_pattern`, and
-`itinerary_pattern_meta`. The benchmark does **not** import GTFS itself.
-Use the existing Maple import pipeline and validate that the feed is assigned
-to château `schweiz`.
+## Reproduce locally
 
-To run locally with an already populated database:
+After importing `f-u0-switzerland` into a production-schema PostgreSQL database (see the workflow's `catenaryconfig.toml` and commands), with etcd and Elasticsearch available:
 
 ```bash
-python -m pip install 'psycopg[binary]==3.2.3'
-DATABASE_URL='postgresql://...' python benchmarks/nearby_postgres.py \
-  --mode imported --rounds 7 --radius-m 500 \
-  --output switzerland-real-gtfs.json
+python3 -m pip install 'psycopg[binary]==3.2.3'
+python3 benchmarks/nearby_full.py \
+  --database-url postgres://postgres:postgres@localhost:5432/catenary \
+  --baseline-binary benchmark-bin/baseline-birch \
+  --candidate-binary benchmark-bin/candidate-birch \
+  --baseline-ref BASE_COMMIT_SHA --candidate-ref PR_COMMIT_SHA \
+  --rounds 3 --output-dir benchmark-results
 ```
 
-The GitHub Actions **imported** input uses the repository secret
-`NEARBY_BENCH_DATABASE_URL` to connect to an **existing, benchmark-only**
-PostgreSQL instance containing Swiss GTFS. It does **not** create the
-database, fetch the Swiss ZIP, or run Maple. Restrict network access and use
-a read-only DB account for this mode. On pull requests, the workflow defaults
-to synthetic data and does not need access to this secret.
+The benchmark fails if the GTFS data is missing or if the versions produce different timetable responses. The benchmark intentionally **does not** compare realtime data because Aspen updates are non-deterministic. The two implementations run sequentially, so PostgreSQL warm-cache effects may favor the second binary. For robust latency conclusions, repeat with reversed ordering or in several workflow runs; compare the per-stage server timings as well as HTTP timings.
 
-The imported-mode spatial lookup uses PostGIS geography from
-`gtfs.stops.point`. Landmarks without nearby imported stops are marked
-as skipped; the run fails if all landmarks are skipped. The query's
-returned-record parity is checked for each included landmark.
-
-## Comparing meaningful numbers
-
-Look at each landmark's `legacy_median_ms`,
-`stop_first_median_ms`, `ratio`, `rows`, and `parity`.
-Both SQL variants are executed against the **same rows**, with query order
-alternating between iterations. Timings include client-side fetching and
-decoding for the requested rows.
-
-This **does not** establish end-to-end API improvement. Test the actual
-Nearby Departures HTTP response with the same coordinates, departure time,
-radius and realtime settings for complete-system validation. In particular,
-nearest-stop-per-direction filtering and route distance limits still run in
-Rust; the SQL benchmark intentionally isolates the itinerary lookup.
+**No results are claimed before GitHub Actions has successfully completed.**
