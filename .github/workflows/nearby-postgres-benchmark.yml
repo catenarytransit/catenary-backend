@@ -1,0 +1,83 @@
+name: Nearby Departures PostgreSQL benchmark
+
+on:
+  pull_request:
+    paths:
+      - 'src/nearby_departures.rs'
+      - 'benchmarks/nearby_postgres.py'
+      - 'benchmarks/swiss_landmarks.json'
+      - '.github/workflows/nearby-postgres-benchmark.yml'
+  workflow_dispatch:
+    inputs:
+      fixture:
+        description: 'synthetic runs without secrets; imported uses a pre-populated Swiss GTFS database'
+        required: true
+        default: synthetic
+        type: choice
+        options:
+          - synthetic
+          - imported
+      rounds:
+        description: 'Timed alternating runs for each landmark'
+        required: true
+        default: '7'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  nearby-sql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: nearby_benchmark
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nearby_benchmark"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install benchmark dependencies
+        run: python -m pip install 'psycopg[binary]==3.2.3'
+      - name: Run query parity and latency benchmark
+        env:
+          SYNTHETIC_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/nearby_benchmark
+          IMPORTED_DATABASE_URL: ${{ secrets.NEARBY_BENCH_DATABASE_URL }}
+          BENCH_MODE: ${{ inputs.fixture || 'synthetic' }}
+          BENCH_ROUNDS: ${{ inputs.rounds || '7' }}
+        run: |
+          set -euo pipefail
+          if [ "$BENCH_MODE" = imported ]; then
+            if [ -z "$IMPORTED_DATABASE_URL" ]; then
+              echo "Missing repository secret NEARBY_BENCH_DATABASE_URL for imported Swiss dataset" >&2
+              exit 1
+            fi
+            DATABASE_URL="$IMPORTED_DATABASE_URL"
+          else
+            DATABASE_URL="$SYNTHETIC_DATABASE_URL"
+          fi
+          python benchmarks/nearby_postgres.py \
+            --database-url "$DATABASE_URL" \
+            --mode "$BENCH_MODE" \
+            --rounds "$BENCH_ROUNDS" \
+            --output nearby-benchmark.json
+      - name: Upload machine-readable results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nearby-postgres-benchmark
+          path: nearby-benchmark.json
+          if-no-files-found: warn
