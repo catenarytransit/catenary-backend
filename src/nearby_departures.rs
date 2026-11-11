@@ -103,15 +103,15 @@ fn snapshot_sql_timings(timings: &SharedSqlTimings) -> Vec<NearbySqlTiming> {
 macro_rules! timed_nearby_sql {
     ($timings:expr, $request_started:expr, $chateau:expr, $name:literal, $inputs:expr, $pool:expr, $query:expr, $row:ty) => {{
         let input_ids = $inputs;
-        let timing_chateau: Option<String> = if $chateau.is_empty() {
+        let timing_chateau: Option<String> = if ($chateau).is_empty() {
             None
         } else {
-            Some($chateau.to_string())
+            Some(($chateau).to_string())
         };
         let checkout_started = Instant::now();
-        let mut conn = $pool.get().await.unwrap();
+        let mut conn = ($pool).get().await.unwrap();
         let sql_started = Instant::now();
-        let result = $query.load::<$row>(&mut conn).await;
+        let result = ($query).load::<$row>(&mut conn).await;
         record_sql_timing(
             &$timings, $request_started, timing_chateau, $name, input_ids,
             checkout_started, sql_started, &result,
@@ -2166,5 +2166,48 @@ mod progressive_tests {
             r#"{"lat":0,"lon":0,"limit_per_headsign":10000}"#] {
             assert!(serde_json::from_str::<NearbyFromCoordsV3>(invalid).unwrap().validate().is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod nearby_sql_timing_tests {
+    use super::*;
+
+    #[test]
+    fn query_record_keeps_input_and_result_counts() {
+        let start = Instant::now();
+        let checkout = Instant::now();
+        let sql_start = Instant::now();
+        let result: diesel::QueryResult<Vec<i32>> = Ok(vec![1, 2, 3]);
+        let record = sql_timing(
+            start, Some("test-chateau".to_owned()), "test_query", 5,
+            checkout, sql_start, &result,
+        );
+        assert_eq!(record.chateau.as_deref(), Some("test-chateau"));
+        assert_eq!(record.query, "test_query");
+        assert_eq!(record.input_ids, 5);
+        assert_eq!(record.returned_rows, 3);
+        assert!(record.success);
+        assert!(record.query_ms >= 0.0);
+        assert!(record.pool_wait_ms >= 0.0);
+    }
+
+    #[test]
+    fn failed_queries_are_included_and_sorted_by_start() {
+        let origin = Instant::now();
+        let collection: SharedSqlTimings =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let failure: diesel::QueryResult<Vec<i32>> =
+            Err(diesel::result::Error::NotFound);
+        let start = Instant::now();
+        record_sql_timing(
+            &collection, origin, Some("test-chateau".to_owned()), "failed", 8,
+            start, Instant::now(), &failure,
+        );
+        let records = snapshot_sql_timings(&collection);
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].success);
+        assert_eq!(records[0].returned_rows, 0);
+        assert_eq!(records[0].input_ids, 8);
     }
 }
