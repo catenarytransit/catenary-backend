@@ -62,8 +62,32 @@ def validate_dataset(conn):
         raise RuntimeError(
             f"Only {FEED} should be imported; trips contain {actual_feeds}"
         )
-    return {"feed_id": FEED, "chateau": CHATEAU,
-            "tables": counts, "chateaux": chateaux}
+    with conn.cursor() as cur:
+        cur.execute("SELECT count(*) FROM gtfs.osm_stations")
+        osm_stations = cur.fetchone()[0]
+        cur.execute(
+            "SELECT count(*), count(osm_station_id), "
+            "count(DISTINCT osm_station_id), count(osm_platform_id) "
+            "FROM gtfs.stops WHERE onestop_feed_id = %s AND chateau = %s",
+            (FEED, CHATEAU),
+        )
+        total_stops, matched_stops, distinct_osm, matched_platforms = cur.fetchone()
+    if osm_stations == 0 or matched_stops == 0:
+        raise RuntimeError(
+            f"OSM enrichment failed: {osm_stations} OSM stations imported, "
+            f"{matched_stops}/{total_stops} Swiss GTFS stops matched"
+        )
+    return {
+        "feed_id": FEED, "chateau": CHATEAU,
+        "tables": counts, "chateaux": chateaux,
+        "osm_enrichment": {
+            "imported_osm_stations": osm_stations,
+            "swiss_stops": total_stops,
+            "matched_swiss_stops": matched_stops,
+            "distinct_matched_osm_stations": distinct_osm,
+            "matched_swiss_platforms": matched_platforms,
+        },
+    }
 
 
 def choose_service_day(conn):
@@ -244,7 +268,12 @@ def record(label, location, url, timeout, store, save_response=False):
     return info
 
 
-def run_variant(args, label, binary, fixture, directory):
+def run_variant(args, label, binary, fixture, directory, expected_dataset):
+    # Both control and experiment must see the very same OSM-enriched
+    # PostgreSQL fixture. Detect accidental mutation between the two runs.
+    with psycopg.connect(args.database_url, autocommit=True) as conn:
+        if validate_dataset(conn) != expected_dataset:
+            raise RuntimeError(f"{label}: database differs from the shared OSM fixture")
     proc = start_server(binary, label, directory, args.startup_timeout)
     results = {}
     try:
@@ -263,6 +292,9 @@ def run_variant(args, label, binary, fixture, directory):
                   f"groups={samples[0]['route_groups']}", flush=True)
     finally:
         stop_server(proc)
+    with psycopg.connect(args.database_url, autocommit=True) as conn:
+        if validate_dataset(conn) != expected_dataset:
+            raise RuntimeError(f"{label}: OSM-enriched database changed during benchmark")
     return results
 
 
@@ -383,9 +415,9 @@ def main():
     print("Imported GTFS:", json.dumps(dataset), flush=True)
     print("Fixed departure:", json.dumps(fixture), flush=True)
     baseline = run_variant(
-        args, "baseline", args.baseline_binary, fixture, directory)
+        args, "baseline", args.baseline_binary, fixture, directory, dataset)
     candidate = run_variant(
-        args, "candidate", args.candidate_binary, fixture, directory)
+        args, "candidate", args.candidate_binary, fixture, directory, dataset)
     compare(baseline, candidate, fixture, dataset, args, directory)
 
 
