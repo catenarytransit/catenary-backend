@@ -1152,6 +1152,15 @@ async fn fetch_chateau_data(
         }
     });
 
+    // Preserve the route restriction after mode/distance filtering. This set
+    // previously lived in the removed itinerary-row fetch block.
+    let route_ids: Vec<CompactString> = itin_meta_list
+        .iter()
+        .map(|meta| meta.route_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+
     // Extract ACTUAL itinerary IDs that match the stop
     let actual_itinerary_ids: Vec<String> = itins_result
         .iter()
