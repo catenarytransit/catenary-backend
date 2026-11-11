@@ -71,22 +71,33 @@ def synthetic_schema(conn):
     conn.commit()
 
 
-def selected_stop_ids(conn, landmark, radius_m):
-    # PostGIS-free bounding and exact haversine distance; same inputs each run.
+def selected_stop_ids(conn, landmark, radius_m, mode):
     lat, lon = landmark["lat"], landmark["lon"]
     with conn.cursor() as c:
-        c.execute("""SELECT gtfs_id FROM gtfs.stops
-            WHERE chateau = 'schweiz' AND
-                6371000 * 2 * asin(least(1, sqrt(
-                    power(sin(radians(lat - %s) / 2), 2) +
-                    cos(radians(%s)) * cos(radians(lat)) *
-                    power(sin(radians(lon - %s) / 2), 2)
-                ))) <= %s ORDER BY gtfs_id""", (lat, lat, lon, radius_m))
+        if mode == "imported":
+            # The production GTFS schema uses a PostGIS geometry point.
+            c.execute("""SELECT gtfs_id FROM gtfs.stops
+                WHERE chateau = 'schweiz' AND point IS NOT NULL
+                  AND ST_DWithin(
+                      point::geography,
+                      ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography,
+                      %s
+                  )
+                ORDER BY gtfs_id""", (lon, lat, radius_m))
+        else:
+            # PostGIS-free exact haversine distance for the synthetic fixture.
+            c.execute("""SELECT gtfs_id FROM gtfs.stops
+                WHERE chateau = 'schweiz' AND
+                    6371000 * 2 * asin(least(1, sqrt(
+                        power(sin(radians(lat - %s) / 2), 2) +
+                        cos(radians(%s)) * cos(radians(lat)) *
+                        power(sin(radians(lon - %s) / 2), 2)
+                    ))) <= %s ORDER BY gtfs_id""", (lat, lat, lon, radius_m))
         return [x[0] for x in c.fetchall()]
 
 
-def benchmark_one(conn, landmark, radius_m, rounds):
-    stops = selected_stop_ids(conn, landmark, radius_m)
+def benchmark_one(conn, landmark, radius_m, rounds, mode):
+    stops = selected_stop_ids(conn, landmark, radius_m, mode)
     if not stops:
         raise RuntimeError("No GTFS stops for " + landmark["id"])
     # Fix the stop set across old and new. Preselect direction IDs just as
@@ -186,7 +197,7 @@ def main():
         results = []
         for landmark in LANDMARKS:
             try:
-                result = benchmark_one(conn, landmark, args.radius_m, args.rounds)
+                result = benchmark_one(conn, landmark, args.radius_m, args.rounds, args.mode)
             except RuntimeError:
                 if args.mode == "imported":
                     results.append({"id": landmark["id"], "status": "no nearby stops"})
