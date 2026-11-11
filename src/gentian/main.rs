@@ -33,7 +33,7 @@ struct Args {
     #[arg(short, long)]
     output: Option<PathBuf>,
 
-    /// First UTC traffic day in Unix days. Defaults to yesterday (UTC).
+    /// First UTC traffic day in Unix days. Defaults to seven days before today (UTC).
     #[arg(long)]
     first_utc_day: Option<i32>,
 
@@ -112,9 +112,8 @@ struct Args {
     low_priority: bool,
 }
 
-/// MOTIS/Nigiri defaults to TODAY with 365 service days. Its import interval
-/// additionally starts one day earlier so previous-day overnight services
-/// remain available at the beginning of the requested timetable.
+/// Compile 365 service days plus a preceding lookback week so previous-day
+/// overnight services remain available at the beginning of the requested timetable.
 const DEFAULT_SERVICE_DAYS: u32 = 365;
 const LOOKBACK_DAYS: i32 = 7;
 
@@ -446,15 +445,15 @@ mod tests {
     }
 
     #[test]
-    fn default_horizon_is_today_with_one_lookback_day_and_365_service_days() {
+    fn default_horizon_is_today_with_one_lookback_week_and_365_service_days() {
         // 2026-10-22 is UTC day 20748.
-        assert_eq!(resolve_horizon(None, None, 20748).unwrap(), (20747, 366));
+        assert_eq!(resolve_horizon(None, None, 20748).unwrap(), (20741, 372));
     }
 
     #[test]
     fn explicit_horizon_overrides_are_independent() {
-        assert_eq!(resolve_horizon(Some(0), None, 20748).unwrap(), (0, 366));
-        assert_eq!(resolve_horizon(None, Some(35), 20748).unwrap(), (20747, 35));
+        assert_eq!(resolve_horizon(Some(0), None, 20748).unwrap(), (0, 372));
+        assert_eq!(resolve_horizon(None, Some(35), 20748).unwrap(), (20741, 35));
         assert_eq!(
             resolve_horizon(Some(20745), Some(35), 20748).unwrap(),
             (20745, 35)
