@@ -4,6 +4,7 @@
 //You are required under the APGL license to retain this annotation as is
 
 use crate::chateau_postprocess::feed_id_to_chateau_id_pivot_table;
+use crate::polygon_union::union_polygons;
 use crate::update_schedules_with_new_chateau_id::update_schedules_with_new_chateau_id;
 use catenary::schema::gtfs as gtfs_schema;
 use chateau::Chateau;
@@ -13,7 +14,7 @@ use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
 use diesel_async::{AsyncConnection, RunQueryDsl};
 use dmfr_dataset_reader::ReturnDmfrAnalysis;
-use geo::algorithm::bool_ops::BooleanOps;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::error::Error;
@@ -67,93 +68,83 @@ pub async fn refresh_metadata_assignments(
         .map(|x| (x.onestop_feed_id.clone(), x.clone()))
         .collect::<HashMap<String, catenary::models::StaticFeed>>();
 
-    //calculate new list of chateaus
-    let chateaus_pg = chateau_result
+    // Move owned inputs into a blocking task so CPU-bound geometry work does not
+    // occupy a Tokio worker. Rayon bounds concurrency across independent chateaux.
+    let chateau_inputs = chateau_result
         .iter()
-        .map(|(k, v)| {
-            let languages_avaliable_pg: HashSet<String> = {
-                let mut languages_avaliable_pg = HashSet::new();
-
-                for static_id in v.static_feeds.iter() {
-                    if let Some(static_feed) = existing_static_feeds_map.get(static_id) {
-                        if let Some(default_lang) = static_feed.default_lang.clone() {
-                            languages_avaliable_pg.insert(default_lang);
-                        }
-
-                        languages_avaliable_pg.extend(
-                            static_feed
-                                .languages_avaliable
-                                .iter()
-                                .filter_map(|x| x.clone()),
-                        );
-                    }
-                }
-                languages_avaliable_pg
-            };
-
-            //use geo_repair_polygon to merge hulls from each feed together
-
-            let hulls_from_static: Vec<
-                postgis_diesel::types::Polygon<postgis_diesel::types::Point>,
-            > = {
-                let mut hulls_from_static = vec![];
-                for static_id in v.static_feeds.iter() {
-                    if let Some(static_feed) = existing_static_feeds_map.get(static_id) {
-                        if let Some(hull) = static_feed.hull.clone() {
-                            hulls_from_static.push(hull);
-                        }
-                    }
-                }
-                hulls_from_static
-            };
-            //conversion to geo_types
-            let hulls_from_static_geo_types: Vec<geo::Polygon<f64>> = hulls_from_static
-                .iter()
-                .filter(|x| !x.rings.is_empty())
-                .filter(|x| x.rings[0].len() >= 4)
-                .map(|x| {
-                    let mut points = vec![];
-                    for point in x.rings[0].iter() {
-                        points.push(geo::Point::new(point.x, point.y));
-                    }
-                    geo::Polygon::new(geo::LineString::from(points), vec![])
-                })
-                .collect();
-
-            //merge hulls
-
-            let hull: Option<geo::MultiPolygon> = match hulls_from_static_geo_types.is_empty() {
-                true => None,
-                false => Some({
-                    let mut merged_hull: geo::MultiPolygon =
-                        hulls_from_static_geo_types[0].clone().into();
-                    for hull_subset in hulls_from_static_geo_types.iter().skip(1) {
-                        merged_hull = merged_hull.union(&hull_subset.clone());
-                    }
-                    merged_hull
-                }),
-            };
-
-            let hull_pg: Option<postgis_diesel::types::MultiPolygon<postgis_diesel::types::Point>> =
-                hull.map(catenary::postgis_to_diesel::multi_polygon_geo_to_diesel);
-
-            catenary::models::Chateau {
-                chateau: k.to_string(),
-                hull: hull_pg,
-                static_feeds: v.static_feeds.iter().map(|x| Some(x.to_string())).collect(),
-                realtime_feeds: v
-                    .realtime_feeds
-                    .iter()
-                    .map(|x| Some(x.to_string()))
-                    .collect(),
-                languages_avaliable: languages_avaliable_pg
-                    .clone()
-                    .into_iter()
-                    .map(Some)
-                    .collect::<Vec<Option<String>>>(),
-            }
+        .map(|(id, chateau)| {
+            (
+                id.clone(),
+                chateau.static_feeds.iter().cloned().collect::<Vec<_>>(),
+                chateau.realtime_feeds.iter().cloned().collect::<Vec<_>>(),
+            )
         })
-        .collect::<Vec<catenary::models::Chateau>>();
+        .collect::<Vec<_>>();
+    let chateaus_pg = tokio::task::spawn_blocking(move || {
+        chateau_inputs
+            .into_par_iter()
+            .map(|(id, static_feeds, realtime_feeds)| {
+                let languages_avaliable_pg: HashSet<String> = {
+                    let mut languages_avaliable_pg = HashSet::new();
+
+                    for static_id in &static_feeds {
+                        if let Some(static_feed) = existing_static_feeds_map.get(static_id) {
+                            if let Some(default_lang) = static_feed.default_lang.clone() {
+                                languages_avaliable_pg.insert(default_lang);
+                            }
+
+                            languages_avaliable_pg.extend(
+                                static_feed
+                                    .languages_avaliable
+                                    .iter()
+                                    .filter_map(|x| x.clone()),
+                            );
+                        }
+                    }
+                    languages_avaliable_pg
+                };
+
+                // Read borrowed hulls directly; avoid cloning the PostGIS geometries
+                // and repeatedly overlaying an ever-growing intermediate multipolygon.
+                let polygons = static_feeds
+                    .iter()
+                    .filter_map(|id| existing_static_feeds_map.get(id))
+                    .filter_map(|feed| feed.hull.as_ref())
+                    .filter_map(|hull| hull.rings.first())
+                    .filter(|ring| ring.len() >= 4)
+                    .map(|ring| {
+                        geo::Polygon::new(
+                            geo::LineString::from(
+                                ring.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+                            ),
+                            vec![],
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let hull = if polygons.is_empty() {
+                    None
+                } else {
+                    Some(union_polygons(polygons))
+                };
+
+                let hull_pg: Option<
+                    postgis_diesel::types::MultiPolygon<postgis_diesel::types::Point>,
+                > = hull.map(catenary::postgis_to_diesel::multi_polygon_geo_to_diesel);
+
+                catenary::models::Chateau {
+                    chateau: id,
+                    hull: hull_pg,
+                    static_feeds: static_feeds.into_iter().map(Some).collect(),
+                    realtime_feeds: realtime_feeds.into_iter().map(Some).collect(),
+                    languages_avaliable: languages_avaliable_pg
+                        .into_iter()
+                        .map(Some)
+                        .collect::<Vec<Option<String>>>(),
+                }
+            })
+            .collect::<Vec<catenary::models::Chateau>>()
+    })
+    .await?;
 
     for delete_chateau in existing_chateaus {
         //if the current chateau doesn't exist anymore, delete it
