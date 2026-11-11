@@ -1886,7 +1886,7 @@ mod pattern_batch_tests {
             rows.sort_unstable();
             assert_eq!(rows, ids);
             assert_eq!(
-                calls.load(Ordering::SeqCst),
+                AtomicUsize::load(&calls, Ordering::SeqCst),
                 count.div_ceil(PATTERN_QUERY_BATCH_SIZE)
             );
         }
@@ -1916,8 +1916,8 @@ mod pattern_batch_tests {
         );
         assert_eq!(first.unwrap().len(), ids.len());
         assert_eq!(second.unwrap().len(), ids.len());
-        assert_eq!(peak.load(Ordering::SeqCst), PATTERN_QUERY_CONCURRENCY);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(AtomicUsize::load(&peak, Ordering::SeqCst), PATTERN_QUERY_CONCURRENCY);
+        assert_eq!(AtomicUsize::load(&active, Ordering::SeqCst), 0);
         assert_eq!(slots.available_permits(), PATTERN_QUERY_CONCURRENCY);
     }
 
