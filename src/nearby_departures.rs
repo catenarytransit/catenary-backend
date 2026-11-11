@@ -33,6 +33,93 @@ use crate::make_calendar_structure_from_pg;
 const PATTERN_QUERY_BATCH_SIZE: usize = 128;
 const PATTERN_QUERY_CONCURRENCY: usize = 4;
 
+// Each HTTP/WS load has its own trace; concurrent chateaux and batches add
+// records without serializing database work.
+#[derive(Serialize, Clone, Debug)]
+pub struct NearbySqlTiming {
+    pub chateau: Option<String>,
+    pub query: &'static str,
+    // Milliseconds since the request began. Concurrent queries overlap.
+    pub started_ms: f64,
+    pub pool_wait_ms: f64,
+    pub query_ms: f64,
+    pub input_ids: usize,
+    pub returned_rows: usize,
+    pub success: bool,
+}
+
+type SharedSqlTimings = Arc<std::sync::Mutex<Vec<NearbySqlTiming>>>;
+
+fn sql_timing<Row>(
+    request_started: Instant,
+    chateau: Option<String>,
+    query: &'static str,
+    input_ids: usize,
+    checkout_started: Instant,
+    sql_started: Instant,
+    result: &diesel::QueryResult<Vec<Row>>,
+) -> NearbySqlTiming {
+    let finished = Instant::now();
+    NearbySqlTiming {
+        chateau,
+        query,
+        started_ms: checkout_started.duration_since(request_started).as_secs_f64() * 1000.0,
+        pool_wait_ms: sql_started.duration_since(checkout_started).as_secs_f64() * 1000.0,
+        query_ms: finished.duration_since(sql_started).as_secs_f64() * 1000.0,
+        input_ids,
+        returned_rows: result.as_ref().map_or(0, Vec::len),
+        success: result.is_ok(),
+    }
+}
+
+fn record_sql_timing<Row>(
+    timings: &SharedSqlTimings,
+    request_started: Instant,
+    chateau: Option<String>,
+    query: &'static str,
+    input_ids: usize,
+    checkout_started: Instant,
+    sql_started: Instant,
+    result: &diesel::QueryResult<Vec<Row>>,
+) {
+    let record = sql_timing(
+        request_started, chateau, query, input_ids, checkout_started, sql_started, result,
+    );
+    timings.lock().expect("nearby SQL timing mutex poisoned").push(record);
+}
+
+fn snapshot_sql_timings(timings: &SharedSqlTimings) -> Vec<NearbySqlTiming> {
+    let mut records = timings.lock().expect("nearby SQL timing mutex poisoned").clone();
+    records.sort_by(|a, b| {
+        a.started_ms.total_cmp(&b.started_ms)
+            .then_with(|| a.chateau.cmp(&b.chateau))
+            .then_with(|| a.query.cmp(b.query))
+    });
+    records
+}
+
+// A record is emitted for each SQL query, including every parallel batch.
+// Capture the chateau and batch size before Diesel consumes query parameters.
+macro_rules! timed_nearby_sql {
+    ($timings:expr, $request_started:expr, $chateau:expr, $name:literal, $inputs:expr, $pool:expr, $query:expr, $row:ty) => {{
+        let input_ids = $inputs;
+        let timing_chateau: Option<String> = if ($chateau).is_empty() {
+            None
+        } else {
+            Some(($chateau).to_string())
+        };
+        let checkout_started = Instant::now();
+        let mut conn = ($pool).get().await.unwrap();
+        let sql_started = Instant::now();
+        let result = ($query).load::<$row>(&mut conn).await;
+        record_sql_timing(
+            &$timings, $request_started, timing_chateau, $name, input_ids,
+            checkout_started, sql_started, &result,
+        );
+        result
+    }};
+}
+
 async fn load_pattern_batches<Id, Row, Load, LoadFuture>(
     ids: &[Id],
     query_slots: &tokio::sync::Semaphore,
@@ -162,6 +249,7 @@ pub struct NearbyDeparturesDebug {
     pub pipeline_processing_time_ms: u128,
     pub initial_stop_count: Option<usize>,
     pub initial_osm_station_count: Option<usize>,
+    pub sql_queries: Vec<NearbySqlTiming>,
 }
 
 // --- Long Distance Structs ---
@@ -268,12 +356,20 @@ pub async fn prepare_nearby(
         query.lon, query.lat, spatial_resolution
     );
     let stops_start = Instant::now();
-    let stops = crate::schema::gtfs::stops::dsl::stops
+    let stops_result = crate::schema::gtfs::stops::dsl::stops
         .filter(sql::<Bool>(&where_query))
         .select(crate::models::Stop::as_select())
         .load::<crate::models::Stop>(&mut conn)
-        .await.map_err(|e| e.to_string())?;
-    Ok(PreparedNearby { query, stops, start, db_connection_time, stops_fetch_time: stops_start.elapsed() })
+        .await;
+    let stop_sql_timing = sql_timing(
+        start, None, "nearby_spatial_stops", 1, connection_start, stops_start, &stops_result,
+    );
+    let stops = stops_result.map_err(|e| e.to_string())?;
+    Ok(PreparedNearby {
+        query, stops, start, db_connection_time, stops_fetch_time: stops_start.elapsed(),
+        stop_sql_timing,
+        priority_sql_timings: Arc::new(std::sync::Mutex::new(Vec::new())),
+    })
 }
 
 pub struct PreparedNearby {
@@ -282,6 +378,8 @@ pub struct PreparedNearby {
     start: Instant,
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
+    stop_sql_timing: NearbySqlTiming,
+    priority_sql_timings: SharedSqlTimings,
 }
 
 impl NearbyFromCoordsV3 {
@@ -330,6 +428,9 @@ impl PreparedNearby {
         let rt_timeout_ms = query.rt_timeout_ms.unwrap_or(2000);
 
         let start = self.start;
+        let mut initial_sql_timings = vec![self.stop_sql_timing.clone()];
+        initial_sql_timings.extend(snapshot_sql_timings(&self.priority_sql_timings));
+        let sql_timings: SharedSqlTimings = Arc::new(std::sync::Mutex::new(initial_sql_timings));
         let db_connection_time = self.db_connection_time;
         let limit_per_station = query.limit_per_station.unwrap_or(10);
         let limit_per_headsign = query.limit_per_headsign.unwrap_or(20);
@@ -383,6 +484,7 @@ impl PreparedNearby {
                     pipeline_processing_time_ms: 0,
                     initial_stop_count: Some(0),
                     initial_osm_station_count: Some(0),
+                    sql_queries: snapshot_sql_timings(&sql_timings),
                 },
             });
         }
@@ -532,6 +634,7 @@ impl PreparedNearby {
             );
 
             let selection = selection.clone();
+            let sql_timings_for_chateau = sql_timings.clone();
             chateau_futures.push(async move {
                 fetch_chateau_data(
                     pool,
@@ -549,6 +652,8 @@ impl PreparedNearby {
                     skip_realtime,
                     rt_timeout_ms,
                     selection,
+                    sql_timings_for_chateau,
+                    start,
                 )
                 .await
             });
@@ -639,13 +744,15 @@ impl PreparedNearby {
         let mut osm_station_info_map: HashMap<i64, crate::models::OsmStation> = HashMap::new();
 
         if !osm_ids_to_fetch.is_empty() {
-            let mut conn = pool.get().await.map_err(|e| e.to_string())?;
             let osm_stations_data: Vec<crate::models::OsmStation> =
-                crate::schema::gtfs::osm_stations::dsl::osm_stations
-                    .filter(crate::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids_to_fetch))
-                    .load::<crate::models::OsmStation>(&mut conn)
-                    .await
-                    .unwrap_or_default();
+                timed_nearby_sql!(
+                    sql_timings, start, "", "osm_stations", osm_ids_to_fetch.len(),
+                    pool,
+                    crate::schema::gtfs::osm_stations::dsl::osm_stations
+                        .filter(crate::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids_to_fetch)),
+                    crate::models::OsmStation
+                )
+                .unwrap_or_default();
             for s in osm_stations_data {
                 osm_station_info_map.insert(s.osm_id, s);
             }
@@ -744,6 +851,7 @@ impl PreparedNearby {
                 pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
                 initial_stop_count: Some(stops.len()),
                 initial_osm_station_count: Some(number_of_unique_osm_stations),
+                sql_queries: snapshot_sql_timings(&sql_timings),
             },
         })
     }
@@ -765,6 +873,8 @@ async fn fetch_chateau_data(
     skip_realtime: bool,
     rt_timeout_ms: u64,
     selection: RouteSelection,
+    sql_timings: SharedSqlTimings,
+    request_started: Instant,
 ) -> Option<(
     HashMap<(String, StationKey), Vec<DepartureItem>>,
     HashMap<
@@ -814,16 +924,13 @@ async fn fetch_chateau_data(
         }
 
         if !stops_to_check.is_empty() {
-            let mut conn = pool.get().await.unwrap();
             let direction_rows: Vec<crate::models::DirectionPatternRow> =
-                crate::schema::gtfs::direction_pattern::dsl::direction_pattern
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "nearest_direction_rows", stops_to_check.len(), pool, crate::schema::gtfs::direction_pattern::dsl::direction_pattern
                     .filter(crate::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
                     .filter(
                         crate::schema::gtfs::direction_pattern::stop_id.eq_any(&stops_to_check),
                     )
-                    .select(crate::models::DirectionPatternRow::as_select())
-                    .load(&mut conn)
-                    .await
+                    .select(crate::models::DirectionPatternRow::as_select()), crate::models::DirectionPatternRow)
                     .unwrap_or_default();
 
             let mut best_stops: HashMap<(String, Option<i16>), (f64, String)> = HashMap::new();
@@ -859,13 +966,10 @@ async fn fetch_chateau_data(
     // A. Fetch Direction & Itinerary Meta
     let direction_rows_list: Vec<crate::models::DirectionPatternRow> =
         load_pattern_batches(&final_stop_ids, &query_slots, |stop_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::direction_pattern::dsl::direction_pattern
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_rows", stop_batch.len(), pool, crate::schema::gtfs::direction_pattern::dsl::direction_pattern
                 .filter(crate::schema::gtfs::direction_pattern::chateau.eq(&chateau))
                 .filter(crate::schema::gtfs::direction_pattern::stop_id.eq_any(stop_batch))
-                .select(crate::models::DirectionPatternRow::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::DirectionPatternRow::as_select()), crate::models::DirectionPatternRow)
         })
         .await
         .unwrap_or_default();
@@ -885,16 +989,13 @@ async fn fetch_chateau_data(
         &direction_pattern_ids,
         &query_slots,
         |pattern_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_metadata_by_direction", pattern_batch.len(), pool, crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
                 .filter(crate::schema::gtfs::itinerary_pattern_meta::chateau.eq(&chateau))
                 .filter(
                     crate::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
                         .eq_any(pattern_batch),
                 )
-                .select(crate::models::ItineraryPatternMeta::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::ItineraryPatternMeta::as_select()), crate::models::ItineraryPatternMeta)
         },
     )
     .await
@@ -913,13 +1014,10 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
     let routes_result: Vec<crate::models::Route> = {
-        let mut conn = pool.get().await.unwrap();
-        crate::schema::gtfs::routes::dsl::routes
+        timed_nearby_sql!(sql_timings, request_started, &chateau, "routes", candidate_route_ids.len(), pool, crate::schema::gtfs::routes::dsl::routes
             .filter(crate::schema::gtfs::routes::chateau.eq(&chateau))
             .filter(crate::schema::gtfs::routes::route_id.eq_any(&candidate_route_ids))
-            .select(crate::models::Route::as_select())
-            .load(&mut conn)
-            .await
+            .select(crate::models::Route::as_select()), crate::models::Route)
             .unwrap_or_default()
     };
     let route_types: HashMap<_, _> = routes_result
@@ -982,8 +1080,7 @@ async fn fetch_chateau_data(
                 &filtered_itinerary_ids,
                 &query_slots,
                 |itinerary_batch| async {
-                    let mut conn = pool_clone.get().await.unwrap();
-                    crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_rows_at_stops", itinerary_batch.len(), pool_clone, crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                         .filter(
                             crate::schema::gtfs::itinerary_pattern::chateau
                                 .eq(&chateau_clone_itin),
@@ -996,9 +1093,7 @@ async fn fetch_chateau_data(
                             crate::schema::gtfs::itinerary_pattern::stop_id
                                 .eq_any(&direction_stop_ids),
                         )
-                        .select(crate::models::ItineraryPatternRow::as_select())
-                        .load::<crate::models::ItineraryPatternRow>(&mut conn)
-                        .await
+                        .select(crate::models::ItineraryPatternRow::as_select()), crate::models::ItineraryPatternRow)
                 },
             )
             .await
@@ -1009,8 +1104,7 @@ async fn fetch_chateau_data(
                 &direction_pattern_ids,
                 &query_slots,
                 |pattern_batch| async {
-                    let mut conn = pool_clone.get().await.unwrap();
-                    crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                    timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_metadata", pattern_batch.len(), pool_clone, crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
                         .filter(
                             crate::schema::gtfs::direction_pattern_meta::chateau
                                 .eq(&chateau_clone_dm),
@@ -1019,9 +1113,7 @@ async fn fetch_chateau_data(
                             crate::schema::gtfs::direction_pattern_meta::direction_pattern_id
                                 .eq_any(pattern_batch),
                         )
-                        .select(crate::models::DirectionPatternMeta::as_select())
-                        .load::<crate::models::DirectionPatternMeta>(&mut conn)
-                        .await
+                        .select(crate::models::DirectionPatternMeta::as_select()), crate::models::DirectionPatternMeta)
                 },
             )
             .await
@@ -1064,17 +1156,14 @@ async fn fetch_chateau_data(
         &actual_itinerary_ids,
         &query_slots,
         |itinerary_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::trips_compressed::dsl::trips_compressed
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "compressed_trips", itinerary_batch.len(), pool, crate::schema::gtfs::trips_compressed::dsl::trips_compressed
                 .filter(crate::schema::gtfs::trips_compressed::chateau.eq(&chateau))
                 .filter(crate::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
                 .filter(
                     crate::schema::gtfs::trips_compressed::itinerary_pattern_id
                         .eq_any(itinerary_batch),
                 )
-                .select(crate::models::CompressedTrip::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::CompressedTrip::as_select()), crate::models::CompressedTrip)
         },
     )
     .await
@@ -1104,27 +1193,23 @@ async fn fetch_chateau_data(
         let s_ids1 = service_ids_vec.clone();
         let s_ids2 = service_ids_vec;
 
+        let sql_timings_calendar = sql_timings.clone();
+        let sql_timings_calendar_dates = sql_timings.clone();
         tokio::join!(
             async move {
-                let mut conn = pool_cal1.get().await.unwrap();
-                crate::schema::gtfs::calendar::dsl::calendar
+                timed_nearby_sql!(sql_timings_calendar, request_started, &chateau_cal1, "calendar", s_ids1.len(), pool_cal1, crate::schema::gtfs::calendar::dsl::calendar
                     .filter(crate::schema::gtfs::calendar::chateau.eq(chateau_cal1))
                     .filter(crate::schema::gtfs::calendar::service_id.eq_any(&s_ids1))
-                    .select(crate::models::Calendar::as_select())
-                    .load::<crate::models::Calendar>(&mut conn)
-                    .await
+                    .select(crate::models::Calendar::as_select()), crate::models::Calendar)
                     .unwrap_or_default()
             },
             async move {
-                let mut conn = pool_cal2.get().await.unwrap();
-                crate::schema::gtfs::calendar_dates::dsl::calendar_dates
+                timed_nearby_sql!(sql_timings_calendar_dates, request_started, &chateau_cal2, "calendar_dates", s_ids2.len(), pool_cal2, crate::schema::gtfs::calendar_dates::dsl::calendar_dates
                     .filter(crate::schema::gtfs::calendar_dates::chateau.eq(chateau_cal2))
                     .filter(crate::schema::gtfs::calendar_dates::service_id.eq_any(&s_ids2))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.le(date_window_end))
-                    .select(crate::models::CalendarDate::as_select())
-                    .load::<crate::models::CalendarDate>(&mut conn)
-                    .await
+                    .select(crate::models::CalendarDate::as_select()), crate::models::CalendarDate)
                     .unwrap_or_default()
             }
         )
@@ -1176,14 +1261,11 @@ async fn fetch_chateau_data(
         .values()
         .filter_map(|r| r.agency_id.clone())
         .collect();
-    let mut agency_conn = pool.get().await.unwrap();
     let agencies_list: Vec<crate::models::Agency> =
-        crate::schema::gtfs::agencies::dsl::agencies
+        timed_nearby_sql!(sql_timings, request_started, &chateau, "agencies", agency_ids.len(), pool, crate::schema::gtfs::agencies::dsl::agencies
             .filter(crate::schema::gtfs::agencies::chateau.eq(chateau.clone()))
             .filter(crate::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
-            .select(crate::models::Agency::as_select())
-            .load(&mut agency_conn)
-            .await
+            .select(crate::models::Agency::as_select()), crate::models::Agency)
             .unwrap_or_default();
     let agencies: BTreeMap<String, crate::models::Agency> = agencies_list
         .into_iter()
@@ -1285,16 +1367,13 @@ async fn fetch_chateau_data(
             &filtered_itinerary_ids,
             &query_slots,
             |itinerary_batch| async {
-                let mut conn = pool.get().await.unwrap();
-                crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "paris_terminal_itinerary_rows", itinerary_batch.len(), pool, crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                     .filter(crate::schema::gtfs::itinerary_pattern::chateau.eq(&chateau))
                     .filter(
                         crate::schema::gtfs::itinerary_pattern::itinerary_pattern_id
                             .eq_any(itinerary_batch),
                     )
-                    .select(crate::models::ItineraryPatternRow::as_select())
-                    .load(&mut conn)
-                    .await
+                    .select(crate::models::ItineraryPatternRow::as_select()), crate::models::ItineraryPatternRow)
             },
         )
         .await
@@ -1318,17 +1397,14 @@ async fn fetch_chateau_data(
             .collect();
 
         if !last_stop_ids.is_empty() {
-            let mut conn = pool.get().await.unwrap();
             let stop_names: Vec<(String, Option<String>)> =
-                crate::schema::gtfs::stops::dsl::stops
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "paris_terminal_stop_names", last_stop_ids.len(), pool, crate::schema::gtfs::stops::dsl::stops
                     .filter(crate::schema::gtfs::stops::chateau.eq(chateau.clone()))
                     .filter(crate::schema::gtfs::stops::gtfs_id.eq_any(&last_stop_ids))
                     .select((
                         crate::schema::gtfs::stops::gtfs_id,
                         crate::schema::gtfs::stops::name,
-                    ))
-                    .load(&mut conn)
-                    .await
+                    )), (String, Option<String>))
                     .unwrap_or_default();
 
             let mut stop_names_map = HashMap::new();
@@ -1810,7 +1886,7 @@ mod pattern_batch_tests {
             rows.sort_unstable();
             assert_eq!(rows, ids);
             assert_eq!(
-                calls.load(Ordering::SeqCst),
+                AtomicUsize::load(&calls, Ordering::SeqCst),
                 count.div_ceil(PATTERN_QUERY_BATCH_SIZE)
             );
         }
@@ -1840,8 +1916,8 @@ mod pattern_batch_tests {
         );
         assert_eq!(first.unwrap().len(), ids.len());
         assert_eq!(second.unwrap().len(), ids.len());
-        assert_eq!(peak.load(Ordering::SeqCst), PATTERN_QUERY_CONCURRENCY);
-        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(AtomicUsize::load(&peak, Ordering::SeqCst), PATTERN_QUERY_CONCURRENCY);
+        assert_eq!(AtomicUsize::load(&active, Ordering::SeqCst), 0);
         assert_eq!(slots.available_permits(), PATTERN_QUERY_CONCURRENCY);
     }
 
@@ -1988,20 +2064,32 @@ impl PreparedNearby {
                 }
             }
         }
+        let priority_timings = self.priority_sql_timings.clone();
+        let request_started = self.start;
         let parts: Vec<Vec<RouteCandidate>> = futures::stream::iter(by_chateau)
             .map(|(chateau, distances)| {
                 let pool = pool.clone();
+                let priority_timings = priority_timings.clone();
                 async move {
                     use crate::schema::gtfs::{direction_pattern as rows, direction_pattern_meta as meta};
-                    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
                     let ids: Vec<String> = distances.keys().cloned().collect();
-                    let rows: Vec<(CompactString, Option<CompactString>, Option<i16>)> = rows::table
+                    let input_ids = ids.len();
+                    let checkout_started = Instant::now();
+                    let mut conn = pool.get().await.map_err(|e| e.to_string())?;
+                    let sql_started = Instant::now();
+                    let sql_result = rows::table
                         .inner_join(meta::table.on(rows::chateau.eq(meta::chateau)
                             .and(rows::direction_pattern_id.eq(meta::direction_pattern_id))))
                         .filter(rows::chateau.eq(&chateau))
                         .filter(rows::stop_id.eq_any(ids))
                         .select((rows::stop_id, meta::route_id, meta::route_type))
-                        .load(&mut conn).await.map_err(|e| e.to_string())?;
+                        .load::<(CompactString, Option<CompactString>, Option<i16>)>(&mut conn).await;
+                    record_sql_timing(
+                        &priority_timings, request_started, Some(chateau.clone()),
+                        "priority_direction_route_join", input_ids,
+                        checkout_started, sql_started, &sql_result,
+                    );
+                    let rows = sql_result.map_err(|e| e.to_string())?;
                     Ok::<_, String>(rows.into_iter().filter_map(|(stop, route, mode)| {
                         let distance = *distances.get(stop.as_str())?;
                         let mode = mode?;
@@ -2078,5 +2166,48 @@ mod progressive_tests {
             r#"{"lat":0,"lon":0,"limit_per_headsign":10000}"#] {
             assert!(serde_json::from_str::<NearbyFromCoordsV3>(invalid).unwrap().validate().is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod nearby_sql_timing_tests {
+    use super::*;
+
+    #[test]
+    fn query_record_keeps_input_and_result_counts() {
+        let start = Instant::now();
+        let checkout = Instant::now();
+        let sql_start = Instant::now();
+        let result: diesel::QueryResult<Vec<i32>> = Ok(vec![1, 2, 3]);
+        let record = sql_timing(
+            start, Some("test-chateau".to_owned()), "test_query", 5,
+            checkout, sql_start, &result,
+        );
+        assert_eq!(record.chateau.as_deref(), Some("test-chateau"));
+        assert_eq!(record.query, "test_query");
+        assert_eq!(record.input_ids, 5);
+        assert_eq!(record.returned_rows, 3);
+        assert!(record.success);
+        assert!(record.query_ms >= 0.0);
+        assert!(record.pool_wait_ms >= 0.0);
+    }
+
+    #[test]
+    fn failed_queries_are_included_and_sorted_by_start() {
+        let origin = Instant::now();
+        let collection: SharedSqlTimings =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let failure: diesel::QueryResult<Vec<i32>> =
+            Err(diesel::result::Error::NotFound);
+        let start = Instant::now();
+        record_sql_timing(
+            &collection, origin, Some("test-chateau".to_owned()), "failed", 8,
+            start, Instant::now(), &failure,
+        );
+        let records = snapshot_sql_timings(&collection);
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].success);
+        assert_eq!(records[0].returned_rows, 0);
+        assert_eq!(records[0].input_ids, 8);
     }
 }
