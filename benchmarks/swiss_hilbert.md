@@ -79,13 +79,14 @@ layout-derived journey hashes, response ordering, cursors, debug counters and
 geometry. A changed or missing journey fails the job; speedups with failed
 parity must not be interpreted as an improvement.
 
-The `swiss-hilbert-experiment` artifact contains raw JSON/CSV samples,
-responses, requests, source selections, compile/server logs, exact revisions,
-toolchain/dependency lockfile, graph manifest, timetable checksums and a
-PostgreSQL dump of the imported GTFS schema. Timetables themselves are not
-uploaded. Store the artifact before its 14-day expiry if longer retention is
-needed. The dump and graph manifest identify the snapshot; reconstructing
-the OSR graph later still requires the original PBF/OSR revision.
+The `swiss-hilbert-experiment` artifact contains timing JSON/CSV samples,
+parity status, benchmark requests, source selections, exact revisions,
+toolchain/dependency lockfile, graph manifest and timetable checksums.
+Raw routing responses and service logs remain on the runner for validation;
+the artifact allowlist excludes them and the imported database. Store the
+artifact before its 14-day expiry if longer retention is needed. Repeating
+a run later can download changed GTFS/OSM inputs; compare snapshot metadata
+before comparing results across separate runs.
 
 For an already prepared local dataset:
 

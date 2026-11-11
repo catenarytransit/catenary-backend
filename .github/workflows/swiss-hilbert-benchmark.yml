@@ -164,9 +164,6 @@ jobs:
           s = json.loads(Path('benchmark-results/selection.json').read_text())
           assert s['sources'] and {s['onestop_feed_id'] for s in s['sources']} == {'f-u0-switzerland'}, s
           PY
-          # Maple records downloaded feed hashes/URLs; preserve the ingested
-          # schema snapshot too so a later changing live feed cannot obscure parity.
-          pg_dump "$DATABASE_URL" --schema=gtfs --format=custom > benchmark-results/swiss-gtfs.dump
       - name: Select service dates and shared compilation horizon
         run: |
           python - <<'PY'
@@ -247,7 +244,7 @@ jobs:
         run: |
           set -euo pipefail
           python benchmarks/swiss_hilbert.py --monday "$SERVICE_MONDAY" --rounds "$BENCH_ROUNDS"
-      - name: Upload reproducible inputs, responses and raw timing samples
+      - name: Upload benchmark timings, parity status and public fixture metadata
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -255,6 +252,20 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
           path: |
-            benchmark-results/
-            !benchmark-results/*/switzerland.bin
-            !benchmark-results/*/switzerland.platforms.json
+            benchmark-results/summary.md
+            benchmark-results/summary.json
+            benchmark-results/per-query.json
+            benchmark-results/samples.csv
+            benchmark-results/samples.jsonl
+            benchmark-results/requests.json
+            benchmark-results/selection.json
+            benchmark-results/*-sha.txt
+            benchmark-results/service-date.txt
+            benchmark-results/timetable-sha256.txt
+            benchmark-results/osr-manifest.json
+            benchmark-results/rustc.txt
+            benchmark-results/Cargo.lock
+            benchmark-results/cpu.txt
+            benchmark-results/memory.txt
+            benchmark-results/kernel.txt
+            benchmark-results/*/sources.json
