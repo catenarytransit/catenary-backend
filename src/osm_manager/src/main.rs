@@ -500,8 +500,10 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
         ensure!(revision == after_revision,
             "Geofabrik revision changed during download for {}; retry the manager", region.id);
         let (geometry, boundary_url) = fetch_boundary(client, region)?;
+        // OSR declares this as a boolean value option, not a presence-only
+        // switch. A bare -p aborts argument parsing before extraction.
         let status = Command::new(&cfg.osr_extract)
-            .arg("-p").arg("-i").arg(&download).arg("-o").arg(&staging)
+            .arg("--with_platforms=true").arg("-i").arg(&download).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
         // Verify expected files. Actual serializer compatibility is checked

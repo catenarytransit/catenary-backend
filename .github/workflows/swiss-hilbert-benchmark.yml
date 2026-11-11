@@ -7,6 +7,7 @@ on:
       - 'benchmarks/*swiss*routing*'
       - 'benchmarks/*hilbert*'
       - 'src/gentian/**'
+      - 'src/osm_manager/**'
   workflow_dispatch:
     inputs:
       rounds:
@@ -114,6 +115,7 @@ jobs:
           cargo build --release --bin maple --bin gentian --bin edelweiss
           cargo test --release --bin gentian
           cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+          cargo test --release --manifest-path src/osm_manager/Cargo.toml
           bash src/osm_manager/build_matched_extractor.sh
           cp target/release/gentian benchmark-bin/candidate-gentian
           cp target/release/edelweiss benchmark-bin/candidate-edelweiss
