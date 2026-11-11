@@ -1,0 +1,163 @@
+{
+  "description": "Approximate pedestrian-access landmark coordinates; fixed fixtures, not geocoded at runtime.",
+  "sources": [
+    "https://ethz.ch/en/campus/erreichen/hoenggerberg.html",
+    "https://ethz.ch/en/campus/getting-to-know/learning-and-working/campusinfo/anreise-campus-info-hg.html",
+    "https://www.epfl.ch/labs/lms/page-92390-en-html/",
+    "https://www.epfl.ch/labs/lgb/how-to-find-us/",
+    "https://www.myswitzerland.com/en-ch/experiences/chapel-bridge-and-water-tower/",
+    "https://www.myswitzerland.com/en-ch/experiences/lion-monument/",
+    "https://bern.com/en/explore/tourist-attractions/attractions/zytglogge-clock-tower",
+    "https://www.bernmobil.ch/sites/default/files/2023-12/Kantenplan%20Zytglogge%202024.pdf",
+    "https://www.verkehrshaus.ch/en/your-visit/plan-a-visit/how-to-reach-us"
+  ],
+  "places": {
+    "eth-zentrum": {
+      "name": "ETH Zürich Zentrum",
+      "lat": 47.3763,
+      "lon": 8.548
+    },
+    "eth-honggerberg": {
+      "name": "ETH Zürich Hönggerberg",
+      "lat": 47.4086,
+      "lon": 8.5077
+    },
+    "epfl": {
+      "name": "EPFL campus",
+      "lat": 46.52184,
+      "lon": 6.56488
+    },
+    "unil": {
+      "name": "UNIL Mouline campus access",
+      "lat": 46.5238,
+      "lon": 6.5798
+    },
+    "zytglogge": {
+      "name": "Bern Zytglogge",
+      "lat": 46.948,
+      "lon": 7.4478
+    },
+    "paul-klee": {
+      "name": "Zentrum Paul Klee",
+      "lat": 46.9489,
+      "lon": 7.4735
+    },
+    "chapel-bridge": {
+      "name": "Lucerne Chapel Bridge",
+      "lat": 47.0517,
+      "lon": 8.3077
+    },
+    "lion": {
+      "name": "Lucerne Lion Monument",
+      "lat": 47.0583,
+      "lon": 8.3106
+    },
+    "zurich": {
+      "name": "Zürich HB",
+      "lat": 47.37818,
+      "lon": 8.54019
+    },
+    "geneva": {
+      "name": "Genève-Cornavin",
+      "lat": 46.21015,
+      "lon": 6.14244
+    },
+    "basel": {
+      "name": "Basel SBB",
+      "lat": 47.54742,
+      "lon": 7.58956
+    },
+    "bern": {
+      "name": "Bern Bahnhof",
+      "lat": 46.94872,
+      "lon": 7.43945
+    },
+    "lausanne": {
+      "name": "Lausanne Gare",
+      "lat": 46.51679,
+      "lon": 6.62909
+    },
+    "lucerne": {
+      "name": "Luzern Bahnhof",
+      "lat": 47.05022,
+      "lon": 8.31019
+    },
+    "lugano": {
+      "name": "Lugano Stazione",
+      "lat": 46.00595,
+      "lon": 8.94717
+    },
+    "chur": {
+      "name": "Chur Bahnhof",
+      "lat": 46.85358,
+      "lon": 9.53232
+    },
+    "transport-museum": {
+      "name": "Swiss Museum of Transport",
+      "lat": 47.052,
+      "lon": 8.3359
+    }
+  },
+  "pairs": [
+    [
+      "intercity",
+      "zurich",
+      "geneva"
+    ],
+    [
+      "intercity",
+      "basel",
+      "lausanne"
+    ],
+    [
+      "intercity",
+      "bern",
+      "lucerne"
+    ],
+    [
+      "intercity",
+      "zurich",
+      "lugano"
+    ],
+    [
+      "intercity",
+      "geneva",
+      "bern"
+    ],
+    [
+      "intercity",
+      "basel",
+      "chur"
+    ],
+    [
+      "intercity",
+      "eth-zentrum",
+      "epfl"
+    ],
+    [
+      "intercity",
+      "chapel-bridge",
+      "zytglogge"
+    ],
+    [
+      "local",
+      "eth-zentrum",
+      "eth-honggerberg"
+    ],
+    [
+      "local",
+      "epfl",
+      "unil"
+    ],
+    [
+      "local",
+      "zytglogge",
+      "paul-klee"
+    ],
+    [
+      "local",
+      "lion",
+      "transport-museum"
+    ]
+  ]
+}

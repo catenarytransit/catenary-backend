@@ -1,0 +1,260 @@
+name: Swiss routing - main versus Hilbert location order
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/swiss-hilbert-benchmark.yml'
+      - 'benchmarks/*swiss*routing*'
+      - 'benchmarks/*hilbert*'
+      - 'src/gentian/**'
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: 'Measured blocks per variant (at least 3; 6 balances variant order)'
+        default: '6'
+        type: string
+      monday:
+        description: 'Monday YYYY-MM-DD within downloaded GTFS coverage; blank selects next Monday'
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swiss-hilbert-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
+      PGPASSWORD: postgres
+      CC: gcc-14
+      CXX: g++-14
+      OSR_BUILD_JOBS: '2'
+      SKIP_PFAEDLE: '1'
+      RAYON_NUM_THREADS: '2'
+      BENCH_ROUNDS: ${{ inputs.rounds || '6' }}
+      BENCH_MONDAY: ${{ inputs.monday }}
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_DB: catenary
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d catenary"
+          --health-interval 5s --health-timeout 5s --health-retries 15
+
+    steps:
+      # Ordinary Git avoids checkout's cleanup of the repository's unused
+      # temp/pfaedle gitlink, which has no .gitmodules URL.
+      - name: Checkout candidate and pin main
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REF_NAME: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin https://github.com/catenarytransit/catenary-backend.git
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            git fetch --no-tags origin "refs/pull/${PR_NUMBER}/merge"
+          else
+            git fetch --no-tags origin "$REF_NAME"
+          fi
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          mkdir -p benchmark-results benchmark-bin
+          git rev-parse HEAD > benchmark-results/candidate-sha.txt
+          git fetch --no-tags origin main
+          git rev-parse FETCH_HEAD > benchmark-results/main-sha.txt
+          git worktree add --detach /tmp/hilbert-main "$(cat benchmark-results/main-sha.txt)"
+          lscpu > benchmark-results/cpu.txt
+          free -h > benchmark-results/memory.txt
+          uname -a > benchmark-results/kernel.txt
+      - uses: actions/checkout@v4
+        with:
+          repository: catenarytransit/transitland-atlas
+          path: transitland-atlas
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: swiss-hilbert-gcc14
+          cache-on-failure: true
+          cache-targets: true
+          workspaces: |
+            . -> target
+            src/osm_manager -> target
+      - name: Install native and ingestion dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            gcc-14 g++-14 build-essential binutils lld libtbb-dev \
+            protobuf-compiler libpq-dev libssl-dev pkg-config cmake ninja-build \
+            libcoinutils-dev coinor-libcbc-dev postgresql-client \
+            libboost-all-dev libzstd-dev liblz4-dev wget
+          if ! command -v diesel >/dev/null 2>&1; then
+            cargo install diesel_cli --no-default-features --features postgres --locked
+          fi
+      - name: Validate benchmark harness
+        run: python -m unittest discover -s benchmarks -p 'test_swiss_hilbert.py' -v
+      - name: Build candidate, native extractor and location-remapping tests
+        run: |
+          set -euo pipefail
+          cargo build --release --bin maple --bin gentian --bin edelweiss
+          cargo test --release --bin gentian
+          cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+          bash src/osm_manager/build_matched_extractor.sh
+          cp target/release/gentian benchmark-bin/candidate-gentian
+          cp target/release/edelweiss benchmark-bin/candidate-edelweiss
+          # Preserve the reader matching each executable, even if rebuilding
+          # main reuses Cargo output paths. LD_LIBRARY_PATH is set per variant.
+          mkdir -p benchmark-bin/candidate-lib
+          bridge="$(ldd target/release/gentian | awk '$1 == "libcatenary_osr_bridge.so" {print $3; exit}')"
+          test -f "$bridge"
+          cp "$bridge" benchmark-bin/candidate-lib/
+          cp Cargo.lock benchmark-results/Cargo.lock
+          rustc -Vv > benchmark-results/rustc.txt
+          git -C transitland-atlas rev-parse HEAD > benchmark-results/atlas-sha.txt
+      - name: Download Switzerland boundary and configure Swiss-only Maple and OSR
+        run: |
+          set -euo pipefail
+          mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
+          curl -fL --retry 4 https://download.geofabrik.de/europe/switzerland.geojson \
+            -o routing_regions/switzerland.geojson
+          python benchmarks/prepare_swiss_routing.py
+          python - <<'PY'
+          import tomllib
+          with open('catenaryconfig.toml', 'rb') as f:
+              c = tomllib.load(f)
+          assert c['maple']['only_feed_ids'] == ['f-u0-switzerland']
+          assert c['osm_manager']['regions'] == ['europe/switzerland']
+          PY
+      - name: Download europe/switzerland OSM and extract matching OSR graph
+        run: |
+          set -euo pipefail
+          ./src/osm_manager/target/release/osm_manager --config catenaryconfig.toml run
+          test -s temp/osr-data/regions/europe/switzerland/routing.bin
+          cp temp/osr-data/regions/europe/switzerland/manifest.json benchmark-results/osr-manifest.json
+      - name: Import f-u0-switzerland once for all three variants
+        run: |
+          set -euo pipefail
+          diesel migration run
+          ONLY_FEED_IDS=f-u0-switzerland ./target/release/maple > benchmark-results/maple.log 2>&1 || {
+            tail -n 180 benchmark-results/maple.log
+            exit 1
+          }
+          tail -n 45 benchmark-results/maple.log
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'ANALYZE'
+          ./benchmark-bin/candidate-gentian --region switzerland --list-chateaux \
+            > benchmark-results/selection.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s = json.loads(Path('benchmark-results/selection.json').read_text())
+          assert s['sources'] and {s['onestop_feed_id'] for s in s['sources']} == {'f-u0-switzerland'}, s
+          PY
+          # Maple records downloaded feed hashes/URLs; preserve the ingested
+          # schema snapshot too so a later changing live feed cannot obscure parity.
+          pg_dump "$DATABASE_URL" --schema=gtfs --format=custom > benchmark-results/swiss-gtfs.dump
+      - name: Select service dates and shared compilation horizon
+        run: |
+          python - <<'PY'
+          from datetime import date, timedelta
+          import os
+          from pathlib import Path
+          monday = os.environ.get('BENCH_MONDAY')
+          if monday:
+              monday = date.fromisoformat(monday)
+          else:
+              today = date.today()
+              monday = today + timedelta(days=(7-today.weekday()) % 7 or 7)
+          assert monday.weekday() == 0, 'Service date must be Monday'
+          first_day = (monday - timedelta(days=2) - date(1970,1,1)).days
+          Path('benchmark-results/service-date.txt').write_text(str(monday) + '\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f'SERVICE_MONDAY={monday}\nFIRST_UTC_DAY={first_day}\n')
+          PY
+      - name: Compile candidate source-order and Hilbert-order timetables
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/benchmark-bin/candidate-lib"
+          for layout in source hilbert; do
+            ./benchmark-bin/candidate-gentian --build --region switzerland \
+              --location-order "$layout" --first-utc-day "$FIRST_UTC_DAY" --day-count 10 \
+              --osr-dir temp/osr-data/regions/europe/switzerland \
+              --max-seconds 900 --candidate-meters 1200 \
+              --output "benchmark-results/$layout/switzerland.bin" \
+              > "benchmark-results/$layout/compile.log" 2>&1 || {
+                tail -n 100 "benchmark-results/$layout/compile.log"
+                exit 1
+              }
+            ./benchmark-bin/candidate-gentian --inspect-timetable "benchmark-results/$layout/switzerland.bin" \
+              > "benchmark-results/$layout/sources.json"
+          done
+          grep -F 'globally Hilbert-ordered' benchmark-results/hilbert/compile.log
+      - name: Build pinned main with the same dependency lockfile and toolchain
+        run: |
+          set -euo pipefail
+          cp benchmark-results/Cargo.lock /tmp/hilbert-main/Cargo.lock
+          (
+            cd /tmp/hilbert-main
+            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build --release --locked --bin gentian --bin edelweiss
+          )
+          cp target/release/gentian benchmark-bin/main-gentian
+          cp target/release/edelweiss benchmark-bin/main-edelweiss
+          mkdir -p benchmark-bin/main-lib
+          bridge="$(ldd target/release/gentian | awk '$1 == "libcatenary_osr_bridge.so" {print $3; exit}')"
+          test -f "$bridge"
+          cp "$bridge" benchmark-bin/main-lib/
+      - name: Compile main timetable from identical DB, graph and horizon
+        run: |
+          set -euo pipefail
+          export LD_LIBRARY_PATH="$GITHUB_WORKSPACE/benchmark-bin/main-lib"
+          ./benchmark-bin/main-gentian --build --region switzerland \
+            --first-utc-day "$FIRST_UTC_DAY" --day-count 10 \
+            --osr-dir temp/osr-data/regions/europe/switzerland \
+            --max-seconds 900 --candidate-meters 1200 \
+            --output benchmark-results/main/switzerland.bin \
+            > benchmark-results/main/compile.log 2>&1 || {
+              tail -n 100 benchmark-results/main/compile.log
+              exit 1
+            }
+          ./benchmark-bin/main-gentian --inspect-timetable benchmark-results/main/switzerland.bin \
+            > benchmark-results/main/sources.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          sources = [json.loads(Path(f'benchmark-results/{v}/sources.json').read_text())
+                     for v in ('main', 'source', 'hilbert')]
+          assert all(s['sources'] == sources[0]['sources'] for s in sources)
+          assert all(s['route_count'] == sources[0]['route_count'] > 0 for s in sources)
+          PY
+          sha256sum benchmark-results/*/switzerland.bin > benchmark-results/timetable-sha256.txt
+          # Free build/cache memory pressure before measurement.
+          sync
+      - name: Measure paired warm-service queries and require journey parity
+        run: |
+          set -euo pipefail
+          python benchmarks/swiss_hilbert.py --monday "$SERVICE_MONDAY" --rounds "$BENCH_ROUNDS"
+      - name: Upload reproducible inputs, responses and raw timing samples
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiss-hilbert-experiment
+          retention-days: 14
+          if-no-files-found: ignore
+          path: |
+            benchmark-results/
+            !benchmark-results/*/switzerland.bin
+            !benchmark-results/*/switzerland.platforms.json

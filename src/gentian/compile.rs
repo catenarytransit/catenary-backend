@@ -1108,6 +1108,7 @@ pub fn build(
     output: &Path,
     scratch_dir: Option<&Path>,
     schedule_memory_mib: usize,
+    hilbert_locations: bool,
 ) -> Result<()> {
     ensure!((1..=512).contains(&day_count), "invalid timetable horizon");
     for source in sources {
@@ -1147,6 +1148,12 @@ pub fn build(
         );
     }
     assemble_routes(&mut tt, schedules)?;
+    transfer_rules.finish(&mut tt);
+    // Reindex after route assembly so route/transport order is identical in
+    // both layouts, before any OSR candidates, footpaths or sidecars exist.
+    if hilbert_locations {
+        super::location_order::apply(&mut tt)?;
+    }
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
     let transfers = super::footpaths::compute(
         osr_dir,
@@ -1160,7 +1167,6 @@ pub fn build(
     // Closing the directed, OSR-verified graph preserves this invariant.
     let transfers = super::footpaths::bounded_closure(&transfers, max_seconds)?;
     add_footpaths(&mut tt, transfers)?;
-    transfer_rules.finish(&mut tt);
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
     let sidecar = output.with_extension("platforms.json");
     let staging = sidecar.with_extension("platforms.json.tmp");

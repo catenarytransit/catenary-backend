@@ -19,6 +19,7 @@ mod compile;
 mod external_assembly;
 mod file_sizes;
 mod footpaths;
+mod location_order;
 mod transfer_rules;
 
 #[derive(Parser, Debug)]
@@ -79,6 +80,10 @@ struct Args {
     /// This does not cap stop indexes, final timetable columns or OSR memory.
     #[arg(long, default_value_t = 64)]
     schedule_memory_mib: usize,
+
+    /// Experimental global Hilbert location numbering. Default keeps source/GTFS order.
+    #[arg(long, default_value = "source", value_parser = ["source", "hilbert"], requires = "build")]
+    location_order: String,
 
     /// Scratch filesystem for external schedule runs. Defaults to the output
     /// directory so /tmp tmpfs does not consume the compiler's memory budget.
@@ -324,6 +329,7 @@ fn main() -> Result<()> {
             &output,
             args.scratch_dir.as_deref(),
             args.schedule_memory_mib,
+            args.location_order == "hilbert",
         )?;
         return file_sizes::print_published(&selection.id, &output);
     }
