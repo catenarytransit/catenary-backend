@@ -33,6 +33,19 @@ use crate::make_calendar_structure_from_pg;
 const PATTERN_QUERY_BATCH_SIZE: usize = 128;
 const PATTERN_QUERY_CONCURRENCY: usize = 4;
 
+// This endpoint reads its trips from trips_compressed, so it never uses the
+// potentially large itinerary_pattern_meta.trip_ids array. Explicitly select
+// only the metadata needed to construct nearby departures.
+#[derive(Debug, Queryable, Selectable)]
+#[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
+struct NearbyItineraryPatternMeta {
+    itinerary_pattern_id: String,
+    route_id: CompactString,
+    direction_pattern_id: Option<String>,
+    timezone: String,
+    row_count: i32,
+}
+
 // Each HTTP/WS load has its own trace; concurrent chateaux and batches add
 // records without serializing database work.
 #[derive(Serialize, Clone, Debug)]
@@ -985,7 +998,7 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let mut itin_meta_list: Vec<crate::models::ItineraryPatternMeta> = load_pattern_batches(
+    let mut itin_meta_list: Vec<NearbyItineraryPatternMeta> = load_pattern_batches(
         &direction_pattern_ids,
         &query_slots,
         |pattern_batch| async {
@@ -995,7 +1008,7 @@ async fn fetch_chateau_data(
                     crate::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
                         .eq_any(pattern_batch),
                 )
-                .select(crate::models::ItineraryPatternMeta::as_select()), crate::models::ItineraryPatternMeta)
+                .select(NearbyItineraryPatternMeta::as_select()), NearbyItineraryPatternMeta)
         },
     )
     .await
@@ -1231,7 +1244,7 @@ async fn fetch_chateau_data(
             .push(itin);
     }
 
-    let mut itin_meta: BTreeMap<String, crate::models::ItineraryPatternMeta> = BTreeMap::new();
+    let mut itin_meta: BTreeMap<String, NearbyItineraryPatternMeta> = BTreeMap::new();
     for meta in itin_meta_list {
         itin_meta.insert(meta.itinerary_pattern_id.clone(), meta);
     }
@@ -2209,5 +2222,32 @@ mod nearby_sql_timing_tests {
         assert!(!records[0].success);
         assert_eq!(records[0].returned_rows, 0);
         assert_eq!(records[0].input_ids, 8);
+    }
+}
+
+#[cfg(test)]
+mod nearby_metadata_projection_tests {
+    use super::*;
+
+    #[test]
+    fn nearby_metadata_sql_omits_trip_ids() {
+        use crate::schema::gtfs::itinerary_pattern_meta::dsl as meta;
+
+        let query = meta::itinerary_pattern_meta
+            .filter(meta::chateau.eq("test-chateau"))
+            .select(NearbyItineraryPatternMeta::as_select());
+
+        // This checks the actual Diesel SELECT list, without a live database.
+        let sql = diesel::debug_query::<diesel::pg::Pg, _>(&query).to_string();
+        assert!(!sql.contains("trip_ids"), "unexpected trip_ids in: {sql}");
+        for column in [
+            "itinerary_pattern_id",
+            "route_id",
+            "direction_pattern_id",
+            "timezone",
+            "row_count",
+        ] {
+            assert!(sql.contains(column), "missing {column} in: {sql}");
+        }
     }
 }
