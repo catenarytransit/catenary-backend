@@ -918,16 +918,13 @@ async fn fetch_chateau_data(
         }
 
         if !stops_to_check.is_empty() {
-            let mut conn = pool.get().await.unwrap();
             let direction_rows: Vec<crate::models::DirectionPatternRow> =
-                crate::schema::gtfs::direction_pattern::dsl::direction_pattern
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "nearest_direction_rows", stops_to_check.len(), pool, crate::schema::gtfs::direction_pattern::dsl::direction_pattern
                     .filter(crate::schema::gtfs::direction_pattern::chateau.eq(chateau.clone()))
                     .filter(
                         crate::schema::gtfs::direction_pattern::stop_id.eq_any(&stops_to_check),
                     )
-                    .select(crate::models::DirectionPatternRow::as_select())
-                    .load(&mut conn)
-                    .await
+                    .select(crate::models::DirectionPatternRow::as_select()), crate::models::DirectionPatternRow)
                     .unwrap_or_default();
 
             let mut best_stops: HashMap<(String, Option<i16>), (f64, String)> = HashMap::new();
@@ -963,13 +960,10 @@ async fn fetch_chateau_data(
     // A. Fetch Direction & Itinerary Meta
     let direction_rows_list: Vec<crate::models::DirectionPatternRow> =
         load_pattern_batches(&final_stop_ids, &query_slots, |stop_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::direction_pattern::dsl::direction_pattern
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_rows", stop_batch.len(), pool, crate::schema::gtfs::direction_pattern::dsl::direction_pattern
                 .filter(crate::schema::gtfs::direction_pattern::chateau.eq(&chateau))
                 .filter(crate::schema::gtfs::direction_pattern::stop_id.eq_any(stop_batch))
-                .select(crate::models::DirectionPatternRow::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::DirectionPatternRow::as_select()), crate::models::DirectionPatternRow)
         })
         .await
         .unwrap_or_default();
@@ -989,16 +983,13 @@ async fn fetch_chateau_data(
         &direction_pattern_ids,
         &query_slots,
         |pattern_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_metadata_by_direction", pattern_batch.len(), pool, crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
                 .filter(crate::schema::gtfs::itinerary_pattern_meta::chateau.eq(&chateau))
                 .filter(
                     crate::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
                         .eq_any(pattern_batch),
                 )
-                .select(crate::models::ItineraryPatternMeta::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::ItineraryPatternMeta::as_select()), crate::models::ItineraryPatternMeta)
         },
     )
     .await
@@ -1017,13 +1008,10 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
     let routes_result: Vec<crate::models::Route> = {
-        let mut conn = pool.get().await.unwrap();
-        crate::schema::gtfs::routes::dsl::routes
+        timed_nearby_sql!(sql_timings, request_started, &chateau, "routes", candidate_route_ids.len(), pool, crate::schema::gtfs::routes::dsl::routes
             .filter(crate::schema::gtfs::routes::chateau.eq(&chateau))
             .filter(crate::schema::gtfs::routes::route_id.eq_any(&candidate_route_ids))
-            .select(crate::models::Route::as_select())
-            .load(&mut conn)
-            .await
+            .select(crate::models::Route::as_select()), crate::models::Route)
             .unwrap_or_default()
     };
     let route_types: HashMap<_, _> = routes_result
@@ -1086,8 +1074,7 @@ async fn fetch_chateau_data(
                 &filtered_itinerary_ids,
                 &query_slots,
                 |itinerary_batch| async {
-                    let mut conn = pool_clone.get().await.unwrap();
-                    crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                    timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_rows_at_stops", itinerary_batch.len(), pool_clone, crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                         .filter(
                             crate::schema::gtfs::itinerary_pattern::chateau
                                 .eq(&chateau_clone_itin),
@@ -1100,9 +1087,7 @@ async fn fetch_chateau_data(
                             crate::schema::gtfs::itinerary_pattern::stop_id
                                 .eq_any(&direction_stop_ids),
                         )
-                        .select(crate::models::ItineraryPatternRow::as_select())
-                        .load::<crate::models::ItineraryPatternRow>(&mut conn)
-                        .await
+                        .select(crate::models::ItineraryPatternRow::as_select()), crate::models::ItineraryPatternRow)
                 },
             )
             .await
@@ -1113,8 +1098,7 @@ async fn fetch_chateau_data(
                 &direction_pattern_ids,
                 &query_slots,
                 |pattern_batch| async {
-                    let mut conn = pool_clone.get().await.unwrap();
-                    crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                    timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_metadata", pattern_batch.len(), pool_clone, crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
                         .filter(
                             crate::schema::gtfs::direction_pattern_meta::chateau
                                 .eq(&chateau_clone_dm),
@@ -1123,9 +1107,7 @@ async fn fetch_chateau_data(
                             crate::schema::gtfs::direction_pattern_meta::direction_pattern_id
                                 .eq_any(pattern_batch),
                         )
-                        .select(crate::models::DirectionPatternMeta::as_select())
-                        .load::<crate::models::DirectionPatternMeta>(&mut conn)
-                        .await
+                        .select(crate::models::DirectionPatternMeta::as_select()), crate::models::DirectionPatternMeta)
                 },
             )
             .await
@@ -1168,17 +1150,14 @@ async fn fetch_chateau_data(
         &actual_itinerary_ids,
         &query_slots,
         |itinerary_batch| async {
-            let mut conn = pool.get().await.unwrap();
-            crate::schema::gtfs::trips_compressed::dsl::trips_compressed
+            timed_nearby_sql!(sql_timings, request_started, &chateau, "compressed_trips", itinerary_batch.len(), pool, crate::schema::gtfs::trips_compressed::dsl::trips_compressed
                 .filter(crate::schema::gtfs::trips_compressed::chateau.eq(&chateau))
                 .filter(crate::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
                 .filter(
                     crate::schema::gtfs::trips_compressed::itinerary_pattern_id
                         .eq_any(itinerary_batch),
                 )
-                .select(crate::models::CompressedTrip::as_select())
-                .load(&mut conn)
-                .await
+                .select(crate::models::CompressedTrip::as_select()), crate::models::CompressedTrip)
         },
     )
     .await
@@ -1389,16 +1368,13 @@ async fn fetch_chateau_data(
             &filtered_itinerary_ids,
             &query_slots,
             |itinerary_batch| async {
-                let mut conn = pool.get().await.unwrap();
-                crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "paris_terminal_itinerary_rows", itinerary_batch.len(), pool, crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
                     .filter(crate::schema::gtfs::itinerary_pattern::chateau.eq(&chateau))
                     .filter(
                         crate::schema::gtfs::itinerary_pattern::itinerary_pattern_id
                             .eq_any(itinerary_batch),
                     )
-                    .select(crate::models::ItineraryPatternRow::as_select())
-                    .load(&mut conn)
-                    .await
+                    .select(crate::models::ItineraryPatternRow::as_select()), crate::models::ItineraryPatternRow)
             },
         )
         .await
