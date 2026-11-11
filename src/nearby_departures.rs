@@ -998,21 +998,63 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
 
-    let mut itin_meta_list: Vec<NearbyItineraryPatternMeta> = load_pattern_batches(
-        &direction_pattern_ids,
+    // Start with itinerary occurrences at the *selected stops*, not every
+    // itinerary belonging to a direction serving one of these stops.
+    // The existing (chateau, stop_id) index makes this an efficient anchor.
+    // Joining on the complete feed/attempt/pattern key prevents accidental
+    // matches across GTFS imports sharing an itinerary_pattern_id.
+    let direction_stop_ids: Vec<String> = direction_rows_list
+        .iter()
+        .map(|r| r.stop_id.to_string())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let matching_rows_and_metadata: Vec<(
+        crate::models::ItineraryPatternRow,
+        NearbyItineraryPatternMeta,
+    )> = load_pattern_batches(
+        &direction_stop_ids,
         &query_slots,
-        |pattern_batch| async {
-            timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_metadata_by_direction", pattern_batch.len(), pool, crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(crate::schema::gtfs::itinerary_pattern_meta::chateau.eq(&chateau))
-                .filter(
-                    crate::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                        .eq_any(pattern_batch),
-                )
-                .select(NearbyItineraryPatternMeta::as_select()), NearbyItineraryPatternMeta)
+        |stop_batch| async {
+            use crate::schema::gtfs::{
+                itinerary_pattern as ip,
+                itinerary_pattern_meta as im,
+            };
+            timed_nearby_sql!(
+                sql_timings, request_started, &chateau, "itinerary_rows_by_selected_stops",
+                stop_batch.len(), pool,
+                ip::table
+                    .inner_join(im::table.on(
+                        ip::onestop_feed_id.eq(im::onestop_feed_id)
+                            .and(ip::attempt_id.eq(im::attempt_id))
+                            .and(ip::itinerary_pattern_id.eq(im::itinerary_pattern_id))
+                    ))
+                    .filter(ip::chateau.eq(&chateau))
+                    .filter(im::chateau.eq(&chateau))
+                    .filter(ip::stop_id.eq_any(stop_batch))
+                    .filter(im::direction_pattern_id.eq_any(&direction_pattern_ids))
+                    .select((
+                        crate::models::ItineraryPatternRow::as_select(),
+                        NearbyItineraryPatternMeta::as_select(),
+                    )),
+                (crate::models::ItineraryPatternRow, NearbyItineraryPatternMeta)
+            )
         },
     )
     .await
     .unwrap_or_default();
+
+    // Only materialize one copy of a pattern's metadata. Multiple stops and
+    // repeated occurrences of the same stop must remain distinct row entries.
+    let mut itin_meta_list = Vec::new();
+    let mut itins_result = Vec::with_capacity(matching_rows_and_metadata.len());
+    let mut seen_itinerary_ids = HashSet::new();
+    for (row, meta) in matching_rows_and_metadata {
+        if seen_itinerary_ids.insert(meta.itinerary_pattern_id.clone()) {
+            itin_meta_list.push(meta);
+        }
+        itins_result.push(row);
+    }
 
     // Partition before loading route dictionaries, itinerary rows or trips.
     itin_meta_list.retain(|meta| selection.allows(&chateau, meta.route_id.as_str()));
@@ -1069,70 +1111,25 @@ async fn fetch_chateau_data(
 
     // Active services optimization removed (performance regression)
 
-    // C. Fetch Remaining Data (Filtered by Active Services)
-    let direction_stop_ids: Vec<String> = direction_rows_list
-        .iter()
-        .map(|r| r.stop_id.to_string())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-
-    let route_ids: Vec<CompactString> = itin_meta_list
-        .iter()
-        .map(|m| m.route_id.clone())
-        .collect::<HashSet<_>>()
-        .into_iter()
-        .collect();
-    let pool_clone = pool.clone();
-    let chateau_clone_itin = chateau.clone();
-    let chateau_clone_dm = chateau.clone();
-
-    let (mut itins_result, direction_meta_result) = tokio::join!(
-        async {
-            load_pattern_batches(
-                &filtered_itinerary_ids,
-                &query_slots,
-                |itinerary_batch| async {
-                    timed_nearby_sql!(sql_timings, request_started, &chateau, "itinerary_rows_at_stops", itinerary_batch.len(), pool_clone, crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                        .filter(
-                            crate::schema::gtfs::itinerary_pattern::chateau
-                                .eq(&chateau_clone_itin),
-                        )
-                        .filter(
-                            crate::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                                .eq_any(itinerary_batch),
-                        )
-                        .filter(
-                            crate::schema::gtfs::itinerary_pattern::stop_id
-                                .eq_any(&direction_stop_ids),
-                        )
-                        .select(crate::models::ItineraryPatternRow::as_select()), crate::models::ItineraryPatternRow)
-                },
-            )
-            .await
-            .unwrap_or_default()
-        },
-        async {
-            load_pattern_batches(
-                &direction_pattern_ids,
-                &query_slots,
-                |pattern_batch| async {
-                    timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_metadata", pattern_batch.len(), pool_clone, crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
-                        .filter(
-                            crate::schema::gtfs::direction_pattern_meta::chateau
-                                .eq(&chateau_clone_dm),
-                        )
-                        .filter(
-                            crate::schema::gtfs::direction_pattern_meta::direction_pattern_id
-                                .eq_any(pattern_batch),
-                        )
-                        .select(crate::models::DirectionPatternMeta::as_select()), crate::models::DirectionPatternMeta)
-                },
-            )
-            .await
-            .unwrap_or_default()
-        },
-    );
+    // C. Fetch direction labels. Stop rows have already been fetched by
+    // selected stop ID, so no itinerary-ID fan-out is needed here.
+    let direction_meta_result: Vec<crate::models::DirectionPatternMeta> =
+        load_pattern_batches(
+            &direction_pattern_ids,
+            &query_slots,
+            |pattern_batch| async {
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "direction_metadata",
+                    pattern_batch.len(), pool,
+                    crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
+                        .filter(crate::schema::gtfs::direction_pattern_meta::chateau.eq(&chateau))
+                        .filter(crate::schema::gtfs::direction_pattern_meta::direction_pattern_id
+                            .eq_any(pattern_batch))
+                        .select(crate::models::DirectionPatternMeta::as_select()),
+                    crate::models::DirectionPatternMeta)
+            },
+        )
+        .await
+        .unwrap_or_default();
 
     // A retained itinerary can still contain a distant bus row when a closer
     // stop made its direction eligible. Exclude each row before fetching trips
