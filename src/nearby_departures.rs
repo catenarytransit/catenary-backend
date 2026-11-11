@@ -740,13 +740,15 @@ impl PreparedNearby {
         let mut osm_station_info_map: HashMap<i64, crate::models::OsmStation> = HashMap::new();
 
         if !osm_ids_to_fetch.is_empty() {
-            let mut conn = pool.get().await.map_err(|e| e.to_string())?;
             let osm_stations_data: Vec<crate::models::OsmStation> =
-                crate::schema::gtfs::osm_stations::dsl::osm_stations
-                    .filter(crate::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids_to_fetch))
-                    .load::<crate::models::OsmStation>(&mut conn)
-                    .await
-                    .unwrap_or_default();
+                timed_nearby_sql!(
+                    sql_timings, start, "", "osm_stations", osm_ids_to_fetch.len(),
+                    pool,
+                    crate::schema::gtfs::osm_stations::dsl::osm_stations
+                        .filter(crate::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids_to_fetch)),
+                    crate::models::OsmStation
+                )
+                .unwrap_or_default();
             for s in osm_stations_data {
                 osm_station_info_map.insert(s.osm_id, s);
             }
@@ -1189,25 +1191,19 @@ async fn fetch_chateau_data(
 
         tokio::join!(
             async move {
-                let mut conn = pool_cal1.get().await.unwrap();
-                crate::schema::gtfs::calendar::dsl::calendar
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "calendar", s_ids1.len(), pool_cal1, crate::schema::gtfs::calendar::dsl::calendar
                     .filter(crate::schema::gtfs::calendar::chateau.eq(chateau_cal1))
                     .filter(crate::schema::gtfs::calendar::service_id.eq_any(&s_ids1))
-                    .select(crate::models::Calendar::as_select())
-                    .load::<crate::models::Calendar>(&mut conn)
-                    .await
+                    .select(crate::models::Calendar::as_select()), crate::models::Calendar)
                     .unwrap_or_default()
             },
             async move {
-                let mut conn = pool_cal2.get().await.unwrap();
-                crate::schema::gtfs::calendar_dates::dsl::calendar_dates
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "calendar_dates", s_ids2.len(), pool_cal2, crate::schema::gtfs::calendar_dates::dsl::calendar_dates
                     .filter(crate::schema::gtfs::calendar_dates::chateau.eq(chateau_cal2))
                     .filter(crate::schema::gtfs::calendar_dates::service_id.eq_any(&s_ids2))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.ge(date_window_start))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.le(date_window_end))
-                    .select(crate::models::CalendarDate::as_select())
-                    .load::<crate::models::CalendarDate>(&mut conn)
-                    .await
+                    .select(crate::models::CalendarDate::as_select()), crate::models::CalendarDate)
                     .unwrap_or_default()
             }
         )
@@ -1259,14 +1255,11 @@ async fn fetch_chateau_data(
         .values()
         .filter_map(|r| r.agency_id.clone())
         .collect();
-    let mut agency_conn = pool.get().await.unwrap();
     let agencies_list: Vec<crate::models::Agency> =
-        crate::schema::gtfs::agencies::dsl::agencies
+        timed_nearby_sql!(sql_timings, request_started, &chateau, "agencies", agency_ids.len(), pool, crate::schema::gtfs::agencies::dsl::agencies
             .filter(crate::schema::gtfs::agencies::chateau.eq(chateau.clone()))
             .filter(crate::schema::gtfs::agencies::agency_id.eq_any(&agency_ids))
-            .select(crate::models::Agency::as_select())
-            .load(&mut agency_conn)
-            .await
+            .select(crate::models::Agency::as_select()), crate::models::Agency)
             .unwrap_or_default();
     let agencies: BTreeMap<String, crate::models::Agency> = agencies_list
         .into_iter()
@@ -1398,17 +1391,14 @@ async fn fetch_chateau_data(
             .collect();
 
         if !last_stop_ids.is_empty() {
-            let mut conn = pool.get().await.unwrap();
             let stop_names: Vec<(String, Option<String>)> =
-                crate::schema::gtfs::stops::dsl::stops
+                timed_nearby_sql!(sql_timings, request_started, &chateau, "paris_terminal_stop_names", last_stop_ids.len(), pool, crate::schema::gtfs::stops::dsl::stops
                     .filter(crate::schema::gtfs::stops::chateau.eq(chateau.clone()))
                     .filter(crate::schema::gtfs::stops::gtfs_id.eq_any(&last_stop_ids))
                     .select((
                         crate::schema::gtfs::stops::gtfs_id,
                         crate::schema::gtfs::stops::name,
-                    ))
-                    .load(&mut conn)
-                    .await
+                    )), (String, Option<String>))
                     .unwrap_or_default();
 
             let mut stop_names_map = HashMap::new();
