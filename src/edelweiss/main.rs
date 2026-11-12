@@ -10,6 +10,7 @@ mod websocket;
 
 use actix_web::{App, HttpRequest, HttpResponse, HttpServer, web};
 use anyhow::{Context, Result};
+use catenary::routing_common::mmap_residency::StartupMmapAdvice;
 use catenary::routing_common::native_osr::{Endpoint as StreetEndpoint, NativeOsr};
 use catenary::routing_common::profile_search::ProfileOptions;
 use catenary::routing_common::raptor_query::{Journey, RaptorStats, WalkingEndpoint};
@@ -876,10 +877,40 @@ fn resolve_database_url(
         .filter(|url| !url.trim().is_empty()))
 }
 
+fn startup_mmap_advice(config_path: &std::path::Path) -> Result<StartupMmapAdvice> {
+    let contents = fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let config: catenary::catenaryconfig::CatenaryConfig =
+        toml::from_str(&contents).with_context(|| format!("parsing {}", config_path.display()))?;
+    Ok(config.edelweiss.startup_mmap_advice)
+}
+
+fn advise_startup_mappings(router: &Router, osr: &NativeOsr, advice: StartupMmapAdvice) {
+    if advice == StartupMmapAdvice::None {
+        return;
+    }
+    for region in &router.transit {
+        let started = Instant::now();
+        match region.timetable.advise_residency(advice) {
+            Ok(bytes) => eprintln!(
+                "Edelweiss startup: timetable {}: {advice:?} advised {bytes} bytes in {:.3}s (not a reclaimed-byte measurement)",
+                region.id,
+                started.elapsed().as_secs_f64(),
+            ),
+            Err(error) => eprintln!(
+                "Warning: timetable {}: mmap advice failed: {error}",
+                region.id
+            ),
+        }
+    }
+    osr.advise_residency(advice);
+}
+
 #[actix_web::main]
 async fn main() -> Result<()> {
     let startup_started = Instant::now();
     let args = Args::parse();
+    let mmap_advice = startup_mmap_advice(&args.catenary_config)?;
     eprintln!(
         "Edelweiss startup: loading routing configuration {}",
         args.regions_config.display()
@@ -954,6 +985,9 @@ async fn main() -> Result<()> {
             }
         }
     }
+    // Every startup scan/check is complete. Advise once before CLI queries or
+    // HTTP traffic can fault the useful working set back in.
+    advise_startup_mappings(&router, &osr, mmap_advice);
     if let Some(path) = args.query {
         let timing_output = args.query_timings.clone();
         let request: Request = serde_json::from_slice(

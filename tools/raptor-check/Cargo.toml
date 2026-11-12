@@ -7,6 +7,10 @@ publish = false
 [workspace]
 
 [dependencies]
+libc = "0.2"
+memmap2 = "0.9"
+toml = "0.8"
+uuid = { version = "1", features = ["v4"] }
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
