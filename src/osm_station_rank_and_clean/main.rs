@@ -2,6 +2,10 @@
 // Catenary Transit Initiatives
 // OSM Station Ranking and Cleaning Tool
 
+mod ranking_region;
+
+use ranking_region::{GreaterLondon, RankingRegion};
+
 use catenary::models::*;
 use catenary::postgres_tools::make_async_pool;
 use chrono::Utc;
@@ -391,6 +395,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         "Loaded {} target country polygons/multipolygons into R-Tree.",
         country_rtree.size()
     );
+
+    let greater_london = GreaterLondon::load()?;
 
     let pool = make_async_pool().await?;
     let mut conn = pool.get().await?;
@@ -813,65 +819,63 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
         // 4. Score Calculation & Partitioned Cycle
         let mut station_countries = HashMap::new();
+        let mut london_stations = Vec::new();
+        let mut rest_of_uk_stations = Vec::new();
         let mut target_country_stations = Vec::new();
         let mut other_stations = Vec::new();
 
         for s in &parent_stations {
             let check_point = geo::Point::new(s.point.x, s.point.y);
             let mut matched_country = None;
-            let lat_delta = 0.01;
-            let lon_delta = 0.01;
-            let search_box = rstar::AABB::from_corners(
-                [s.point.x - lon_delta, s.point.y - lat_delta],
-                [s.point.x + lon_delta, s.point.y + lat_delta],
-            );
-            for area in country_rtree.locate_in_envelope(&search_box) {
+            let search_box = AABB::from_point([s.point.x, s.point.y]);
+            for area in country_rtree.locate_in_envelope_intersecting(&search_box) {
                 if area.contains_point(&check_point) {
                     matched_country = Some(area.cntr_id().to_string());
                     break;
                 }
             }
-            if let Some(country) = matched_country {
+            let region = greater_london.ranking_region(&check_point, matched_country.as_deref());
+            if region == RankingRegion::GreaterLondon {
+                station_countries.insert(s.osm_id, "UK".to_string());
+            } else if let Some(country) = matched_country {
                 station_countries.insert(s.osm_id, country);
-                target_country_stations.push(s);
-            } else {
-                other_stations.push(s);
+            }
+            match region {
+                RankingRegion::GreaterLondon => london_stations.push(s),
+                RankingRegion::RestOfUk => rest_of_uk_stations.push(s),
+                RankingRegion::TargetCountries => target_country_stations.push(s),
+                RankingRegion::Other => other_stations.push(s),
             }
         }
 
         println!(
-            "Group partitioning: target_country_stations = {}, other_stations = {}",
+            "Group partitioning: greater_london = {}, rest_of_uk = {}, target_country_stations = {}, other_stations = {}",
+            london_stations.len(),
+            rest_of_uk_stations.len(),
             target_country_stations.len(),
             other_stations.len()
         );
 
-        let mut stations_with_tiers_target = score_and_tier_stations(
-            &target_country_stations,
-            &platform_counts,
-            &stops_counts,
-            &terminal_counts,
-            &route_span_logs,
-            &centralities,
-            &station_modes,
-            &station_countries,
-            &w,
-        );
-
-        let mut stations_with_tiers_other = score_and_tier_stations(
-            &other_stations,
-            &platform_counts,
-            &stops_counts,
-            &terminal_counts,
-            &route_span_logs,
-            &centralities,
-            &station_modes,
-            &station_countries,
-            &w,
-        );
-
+        // Standardise features and assign percentile tiers independently per cohort.
         let mut stations_with_tiers = Vec::new();
-        stations_with_tiers.append(&mut stations_with_tiers_target);
-        stations_with_tiers.append(&mut stations_with_tiers_other);
+        for cohort in [
+            &london_stations,
+            &rest_of_uk_stations,
+            &target_country_stations,
+            &other_stations,
+        ] {
+            stations_with_tiers.extend(score_and_tier_stations(
+                cohort,
+                &platform_counts,
+                &stops_counts,
+                &terminal_counts,
+                &route_span_logs,
+                &centralities,
+                &station_modes,
+                &station_countries,
+                &w,
+            ));
+        }
 
         stations_with_tiers.sort_by(|a, b| b.scored.score.total_cmp(&a.scored.score));
 
