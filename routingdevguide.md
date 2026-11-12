@@ -69,3 +69,32 @@ With the default listen address:
 curl http://127.0.0.1:40428/
 curl http://127.0.0.1:40428/health
 ```
+# Startup memory residency
+
+Edelweiss can advise the kernel to reclaim file pages touched by validation,
+index construction, and native OSR loading. This is opt-in in the selected
+`--catenary-config` file:
+
+```toml
+[edelweiss]
+startup_mmap_advice = "pageout"
+```
+
+Supported modes are `none` (default, unchanged behavior), `cold` (prefer these
+pages for reclamation), and `pageout` (request reclamation now). Linux 5.4+ is
+required for the enabled modes. Unsupported operations log warnings and do
+not prevent startup. Unknown setting values fail configuration parsing.
+
+Advice runs once after both loaders and precomputed OSR match checks finish,
+before either CLI routing or HTTP traffic. It covers transit timetable mappings
+and OSR's owned file mappings. It preserves OSR's private relocated pointers;
+heap-backed graph metadata, derived indexes, platform trees, and allocator
+memory are not advised. Existing `[osr_worker.region_load_modes]` controls
+which OSR metadata is mmap-backed independently of this setting.
+
+Startup logs report successfully advised bytes/mappings and failures per region;
+those counts are not measurements of reclaimed memory. There is no guaranteed
+RSS ceiling. Queries can fault needed pages back in, increasing first-query
+latency. Compare `/proc/PID/smaps_rollup` RSS, `Pss_File`, and `Pss_Anon` before
+and after startup, plus first-query and warm-query latency and route parity,
+when choosing a mode. Do not apply advice after each request.

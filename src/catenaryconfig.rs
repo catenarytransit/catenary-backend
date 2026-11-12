@@ -9,6 +9,8 @@ static CATENARY_CONFIG: OnceLock<CatenaryConfig> = OnceLock::new();
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CatenaryConfig {
     #[serde(default)]
+    pub edelweiss: EdelweissConfig,
+    #[serde(default)]
     pub maple: MapleConfig,
     #[serde(default)]
     pub aspen: AspenConfig,
@@ -26,6 +28,40 @@ pub struct CatenaryConfig {
     pub postgres: PostgresConfig,
     #[serde(default)]
     pub elasticsearch: ElasticsearchConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct EdelweissConfig {
+    #[serde(default)]
+    pub startup_mmap_advice: crate::routing_common::mmap_residency::StartupMmapAdvice,
+}
+
+#[cfg(test)]
+mod edelweiss_tests {
+    use super::*;
+    use crate::routing_common::mmap_residency::StartupMmapAdvice;
+
+    #[test]
+    fn startup_advice_is_opt_in_and_validated() {
+        let omitted: CatenaryConfig = toml::from_str("").unwrap();
+        assert_eq!(
+            omitted.edelweiss.startup_mmap_advice,
+            StartupMmapAdvice::None
+        );
+        for (name, expected) in [
+            ("none", StartupMmapAdvice::None),
+            ("cold", StartupMmapAdvice::Cold),
+            ("pageout", StartupMmapAdvice::Pageout),
+        ] {
+            let config: CatenaryConfig = toml::from_str(&format!(
+                "[edelweiss]\nstartup_mmap_advice = '{name}'\n[osr_worker.region_load_modes]\n'europe' = 'mmap'\n'north-america/us' = 'mmap'\n"
+            )).unwrap();
+            assert_eq!(config.edelweiss.startup_mmap_advice, expected);
+        }
+        assert!(
+            toml::from_str::<CatenaryConfig>("[edelweiss]\nstartup_mmap_advice = 'typo'").is_err()
+        );
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
