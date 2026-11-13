@@ -217,6 +217,7 @@ struct UnifiedAgencyDb {
 
 #[derive(Debug)]
 struct RouteDb {
+    url_slug_for_unified_agency: Option<String>,
     onestop_feed_id: String,
     chateau: String,
     route_id: String,
@@ -615,63 +616,35 @@ fn unified_agency_from_row(row: &sqlx::postgres::PgRow) -> Result<UnifiedAgencyD
     })
 }
 
+// A server-side timeout also stops work when a client abandons the request.
+// SET LOCAL is scoped to this transaction and cannot leak into the shared pool.
+async fn directory_route_transaction(
+    pool: &PgPool,
+) -> Result<sqlx::Transaction<'_, sqlx::Postgres>, sqlx::Error> {
+    let mut transaction = pool.begin().await?;
+    sqlx::query("SET LOCAL statement_timeout = '5s'")
+        .execute(&mut *transaction)
+        .await?;
+    Ok(transaction)
+}
+
 async fn fetch_routes_for_unified_agency(
     pool: &PgPool,
     unified_agency_id: &str,
 ) -> Result<Vec<RouteDb>, sqlx::Error> {
-    let rows = sqlx::query(
-        r#"
-        WITH target_agencies AS (
-            SELECT DISTINCT chateau, static_onestop_id, agency_id
-            FROM gtfs.agencies
-            WHERE unified_agency_id = $1
-        ),
-        target_feeds AS (
-            SELECT DISTINCT chateau, static_onestop_id
-            FROM target_agencies
-        ),
-        feed_agency_counts AS (
-            SELECT a.chateau, a.static_onestop_id, COUNT(DISTINCT a.agency_id) AS agency_count
-            FROM gtfs.agencies a
-            JOIN target_feeds f
-              ON f.chateau = a.chateau
-             AND f.static_onestop_id = a.static_onestop_id
-            GROUP BY a.chateau, a.static_onestop_id
-        )
-        SELECT DISTINCT ON (r.chateau, r.route_id)
-            r.onestop_feed_id,
-            r.chateau,
-            r.route_id,
-            r.short_name,
-            r.long_name,
-            r.gtfs_desc,
-            r.route_type,
-            r.url,
-            r.agency_id,
-            r.color,
-            r.text_color,
-            r.gtfs_order::bigint AS gtfs_order
-        FROM gtfs.routes r
-        JOIN target_agencies a
-          ON a.chateau = r.chateau
-         AND a.static_onestop_id = r.onestop_feed_id
-        JOIN feed_agency_counts c
-          ON c.chateau = r.chateau
-         AND c.static_onestop_id = r.onestop_feed_id
-        WHERE r.agency_id = a.agency_id
-           OR (r.agency_id IS NULL AND c.agency_count = 1)
-        ORDER BY r.chateau, r.route_id, r.gtfs_order NULLS LAST, r.short_name NULLS LAST
-        "#,
-    )
-    .bind(unified_agency_id)
-    .fetch_all(pool)
-    .await?;
+    let mut transaction = directory_route_transaction(pool).await?;
+    let rows = sqlx::query(include_str!("sql/directory_agency_routes.sql"))
+        .bind(unified_agency_id)
+        .fetch_all(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
 
     rows.iter().map(route_from_row).collect()
 }
 
 fn route_from_row(row: &sqlx::postgres::PgRow) -> Result<RouteDb, sqlx::Error> {
     Ok(RouteDb {
+        url_slug_for_unified_agency: row.try_get("url_slug_for_unified_agency")?,
         onestop_feed_id: row.try_get("onestop_feed_id")?,
         chateau: row.try_get("chateau")?,
         route_id: row.try_get("route_id")?,
@@ -695,6 +668,7 @@ async fn fetch_route(
     let row = sqlx::query(
         r#"
         SELECT
+            url_slug_for_unified_agency,
             onestop_feed_id,
             chateau,
             route_id,
@@ -826,136 +800,18 @@ async fn fetch_direction_patterns(
     Ok(patterns.into_values().collect())
 }
 
-async fn fetch_route_slugs_for_unified_agency(
-    pool: &PgPool,
-    unified_agency_id: &str,
-) -> Result<BTreeMap<String, String>, sqlx::Error> {
-    let rows = sqlx::query(
-        r#"
-        WITH target_agencies AS (
-            SELECT DISTINCT chateau, static_onestop_id, attempt_id, agency_id
-            FROM gtfs.agencies
-            WHERE unified_agency_id = $1
-        ),
-        target_feeds AS (
-            SELECT DISTINCT chateau, static_onestop_id, attempt_id
-            FROM target_agencies
-        ),
-        feed_agency_counts AS (
-            SELECT
-                a.chateau,
-                a.static_onestop_id,
-                a.attempt_id,
-                COUNT(DISTINCT a.agency_id) AS agency_count
-            FROM gtfs.agencies a
-            JOIN target_feeds f
-              ON f.chateau = a.chateau
-             AND f.static_onestop_id = a.static_onestop_id
-             AND f.attempt_id = a.attempt_id
-            GROUP BY a.chateau, a.static_onestop_id, a.attempt_id
-        )
-        SELECT DISTINCT ON (r.route_id)
-            r.route_id,
-            r.url_slug_for_unified_agency
-        FROM gtfs.routes r
-        JOIN target_agencies a
-          ON a.chateau = r.chateau
-         AND a.static_onestop_id = r.onestop_feed_id
-         AND a.attempt_id = r.attempt_id
-        JOIN feed_agency_counts c
-          ON c.chateau = r.chateau
-         AND c.static_onestop_id = r.onestop_feed_id
-         AND c.attempt_id = r.attempt_id
-        WHERE r.url_slug_for_unified_agency IS NOT NULL
-          AND (
-                r.agency_id = a.agency_id
-             OR (r.agency_id IS NULL AND c.agency_count = 1)
-          )
-        ORDER BY
-            r.route_id,
-            r.gtfs_order NULLS LAST,
-            r.onestop_feed_id,
-            r.attempt_id
-        "#,
-    )
-    .bind(unified_agency_id)
-    .fetch_all(pool)
-    .await?;
-
-    let mut slugs = BTreeMap::new();
-    for row in rows {
-        slugs.insert(
-            row.try_get::<String, _>("route_id")?,
-            row.try_get::<String, _>("url_slug_for_unified_agency")?,
-        );
-    }
-    Ok(slugs)
-}
-
 async fn resolve_route_slug(
     pool: &PgPool,
     unified_agency_id: &str,
     route_slug: &str,
 ) -> Result<Option<(String, String)>, sqlx::Error> {
-    let row = sqlx::query(
-        r#"
-        WITH target_agencies AS (
-            SELECT DISTINCT chateau, static_onestop_id, attempt_id, agency_id
-            FROM gtfs.agencies
-            WHERE unified_agency_id = $1
-        ),
-        target_feeds AS (
-            SELECT DISTINCT chateau, static_onestop_id, attempt_id
-            FROM target_agencies
-        ),
-        feed_agency_counts AS (
-            SELECT
-                a.chateau,
-                a.static_onestop_id,
-                a.attempt_id,
-                COUNT(DISTINCT a.agency_id) AS agency_count
-            FROM gtfs.agencies a
-            JOIN target_feeds f
-              ON f.chateau = a.chateau
-             AND f.static_onestop_id = a.static_onestop_id
-             AND f.attempt_id = a.attempt_id
-            GROUP BY a.chateau, a.static_onestop_id, a.attempt_id
-        )
-        SELECT r.chateau, r.route_id
-        FROM gtfs.routes r
-        JOIN target_agencies a
-          ON a.chateau = r.chateau
-         AND a.static_onestop_id = r.onestop_feed_id
-         AND a.attempt_id = r.attempt_id
-        JOIN feed_agency_counts c
-          ON c.chateau = r.chateau
-         AND c.static_onestop_id = r.onestop_feed_id
-         AND c.attempt_id = r.attempt_id
-        WHERE (
-                r.url_slug_for_unified_agency = $2
-             OR (
-                    r.url_slug_for_unified_agency IS NULL
-                AND r.route_id = $2
-             )
-        )
-          AND (
-                r.agency_id = a.agency_id
-             OR (r.agency_id IS NULL AND c.agency_count = 1)
-          )
-        ORDER BY
-            CASE WHEN r.url_slug_for_unified_agency = $2 THEN 0 ELSE 1 END,
-            r.gtfs_order NULLS LAST,
-            r.onestop_feed_id,
-            r.attempt_id,
-            r.chateau,
-            r.route_id
-        LIMIT 1
-        "#,
-    )
-    .bind(unified_agency_id)
-    .bind(route_slug)
-    .fetch_optional(pool)
-    .await?;
+    let mut transaction = directory_route_transaction(pool).await?;
+    let row = sqlx::query(include_str!("sql/directory_resolve_route_slug.sql"))
+        .bind(unified_agency_id)
+        .bind(route_slug)
+        .fetch_optional(&mut *transaction)
+        .await?;
+    transaction.commit().await?;
 
     row.map(|row| Ok((row.try_get("chateau")?, row.try_get("route_id")?)))
         .transpose()
@@ -1268,17 +1124,6 @@ pub async fn directory_agency(
             .then_with(|| a.route_id.cmp(&b.route_id))
     });
 
-    let route_slugs =
-        match fetch_route_slugs_for_unified_agency(pool.get_ref().as_ref(), &agency.id).await {
-            Ok(slugs) => slugs,
-            Err(error) => {
-                eprintln!("directory route slug query failed: {error}");
-                return json_error(
-                    actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    "could not query agency route slugs",
-                );
-            }
-        };
     let mut seen_route_ids = BTreeSet::new();
 
     let route_cards = routes
@@ -1287,9 +1132,8 @@ pub async fn directory_agency(
             if !seen_route_ids.insert(route.route_id.clone()) {
                 return None;
             }
-            let route_key = route_slugs
-                .get(&route.route_id)
-                .cloned()
+            let route_key = route
+                .url_slug_for_unified_agency
                 .unwrap_or_else(|| route.route_id.clone());
             Some(RouteCard {
                 route_key: route_key.clone(),
