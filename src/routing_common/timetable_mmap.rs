@@ -9,6 +9,13 @@ pub struct MappedTimetable {
 }
 
 impl MappedTimetable {
+    pub fn advise_residency(
+        &self,
+        advice: super::mmap_residency::StartupMmapAdvice,
+    ) -> std::io::Result<usize> {
+        advice.advise(&self.bytes)
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let file =
             File::open(path).with_context(|| format!("opening timetable {}", path.display()))?;
@@ -180,6 +187,16 @@ mod tests {
         std::fs::write(&path, tt.encode().unwrap()).unwrap();
         let mapped = MappedTimetable::open(&path).unwrap();
         assert_eq!(mapped.view().unwrap().header().day_count, 10);
+        #[cfg(target_os = "linux")]
+        for advice in [
+            super::super::mmap_residency::StartupMmapAdvice::Cold,
+            super::super::mmap_residency::StartupMmapAdvice::Pageout,
+        ] {
+            assert!(mapped.advise_residency(advice).unwrap() > 0);
+            let view = mapped.view().unwrap();
+            assert_eq!(view.header().day_count, 10);
+            assert_eq!(view.header().first_utc_day, 20_000);
+        }
         drop(mapped);
         std::fs::remove_file(path).unwrap();
     }

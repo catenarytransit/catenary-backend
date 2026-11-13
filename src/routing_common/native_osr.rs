@@ -180,6 +180,37 @@ impl Drop for Permit<'_> {
     }
 }
 impl NativeOsr {
+    /// Run once after all startup graph checks, never after individual queries.
+    pub fn advise_residency(&self, advice: super::mmap_residency::StartupMmapAdvice) {
+        use super::mmap_residency::StartupMmapAdvice;
+        let native = match advice {
+            StartupMmapAdvice::None => return,
+            StartupMmapAdvice::Cold => ffi::ResidencyAdvice::Cold,
+            StartupMmapAdvice::Pageout => ffi::ResidencyAdvice::PageOut,
+        };
+        for (id, graph) in &self.graphs {
+            let started = std::time::Instant::now();
+            match graph.router.advise_residency(native) {
+                Ok(report) => {
+                    eprintln!(
+                        "Edelweiss startup: OSR {id}: {advice:?} advised {} mappings / {} bytes in {:.3}s (not a reclaimed-byte measurement)",
+                        report.advised_mappings,
+                        report.advised_bytes,
+                        started.elapsed().as_secs_f64(),
+                    );
+                    if report.failed_mappings != 0 {
+                        eprintln!(
+                            "Warning: OSR {id}: mmap advice failed for {} mappings: {}",
+                            report.failed_mappings,
+                            std::io::Error::from_raw_os_error(report.first_errno),
+                        );
+                    }
+                }
+                Err(error) => eprintln!("Warning: OSR {id}: mmap advice failed: {error}"),
+            }
+        }
+    }
+
     pub fn load(config_path: &Path, workers: usize) -> Result<Self> {
         ensure!((1..=16).contains(&workers), "OSR workers must be in 1..=16");
         let config: Config = toml::from_str(&fs::read_to_string(config_path)?)?;

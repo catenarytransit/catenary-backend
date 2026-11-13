@@ -35,6 +35,8 @@
 #[macro_use]
 extern crate diesel_derive_newtype;
 
+pub mod departures_shared;
+pub mod nearby_departures;
 pub mod formation_v1;
 pub mod sbb_formation_types;
 #[macro_use]

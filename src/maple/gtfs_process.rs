@@ -81,6 +81,21 @@ const METRA_MINI_IDS: &[&str] = &[
     "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
 ];
 
+// Keep the default Maple import unchanged. Benchmark environments can opt out
+// of *both* external pfaedle implementations without requiring their binaries
+// or OSM extracts; all other GTFS preprocessing and ingestion still runs.
+fn pfaedle_skip_enabled(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn skip_pfaedle() -> bool {
+    std::env::var("SKIP_PFAEDLE")
+        .is_ok_and(|value| pfaedle_skip_enabled(&value))
+}
+
 async fn execute_pfaedle_brosi(
     gtfs_path: &str,
     osm_path: &str,
@@ -88,6 +103,11 @@ async fn execute_pfaedle_brosi(
     drop_shapes: bool,
     write_colours: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if skip_pfaedle() {
+        println!("SKIP_PFAEDLE: skipping pfaedle for {gtfs_path}");
+        return Ok(());
+    }
+
     let mut command_pfaedle = Command::new("pfaedle");
 
     let mut run = command_pfaedle
@@ -132,6 +152,11 @@ async fn execute_pfaedle_rs(
     drop_shapes: bool,
     write_colours: bool,
 ) -> Result<(), Box<dyn Error + Sync + Send>> {
+    if skip_pfaedle() {
+        println!("SKIP_PFAEDLE: skipping pfaedle-rs for {gtfs_path}");
+        return Ok(());
+    }
+
     let mut command_pfaedle = Command::new("pfaedle-rs");
 
     let mut run = command_pfaedle
@@ -3266,4 +3291,19 @@ pub(crate) fn faster_stop_time_reader_injection(
     }
 
     Ok(gtfs)
+}
+
+#[cfg(test)]
+mod skip_pfaedle_tests {
+    use super::pfaedle_skip_enabled;
+
+    #[test]
+    fn accepted_skip_pfaedle_environment_values() {
+        for enabled in ["1", "true", "TRUE", " yes ", "On"] {
+            assert!(pfaedle_skip_enabled(enabled), "{enabled} must enable the skip");
+        }
+        for disabled in ["", "0", "false", "FALSE", "no", "off", "unrelated"] {
+            assert!(!pfaedle_skip_enabled(disabled), "{disabled} must not enable the skip");
+        }
+    }
 }

@@ -429,6 +429,23 @@ fn location(tt: &ZeroCopyTimetable<'_>, stop: u32) -> Option<[f64; 2]> {
     let c = tt.coordinates().get(stop as usize)?;
     Some([f64::from(c.lon), f64::from(c.lat)])
 }
+/// Resolve civil time at the stop, independently of the trip's service timezone.
+/// Existing timetable files contain coordinates but no per-location timezone index.
+fn point_timezone(lon: f64, lat: f64) -> Option<&'static str> {
+    static FINDER: OnceLock<tzf_rs::DefaultFinder> = OnceLock::new();
+    if !lon.is_finite()
+        || !lat.is_finite()
+        || !(-180.0..=180.0).contains(&lon)
+        || !(-90.0..=90.0).contains(&lat)
+    {
+        return None;
+    }
+    let name = FINDER
+        .get_or_init(tzf_rs::DefaultFinder::new)
+        .get_tz_name(lon, lat);
+    (!name.is_empty()).then_some(name)
+}
+
 fn place(tt: &ZeroCopyTimetable<'_>, stop: u32) -> Value {
     let index = stop as usize;
     let point = location(tt, stop).unwrap_or([0.0, 0.0]);
@@ -442,10 +459,11 @@ fn place(tt: &ZeroCopyTimetable<'_>, stop: u32) -> Value {
         .get(index)
         .and_then(|s| tt.get_string(*s))
         .unwrap_or("");
-    json!({"name":name,"stopId":stop_id,"stopIndex":stop,"lat":point[1],"lon":point[0]})
+    let timezone = location(tt, stop).and_then(|p| point_timezone(p[0], p[1]));
+    json!({"name":name,"stopId":stop_id,"stopIndex":stop,"lat":point[1],"lon":point[0],"timezone":timezone})
 }
 fn coordinate_place(point: Coordinates, name: &str) -> Value {
-    json!({"name": name,"lat":point.lat,"lon":point.lon})
+    json!({"name": name,"lat":point.lat,"lon":point.lon,"timezone":point_timezone(point.lon, point.lat)})
 }
 
 /// A response-local cache avoids rerouting identical selected street legs.
@@ -917,6 +935,18 @@ pub fn build(
 mod tests {
     use super::*;
     #[test]
+    fn places_transmit_local_iana_timezones() {
+        assert_eq!(point_timezone(-118.2437, 34.0522), Some("America/Los_Angeles"));
+        assert_eq!(point_timezone(-74.0060, 40.7128), Some("America/New_York"));
+        let endpoint = coordinate_place(
+            Coordinates { lat: 40.7128, lon: -74.0060 },
+            "Destination",
+        );
+        assert_eq!(endpoint["timezone"], "America/New_York");
+        assert_eq!(point_timezone(f64::NAN, 0.0), None);
+    }
+
+    #[test]
     fn street_geometry_cache_distinguishes_routing_parameters() {
         let key = |origin, budget, mode, speed| {
             street_path_key(
@@ -1016,6 +1046,7 @@ mod tests {
         let bytes = owned.encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let location = place(&tt, 0);
+        assert_eq!(location["timezone"], "America/Los_Angeles");
         let idx = stop_index(&location).unwrap();
         assert_eq!(idx, LocationIdx(0));
         let endpoint = StreetEndpoint::stop(&tt, idx).unwrap();

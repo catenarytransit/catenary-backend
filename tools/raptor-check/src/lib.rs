@@ -1,4 +1,10 @@
 //! Compile the production routing modules without OSR, Postgres or GTFS imports.
+#[path = "../../../src/catenaryconfig.rs"]
+pub mod catenaryconfig;
+#[path = "../../../src/routing_common/mmap_residency.rs"]
+pub mod mmap_residency;
+#[path = "../../../src/routing_common/timetable_mmap.rs"]
+pub mod timetable_mmap;
 #[path = "../../../src/routing_common/dial.rs"]
 pub mod dial;
 #[path = "../../../src/routing_common/interval_estimate.rs"]
@@ -29,6 +35,8 @@ pub mod transfer_optimizer;
 pub mod transport_index;
 
 pub mod routing_common {
+    pub use crate::mmap_residency;
+    pub use crate::timetable_mmap;
     pub use crate::dial;
     pub use crate::interval_estimate;
     pub use crate::pong;

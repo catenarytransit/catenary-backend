@@ -79,3 +79,9 @@ excluded_regions = []
 [osr_worker.region_load_modes]
 # "asia/japan" = "mmap"
 # "europe/germany" = "read"
+
+# One-time advice after Edelweiss finishes initialization (Linux 5.4+).
+# Applies to transit timetables and OSR file mappings; does not release heap data.
+# none: preserve current behavior; cold: prefer reclaim; pageout: request reclaim.
+[edelweiss]
+startup_mmap_advice = "none"
