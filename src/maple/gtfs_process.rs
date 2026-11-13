@@ -1511,6 +1511,11 @@ pub async fn gtfs_process_feed(
                     trip.trip_headsign = None;
                 }
             }
+
+            for route in gtfs.routes.values_mut() {
+                route.route_type = gtfs_structures::RouteType::Bus;
+            }
+
             gtfs
         }
         "f-dq-mtamaryland~marc" => {
