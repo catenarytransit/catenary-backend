@@ -2,14 +2,12 @@ use catenary::is_null_island;
 use geo::algorithm::convex_hull::ConvexHull;
 use geo::coord;
 use geo::prelude::*;
-use geo::{
-    Area, BooleanOps, BoundingRect, Coord, Distance, Haversine, LineString, MultiPoint,
-    MultiPolygon, Point, Polygon,
-};
+use geo::{Area, BoundingRect, Coord, Distance, Haversine, LineString, MultiPoint, Point, Polygon};
 use gtfs_structures::RouteType;
 use std::f64::consts::PI;
 
 use super::ocean_exclusions::open_ocean_exclusions;
+use crate::polygon_union::union_polygons;
 use catenary::hull::chi_shape;
 
 pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Polygon> {
@@ -163,14 +161,9 @@ pub fn hull_from_gtfs(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> Option<Pol
     let projected_poly = Polygon::new(LineString::new(projected_exterior_coords), vec![]);
     buffered_polygons.push(projected_poly);
 
-    // 4. Compute Union (Merge the stadiums into one shape)
-    // We use the pure-rust 'BooleanOps' trait here.
-    let mut result_poly = MultiPolygon::new(vec![buffered_polygons[0].clone()]);
-
-    for poly in &buffered_polygons[1..] {
-        let current_mp = MultiPolygon::new(vec![poly.clone()]);
-        result_poly = result_poly.union(&current_mp);
-    }
+    // 4. Merge all buffers in one overlay instead of repeatedly unioning a
+    // growing multipolygon. The helper also normalizes buffer/hull winding.
+    let result_poly = union_polygons(buffered_polygons);
 
     // 5. Reproject back to WGS84
     // We take the largest polygon from the result.
