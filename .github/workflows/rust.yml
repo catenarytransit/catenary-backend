@@ -35,3 +35,5 @@ jobs:
       run: cargo test --lib routing_common::profile -- --nocapture
     - name: Test Edelweiss street geometry cache parameters
       run: cargo test --bin edelweiss street_geometry_cache_distinguishes_routing_parameters -- --nocapture
+    - name: Test Edelweiss journey response and trip instances
+      run: cargo test --bin edelweiss motis_response::tests -- --nocapture
