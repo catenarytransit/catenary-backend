@@ -10,6 +10,8 @@ use catenary::routing_common::{
     timetable::{Clasz, RouteIdx, TransportIdx, ZeroCopyTimetable},
 };
 use postgres::{Client, NoTls};
+use chrono::{TimeZone, Utc};
+use prost::Message;
 use rayon::prelude::*;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -24,6 +26,7 @@ WITH wanted AS MATERIALIZED (
     -- Parameterized chateau + GTFS ID probes match the existing composite index.
     SELECT tc.onestop_feed_id, tc.attempt_id, tc.trip_id, tc.route_id,
            tc.trip_short_name, tc.itinerary_pattern_id, tc.direction_id,
+           tc.start_time, tc.has_frequencies, tc.frequencies,
            ti.production AND ti.ingestion_successfully_finished
                AND NOT ti.ingesting_in_progress AND NOT ti.ingestion_errored
                AND NOT ti.deleted AS usable,
@@ -35,7 +38,7 @@ WITH wanted AS MATERIALIZED (
 ), selected_trips AS MATERIALIZED (
     SELECT wanted.*, t.onestop_feed_id AS trip_feed, t.attempt_id AS trip_attempt,
            t.route_id AS trip_route, t.trip_short_name, t.itinerary_pattern_id,
-           t.direction_id
+           t.direction_id, t.start_time, t.has_frequencies, t.frequencies
     FROM wanted
     LEFT JOIN LATERAL (
         SELECT tc.* FROM trip_candidates tc WHERE tc.trip_id = wanted.trip
@@ -70,7 +73,14 @@ SELECT t.feed, t.attempt, t.trip,
        CASE WHEN $6::boolean THEN
            COALESCE(ST_AsGeoJSON(s.linestring, 6), ST_AsGeoJSON(ds.linestring, 6))
        END,
-       s.color, s.text_color, ds.color, ds.text_color
+       s.color, s.text_color, ds.color, ds.text_color,
+       m.timezone, t.start_time::bigint, t.has_frequencies, t.frequencies,
+       ARRAY(SELECT p.gtfs_stop_sequence::bigint FROM gtfs.itinerary_pattern p
+             WHERE p.onestop_feed_id = t.trip_feed AND p.attempt_id = t.trip_attempt
+               AND p.itinerary_pattern_id = t.itinerary_pattern_id ORDER BY p.stop_sequence),
+       (SELECT p.departure_time_since_start FROM gtfs.itinerary_pattern p
+        WHERE p.onestop_feed_id = t.trip_feed AND p.attempt_id = t.trip_attempt
+          AND p.itinerary_pattern_id = t.itinerary_pattern_id ORDER BY p.stop_sequence LIMIT 1)
 FROM selected_trips t
 -- Preserve route fallback when the timetable trip has been rotated out.
 LEFT JOIN LATERAL (
@@ -134,6 +144,12 @@ struct TripInfo {
     route_type: Option<i16>,
     direction_id: Option<bool>,
     shape: Vec<[f64; 2]>,
+    timezone: Option<String>,
+    start_time: Option<i64>,
+    has_frequencies: bool,
+    frequencies: Option<Vec<u8>>,
+    stop_sequences: Vec<i64>,
+    first_departure_offset: Option<i32>,
 }
 
 #[derive(Clone)]
@@ -287,6 +303,12 @@ fn metadata_for_chateau(
                 route_type: row.get(13),
                 direction_id: row.get(14),
                 shape,
+                timezone: row.get(20),
+                start_time: row.get(21),
+                has_frequencies: row.get::<_, Option<bool>>(22).unwrap_or(false),
+                frequencies: row.get(23),
+                stop_sequences: row.get(24),
+                first_departure_offset: row.get(25),
             },
         );
     }
@@ -627,11 +649,12 @@ fn trip_info_for_key(
         return TripInfo::default();
     };
     let mut result = info
-        .get(&(key.feed, key.attempt, key.trip))
+        .get(&(key.feed, key.attempt, key.trip.clone()))
         .cloned()
         .unwrap_or_default();
     // The timetable remains authoritative even if PostgreSQL trip metadata is missing.
     result.chateau = Some(key.chateau);
+    result.id = key.trip;
     result
 }
 
@@ -684,6 +707,34 @@ fn transit_mode(route_type: Option<i16>, compiled_class: Option<u8>) -> &'static
         }
         _ => "TRANSIT",
     }
+}
+
+/// Recover the GTFS service date using its noon-minus-12-hours anchor.
+/// A UTC timetable day is the day of the first departure, not the service date.
+fn trip_instance(meta: &TripInfo, first_departure: i64) -> Option<(String, String)> {
+    let tz = catenary_time::Tz::from_str_insensitive(meta.timezone.as_deref()?).ok()?;
+    let offset = i64::from(meta.first_departure_offset?);
+    let starts: Box<dyn Iterator<Item = i64>> = if meta.has_frequencies {
+        let data = catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto::decode(
+            meta.frequencies.as_deref()?
+        ).ok()?;
+        Box::new(data.frequencies.into_iter().filter(|w| w.headway_secs > 0)
+            .flat_map(move |w| (u64::from(w.start_time)..u64::from(w.end_time))
+                .step_by(w.headway_secs as usize).map(move |t| t as i64 - offset)))
+    } else { Box::new(std::iter::once(meta.start_time?)) };
+    for start in starts {
+        let anchor = first_departure.checked_sub(start)?.checked_sub(offset)?;
+        let noon = chrono::DateTime::<Utc>::from_timestamp(anchor.checked_add(43_200)?, 0)?
+            .with_timezone(&tz);
+        let date = noon.date_naive();
+        let expected = tz.from_local_datetime(&date.and_hms_opt(12, 0, 0)?).single()?
+            .timestamp() - 43_200;
+        if expected == anchor && start >= 0 {
+            return Some((date.format("%Y%m%d").to_string(),
+                format!("{:02}:{:02}:{:02}", start / 3600, start / 60 % 60, start % 60)));
+        }
+    }
+    None
 }
 
 fn transit_leg(
@@ -754,6 +805,9 @@ fn transit_leg(
     } else {
         Vec::new()
     };
+    let first_departure = (i64::from(tt.header().first_utc_day) + i64::from(*service_day)) * 86_400
+        + i64::from(tt.transport_first_dep_offset()[*transport as usize].seconds());
+    let instance = trip_instance(&meta, first_departure);
     let mode = transit_mode(
         meta.route_type,
         tt.route_clasz().get(*route as usize).copied(),
@@ -768,6 +822,10 @@ fn transit_leg(
         "realTime":false,"scheduled":true,"cancelled":false,
         "routeId":meta.route_id,"tripId":meta.id,
         "chateau":meta.chateau,
+        "tripStartDate":instance.as_ref().map(|v| &v.0),
+        "tripStartTime":instance.as_ref().map(|v| &v.1),
+        "fromStopSequence":meta.stop_sequences.get(*board_stop_index),
+        "toStopSequence":meta.stop_sequences.get(*alight_stop_index),
         "routeShortName":meta.short_name,"routeLongName":meta.long_name,
         "tripShortName":meta.trip_short_name,"headsign":meta.headsign,
         "routeColor":meta.route_color,"routeTextColor":meta.route_text_color,
@@ -934,6 +992,46 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn instance_meta(start: i64, timezone: &str) -> TripInfo {
+        TripInfo {
+            start_time: Some(start), timezone: Some(timezone.into()),
+            first_departure_offset: Some(120), ..TripInfo::default()
+        }
+    }
+
+    #[test]
+    fn trip_instance_preserves_overnight_service_date_and_first_stop_dwell() {
+        let meta = instance_meta(25 * 3600, "America/Los_Angeles");
+        // 01:02 PST on Nov 14 belongs to the Nov 13 service date.
+        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T09:02:00Z").unwrap().timestamp();
+        assert_eq!(trip_instance(&meta, first), Some(("20261113".into(), "25:00:00".into())));
+    }
+
+    #[test]
+    fn trip_instance_uses_gtfs_noon_anchor_on_both_dst_transitions() {
+        let meta = instance_meta(3600, "America/Los_Angeles");
+        // Noon-minus-12h is 23:00 on the spring transition and 01:00 in fall.
+        for (first, date) in [("2026-03-08T08:02:00Z", "20260308"),
+                              ("2026-11-01T10:02:00Z", "20261101")] {
+            let first = chrono::DateTime::parse_from_rfc3339(first).unwrap().timestamp();
+            assert_eq!(trip_instance(&meta, first), Some((date.into(), "01:00:00".into())));
+        }
+    }
+
+    #[test]
+    fn frequency_instance_selects_exact_compiled_departure() {
+        let mut meta = instance_meta(0, "Europe/London");
+        meta.has_frequencies = true;
+        meta.frequencies = Some(catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto {
+            frequencies: vec![catenary::gtfs_schedule_protobuf::GtfsFrequencyProto {
+                start_time: 25 * 3600, end_time: 26 * 3600, headway_secs: 600, exact_times: Some(1),
+            }],
+        }.encode_to_vec());
+        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T01:10:00Z").unwrap().timestamp();
+        assert_eq!(trip_instance(&meta, first), Some(("20261113".into(), "25:08:00".into())));
+        assert_eq!(trip_instance(&TripInfo::default(), first), None);
+    }
     #[test]
     fn places_transmit_local_iana_timezones() {
         assert_eq!(point_timezone(-118.2437, 34.0522), Some("America/Los_Angeles"));
@@ -1102,6 +1200,7 @@ mod tests {
             "nationalrailuk"
         );
         assert!(missing.short_name.is_none());
+        assert_eq!(missing.id, "train-123");
 
         let mut rows = BTreeMap::new();
         rows.insert(
