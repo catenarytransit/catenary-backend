@@ -10,9 +10,8 @@ pub mod models {
     pub type ItineraryPatternMeta = ();
     pub type CompressedTrip = ();
 }
-pub mod compact_formats {
-    pub type CompactItineraryPatternRow = ();
-}
+#[path = "../../../src/compact_formats.rs"]
+pub mod compact_formats;
 
 #[path = "../../../src/aspen_dataset.rs"]
 pub mod aspen_dataset;

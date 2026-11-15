@@ -5,6 +5,7 @@ on:
     paths:
       - 'src/aspen/**'
       - 'src/aspen_dataset.rs'
+      - 'src/compact_formats.rs'
       - 'src/departure_realtime.rs'
       - 'src/formation_v1.rs'
       - 'src/compressed_aspen_dataset*'
@@ -15,6 +16,7 @@ on:
     paths:
       - 'src/aspen/**'
       - 'src/aspen_dataset.rs'
+      - 'src/compact_formats.rs'
       - 'src/departure_realtime.rs'
       - 'src/formation_v1.rs'
       - 'src/compressed_aspen_dataset*'

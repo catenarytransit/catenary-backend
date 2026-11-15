@@ -730,6 +730,43 @@ mod tests {
         assert!(needs_departure_stop_index(&ordinary, false));
     }
     #[test]
+    fn compact_and_expanded_departure_index_decisions_agree() {
+        for (raw, relationship) in [
+            (0, AspenisedTripScheduleRelationship::Scheduled),
+            (1, AspenisedTripScheduleRelationship::Added),
+            (2, AspenisedTripScheduleRelationship::Unscheduled),
+            (3, AspenisedTripScheduleRelationship::Cancelled),
+            (5, AspenisedTripScheduleRelationship::Replacement),
+            (6, AspenisedTripScheduleRelationship::Duplicated),
+            (7, AspenisedTripScheduleRelationship::Deleted),
+        ] {
+            let expanded = update(relationship);
+            let compact = crate::compact_formats::CompactTripUpdate {
+                trip: gtfs_realtime::TripDescriptor {
+                    schedule_relationship: Some(raw),
+                    ..Default::default()
+                },
+                vehicle: None,
+                stop_time_update: vec![],
+                timestamp: None,
+                delay: None,
+                trip_properties: None,
+            };
+            assert_eq!(
+                needs_departure_stop_index_compact(&compact, true),
+                needs_departure_stop_index(&expanded, true)
+            );
+            assert_eq!(
+                needs_departure_stop_index_raw(Some(raw), false, true),
+                needs_departure_stop_index(&expanded, true)
+            );
+            assert!(needs_departure_stop_index_raw(Some(raw), false, false));
+            assert!(needs_departure_stop_index_raw(Some(raw), true, true));
+        }
+        assert!(!needs_departure_stop_index_raw(None, false, true));
+        assert!(!needs_departure_stop_index_raw(Some(99), false, true));
+    }
+    #[test]
     fn invalid_and_negative_times_never_wrap() {
         assert_eq!(parse_start_time("25:00:00"), Some(90000));
         assert_eq!(parse_start_time("25:60:00"), None);
@@ -745,17 +782,41 @@ mod tests {
 /// Realtime trips must stay discoverable by stop even when their ID also exists
 /// in static GTFS (REPLACEMENT and modified-trip updates commonly do).
 pub fn needs_departure_stop_index(update: &AspenisedTripUpdate, found_static: bool) -> bool {
-    !found_static
-        || update.trip.modified_trip.is_some()
-        || matches!(
-            update.trip.schedule_relationship,
-            Some(
-                AspenisedTripScheduleRelationship::Added
-                    | AspenisedTripScheduleRelationship::Unscheduled
-                    | AspenisedTripScheduleRelationship::Replacement
-                    | AspenisedTripScheduleRelationship::Duplicated
-            )
-        )
+    needs_departure_stop_index_raw(
+        update
+            .trip
+            .schedule_relationship
+            .as_ref()
+            .map(|relationship| {
+                i32::from(crate::aspen_dataset::schedule_relationship_to_u8(
+                    relationship,
+                ))
+            }),
+        update.trip.modified_trip.is_some(),
+        found_static,
+    )
+}
+
+/// The fresh-import path receives compact updates, before Aspen expansion.
+pub fn needs_departure_stop_index_compact(
+    update: &crate::compact_formats::CompactTripUpdate,
+    found_static: bool,
+) -> bool {
+    needs_departure_stop_index_raw(
+        update.trip.schedule_relationship,
+        update.trip.modified_trip.is_some(),
+        found_static,
+    )
+}
+
+/// Import starts with a compact GTFS-RT descriptor whose relationship is still
+/// the protobuf integer. Decide whether to index it without expanding the trip.
+pub fn needs_departure_stop_index_raw(
+    schedule_relationship: Option<i32>,
+    has_modified_trip: bool,
+    found_static: bool,
+) -> bool {
+    !found_static || has_modified_trip || matches!(schedule_relationship, Some(1 | 2 | 5 | 6))
 }
 
 /// Select a departure-board subset directly from a compressed Aspen snapshot.

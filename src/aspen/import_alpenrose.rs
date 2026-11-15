@@ -2442,8 +2442,8 @@ pub async fn new_rt_data(
                             })
                             .unwrap_or(&empty_scheduled_stops_option);
 
-                        if catenary::departure_realtime::needs_departure_stop_index(
-                            &trip_update,
+                        if catenary::departure_realtime::needs_departure_stop_index_compact(
+                            trip_update,
                             compressed_trip.is_some(),
                         ) {
                             for trip_update in trip_update.stop_time_update.iter() {
