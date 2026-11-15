@@ -728,7 +728,7 @@ impl PreparedNearby {
         let mut ld_output: Vec<StationDepartureGroupExport> = Vec::new();
         for ((chateau, key), meta) in station_group_metadata {
             if let Some(mut deps) = ld_departures_by_group.remove(&(chateau.clone(), key.clone())) {
-                deps.sort_by_key(|d| d.scheduled_departure.unwrap_or(0));
+                deps.sort_by_key(|d| d.realtime_departure.or(d.realtime_arrival).or(d.scheduled_departure).or(d.scheduled_arrival).unwrap_or(u64::MAX));
                 deps.truncate(limit_per_station);
 
                 let (osm_id, rep_id) = match key {
@@ -804,7 +804,7 @@ impl PreparedNearby {
             if group.osm_station_id.is_some() {
                 group
                     .departures
-                    .sort_by_key(|d| d.scheduled_departure.unwrap_or(0));
+                    .sort_by_key(|d| d.realtime_departure.or(d.realtime_arrival).or(d.scheduled_departure).or(d.scheduled_arrival).unwrap_or(u64::MAX));
                 group.departures.truncate(limit_per_station);
             }
         }
@@ -819,7 +819,7 @@ impl PreparedNearby {
             let mut sorted_headsigns = HashMap::new();
 
             for (h, mut items) in headsigns {
-                items.sort_by_key(|i| i.departure_schedule.unwrap_or(0));
+                items.sort_by_key(|i| i.departure_realtime.or(i.arrival_realtime).or(i.departure_schedule).or(i.arrival_schedule).unwrap_or(u64::MAX));
                 items.truncate(limit_per_headsign);
                 sorted_headsigns.insert(h, items);
             }
@@ -987,9 +987,6 @@ async fn fetch_chateau_data(
         .await
         .unwrap_or_default();
 
-    if direction_rows_list.is_empty() {
-        return None;
-    }
 
     let direction_pattern_ids: Vec<String> = direction_rows_list
         .iter()
@@ -1058,7 +1055,6 @@ async fn fetch_chateau_data(
 
     // Partition before loading route dictionaries, itinerary rows or trips.
     itin_meta_list.retain(|meta| selection.allows(&chateau, meta.route_id.as_str()));
-    if itin_meta_list.is_empty() { return None; }
 
     // Resolve actual route modes before any itinerary-row or trip lookup.
     // primary_route_type cannot distinguish the bus and metro at a shared stop.
@@ -1098,9 +1094,6 @@ async fn fetch_chateau_data(
             _ => false,
         }
     });
-    if itin_meta_list.is_empty() {
-        return None;
-    }
 
     let filtered_itinerary_ids: Vec<String> = itin_meta_list
         .iter()
@@ -1367,6 +1360,8 @@ async fn fetch_chateau_data(
         }
     }
 
+    let mut board_events = Vec::new();
+
     // 5. Process Data into Objects
     let mut ld_departures_by_group: HashMap<(String, StationKey), Vec<DepartureItem>> =
         HashMap::new();
@@ -1453,7 +1448,6 @@ async fn fetch_chateau_data(
         .filter(|(c, _)| c == &chateau)
         .map(|(_, sid)| sid.clone())
         .collect();
-    let departure_time = departure_time_chrono.timestamp();
 
     let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
     let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
@@ -1467,26 +1461,10 @@ async fn fetch_chateau_data(
                 None => continue,
             };
             let route_id = &itinerary_meta.route_id;
-            let route = match routes.get(route_id.as_str()) {
+            let _route = match routes.get(route_id.as_str()) {
                 Some(r) => r,
                 None => continue,
             };
-
-            // Determine Category
-            let mut is_long_distance = false;
-            if route.route_type == 2 && long_distance_chateaux.contains(chateau.as_str()) {
-                is_long_distance = true;
-                if chateau == "nationalrailuk" {
-                    if let Some(aid) = &route.agency_id {
-                        if ["XR", "HX", "LO"].contains(&aid.as_str()) {
-                            is_long_distance = false;
-                        }
-                    }
-                }
-                if chateau == "upexpress" {
-                    is_long_distance = false;
-                }
-            }
 
             // Service Date Check
             let mut valid_service_dates = Vec::new();
@@ -1512,7 +1490,7 @@ async fn fetch_chateau_data(
                     continue;
                 }
 
-                if let Some(station_key) =
+                if let Some(_station_key) =
                     stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string()))
                 {
                     let dep_time_offset = row
@@ -1554,17 +1532,11 @@ async fn fetch_chateau_data(
                                 .map(|dm| dm.headsign_or_destination.clone()))
                             .unwrap_or_else(|| "Unknown".to_string());
 
-                        let agency_name = route
-                            .agency_id
-                            .clone()
-                            .and_then(|aid| agencies.get(&aid).map(|a| a.agency_name.clone()));
-
                         // Realtime Logic
                         let mut rt_dep = None;
                         let mut rt_arr = None;
                         let mut rt_platform = None;
                         let mut is_cancelled = false;
-                        let mut is_delayed = false;
 
                         let timer_looking_at_rt_alerts = std::time::Instant::now();
                         let relevant_alerts =
@@ -1703,11 +1675,6 @@ async fn fetch_chateau_data(
                                 timer_looking_at_rt_alerts.elapsed();
                         }
 
-                        if let Some(d) = rt_dep {
-                            if d > departure_ts as u64 + 60 {
-                                is_delayed = true;
-                            }
-                        }
                         let display_platform = rt_platform.or_else(|| {
                             stop_platform_map
                                 .get(row.stop_id.as_str())
@@ -1715,123 +1682,33 @@ async fn fetch_chateau_data(
                                 .flatten()
                         });
 
-                        route_info_map.entry(route_id.to_string()).or_insert_with(|| {
-                                RouteInfoExport {
-                                    short_name: route.short_name.clone().map(|x| x.to_string()),
-                                    long_name: route.long_name.clone(),
-                                    agency_name: agency_name.clone(),
-                                    color: route.color.clone().map(|x| x.to_string()),
-                                    text_color: route.text_color.clone().map(|x| x.to_string()),
-                                    route_type: route.route_type as i32,
-                                }
-                        });
-
-                        let is_subway_or_tram = route.route_type == 0 || route.route_type == 1;
-
-                        // Apply the departure window after realtime has been resolved.
-                        // A trip scheduled in the past may still be upcoming if it is delayed.
-                        let effective_departure_ts = rt_dep
-                            .or(rt_arr)
-                            .map(|ts| ts as i64)
-                            .unwrap_or(departure_ts);
-
-                        if effective_departure_ts < departure_time
-                            || effective_departure_ts > departure_time + 18 * 3600
-                        {
-                            continue;
-                        }
-
-                        if !is_subway_or_tram
-                            && (is_long_distance
-                                || (matches!(station_key, StationKey::Osm(_))
-                                    && route.route_type != 3))
-                        {
-                            let item = DepartureItem {
-                                scheduled_departure: Some(departure_ts as u64),
-                                realtime_departure: rt_dep,
-                                scheduled_arrival: Some(
-                                    (midnight_ts
-                                        + trip.start_time as i64
-                                        + row.arrival_time_since_start.unwrap_or(dep_time_offset)
-                                            as i64) as u64,
-                                ),
-                                realtime_arrival: rt_arr,
-                                service_date: *date,
-                                headsign: headsign,
-                                platform: display_platform.clone(),
-                                trip_id: trip_id.to_string(),
-                                trip_short_name: trip
-                                    .trip_short_name
-                                    .clone()
-                                    .map(|x| x.to_string()),
-                                route_id: route_id.to_string(),
-                                stop_id: row.stop_id.to_string(),
-                                agency_id: route.agency_id.clone().unwrap_or_default(),
-                                cancelled: is_cancelled,
-                                delayed: is_delayed,
-                                chateau_id: chateau.clone(),
-                                last_stop: is_last_stop,
-                                final_station_name: itinerary_final_station_name
-                                    .get(&trip.itinerary_pattern_id)
-                                    .cloned(),
-                            };
-                            ld_departures_by_group
-                                .entry((chateau.clone(), station_key.clone()))
-                                .or_default()
-                                .push(item);
-                        } else {
-                            let r_key = LocalRouteKey {
-                                chateau: chateau.clone(),
-                                route_id: route_id.to_string(),
-                            };
-                            local_route_meta_map
-                                .entry(r_key.clone())
-                                .or_insert((route.clone(), agency_name.unwrap_or_default()));
-
-                            let item = LocalDepartureItem {
-                                trip_id: CompactString::from(trip_id.as_str()),
-                                departure_schedule: Some(departure_ts as u64),
-                                departure_realtime: rt_dep,
-                                arrival_schedule: Some(
-                                    (midnight_ts
-                                        + trip.start_time as i64
-                                        + row.arrival_time_since_start.unwrap_or(dep_time_offset)
-                                            as i64) as u64,
-                                ),
-                                arrival_realtime: rt_arr,
-                                stop_id: CompactString::from(row.stop_id.as_str()),
-                                stop_name: stop_name_map
-                                    .get(row.stop_id.as_str())
-                                    .cloned()
-                                    .flatten(),
-                                cancelled: is_cancelled,
-                                platform: display_platform,
-                                service_date: *date,
-                                last_stop: is_last_stop,
-                            };
-                            local_departures
-                                .entry(r_key)
-                                .or_default()
-                                .entry(headsign)
-                                .or_default()
-                                .push(item);
-
-                            if let Some(s) = stop_full_info_map.get(row.stop_id.as_str()) {
-                                stop_output_map.entry(row.stop_id.to_string()).or_insert_with(|| {
-                                        StopOutputV3 {
-                                            gtfs_id: CompactString::from(s.gtfs_id.as_str()),
-                                            name: s.name.clone().unwrap_or_default(),
-                                            lat: s.point.as_ref().unwrap().y,
-                                            lon: s.point.as_ref().unwrap().x,
-                                            osm_station_id: s.osm_station_id,
-                                            timezone: s
-                                                .timezone
-                                                .clone()
-                                                .unwrap_or("ETC/Utc".to_string()),
-                                        }
-                                });
-                            }
-                        }
+                        let mut event = crate::departure_realtime::empty_event(
+                            &chateau,
+                            &trip_id,
+                            route_id.as_str(),
+                            row.stop_id.as_str(),
+                        );
+                        event.stop_sequence = Some(row.gtfs_stop_sequence);
+                        event.trip_start_time = Some(trip.start_time);
+                        event.scheduled_departure = u64::try_from(departure_ts).ok();
+                        event.scheduled_arrival = u64::try_from(
+                            midnight_ts
+                                + i64::from(trip.start_time)
+                                + i64::from(row.arrival_time_since_start.unwrap_or(dep_time_offset)),
+                        )
+                        .ok();
+                        event.realtime_departure = rt_dep;
+                        event.realtime_arrival = rt_arr;
+                        event.service_date = Some(*date);
+                        event.headsign = Some(headsign);
+                        event.platform_code = display_platform;
+                        event.trip_cancelled = is_cancelled;
+                        event.trip_short_name = trip.trip_short_name.clone();
+                        event.last_stop = is_last_stop;
+                        event.final_station_name = itinerary_final_station_name
+                            .get(&trip.itinerary_pattern_id)
+                            .cloned();
+                        board_events.push(event);
                     }
                 }
             }
@@ -1847,6 +1724,188 @@ async fn fetch_chateau_data(
         total_time_added_looking_at_rt_trips.as_millis()
     );
 
+    // Use the same indexed overlay as station boards, before time filtering and
+    // limits. Query every nearby stop: static direction pruning cannot predict
+    // a detour or an added trip's stop calls.
+    let mut route_dictionaries = BTreeMap::from([(chateau.clone(), routes)]);
+    let mut agency_dictionaries = BTreeMap::from([(chateau.clone(), agencies)]);
+    let mut realtime_stops = BTreeMap::new();
+    if !skip_realtime {
+        realtime_stops = crate::departure_realtime_loader::apply_departure_realtime(
+            &mut board_events,
+            &BTreeMap::from([(chateau.clone(), stop_ids.iter().cloned().collect())]),
+            &pool,
+            &aspen_chateau_cache,
+            &mut route_dictionaries,
+            &mut agency_dictionaries,
+            &mut BTreeMap::new(),
+            false,
+        )
+        .await;
+    }
+    let routes = route_dictionaries.remove(&chateau).unwrap_or_default();
+    let agencies = agency_dictionaries.remove(&chateau).unwrap_or_default();
+    for event in board_events {
+        if event.trip_deleted || !selection.allows(&chateau, &event.route_id) {
+            continue;
+        }
+        let Some(route) = routes.get(&event.route_id) else {
+            continue;
+        };
+        let rt_stop = realtime_stops
+            .get(&chateau)
+            .and_then(|stops| stops.get(&event.stop_id));
+        let anchor = if stop_dist_map.contains_key(&event.stop_id) {
+            event.stop_id.as_str()
+        } else {
+            match rt_stop.and_then(|stop| stop.parent_station.as_deref()) {
+                Some(parent) if stop_dist_map.contains_key(parent) => parent,
+                _ => continue,
+            }
+        };
+        let Some(distance) = stop_dist_map.get(anchor) else {
+            continue;
+        };
+        if !distance_limits.allows(route.route_type, *distance) {
+            continue;
+        }
+        let Some(station_key) = stop_to_key_map.get(&(chateau.clone(), anchor.to_string())) else {
+            continue;
+        };
+        let Some(time) = crate::departure_realtime::nearby_event_time(
+            &event,
+            departure_time_chrono.timestamp() as u64,
+        ) else {
+            continue;
+        };
+        let Some(datetime) = chrono::Utc.timestamp_opt(time as i64, 0).single() else {
+            continue;
+        };
+        let service_date = event.service_date.unwrap_or_else(|| {
+            let timezone = stop_full_info_map
+                .get(anchor)
+                .and_then(|stop| stop.timezone.as_deref())
+                .and_then(|tz| catenary_time::Tz::from_str_insensitive(tz).ok())
+                .unwrap_or(catenary_time::UTC);
+            datetime.with_timezone(&timezone).date_naive()
+        });
+        let agency_name = route
+            .agency_id
+            .as_ref()
+            .and_then(|id| agencies.get(id))
+            .map(|agency| agency.agency_name.clone());
+        route_info_map
+            .entry(event.route_id.clone())
+            .or_insert_with(|| RouteInfoExport {
+                short_name: route.short_name.as_ref().map(ToString::to_string),
+                long_name: route.long_name.clone(),
+                agency_name: agency_name.clone(),
+                color: route.color.as_ref().map(ToString::to_string),
+                text_color: route.text_color.as_ref().map(ToString::to_string),
+                route_type: i32::from(route.route_type),
+            });
+        let headsign = event.headsign.clone().unwrap_or_else(|| "Unknown".into());
+        let platform = event
+            .platform_string_realtime
+            .clone()
+            .or(event.platform_code.clone())
+            .or_else(|| stop_platform_map.get(&event.stop_id).cloned().flatten());
+        let cancelled = event.trip_cancelled || event.stop_cancelled;
+        let is_long_distance = route.route_type == 2
+            && is_ld_chateau
+            && !(chateau == "nationalrailuk"
+                && route
+                    .agency_id
+                    .as_deref()
+                    .is_some_and(|id| ["XR", "HX", "LO"].contains(&id)));
+        if route.route_type != 0
+            && route.route_type != 1
+            && (is_long_distance
+                || (matches!(station_key, StationKey::Osm(_)) && route.route_type != 3))
+        {
+            ld_departures_by_group
+                .entry((chateau.clone(), station_key.clone()))
+                .or_default()
+                .push(DepartureItem {
+                    scheduled_departure: event.scheduled_departure,
+                    realtime_departure: event.realtime_departure,
+                    scheduled_arrival: event.scheduled_arrival,
+                    realtime_arrival: event.realtime_arrival,
+                    service_date,
+                    headsign,
+                    platform,
+                    trip_id: event.trip_id,
+                    trip_short_name: event.trip_short_name.map(|s| s.to_string()),
+                    route_id: event.route_id,
+                    stop_id: event.stop_id,
+                    agency_id: route.agency_id.clone().unwrap_or_default(),
+                    cancelled,
+                    delayed: event
+                        .realtime_departure
+                        .zip(event.scheduled_departure)
+                        .is_some_and(|(rt, scheduled)| rt > scheduled + 60),
+                    chateau_id: chateau.clone(),
+                    last_stop: event.last_stop,
+                    final_station_name: event.final_station_name,
+                });
+        } else {
+            let key = LocalRouteKey {
+                chateau: chateau.clone(),
+                route_id: event.route_id,
+            };
+            local_route_meta_map
+                .entry(key.clone())
+                .or_insert((route.clone(), agency_name.unwrap_or_default()));
+            local_departures
+                .entry(key)
+                .or_default()
+                .entry(headsign)
+                .or_default()
+                .push(LocalDepartureItem {
+                    trip_id: event.trip_id.into(),
+                    departure_schedule: event.scheduled_departure,
+                    departure_realtime: event.realtime_departure,
+                    arrival_schedule: event.scheduled_arrival,
+                    arrival_realtime: event.realtime_arrival,
+                    stop_id: event.stop_id.clone().into(),
+                    stop_name: rt_stop
+                        .and_then(|s| s.stop_name.as_ref())
+                        .and_then(|s| s.translation.as_slice().first())
+                        .map(|s| s.text.clone())
+                        .or_else(|| stop_name_map.get(anchor).cloned().flatten()),
+                    cancelled,
+                    platform,
+                    service_date,
+                    last_stop: event.last_stop,
+                });
+            if let Some(stop) = stop_full_info_map.get(anchor) {
+                if let Some(point) = &stop.point {
+                    stop_output_map
+                        .entry(event.stop_id.clone())
+                        .or_insert_with(|| StopOutputV3 {
+                            gtfs_id: event.stop_id.as_str().into(),
+                            name: rt_stop
+                                .and_then(|s| s.stop_name.as_ref())
+                                .and_then(|s| s.translation.as_slice().first())
+                                .map(|s| s.text.clone())
+                                .or_else(|| stop.name.clone())
+                                .unwrap_or_default(),
+                            lat: rt_stop
+                                .and_then(|s| s.stop_lat)
+                                .map(f64::from)
+                                .unwrap_or(point.y),
+                            lon: rt_stop
+                                .and_then(|s| s.stop_lon)
+                                .map(f64::from)
+                                .unwrap_or(point.x),
+                            osm_station_id: stop.osm_station_id,
+                            timezone: stop.timezone.clone().unwrap_or_else(|| "Etc/UTC".into()),
+                        });
+                }
+            }
+        }
+    }
+
     // Filter closest stop for Local
     for headsigns_map in local_departures.values_mut() {
         for items in headsigns_map.values_mut() {
@@ -1854,11 +1913,22 @@ async fn fetch_chateau_data(
                 continue;
             }
             let mut min_dist = f64::MAX;
+            let mut best_cancelled = true;
             let mut best_stop_id: Option<CompactString> = None;
             for item in items.iter() {
-                if let Some(dist) = stop_dist_map.get(item.stop_id.as_str()) {
-                    if *dist < min_dist {
+                let anchor = realtime_stops.get(&chateau)
+                    .and_then(|stops| stops.get(item.stop_id.as_str()))
+                    .and_then(|stop| stop.parent_station.as_deref());
+                if let Some(dist) = stop_dist_map.get(item.stop_id.as_str())
+                    .or_else(|| anchor.and_then(|parent| stop_dist_map.get(parent))) {
+                    // Removed detour calls remain visible as cancelled events.
+                    // They must not hide the replacement stop's running calls.
+                    if best_stop_id.is_none()
+                        || (best_cancelled && !item.cancelled)
+                        || (best_cancelled == item.cancelled && *dist < min_dist)
+                    {
                         min_dist = *dist;
+                        best_cancelled = item.cancelled;
                         best_stop_id = Some(item.stop_id.clone());
                     }
                 }

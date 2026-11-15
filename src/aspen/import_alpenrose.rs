@@ -1615,20 +1615,25 @@ pub async fn new_rt_data(
             let ref_epoch = trip_gtfs_rt_for_feed_id.reference_epoch;
 
             for trip_entity in trip_gtfs_rt_for_feed_id.entities().iter() {
+                // A realtime-only terminal platform may inherit its parent's name.
+                if let Some(parent) = trip_entity
+                    .stop
+                    .as_ref()
+                    .and_then(|stop| stop.parent_station.as_ref())
+                {
+                    stop_ids_to_lookup.insert(parent.clone());
+                }
+
                 if let Some(trip_update) = &trip_entity.trip_update {
                     if let Some(trip_id) = &trip_update.trip.trip_id {
-                        if missing_trip_ids.contains(trip_id) {
-                            if let Some(trip_id) = &trip_update.trip.trip_id {
-                                let last_non_skipped_stop_id = trip_update
-                                    .stop_time_update
-                                    .iter()
-                                    .filter(|x| x.schedule_relationship != Some(1))
-                                    .last()
-                                    .and_then(|x| x.stop_id.clone());
-
-                                if let Some(last_non_skipped_stop_id) = last_non_skipped_stop_id {
-                                    stop_ids_to_lookup.insert(last_non_skipped_stop_id.to_string());
-                                }
+                        if catenary::departure_realtime::needs_departure_stop_index_compact(
+                            trip_update,
+                            trip_id_to_trip.contains_key(trip_id.as_str()),
+                        ) {
+                            if let Some(terminal) =
+                                catenary::departure_realtime::compact_headsign_terminal_stop_id(trip_update)
+                            {
+                                stop_ids_to_lookup.insert(terminal.to_string());
                             }
                         }
 
@@ -2458,37 +2463,14 @@ pub async fn new_rt_data(
                             }
                         }
 
-                        let last_non_cancelled_stop_id = trip_update
-                            .stop_time_update
-                            .iter()
-                            .filter(|x| x.schedule_relationship != Some(1))
-                            .last()
-                            .and_then(|x| x.stop_id.clone());
-
-                        let mut trip_headsign = match &trip_id {
-                            Some(trip_id) => match missing_trip_ids.contains(trip_id) {
-                                true => match last_non_cancelled_stop_id {
-                                    Some(last_non_cancelled_stop_id) => {
-                                        stop_id_to_stop_from_postgres
-                                            .get(last_non_cancelled_stop_id.as_ref())
-                                            .and_then(|s| s.name.as_deref())
-                                            .map(|hs| {
-                                                if let Some(existing) = headsign_cache.get(hs) {
-                                                    existing.clone()
-                                                } else {
-                                                    let arc: Arc<str> = Arc::from(hs);
-                                                    headsign_cache
-                                                        .insert(hs.to_string(), arc.clone());
-                                                    arc
-                                                }
-                                            })
-                                    }
-                                    None => None,
-                                },
-                                false => None,
-                            },
-                            None => None,
-                        };
+                        // Resolve fallback destinations after all realtime Stop entities
+                        // have been assembled, including added trips reusing static IDs.
+                        let trip_headsign = trip_update
+                            .trip_properties
+                            .as_ref()
+                            .and_then(|properties| properties.trip_headsign.as_deref())
+                            .filter(|headsign| !headsign.trim().is_empty())
+                            .map(Arc::<str>::from);
 
                         let mut trip_descriptor: AspenRawTripInfo = trip_update.trip.clone().into();
 
@@ -4311,6 +4293,48 @@ pub async fn new_rt_data(
     }
 
     drop(previous_authoritative_data_store);
+
+    // All feeds and realtime Stop entities are now available. Populate the
+    // existing trip_headsign field before compression, RPCs and history output.
+    for update in trip_updates.values_mut() {
+        catenary::departure_realtime::fill_unscheduled_headsign(update, |id| {
+            let stop = stop_id_to_stop.get(id)?;
+            catenary::departure_realtime::stop_display_name(stop).or_else(|| {
+                stop.parent_station
+                    .as_deref()
+                    .and_then(|parent| stop_id_to_stop.get(parent))
+                    .and_then(catenary::departure_realtime::stop_display_name)
+            })
+        });
+        // Preserve destination recovery for vehicle entities now that headsign
+        // inference happens after the earlier vehicle/trip merge.
+        if !update.found_schedule_trip_id {
+            if let Some(headsign) = catenary::departure_realtime::realtime_trip_headsign(update) {
+                for trip_id in update.trip.trip_id.iter().chain(
+                    update
+                        .trip_properties
+                        .iter()
+                        .filter_map(|p| p.trip_id.as_ref()),
+                ) {
+                    if let Some(ids) = trip_id_to_vehicle_gtfs_rt_id.get(trip_id) {
+                        for id in ids {
+                            if let Some(vehicle) = aspenised_vehicle_positions.get_mut(id) {
+                                if let Some(trip) = vehicle.trip.as_mut() {
+                                    if trip
+                                        .trip_headsign
+                                        .as_deref()
+                                        .is_none_or(|name| name.trim().is_empty())
+                                    {
+                                        trip.trip_headsign = Some(Arc::from(headsign));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     let cpu_started = current_thread_cpu_time();
     let mut vehicle_positions_rtree_by_route_type = AHashMap::new();

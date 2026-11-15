@@ -266,6 +266,133 @@ fn positive_time(time: Option<i64>) -> Option<u64> {
 
 /// Apply realtime-only calls once per occurrence, not once per stop ID. The
 /// caller has already applied TripModifications to the scheduled board.
+/// A feed-supplied headsign takes priority over any inferred destination.
+/// Blank strings are missing values, rather than useful display names.
+pub fn realtime_trip_headsign(update: &AspenisedTripUpdate) -> Option<&str> {
+    update
+        .trip_properties
+        .as_ref()
+        .and_then(|p| p.trip_headsign.as_deref())
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            update
+                .trip_headsign
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+        })
+}
+
+fn terminal_stop_id<'a>(
+    calls: impl Iterator<Item = (Option<u16>, bool, Option<&'a str>)>,
+) -> Option<&'a str> {
+    let mut last = None;
+    let mut highest: Option<(u16, Option<&str>)> = None;
+    let mut complete_sequences = true;
+    for (sequence, skipped, id) in calls {
+        if skipped {
+            continue;
+        }
+        last = Some(id);
+        if let Some(sequence) = sequence {
+            if highest.is_none_or(|(previous, _)| sequence >= previous) {
+                highest = Some((sequence, id));
+            }
+        } else {
+            complete_sequences = false;
+        }
+    }
+    // Use feed order if sequences are incomplete, otherwise the highest
+    // sequence (including loops and out-of-order arrays). Never use a preceding
+    // stop merely because the actual terminal has no ID or name.
+    let terminal = if complete_sequences {
+        highest.and_then(|(_, id)| id)
+    } else {
+        last.flatten()
+    };
+    terminal.filter(|id| !id.trim().is_empty())
+}
+
+pub fn headsign_terminal_stop_id(update: &AspenisedTripUpdate) -> Option<&str> {
+    if matches!(
+        update.trip.schedule_relationship,
+        Some(
+            AspenisedTripScheduleRelationship::Cancelled
+                | AspenisedTripScheduleRelationship::Deleted
+        )
+    ) {
+        return None;
+    }
+    terminal_stop_id(update.stop_time_update.iter().map(|stop| {
+        (
+            stop.stop_sequence,
+            stop.schedule_relationship == Some(AspenisedStopTimeScheduleRelationship::Skipped),
+            stop.stop_time_properties
+                .as_ref()
+                .and_then(|p| p.assigned_stop_id.as_deref())
+                .filter(|id| !id.trim().is_empty())
+                .or(stop.stop_id.as_deref()),
+        )
+    }))
+}
+
+/// Use exactly the same terminal selection during compact-feed lookup planning.
+pub fn compact_headsign_terminal_stop_id(
+    update: &crate::compact_formats::CompactTripUpdate,
+) -> Option<&str> {
+    terminal_stop_id(update.stop_time_update.iter().map(|stop| {
+        (
+            stop.stop_sequence,
+            stop.schedule_relationship == Some(1),
+            stop.stop_time_properties
+                .as_ref()
+                .and_then(|p| p.assigned_stop_id.as_deref())
+                .filter(|id| !id.trim().is_empty())
+                .or(stop.stop_id.as_deref()),
+        )
+    }))
+}
+
+pub fn needs_headsign_fallback(update: &AspenisedTripUpdate) -> bool {
+    realtime_trip_headsign(update).is_none()
+        && (!update.found_schedule_trip_id
+            || matches!(
+                update.trip.schedule_relationship,
+                Some(
+                    AspenisedTripScheduleRelationship::Added
+                        | AspenisedTripScheduleRelationship::Unscheduled
+                        | AspenisedTripScheduleRelationship::Duplicated
+                        | AspenisedTripScheduleRelationship::Replacement
+                )
+            ))
+        && headsign_terminal_stop_id(update).is_some()
+}
+
+/// Fill Aspen's existing field once from the full trip, before selecting board
+/// calls. Every departure then has the same destination, even at an intermediate stop.
+pub fn fill_unscheduled_headsign(
+    update: &mut AspenisedTripUpdate,
+    mut stop_name: impl FnMut(&str) -> Option<String>,
+) {
+    if !needs_headsign_fallback(update) {
+        return;
+    }
+    if let Some(name) = headsign_terminal_stop_id(update)
+        .and_then(&mut stop_name)
+        .filter(|name| !name.trim().is_empty())
+    {
+        update.trip_headsign = Some(std::sync::Arc::from(name));
+    }
+}
+
+pub fn stop_display_name(stop: &AspenisedStop) -> Option<String> {
+    let translations = &stop.stop_name.as_ref()?.translation;
+    translations
+        .iter()
+        .find(|t| t.language.is_none() && !t.text.trim().is_empty())
+        .or_else(|| translations.iter().find(|t| !t.text.trim().is_empty()))
+        .map(|t| t.text.clone())
+}
+
 pub fn overlay_updates(
     events: &mut Vec<StopEvent>,
     chateau: &str,
@@ -299,7 +426,16 @@ pub fn overlay_updates(
             |event: &StopEvent| {
                 event.chateau == chateau
                     && event.trip_id == trip_id
-                    && (!event.trip_modified || modified.is_some() || is_replacement)
+                    && (!event.trip_modified
+                        || modified.is_some()
+                        || is_replacement
+                        || matches!(
+                            relationship,
+                            Some(
+                                AspenisedTripScheduleRelationship::Deleted
+                                    | AspenisedTripScheduleRelationship::Cancelled
+                            )
+                        ))
                     && update
                         .trip
                         .effective_start_time()
@@ -328,6 +464,20 @@ pub fn overlay_updates(
                         }),
                     }
             };
+        if matches!(
+            relationship,
+            Some(
+                AspenisedTripScheduleRelationship::Deleted
+                    | AspenisedTripScheduleRelationship::Cancelled
+            )
+        ) {
+            for event in events.iter_mut().filter(|event| instance_matches(event)) {
+                event.trip_deleted =
+                    relationship == Some(&AspenisedTripScheduleRelationship::Deleted);
+                event.trip_cancelled =
+                    relationship == Some(&AspenisedTripScheduleRelationship::Cancelled);
+            }
+        }
         if is_replacement && date.is_some() {
             for event in events.iter_mut().filter(|event| instance_matches(event)) {
                 event.trip_modified = true;
@@ -456,11 +606,8 @@ pub fn overlay_updates(
             event.trip_cancelled =
                 relationship == Some(&AspenisedTripScheduleRelationship::Cancelled);
             event.trip_deleted = relationship == Some(&AspenisedTripScheduleRelationship::Deleted);
-            event.headsign = update
-                .trip_properties
-                .as_ref()
-                .and_then(|p| p.trip_headsign.clone())
-                .or_else(|| update.trip_headsign.as_deref().map(str::to_owned))
+            event.headsign = realtime_trip_headsign(update)
+                .map(str::to_owned)
                 .or(event.headsign);
             event.trip_short_name = update
                 .trip_properties
@@ -492,6 +639,19 @@ pub fn overlay_updates(
             }
         }
     }
+}
+
+/// Select nearby calls only after applying modifications and trip-level updates.
+pub fn nearby_event_time(event: &StopEvent, start: u64) -> Option<u64> {
+    if event.trip_deleted {
+        return None;
+    }
+    let time = event
+        .realtime_departure
+        .or(event.realtime_arrival)
+        .or(event.scheduled_departure)
+        .or(event.scheduled_arrival)?;
+    (time >= start && time <= start.saturating_add(18 * 3600)).then_some(time)
 }
 
 #[cfg(test)]
@@ -618,6 +778,238 @@ mod tests {
             .is_none()
         );
     }
+    #[test]
+    fn unscheduled_headsign_uses_last_reachable_stop_even_for_static_trip_ids() {
+        for relationship in [
+            AspenisedTripScheduleRelationship::Added,
+            AspenisedTripScheduleRelationship::Unscheduled,
+            AspenisedTripScheduleRelationship::Duplicated,
+            AspenisedTripScheduleRelationship::Replacement,
+        ] {
+            let mut u = update(relationship);
+            u.found_schedule_trip_id = true;
+            let mut skipped = stu("closed-terminal", 4, 400);
+            skipped.schedule_relationship = Some(AspenisedStopTimeScheduleRelationship::Skipped);
+            u.stop_time_update = vec![stu("origin", 1, 100), stu("reachable", 3, 300), skipped];
+            fill_unscheduled_headsign(&mut u, |id| Some(format!("Name {id}")));
+            assert_eq!(u.trip_headsign.as_deref(), Some("Name reachable"));
+            let mut events = vec![];
+            overlay_updates(&mut events, "feed", &HashSet::from(["origin".into()]), &[u]);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].headsign.as_deref(), Some("Name reachable"));
+        }
+    }
+
+    #[test]
+    fn explicit_headsign_wins_and_blank_properties_do_not_mask_fallback() {
+        let mut u = update(AspenisedTripScheduleRelationship::Added);
+        u.stop_time_update = vec![stu("terminal", 1, 100)];
+        u.trip_properties = Some(
+            serde_json::from_value(serde_json::json!({"trip_headsign":"Express destination"}))
+                .unwrap(),
+        );
+        fill_unscheduled_headsign(&mut u, |_| panic!("explicit headsign must not be replaced"));
+        assert_eq!(realtime_trip_headsign(&u), Some("Express destination"));
+        u.trip_properties.as_mut().unwrap().trip_headsign = Some("  ".into());
+        u.trip_headsign = Some(" ".into());
+        fill_unscheduled_headsign(&mut u, |_| Some("Terminal Station".into()));
+        let mut events = vec![];
+        overlay_updates(
+            &mut events,
+            "feed",
+            &HashSet::from(["terminal".into()]),
+            &[u.clone()],
+        );
+        assert_eq!(events[0].headsign.as_deref(), Some("Terminal Station"));
+        u.trip_properties = None;
+        u.trip_headsign = Some("Feed destination".into());
+        fill_unscheduled_headsign(&mut u, |_| panic!("existing headsign must not be replaced"));
+        assert_eq!(realtime_trip_headsign(&u), Some("Feed destination"));
+    }
+
+    #[test]
+    fn terminal_uses_sequence_and_assigned_stop_and_preserves_loop_return() {
+        let mut u = update(AspenisedTripScheduleRelationship::Unscheduled);
+        let mut terminal = stu("old-platform", 5, 500);
+        terminal.stop_time_properties = Some(
+            serde_json::from_value(serde_json::json!({"assigned_stop_id":"replacement-platform"}))
+                .unwrap(),
+        );
+        u.stop_time_update = vec![terminal, stu("origin", 1, 100), stu("middle", 3, 300)];
+        assert_eq!(headsign_terminal_stop_id(&u), Some("replacement-platform"));
+        u.stop_time_update[0] = stu("origin", 5, 500);
+        assert_eq!(headsign_terminal_stop_id(&u), Some("origin"));
+        // With partial sequences use the feed's call order instead of inventing an order.
+        u.stop_time_update[2].stop_sequence = None;
+        assert_eq!(headsign_terminal_stop_id(&u), Some("middle"));
+    }
+
+    #[test]
+    fn unreachable_or_unresolvable_terminal_does_not_invent_destination() {
+        let mut u = update(AspenisedTripScheduleRelationship::Added);
+        u.stop_time_update = vec![stu("origin", 1, 100), stu("unknown", 2, 200)];
+        fill_unscheduled_headsign(&mut u, |id| (id == "origin").then(|| "Origin".into()));
+        assert!(u.trip_headsign.is_none());
+        u.stop_time_update[1].stop_id = None;
+        assert!(headsign_terminal_stop_id(&u).is_none());
+        for stop in &mut u.stop_time_update {
+            stop.schedule_relationship = Some(AspenisedStopTimeScheduleRelationship::Skipped);
+        }
+        assert!(headsign_terminal_stop_id(&u).is_none());
+        for relationship in [
+            AspenisedTripScheduleRelationship::Cancelled,
+            AspenisedTripScheduleRelationship::Deleted,
+        ] {
+            u.trip.schedule_relationship = Some(relationship);
+            assert!(!needs_headsign_fallback(&u));
+        }
+    }
+
+    #[test]
+    fn no_data_terminal_is_reachable_and_scheduled_headsigns_are_unchanged() {
+        let mut u = update(AspenisedTripScheduleRelationship::Scheduled);
+        u.found_schedule_trip_id = true;
+        let mut terminal = stu("terminal", 2, 200);
+        terminal.schedule_relationship = Some(AspenisedStopTimeScheduleRelationship::NoData);
+        terminal.arrival = None;
+        terminal.departure = None;
+        u.stop_time_update = vec![stu("origin", 1, 100), terminal];
+        fill_unscheduled_headsign(&mut u, |_| {
+            panic!("ordinary scheduled trip must keep its static headsign")
+        });
+        assert!(u.trip_headsign.is_none());
+        u.trip.modified_trip = Some(ModifiedTripSelector {
+            modifications_id: Some("detour".into()),
+            affected_trip_id: Some("trip".into()),
+            start_time: None,
+            start_date: u.trip.start_date,
+        });
+        fill_unscheduled_headsign(&mut u, |_| {
+            panic!(
+                "partial scheduled detour updates must not replace the full schedule destination"
+            )
+        });
+        u.found_schedule_trip_id = false;
+        fill_unscheduled_headsign(&mut u, |id| Some(format!("Name {id}")));
+        assert_eq!(u.trip_headsign.as_deref(), Some("Name terminal"));
+    }
+
+    #[test]
+    fn compact_and_expanded_headsign_terminal_selection_agree() {
+        let mut u = update(AspenisedTripScheduleRelationship::Added);
+        u.stop_time_update = vec![
+            stu("origin", 1, 100),
+            stu("old-terminal", 3, 300),
+            stu("reachable", 2, 200),
+        ];
+        u.stop_time_update[1].schedule_relationship =
+            Some(AspenisedStopTimeScheduleRelationship::Skipped);
+        u.stop_time_update[2].stop_time_properties = Some(
+            serde_json::from_value(serde_json::json!({"assigned_stop_id":"assigned"})).unwrap(),
+        );
+        let compact = crate::compact_formats::CompactTripUpdate {
+            trip: gtfs_realtime::TripDescriptor::default(),
+            vehicle: None,
+            timestamp: None,
+            delay: None,
+            trip_properties: None,
+            stop_time_update: u
+                .stop_time_update
+                .iter()
+                .map(|stop| crate::compact_formats::CompactStopTimeUpdate {
+                    stop_sequence: stop.stop_sequence,
+                    stop_id: stop.stop_id.clone(),
+                    arrival: None,
+                    departure: None,
+                    departure_occupancy_status: None,
+                    schedule_relationship: stop.schedule_relationship.as_ref().map(|r| match r {
+                        AspenisedStopTimeScheduleRelationship::Skipped => 1,
+                        _ => 0,
+                    }),
+                    stop_time_properties: stop.stop_time_properties.as_ref().map(|p| {
+                        Box::new(
+                            gtfs_realtime::trip_update::stop_time_update::StopTimeProperties {
+                                assigned_stop_id: p
+                                    .assigned_stop_id
+                                    .as_ref()
+                                    .map(ToString::to_string),
+                                ..Default::default()
+                            },
+                        )
+                    }),
+                })
+                .collect(),
+        };
+        assert_eq!(
+            compact_headsign_terminal_stop_id(&compact),
+            headsign_terminal_stop_id(&u)
+        );
+        assert_eq!(headsign_terminal_stop_id(&u), Some("assigned"));
+    }
+
+    #[test]
+    fn trip_level_deletion_without_stop_updates_is_instance_scoped() {
+        for relationship in [
+            AspenisedTripScheduleRelationship::Deleted,
+            AspenisedTripScheduleRelationship::Cancelled,
+        ] {
+            let mut u = update(relationship.clone());
+            u.trip.start_time = Some("25:00:00".into());
+            let mut event = empty_event("feed", "trip", "route", "a");
+            event.service_date = u.trip.start_date;
+            event.trip_start_time = Some(25 * 3600);
+            event.trip_modified = true;
+            let mut other_day = event.clone();
+            other_day.service_date = event.service_date.map(|d| d.succ_opt().unwrap());
+            let mut other_run = event.clone();
+            other_run.trip_start_time = Some(26 * 3600);
+            let mut other_feed = event.clone();
+            other_feed.chateau = "other".into();
+            let mut events = vec![event, other_day, other_run, other_feed];
+            overlay_updates(&mut events, "feed", &HashSet::from(["a".into()]), &[u]);
+            assert_eq!(
+                events[0].trip_deleted,
+                relationship == AspenisedTripScheduleRelationship::Deleted
+            );
+            assert_eq!(
+                events[0].trip_cancelled,
+                relationship == AspenisedTripScheduleRelationship::Cancelled
+            );
+            assert!(
+                events[1..]
+                    .iter()
+                    .all(|e| !e.trip_deleted && !e.trip_cancelled)
+            );
+        }
+    }
+
+    #[test]
+    fn nearby_filters_after_detour_added_and_deleted_overlays() {
+        let mut template = empty_event("feed", "trip", "route", "a");
+        template.service_date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        template.scheduled_departure = Some(90);
+        let calls = modified_calls(
+            &[call("outside", 1, 90)],
+            &[modification(1, Some(1), &[("a", 30)], 0)],
+        )
+        .unwrap();
+        let stops = HashSet::from(["a".into()]);
+        let mut events = vec![];
+        apply_modified_schedule(&mut events, &template, &calls, &stops);
+        assert_eq!(nearby_event_time(&events[0], 100), Some(120));
+        let deleted = update(AspenisedTripScheduleRelationship::Deleted);
+        overlay_updates(&mut events, "feed", &stops, &[deleted]);
+        assert_eq!(nearby_event_time(&events[0], 100), None);
+        let mut added = update(AspenisedTripScheduleRelationship::Added);
+        added.trip.trip_id = Some("new".into());
+        added.stop_time_update = vec![stu("a", 1, 130)];
+        overlay_updates(&mut events, "feed", &stops, &[added]);
+        assert_eq!(nearby_event_time(&events[1], 100), Some(130));
+        events[1].trip_cancelled = true;
+        assert_eq!(nearby_event_time(&events[1], 100), Some(130));
+        assert_eq!(nearby_event_time(&events[1], 131), None);
+    }
+
     #[test]
     fn added_trip_keeps_all_loop_occurrences() {
         let mut u = update(AspenisedTripScheduleRelationship::Added);
@@ -861,7 +1253,7 @@ pub fn select_departure_realtime(
                 .map(|value| (id.to_string(), value.clone()))
         })
         .collect();
-    let mut all_trip_ids: AHashSet<String> = AHashSet::new();
+    let mut all_trip_ids: AHashSet<String> = trip_ids.into_iter().collect();
     for modification in modifications.values() {
         for selected in &modification.selected_trips {
             all_trip_ids.extend(selected.trip_ids.iter().cloned());
@@ -887,9 +1279,19 @@ pub fn select_departure_realtime(
     let updates = update_ids
         .iter()
         .filter_map(|id| {
-            data.trip_updates()
-                .get(id.as_str())
-                .map(|update| update.to_owned())
+            data.trip_updates().get(id.as_str()).map(|update| {
+                let mut update = update.to_owned();
+                fill_unscheduled_headsign(&mut update, |id| {
+                    let stop = metadata.stop_id_to_stop.get(id)?;
+                    stop_display_name(stop).or_else(|| {
+                        stop.parent_station
+                            .as_deref()
+                            .and_then(|parent| metadata.stop_id_to_stop.get(parent))
+                            .and_then(stop_display_name)
+                    })
+                });
+                update
+            })
         })
         .collect();
     let realtime_stops = stop_ids

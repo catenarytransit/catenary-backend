@@ -37,6 +37,7 @@ extern crate diesel_derive_newtype;
 
 pub mod departures_shared;
 pub mod departure_realtime;
+pub mod departure_realtime_loader;
 pub mod nearby_departures;
 pub mod formation_v1;
 pub mod sbb_formation_types;
