@@ -109,3 +109,22 @@ station endpoints re-export it. It retains the existing three-second indexed
 lookup timeout and scheduled-board fallback, independent of nearby's ordinary
 trip-update timeout parameter. Deploy the Aspen support from #198/#199 before
 this Birch/Ramonda change. No new RPC or database migration is required.
+
+## Destinations for unscheduled trips
+
+Aspen fills its existing `trip_headsign` field for realtime-only, ADDED,
+UNSCHEDULED, DUPLICATED and REPLACEMENT trips lacking a nonempty realtime
+headsign. This also applies when the realtime trip ID exists in static GTFS.
+Inference runs after all static and realtime stop metadata is assembled. The
+terminal is the last non-SKIPPED call, using the highest stop sequence when all
+reachable calls have sequences, otherwise feed order. Assigned stop IDs take
+priority. The terminal's name, or its parent station's name, becomes the headsign.
+A terminal with NO_DATA remains reachable; CANCELED/DELETED trips receive no
+inferred destination. Unknown terminal names are left unresolved rather than
+substituting an earlier stop. Feed-supplied nonblank headsigns always win.
+
+The indexed lookup can also enrich older snapshots from their stop metadata.
+All nearby and station/stop departure boards consume the same value, computed
+from the full trip before selecting the requested stop calls. Empty headsigns in
+TripProperties do not mask the inferred field. No wire-format change is needed;
+deploy the updated Aspen importer for terminal stop lookup and enrichment.

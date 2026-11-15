@@ -571,3 +571,56 @@ fn departure_lookup_includes_requested_trip_deletions_without_stop_updates() {
     );
     assert!(result.updates[0].stop_time_update.is_empty());
 }
+
+#[test]
+fn departure_headsign_resolves_terminal_outside_selected_board_and_survives_compression() {
+    let mut data = empty_dataset();
+    let mut update = trip(vec![
+        serde_json::from_value(serde_json::json!({"old_rt_data":false, "stop_id":"pico", "stop_sequence":1, "departure":{"time":100}})).unwrap(),
+        serde_json::from_value(serde_json::json!({"old_rt_data":false, "stop_id":"rt-terminal", "stop_sequence":10, "arrival":{"time":200}})).unwrap(),
+        serde_json::from_value(serde_json::json!({"old_rt_data":false, "stop_id":"closed", "stop_sequence":11, "schedule_relationship":"Skipped"})).unwrap(),
+    ]);
+    update.trip.trip_id = Some("added-trip".into());
+    update.trip.route_id = Some("A".into());
+    update.trip.schedule_relationship = Some(AspenisedTripScheduleRelationship::Added);
+    update.found_schedule_trip_id = true;
+    update.trip_headsign = None;
+    update.trip_properties =
+        Some(serde_json::from_value(serde_json::json!({"trip_headsign":""})).unwrap());
+    data.trip_updates.insert("added".into(), update);
+    data.stop_id_to_non_scheduled_trip_ids
+        .insert("pico".into(), vec!["added".into()]);
+    // A realtime terminal platform can inherit its parent's usable station name.
+    data.stop_id_to_stop.insert(
+        "rt-terminal".into(),
+        serde_json::from_value(serde_json::json!({"parent_station":"terminal-parent"})).unwrap(),
+    );
+    data.stop_id_to_stop.insert("terminal-parent".into(), serde_json::from_value(serde_json::json!({"stop_name":{"translation":[{"text":"  "},{"text":"Pomona Station"}]}})).unwrap());
+    let encoded = crate::bincode_serialize(&data.into_compressed()).unwrap();
+    let compressed: CompressedAspenisedData = crate::bincode_deserialize(&encoded).unwrap();
+    let result = crate::departure_realtime::select_departure_realtime(
+        &compressed,
+        vec![],
+        vec!["pico".into()],
+    );
+    assert_eq!(result.searched_stop_ids, ["pico"]);
+    assert_eq!(
+        result.updates[0].trip_headsign.as_deref(),
+        Some("Pomona Station")
+    );
+    let mut events = vec![];
+    crate::departure_realtime::overlay_updates(
+        &mut events,
+        "feed",
+        &std::collections::HashSet::from(["pico".into()]),
+        &result.updates,
+    );
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].headsign.as_deref(), Some("Pomona Station"));
+    assert_eq!(
+        crate::departure_realtime::nearby_event_time(&events[0], 90),
+        Some(100)
+    );
+    let serialized = serde_json::to_value(&events[0]).unwrap();
+    assert_eq!(serialized["headsign"], "Pomona Station");
+}
