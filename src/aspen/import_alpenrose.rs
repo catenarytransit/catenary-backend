@@ -2442,7 +2442,10 @@ pub async fn new_rt_data(
                             })
                             .unwrap_or(&empty_scheduled_stops_option);
 
-                        if compressed_trip.is_none() {
+                        if catenary::departure_realtime::needs_departure_stop_index(
+                            &trip_update,
+                            compressed_trip.is_some(),
+                        ) {
                             for trip_update in trip_update.stop_time_update.iter() {
                                 if let Some(stop_id) = &trip_update.stop_id {
                                     stop_id_to_non_scheduled_trip_ids
@@ -3859,6 +3862,17 @@ pub async fn new_rt_data(
 
                     if let Some(stop_rt) = &trip_update_entity.stop {
                         if let Some(stop_id) = &stop_rt.stop_id {
+                            if let Some(parent) = &stop_rt.parent_station {
+                                stop_id_to_parent_id
+                                    .insert(stop_id.as_str().into(), parent.as_str().into());
+                                let children = parent_id_to_children_ids
+                                    .entry(parent.as_str().into())
+                                    .or_default();
+                                let child: CompactString = stop_id.as_str().into();
+                                if !children.contains(&child) {
+                                    children.push(child);
+                                }
+                            }
                             stop_id_to_stop.entry(stop_id.clone().into()).or_insert(
                                 AspenisedStop {
                                     stop_id: stop_id.clone().into(),
@@ -4274,7 +4288,10 @@ pub async fn new_rt_data(
                                 .or_insert(vec![trip_update_id.clone()]);
                         }
 
-                        if !old_trip_update.found_schedule_trip_id {
+                        if catenary::departure_realtime::needs_departure_stop_index(
+                            &old_trip_update,
+                            old_trip_update.found_schedule_trip_id,
+                        ) {
                             for stop_time_update in &old_trip_update.stop_time_update {
                                 if let Some(stop_id) = &stop_time_update.stop_id {
                                     stop_id_to_non_scheduled_trip_ids

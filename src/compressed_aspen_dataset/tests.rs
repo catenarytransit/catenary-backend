@@ -498,3 +498,53 @@ fn borrowed_stop_iterators_support_suffix_merge_and_endpoint_reads() {
     assert!(preserved.iter().all(|s| s.old_rt_data));
     assert!(update.stops().all(|s| !s.old_rt_data()));
 }
+
+#[test]
+fn departure_lookup_expands_realtime_children_and_finds_detours_into_new_stops() {
+    let mut data = empty_dataset();
+    let mut added = trip(vec![AspenisedStopTimeUpdate {
+        stop_id: Some(Arc::from("rt-platform")),
+        ..empty_stop()
+    }]);
+    added.trip.schedule_relationship = Some(AspenisedTripScheduleRelationship::Added);
+    data.trip_updates.insert("added-entity".into(), added);
+    data.stop_id_to_non_scheduled_trip_ids
+        .insert("rt-platform".into(), vec!["added-entity".into()]);
+    // Include a cycle to verify expansion terminates and de-duplicates.
+    data.parent_id_to_children_ids
+        .insert("station".into(), vec!["rt-platform".into()]);
+    data.parent_id_to_children_ids
+        .insert("rt-platform".into(), vec!["station".into()]);
+    data.stop_id_to_trip_modification_ids
+        .insert("rt-platform".into(), vec!["detour".into()]);
+    data.trip_modifications.insert(
+        "detour".into(),
+        AspenisedTripModification {
+            selected_trips: vec![AspenSelectedTrips {
+                trip_ids: vec!["outside-static-station".into()],
+                shape_id: None,
+            }],
+            start_times: vec![],
+            service_dates: vec![],
+            modifications: vec![],
+        },
+    );
+    data.trip_updates_lookup_by_trip_id_to_trip_update_ids
+        .insert(
+            "outside-static-station".into(),
+            vec!["modified-entity".into()],
+        );
+    data.trip_updates
+        .insert("modified-entity".into(), trip(vec![]));
+    data.trip_updates
+        .insert("unrelated-entity".into(), trip(vec![]));
+    let result = crate::departure_realtime::select_departure_realtime(
+        &data.into_compressed(),
+        vec![],
+        vec!["station".into()],
+    );
+    assert_eq!(result.searched_stop_ids.len(), 2);
+    assert!(result.searched_stop_ids.contains(&"rt-platform".into()));
+    assert_eq!(result.modifications.len(), 1);
+    assert_eq!(result.updates.len(), 2);
+}

@@ -321,6 +321,22 @@ impl AspenRpc for AspenServer {
         }
     }
 
+    async fn get_departure_realtime(
+        self,
+        _: context::Context,
+        chateau_id: String,
+        trip_ids: Vec<String>,
+        stop_ids: Vec<String>,
+    ) -> Option<catenary::departure_realtime::DepartureRealtime> {
+        let data = {
+            let guard = self.authoritative_data_store.get_async(&chateau_id).await?;
+            Arc::clone(guard.get())
+        };
+        Some(catenary::departure_realtime::select_departure_realtime(
+            &data, trip_ids, stop_ids,
+        ))
+    }
+
     async fn get_trip_modification(
         self,
         _: context::Context,

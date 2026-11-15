@@ -88,34 +88,7 @@ struct StopInfoResponse {
     stop_name_translations: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-struct StopEvent {
-    scheduled_arrival: Option<u64>,
-    scheduled_departure: Option<u64>,
-    realtime_arrival: Option<u64>,
-    realtime_departure: Option<u64>,
-    trip_modified: bool,
-    stop_cancelled: bool,
-    trip_cancelled: bool,
-    trip_deleted: bool,
-    trip_id: String,
-    headsign: Option<String>,
-    route_id: String,
-    chateau: String,
-    stop_id: String,
-    uses_primary_stop: bool,
-    unscheduled_trip: bool,
-    moved_info: Option<MovedStopData>,
-    platform_string_realtime: Option<String>,
-    level_id: Option<String>,
-    platform_code: Option<String>,
-    vehicle_number: Option<String>,
-    trip_short_name: Option<CompactString>,
-    service_date: Option<NaiveDate>,
-    last_stop: bool,
-    scheduled_trip_shape_id: Option<CompactString>,
-    pub final_station_name: Option<String>,
-}
+use catenary::departure_realtime::StopEvent;
 
 #[derive(Serialize, Clone, Debug)]
 pub struct DeparturesAtOsmStationDebug {
@@ -130,6 +103,7 @@ pub struct DeparturesAtOsmStationDebug {
 
 #[derive(Serialize, Clone, Debug)]
 struct DeparturesAtOsmStationResponse {
+    realtime_stops: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedStop>>,
     osm_station: Option<OsmStationInfoForResponse>,
     stops: Vec<StopInfoResponse>,
     events: Vec<StopEvent>,
@@ -156,8 +130,8 @@ pub async fn departures_at_osm_station(
     let db_timer = Instant::now();
 
     let conn_pool = pool.as_ref();
-    let conn_pre = conn_pool.get().await;
-    let conn = &mut conn_pre.unwrap();
+    let mut initial_connection = conn_pool.get().await.unwrap();
+    let conn = &mut initial_connection;
 
     let db_connection_time = db_timer.elapsed();
     let initial_osm_query_timer = Instant::now();
@@ -287,6 +261,7 @@ pub async fn departures_at_osm_station(
         }
 
         return HttpResponse::Ok().json(DeparturesAtOsmStationResponse {
+            realtime_stops: BTreeMap::new(),
             osm_station: osm_station_info,
             stops: vec![],
             events: vec![],
@@ -524,6 +499,8 @@ pub async fn departures_at_osm_station(
 
     let stop_data_fetch_time = stop_data_fetch_timer.elapsed();
 
+    drop(initial_connection);
+
     let calendar_structure =
         make_calendar_structure_from_pg(calender_responses, calendar_dates_responses)
             .unwrap_or_default();
@@ -563,8 +540,6 @@ pub async fn departures_at_osm_station(
 
     let mut events: Vec<StopEvent> = vec![];
     let mut chateau_to_trips_aspenised: HashMap<String, TripsSelectionResponse> = HashMap::new();
-    let mut chateau_to_nonscheduled_trips_aspenised: HashMap<String, Vec<AspenisedTripUpdate>> =
-        HashMap::new();
     let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> =
         BTreeMap::new();
 
@@ -592,14 +567,12 @@ pub async fn departures_at_osm_station(
 
             let socket = chateau_metadata_for_c.socket.clone();
 
-            let stops_to_search_for_this_chateau = stops_to_search.get(chateau_id.as_str()).clone();
-
             aspen_futures.push(async move {
                 let client = match catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await {
                     Ok(client) => client,
                     Err(e) => {
                         eprintln!("Error creating aspen client for {}: {:?}", chateau_id, e);
-                        return (chateau_id, None, None, None);
+                        return (chateau_id, None, None);
                     }
                 };
 
@@ -611,21 +584,7 @@ pub async fn departures_at_osm_station(
                     trips_to_get,
                 );
 
-                let stops_to_search_for_this_chateau: Vec<String> =
-                    match stops_to_search_for_this_chateau {
-                        Some(stops_set) => stops_set.iter().cloned().collect(),
-                        None => vec![],
-                    };
-
-                let nonscheduled_trips_future = client
-                    .get_nonscheduled_trips_updates_from_stop_ids(
-                        tarpc::context::current(),
-                        chateau_id.clone(),
-                        stops_to_search_for_this_chateau,
-                    );
-
-                let (alerts_res, trips_res, nonscheduled_trips_res) =
-                    tokio::join!(alerts_future, trips_future, nonscheduled_trips_future);
+                let (alerts_res, trips_res) = tokio::join!(alerts_future, trips_future);
 
                 let alerts_data = match alerts_res {
                     Ok(Some(a)) => Some(a),
@@ -645,36 +604,19 @@ pub async fn departures_at_osm_station(
                     }
                 };
 
-                let nonscheduled_trips_data = match nonscheduled_trips_res {
-                    Ok(Some(t)) => Some(t),
-                    Ok(None) => None,
-                    Err(e) => {
-                        eprintln!(
-                            "Error getting nonscheduled trip updates for {}: {:?}",
-                            chateau_id, e
-                        );
-                        None
-                    }
-                };
-
-                (chateau_id, alerts_data, trips_data, nonscheduled_trips_data)
+                (chateau_id, alerts_data, trips_data)
             });
         }
     }
 
     let aspen_results = join_all(aspen_futures).await;
 
-    for (chateau_id, alerts_opt, trips_opt, nonscheduled_trips_data_opt) in aspen_results {
+    for (chateau_id, alerts_opt, trips_opt) in aspen_results {
         if let Some(all_alerts) = alerts_opt {
             alerts.insert(chateau_id.clone(), all_alerts.into_iter().collect());
         }
         if let Some(trips) = trips_opt {
             chateau_to_trips_aspenised.insert(chateau_id.clone(), trips);
-        }
-
-        if let Some(nonscheduled_trips_data) = nonscheduled_trips_data_opt {
-            chateau_to_nonscheduled_trips_aspenised
-                .insert(chateau_id.clone(), nonscheduled_trips_data);
         }
     }
 
@@ -769,6 +711,7 @@ pub async fn departures_at_osm_station(
     let alert_indices = std::sync::Arc::new(alert_indices);
     let chateau_to_trips_aspenised = std::sync::Arc::new(chateau_to_trips_aspenised);
     let itinerary_final_station_name = std::sync::Arc::new(itinerary_final_station_name);
+    let realtime_search_stops = stops_to_search.clone();
     let events_result = web::block(move || {
         trip_compressed_btreemap_by_chateau.par_iter().flat_map(|(chateau_id, trips_compressed_data)| {
             let active_services = active_services_by_chateau.get(chateau_id);
@@ -787,13 +730,13 @@ pub async fn departures_at_osm_station(
                 if let Some(metas) = itin_meta_btreemap_by_chateau.get(chateau_id) {
                     for (pattern_id, rows) in itins {
                         if rows.is_empty() { continue; }
-                        
+
                         // Get Meta
                         let meta = match metas.get(pattern_id) {
                             Some(m) => m,
                             None => continue,
                         };
-                        
+
                         // Parse Timezone
                         let timezone = match catenary_time::Tz::from_str(meta.timezone.as_str()) {
                             Ok(tz) => tz,
@@ -803,7 +746,7 @@ pub async fn departures_at_osm_station(
                         // Get Direction Meta
                         let direction_meta = match direction_meta_btreemap_by_chateau
                             .get(chateau_id)
-                            .and_then(|m| meta.direction_pattern_id.as_ref().and_then(|id| m.get(id))) 
+                            .and_then(|m| meta.direction_pattern_id.as_ref().and_then(|id| m.get(id)))
                         {
                             Some(d) => d,
                             None => continue,
@@ -851,7 +794,7 @@ pub async fn departures_at_osm_station(
                     }
                 }
             }
-            
+
             let pattern_cache = std::sync::Arc::new(pattern_cache);
 
             trips_compressed_data.par_iter().flat_map(move |(trip_id, trip_compressed)| {
@@ -877,7 +820,7 @@ pub async fn departures_at_osm_station(
                     Some(x) => x,
                     None => return Vec::new(),
                 };
-                
+
                 let direction_pattern_id = match &itin_for_this_trip.direction_pattern_id {
                     Some(id) => id,
                     None => return Vec::new(),
@@ -1048,7 +991,7 @@ pub async fn departures_at_osm_station(
                                                         trip_update.stop_time_update.iter().find(|stu| {
                                                             stu.stop_sequence
                                                                 == Some(itin_option.gtfs_stop_sequence as u16)
-                                                                || stu.stop_id.as_ref().map(|sid| 
+                                                                || stu.stop_id.as_ref().map(|sid|
                                                                     crate::stop_matching::rt_stop_matches_scheduled_simple(sid, itin_option.stop_id.as_str())
                                                                 ).unwrap_or(false)
                                                         })
@@ -1069,9 +1012,9 @@ pub async fn departures_at_osm_station(
                                                         {
                                                             stop_cancelled = true;
                                                         }
-                                                        
+
                                                         // LOGIC UPDATE: Handle partial schedules and late arrivals
-                                                        let trip_base_time = valid_trip.reference_start_of_service_date.timestamp() as u64 
+                                                        let trip_base_time = valid_trip.reference_start_of_service_date.timestamp() as u64
                                                             + valid_trip.trip_start_time as u64;
 
                                                         let abs_scheduled_arrival = itin_option.arrival_time_since_start
@@ -1079,7 +1022,7 @@ pub async fn departures_at_osm_station(
                                                         let abs_scheduled_departure = itin_option.departure_time_since_start
                                                             .map(|t| trip_base_time + t as u64);
 
-                                                        // If the GTFS schedule is only listing either arrival or departure but not both (aka waiting at a station), 
+                                                        // If the GTFS schedule is only listing either arrival or departure but not both (aka waiting at a station),
                                                         // set the rt departure time to the rt arrival time.
                                                         if (abs_scheduled_arrival.is_some() ^ abs_scheduled_departure.is_some()) {
                                                             if let Some(rt_arr) = arrival_time_rt {
@@ -1130,6 +1073,8 @@ pub async fn departures_at_osm_station(
                                     }
 
                                     local_events.push(StopEvent {
+                                        stop_sequence: Some(itin_option.gtfs_stop_sequence),
+                                        trip_start_time: Some(valid_trip.trip_start_time),
                                         scheduled_arrival: scheduled_arrival_time,
                                         scheduled_departure: scheduled_departure_time,
                                         realtime_arrival: arrival_time_rt,
@@ -1177,35 +1122,36 @@ pub async fn departures_at_osm_station(
         }
     };
 
-    // Deduplicate events: keep only one trip per (scheduled_time, route, headsign), preferring realtime
-    let mut unique_events: HashMap<(Option<u64>, String, Option<String>), StopEvent> =
-        HashMap::new();
+    let realtime_stops = crate::departures_shared::apply_departure_realtime(
+        &mut events,
+        &realtime_search_stops,
+        pool.get_ref(),
+        aspen_chateau_cache.get_ref(),
+        &mut routes,
+        &mut agencies,
+        &mut shapes,
+        include_shapes,
+    )
+    .await;
 
-    for event in events {
-        let key = (
-            event.scheduled_departure,
-            event.route_id.clone(),
-            event.headsign.clone(),
-        );
-
-        match unique_events.entry(key) {
-            std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let existing = entry.get();
-                let existing_has_rt =
-                    existing.realtime_departure.is_some() || existing.realtime_arrival.is_some();
-                let new_has_rt =
-                    event.realtime_departure.is_some() || event.realtime_arrival.is_some();
-
-                if !existing_has_rt && new_has_rt {
-                    entry.insert(event);
-                }
-            }
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(event);
-            }
-        }
-    }
-    let mut events: Vec<StopEvent> = unique_events.into_values().collect();
+    // Preserve distinct trips, chateaux, service days and repeated loop calls.
+    let mut seen_events = HashSet::new();
+    events.retain(|event| {
+        seen_events.insert((
+            event.chateau.clone(),
+            event.trip_id.clone(),
+            event.service_date,
+            event.trip_start_time,
+            event.stop_id.clone(),
+            event.stop_sequence,
+            event.stop_cancelled,
+            event
+                .scheduled_departure
+                .or(event.scheduled_arrival)
+                .or(event.realtime_departure)
+                .or(event.realtime_arrival),
+        ))
+    });
 
     // Filter and sort events
     let gt = greater_than_time;
@@ -1221,16 +1167,16 @@ pub async fn departures_at_osm_station(
 
     events.sort_by(|a, b| {
         let time_a = a
-            .scheduled_departure
-            .or(a.realtime_departure)
-            .or(a.scheduled_arrival)
+            .realtime_departure
             .or(a.realtime_arrival)
+            .or(a.scheduled_departure)
+            .or(a.scheduled_arrival)
             .unwrap_or(0);
         let time_b = b
-            .scheduled_departure
-            .or(b.realtime_departure)
-            .or(b.scheduled_arrival)
+            .realtime_departure
             .or(b.realtime_arrival)
+            .or(b.scheduled_departure)
+            .or(b.scheduled_arrival)
             .unwrap_or(0);
         time_a.cmp(&time_b)
     });
@@ -1238,6 +1184,7 @@ pub async fn departures_at_osm_station(
     let event_generation_time = event_generation_timer.elapsed();
 
     HttpResponse::Ok().json(DeparturesAtOsmStationResponse {
+        realtime_stops,
         osm_station: osm_station_info,
         stops: stop_info_responses,
         events,
@@ -1269,52 +1216,59 @@ async fn fetch_chateau_data_optimized(
 ) -> crate::departures_shared::StopDataResult {
     let mut conn = pool.get().await.unwrap();
 
-    // 1. Fetch Direction Pattern IDs containing these stops
-    let direction_rows: Vec<catenary::models::DirectionPatternRow> =
-        catenary::schema::gtfs::direction_pattern::dsl::direction_pattern
-            .filter(catenary::schema::gtfs::direction_pattern::chateau.eq(chateau_id.clone()))
-            .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids))
-            .select(catenary::models::DirectionPatternRow::as_select())
-            .load(&mut conn)
-            .await
-            .unwrap_or_default();
-
-    if direction_rows.is_empty() {
-        return (
-            chateau_id,
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            BTreeMap::new(),
-            vec![],
-            vec![],
-        );
+    // Anchor at selected stop occurrences, matching the nearby-departures pipeline.
+    // Substitute an empty trip_ids array: departure boards read trips_compressed.
+    use catenary::schema::gtfs::{itinerary_pattern as ip, itinerary_pattern_meta as im};
+    let matching: Vec<(
+        catenary::models::ItineraryPatternRow,
+        catenary::models::ItineraryPatternMeta,
+    )> = ip::table
+        .inner_join(
+            im::table.on(ip::onestop_feed_id
+                .eq(im::onestop_feed_id)
+                .and(ip::attempt_id.eq(im::attempt_id))
+                .and(ip::itinerary_pattern_id.eq(im::itinerary_pattern_id))),
+        )
+        .filter(ip::chateau.eq(&chateau_id))
+        .filter(im::chateau.eq(&chateau_id))
+        .filter(ip::stop_id.eq_any(&stop_ids))
+        .select((
+            catenary::models::ItineraryPatternRow::as_select(),
+            (
+                im::onestop_feed_id,
+                im::attempt_id,
+                sql::<Array<Nullable<Text>>>("ARRAY[]::text[]"),
+                im::itinerary_pattern_id,
+                im::chateau,
+                im::trip_headsign,
+                im::trip_headsign_translations,
+                im::shape_id,
+                im::timezone,
+                im::route_id,
+                im::direction_pattern_id,
+                im::row_count,
+            ),
+        ))
+        .load(&mut conn)
+        .await
+        .unwrap_or_default();
+    let mut selected_rows = Vec::new();
+    let mut selected_meta = BTreeMap::new();
+    for (row, meta) in matching {
+        selected_rows.push(row);
+        selected_meta
+            .entry(meta.itinerary_pattern_id.clone())
+            .or_insert(meta);
     }
+    let itin_meta_list: Vec<_> = selected_meta.into_values().collect();
+    drop(conn);
 
-    let direction_pattern_ids: Vec<String> = direction_rows
+    let direction_pattern_ids: Vec<String> = itin_meta_list
         .iter()
-        .map(|r| r.direction_pattern_id.clone())
+        .filter_map(|meta| meta.direction_pattern_id.clone())
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-
-    // 2. Fetch Meta based on Direction Patterns
-    let mut conn_meta = pool.get().await.unwrap();
-    let itin_meta_list: Vec<catenary::models::ItineraryPatternMeta> =
-        catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-            .filter(catenary::schema::gtfs::itinerary_pattern_meta::chateau.eq(chateau_id.clone()))
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                    .eq_any(&direction_pattern_ids),
-            )
-            .select(catenary::models::ItineraryPatternMeta::as_select())
-            .load(&mut conn_meta)
-            .await
-            .unwrap_or_default();
 
     let itinerary_ids: Vec<String> = itin_meta_list
         .iter()
@@ -1326,7 +1280,6 @@ async fn fetch_chateau_data_optimized(
     let route_ids: Vec<CompactString> = itin_meta_list.iter().map(|m| m.route_id.clone()).collect();
 
     let pool_clone = pool.clone();
-    let chateau_clone_itin = chateau_id.clone();
     let chateau_clone_dm = chateau_id.clone();
     let chateau_clone_routes = chateau_id.clone();
     let chateau_clone_agencies = chateau_id.clone();
@@ -1337,20 +1290,7 @@ async fn fetch_chateau_data_optimized(
 
     // START PARALLEL FETCHES
     let (itins_result, direction_meta_result, direction_rows_result, routes_result) = tokio::join!(
-        async {
-            let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone_itin))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                        .eq_any(&itinerary_ids),
-                )
-                .filter(catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&stop_ids))
-                .select(catenary::models::ItineraryPatternRow::as_select())
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default()
-        },
+        async { selected_rows },
         async {
             let mut conn = pool_clone.get().await.unwrap();
             catenary::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
@@ -1374,6 +1314,7 @@ async fn fetch_chateau_data_optimized(
                     catenary::schema::gtfs::direction_pattern::direction_pattern_id
                         .eq_any(&direction_pattern_ids_clone),
                 )
+                .filter(catenary::schema::gtfs::direction_pattern::stop_id.eq_any(&stop_ids))
                 .select(catenary::models::DirectionPatternRow::as_select())
                 .load::<catenary::models::DirectionPatternRow>(&mut conn)
                 .await
@@ -1442,24 +1383,23 @@ async fn fetch_chateau_data_optimized(
         }
     }
 
-    // Fetch Trips (Compressed)
-    let trips_result: Vec<catenary::models::CompressedTrip> = {
+    // Match nearby departures: bounded predicates on the indexed itinerary key,
+    // rather than loading every trip of every route and discarding most rows.
+    let mut trips_result = Vec::new();
+    for batch in itinerary_ids.chunks(128) {
         let mut conn = pool.get().await.unwrap();
-        let trips_raw: Vec<catenary::models::CompressedTrip> =
+        let mut trips: Vec<catenary::models::CompressedTrip> =
             catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id.clone()))
-                .filter(catenary::schema::gtfs::trips_compressed::route_id.eq_any(&route_ids))
+                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(&chateau_id))
+                .filter(
+                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id.eq_any(batch),
+                )
                 .select(catenary::models::CompressedTrip::as_select())
                 .load(&mut conn)
                 .await
                 .unwrap_or_default();
-
-        let valid_itins: HashSet<&str> = itinerary_ids.iter().map(|s| s.as_str()).collect();
-        trips_raw
-            .into_iter()
-            .filter(|t| valid_itins.contains(t.itinerary_pattern_id.as_str()))
-            .collect()
-    };
+        trips_result.append(&mut trips);
+    }
 
     // Fetch Calendar
     let service_ids: Vec<CompactString> = trips_result
@@ -1516,6 +1456,10 @@ async fn fetch_chateau_data_optimized(
             .entry(i.itinerary_pattern_id.clone())
             .or_insert_with(Vec::new)
             .push(i);
+    }
+
+    for rows in itins_map.values_mut() {
+        rows.sort_by_key(|row| row.stop_sequence);
     }
 
     let mut itin_meta_map = BTreeMap::new();

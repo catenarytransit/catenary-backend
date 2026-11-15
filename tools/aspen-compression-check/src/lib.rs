@@ -32,3 +32,17 @@ pub fn bincode_deserialize<T: serde::de::DeserializeOwned>(
 ) -> Result<T, bincode::error::DecodeError> {
     bincode::serde::decode_from_slice(value, bincode::config::legacy()).map(|(value, _)| value)
 }
+
+// Only the unrelated SQL module is stubbed; board overlays use production RT types.
+pub mod departures_shared {
+    #[derive(Clone, Debug, serde::Serialize)]
+    pub struct MovedStopData {
+        pub stop_id: String,
+        pub scheduled_arrival: Option<u64>,
+        pub scheduled_departure: Option<u64>,
+        pub realtime_arrival: Option<u64>,
+        pub realtime_departure: Option<u64>,
+    }
+}
+#[path = "../../../src/departure_realtime.rs"]
+pub mod departure_realtime;
