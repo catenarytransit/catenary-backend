@@ -1538,7 +1538,7 @@ pub async fn gtfs_process_feed(
             }
 
             for route in gtfs.routes.values_mut() {
-                if route.route_id.starts_with("CM:") {
+                if route.id.starts_with("CM:") {
                     //fix route type for commute.org, incorrectly marked as route type 2 (Metro)
                     route.route_type = gtfs_structures::RouteType::Bus;
                 }
