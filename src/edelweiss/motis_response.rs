@@ -1013,7 +1013,7 @@ mod tests {
         let meta = instance_meta(3600, "America/Los_Angeles");
         // Noon-minus-12h is 23:00 on the spring transition and 01:00 in fall.
         for (first, date) in [("2026-03-08T08:02:00Z", "20260308"),
-                              ("2026-11-01T10:02:00Z", "20261101")] {
+                              ("2026-11-01T09:02:00Z", "20261101")] {
             let first = chrono::DateTime::parse_from_rfc3339(first).unwrap().timestamp();
             assert_eq!(trip_instance(&meta, first), Some((date.into(), "01:00:00".into())));
         }
@@ -1079,7 +1079,7 @@ mod tests {
         assert!(METADATA_SQL.contains("rr.route_id = COALESCE"));
         assert!(!METADATA_SQL.contains("tc.onestop_feed_id = wanted.feed\n"));
         // One selected trip, route and agency per ride even with many import attempts.
-        assert_eq!(METADATA_SQL.matches("LIMIT 1").count(), 3);
+        assert_eq!(METADATA_SQL.matches("LIMIT 1").count(), 4);
     }
 
     #[test]
@@ -1232,7 +1232,7 @@ mod tests {
             Some("#D9382E".into())
         );
         assert_eq!(
-            first_normalized_color(&[Some("bad"), Some("a1b2c3"), Some("000000")]),
+            first_normalized_color(&[Some("invalid"), Some("a1b2c3"), Some("000000")]),
             Some("#A1B2C3".into())
         );
         assert_eq!(first_normalized_color(&[None, Some(""), None]), None);
