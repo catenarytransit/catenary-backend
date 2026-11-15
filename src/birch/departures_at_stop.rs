@@ -42,6 +42,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::join;
@@ -72,36 +73,11 @@ struct StopInfoResponse {
     stop_name_translations: Option<HashMap<String, String>>,
 }
 
-#[derive(Serialize, Clone, Debug)]
-struct StopEvent {
-    scheduled_arrival: Option<u64>,
-    scheduled_departure: Option<u64>,
-    realtime_arrival: Option<u64>,
-    realtime_departure: Option<u64>,
-    trip_modified: bool,
-    stop_cancelled: bool,
-    trip_cancelled: bool,
-    trip_deleted: bool,
-    trip_id: String,
-    headsign: Option<String>,
-    route_id: String,
-    chateau: String,
-    stop_id: String,
-    uses_primary_stop: bool,
-    unscheduled_trip: bool,
-    moved_info: Option<MovedStopData>,
-    platform_string_realtime: Option<String>,
-    level_id: Option<String>,
-    platform_code: Option<String>,
-    vehicle_number: Option<String>,
-    trip_short_name: Option<CompactString>,
-    service_date: Option<NaiveDate>,
-    last_stop: bool,
-    scheduled_trip_shape_id: Option<CompactString>,
-}
+use catenary::departure_realtime::StopEvent;
 
 #[derive(Serialize, Clone, Debug)]
 struct NearbyFromStopsResponse {
+    realtime_stops: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedStop>>,
     primary: StopInfoResponse,
     parent: Option<StopInfoResponse>,
     children_and_related: Vec<StopInfoResponse>,
@@ -471,9 +447,6 @@ pub async fn departures_at_stop(
 
     let mut chateau_to_trips_aspenised: HashMap<String, TripsSelectionResponse> = HashMap::new();
 
-    let mut chateau_to_nonscheduled_trips_aspenised: HashMap<String, Vec<AspenisedTripUpdate>> =
-        HashMap::new();
-
     let mut alerts: BTreeMap<String, BTreeMap<String, catenary::aspen_dataset::AspenisedAlert>> =
         BTreeMap::new();
 
@@ -487,14 +460,12 @@ pub async fn departures_at_stop(
                 .collect::<Vec<String>>();
             let socket = chateau_metadata_for_c.socket.clone();
 
-            let stops_to_search_for_this_chateau = stops_to_search.get(chateau_id.as_str()).clone();
-
             aspen_futures.push(async move {
                 let client = match catenary::aspen::lib::spawn_aspen_client_from_ip(&socket).await {
                     Ok(client) => client,
                     Err(e) => {
                         eprintln!("Error creating aspen client for {}: {:?}", chateau_id, e);
-                        return (chateau_id, None, None, None);
+                        return (chateau_id, None, None);
                     }
                 };
 
@@ -506,22 +477,7 @@ pub async fn departures_at_stop(
                     trips_to_get,
                 );
 
-                let stops_to_search_for_this_chateau = match stops_to_search_for_this_chateau {
-                    Some(stops_to_search_for_this_chateau) => {
-                        stops_to_search_for_this_chateau.to_vec()
-                    }
-                    None => vec![],
-                };
-
-                let nonscheduled_trips_future = client
-                    .get_nonscheduled_trips_updates_from_stop_ids(
-                        tarpc::context::current(),
-                        chateau_id.clone(),
-                        stops_to_search_for_this_chateau,
-                    );
-
-                let (alerts_res, trips_res, nonscheduled_trips_res) =
-                    tokio::join!(alerts_future, trips_future, nonscheduled_trips_future);
+                let (alerts_res, trips_res) = tokio::join!(alerts_future, trips_future);
 
                 let alerts_data = match alerts_res {
                     Ok(Some(a)) => Some(a),
@@ -541,36 +497,19 @@ pub async fn departures_at_stop(
                     }
                 };
 
-                let nonscheduled_trips_data = match nonscheduled_trips_res {
-                    Ok(Some(t)) => Some(t),
-                    Ok(None) => None,
-                    Err(e) => {
-                        eprintln!(
-                            "Error getting nonscheduled trip updates for {}: {:?}",
-                            chateau_id, e
-                        );
-                        None
-                    }
-                };
-
-                (chateau_id, alerts_data, trips_data, nonscheduled_trips_data)
+                (chateau_id, alerts_data, trips_data)
             });
         }
     }
 
     let aspen_results = join_all(aspen_futures).await;
 
-    for (chateau_id, alerts_opt, trips_opt, nonscheduled_trips_data_opt) in aspen_results {
+    for (chateau_id, alerts_opt, trips_opt) in aspen_results {
         if let Some(all_alerts) = alerts_opt {
             alerts.insert(chateau_id.clone(), all_alerts.into_iter().collect());
         }
         if let Some(trips) = trips_opt {
             chateau_to_trips_aspenised.insert(chateau_id.clone(), trips);
-        }
-
-        if let Some(nonscheduled_trips_data) = nonscheduled_trips_data_opt {
-            chateau_to_nonscheduled_trips_aspenised
-                .insert(chateau_id.clone(), nonscheduled_trips_data);
         }
     }
 
@@ -925,14 +864,14 @@ pub async fn departures_at_stop(
                                                     (&relevant_stop_time_update.departure, &relevant_stop_time_update.arrival) {
                                                         if let Some(time) = departure.time {
                                                             departure_time_rt = Some(time as u64);
-                                                        
+
                                                         }
 
                                                         if let Some(time) = arrival.time {
                                                             arrival_time_rt = Some(time as u64);
                                                         }
                                                     } else {
-                                                        
+
                                                 if let Some(departure) =
                                                     &relevant_stop_time_update.departure
                                                 {
@@ -959,7 +898,7 @@ pub async fn departures_at_stop(
 
                                                 if let Some(trip_vehicle) = &trip_update.vehicle {
                                                     if let Some(label) = &trip_vehicle.label {
-                                                        
+
                                                         vehicle_num = Some(label.to_string());
                                                     } else {
                                                         if let Some(id) = &trip_vehicle.id {
@@ -996,6 +935,8 @@ pub async fn departures_at_stop(
                             .unwrap();
 
                         events.push(StopEvent {
+                            stop_sequence: Some(itin_option.gtfs_stop_sequence),
+                            trip_start_time: Some(valid_trip.trip_start_time),
                             last_stop: itin_option.gtfs_stop_sequence
                                 == (direction_meta.row_count as u32).saturating_sub(1),
                             scheduled_arrival: itin_option
@@ -1019,6 +960,7 @@ pub async fn departures_at_stop(
                             trip_cancelled: trip_cancelled,
                             trip_deleted: trip_deleted,
                             trip_modified: false,
+                            final_station_name: None,
                             realtime_arrival: arrival_time_rt,
                             realtime_departure: departure_time_rt,
                             platform_code: None,
@@ -1276,6 +1218,8 @@ pub async fn departures_at_stop(
                             // 3. Push Event
                             if !trip_deleted {
                                 events.push(StopEvent {
+                                    stop_sequence: Some(itin_option.gtfs_stop_sequence),
+                                    trip_start_time: Some(scheduled_frequency_start_time),
                                     last_stop: itin_option.gtfs_stop_sequence
                                         == (direction_meta.row_count as u32).saturating_sub(1),
                                     scheduled_arrival: itin_option
@@ -1299,6 +1243,7 @@ pub async fn departures_at_stop(
                                     trip_cancelled: trip_cancelled,
                                     trip_deleted: trip_deleted,
                                     trip_modified: false,
+                                    final_station_name: None,
                                     realtime_arrival: arrival_time_rt,
                                     realtime_departure: departure_time_rt,
                                     platform_code: None,
@@ -1350,132 +1295,21 @@ pub async fn departures_at_stop(
         }
     }
 
-    //look through unscheduled trips
-
-    for (chateau_id, unscheduled_trips) in &chateau_to_nonscheduled_trips_aspenised {
-        let matching_stop_ids = &stops_to_search.get(chateau_id.as_str());
-
-        for trip_update in unscheduled_trips {
-            if let Some(matching_stu) =
-                trip_update
-                    .stop_time_update
-                    .iter()
-                    .find(|stu| match &stu.stop_id {
-                        Some(stu_stop_id) => {
-                            stu_stop_id.as_ref() == &stop.gtfs_id
-                                || match matching_stop_ids {
-                                    None => false,
-                                    Some(matching_stop_ids) => {
-                                        matching_stop_ids.contains(&(stu_stop_id.to_string()))
-                                    }
-                                }
-                        }
-                        None => false,
-                    })
-            {
-                let realtime_arrival = matching_stu
-                    .arrival
-                    .as_ref()
-                    .map(|a| a.time.map(|t| t as u64))
-                    .flatten();
-                let realtime_departure = matching_stu
-                    .departure
-                    .as_ref()
-                    .map(|d| d.time.map(|t| t as u64))
-                    .flatten();
-
-                let vehicle_number = trip_update
-                    .vehicle
-                    .as_ref()
-                    .map(|x| x.label.clone())
-                    .flatten();
-
-                let service_date = trip_update.trip.start_date;
-
-                let mut trip_cancelled = false;
-                let mut stop_cancelled = false;
-                let mut trip_deleted = false;
-
-                let route_id = trip_update.trip.route_id.clone().unwrap_or(String::new());
-
-                let mut headsign = None;
-
-                let mut short_name = None;
-
-                if let Some(trip_properties) = &trip_update.trip_properties {
-                    if let Some(trip_headsign) = &trip_properties.trip_headsign {
-                        headsign = Some(trip_headsign.clone());
-                    }
-
-                    if let Some(trip_short_name) = &trip_properties.trip_short_name {
-                        short_name = Some(trip_short_name.into());
-                    }
-                }
-
-                if let Some(schedule_relationship) = &matching_stu.schedule_relationship {
-                    match schedule_relationship {
-                        AspenisedStopTimeScheduleRelationship::Skipped => {
-                            stop_cancelled = true;
-                        }
-                        _ => {}
-                    }
-                }
-
-                if trip_update.trip.schedule_relationship
-                    == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled)
-                {
-                    trip_cancelled = true;
-                } else if trip_update.trip.schedule_relationship
-                    == Some(catenary::aspen_dataset::AspenisedTripScheduleRelationship::Deleted)
-                {
-                    trip_deleted = true;
-                }
-
-                let stopevent = StopEvent {
-                    scheduled_arrival: None,
-                    scheduled_departure: None,
-                    realtime_arrival: realtime_arrival,
-                    realtime_departure: realtime_departure,
-                    trip_modified: false,
-                    uses_primary_stop: true,
-                    unscheduled_trip: true,
-                    moved_info: None,
-                    platform_string_realtime: None,
-                    headsign: headsign,
-                    trip_short_name: short_name,
-                    trip_id: trip_update.trip.trip_id.clone().unwrap_or(String::new()),
-                    level_id: None,
-                    route_id: route_id,
-                    platform_code: None,
-                    last_stop: false,
-                    scheduled_trip_shape_id: None,
-                    chateau: chateau_id.clone(),
-                    stop_id: match &matching_stu.stop_id {
-                        Some(sid) => sid.to_string(),
-                        None => String::new(),
-                    },
-                    vehicle_number: vehicle_number,
-                    service_date: service_date,
-                    trip_cancelled: trip_cancelled,
-                    stop_cancelled: stop_cancelled,
-                    trip_deleted: trip_deleted,
-                };
-
-                let already_exists = events.iter().any(|e| {
-                    e.chateau == stopevent.chateau
-                        && e.trip_id == stopevent.trip_id
-                        && e.stop_id == stopevent.stop_id
-                        && (stopevent.service_date.is_none()
-                            || e.service_date.is_none()
-                            || e.service_date == stopevent.service_date)
-                });
-
-                if !already_exists {
-                    events.push(stopevent);
-                }
-            }
-        }
-    }
+    let realtime_search_stops = stops_to_search
+        .iter()
+        .map(|(chateau, ids)| (chateau.clone(), ids.iter().cloned().collect::<HashSet<_>>()))
+        .collect();
+    let realtime_stops = crate::departures_shared::apply_departure_realtime(
+        &mut events,
+        &realtime_search_stops,
+        pool.get_ref(),
+        aspen_chateau_cache.get_ref(),
+        &mut routes,
+        &mut agencies,
+        &mut shapes,
+        query.include_shapes.unwrap_or(true),
+    )
+    .await;
 
     //sort the event list
 
@@ -1500,6 +1334,7 @@ pub async fn departures_at_stop(
     });
 
     let response = NearbyFromStopsResponse {
+        realtime_stops,
         primary: StopInfoResponse {
             chateau: stop.chateau,
             stop_id: stop.gtfs_id,

@@ -210,6 +210,12 @@ pub trait AspenRpc {
 
     /// Publisher header timestamps in Unix seconds; absent data/timestamps are None.
     async fn get_gtfs_rt_timestamps(realtime_feed_id: String) -> GtfsRtTimestamps;
+    /// Indexed board lookup: includes detours into stops absent from the static trip.
+    async fn get_departure_realtime(
+        chateau_id: String,
+        trip_ids: Vec<String>,
+        stop_ids: Vec<String>,
+    ) -> Option<crate::departure_realtime::DepartureRealtime>;
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
