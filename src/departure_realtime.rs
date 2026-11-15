@@ -299,7 +299,16 @@ pub fn overlay_updates(
             |event: &StopEvent| {
                 event.chateau == chateau
                     && event.trip_id == trip_id
-                    && (!event.trip_modified || modified.is_some() || is_replacement)
+                    && (!event.trip_modified
+                        || modified.is_some()
+                        || is_replacement
+                        || matches!(
+                            relationship,
+                            Some(
+                                AspenisedTripScheduleRelationship::Deleted
+                                    | AspenisedTripScheduleRelationship::Cancelled
+                            )
+                        ))
                     && update
                         .trip
                         .effective_start_time()
@@ -328,6 +337,20 @@ pub fn overlay_updates(
                         }),
                     }
             };
+        if matches!(
+            relationship,
+            Some(
+                AspenisedTripScheduleRelationship::Deleted
+                    | AspenisedTripScheduleRelationship::Cancelled
+            )
+        ) {
+            for event in events.iter_mut().filter(|event| instance_matches(event)) {
+                event.trip_deleted =
+                    relationship == Some(&AspenisedTripScheduleRelationship::Deleted);
+                event.trip_cancelled =
+                    relationship == Some(&AspenisedTripScheduleRelationship::Cancelled);
+            }
+        }
         if is_replacement && date.is_some() {
             for event in events.iter_mut().filter(|event| instance_matches(event)) {
                 event.trip_modified = true;
@@ -494,6 +517,19 @@ pub fn overlay_updates(
     }
 }
 
+/// Select nearby calls only after applying modifications and trip-level updates.
+pub fn nearby_event_time(event: &StopEvent, start: u64) -> Option<u64> {
+    if event.trip_deleted {
+        return None;
+    }
+    let time = event
+        .realtime_departure
+        .or(event.realtime_arrival)
+        .or(event.scheduled_departure)
+        .or(event.scheduled_arrival)?;
+    (time >= start && time <= start.saturating_add(18 * 3600)).then_some(time)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,6 +654,69 @@ mod tests {
             .is_none()
         );
     }
+    #[test]
+    fn trip_level_deletion_without_stop_updates_is_instance_scoped() {
+        for relationship in [
+            AspenisedTripScheduleRelationship::Deleted,
+            AspenisedTripScheduleRelationship::Cancelled,
+        ] {
+            let mut u = update(relationship.clone());
+            u.trip.start_time = Some("25:00:00".into());
+            let mut event = empty_event("feed", "trip", "route", "a");
+            event.service_date = u.trip.start_date;
+            event.trip_start_time = Some(25 * 3600);
+            event.trip_modified = true;
+            let mut other_day = event.clone();
+            other_day.service_date = event.service_date.map(|d| d.succ_opt().unwrap());
+            let mut other_run = event.clone();
+            other_run.trip_start_time = Some(26 * 3600);
+            let mut other_feed = event.clone();
+            other_feed.chateau = "other".into();
+            let mut events = vec![event, other_day, other_run, other_feed];
+            overlay_updates(&mut events, "feed", &HashSet::from(["a".into()]), &[u]);
+            assert_eq!(
+                events[0].trip_deleted,
+                relationship == AspenisedTripScheduleRelationship::Deleted
+            );
+            assert_eq!(
+                events[0].trip_cancelled,
+                relationship == AspenisedTripScheduleRelationship::Cancelled
+            );
+            assert!(
+                events[1..]
+                    .iter()
+                    .all(|e| !e.trip_deleted && !e.trip_cancelled)
+            );
+        }
+    }
+
+    #[test]
+    fn nearby_filters_after_detour_added_and_deleted_overlays() {
+        let mut template = empty_event("feed", "trip", "route", "a");
+        template.service_date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        template.scheduled_departure = Some(90);
+        let calls = modified_calls(
+            &[call("outside", 1, 90)],
+            &[modification(1, Some(1), &[("a", 30)], 0)],
+        )
+        .unwrap();
+        let stops = HashSet::from(["a".into()]);
+        let mut events = vec![];
+        apply_modified_schedule(&mut events, &template, &calls, &stops);
+        assert_eq!(nearby_event_time(&events[0], 100), Some(120));
+        let deleted = update(AspenisedTripScheduleRelationship::Deleted);
+        overlay_updates(&mut events, "feed", &stops, &[deleted]);
+        assert_eq!(nearby_event_time(&events[0], 100), None);
+        let mut added = update(AspenisedTripScheduleRelationship::Added);
+        added.trip.trip_id = Some("new".into());
+        added.stop_time_update = vec![stu("a", 1, 130)];
+        overlay_updates(&mut events, "feed", &stops, &[added]);
+        assert_eq!(nearby_event_time(&events[1], 100), Some(130));
+        events[1].trip_cancelled = true;
+        assert_eq!(nearby_event_time(&events[1], 100), Some(130));
+        assert_eq!(nearby_event_time(&events[1], 131), None);
+    }
+
     #[test]
     fn added_trip_keeps_all_loop_occurrences() {
         let mut u = update(AspenisedTripScheduleRelationship::Added);
@@ -861,7 +960,7 @@ pub fn select_departure_realtime(
                 .map(|value| (id.to_string(), value.clone()))
         })
         .collect();
-    let mut all_trip_ids: AHashSet<String> = AHashSet::new();
+    let mut all_trip_ids: AHashSet<String> = trip_ids.into_iter().collect();
     for modification in modifications.values() {
         for selected in &modification.selected_trips {
             all_trip_ids.extend(selected.trip_ids.iter().cloned());

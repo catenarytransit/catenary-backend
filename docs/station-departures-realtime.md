@@ -79,3 +79,33 @@ Specification references:
 
 - https://gtfs.org/documentation/realtime/feed-entities/trip-modifications/
 - https://gtfs.org/documentation/realtime/reference/
+
+## Nearby departures
+
+`/nearbydeparturesfromcoordsv3` and Ramonda's nearby loads now use the same
+indexed overlay as station boards. The earlier station-board change did not
+connect this separate pipeline. Static direction or itinerary absence must not
+return early: an indexed replacement stop or added-trip call can supply the
+first departure at a nearby stop. Route selection and mode/distance policy still
+apply to every emitted call, including realtime-only calls. Parent-linked realtime
+platforms use the selected parent's station group and distance policy.
+
+Build stop events with service date, trip start time and original GTFS sequence,
+apply the shared loader, then filter the 18-hour window and sort/limit by effective
+realtime departure/arrival, falling back to scheduled times. This also permits a
+modification to move a previously out-of-window scheduled call into the result.
+The response schema is unchanged.
+
+The indexed lookup now includes updates for explicitly requested static trips,
+as well as modifications and added-trip stop indexes. Dated DELETED and CANCELED
+relationships apply at trip level even with an empty stop_time_update list and
+are scoped to the service date/start-time instance. Nearby omits DELETED calls;
+CANCELED trips and removed/skipped calls retain the existing cancellation display.
+Undated updates retain the existing absolute-scheduled-time matching safeguard;
+ambiguous undated deletions without stop timestamps are not guessed across days.
+
+The shared database/RPC loader lives in `departure_realtime_loader`; Birch's
+station endpoints re-export it. It retains the existing three-second indexed
+lookup timeout and scheduled-board fallback, independent of nearby's ordinary
+trip-update timeout parameter. Deploy the Aspen support from #198/#199 before
+this Birch/Ramonda change. No new RPC or database migration is required.

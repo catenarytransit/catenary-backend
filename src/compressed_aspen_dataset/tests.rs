@@ -548,3 +548,26 @@ fn departure_lookup_expands_realtime_children_and_finds_detours_into_new_stops()
     assert_eq!(result.modifications.len(), 1);
     assert_eq!(result.updates.len(), 2);
 }
+
+#[test]
+fn departure_lookup_includes_requested_trip_deletions_without_stop_updates() {
+    let mut data = empty_dataset();
+    let mut deleted = trip(vec![]);
+    deleted.trip.trip_id = Some("static-trip".into());
+    deleted.trip.schedule_relationship = Some(AspenisedTripScheduleRelationship::Deleted);
+    data.trip_updates.insert("deleted-entity".into(), deleted);
+    data.trip_updates_lookup_by_trip_id_to_trip_update_ids
+        .insert("static-trip".into(), vec!["deleted-entity".into()]);
+    data.trip_updates.insert("unrelated".into(), trip(vec![]));
+    let result = crate::departure_realtime::select_departure_realtime(
+        &data.into_compressed(),
+        vec!["static-trip".into()],
+        vec!["a".into()],
+    );
+    assert_eq!(result.updates.len(), 1);
+    assert_eq!(
+        result.updates[0].trip.schedule_relationship,
+        Some(AspenisedTripScheduleRelationship::Deleted)
+    );
+    assert!(result.updates[0].stop_time_update.is_empty());
+}
