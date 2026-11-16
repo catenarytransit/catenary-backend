@@ -766,6 +766,16 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
+        "f-chicago~ohare~ats" => {
+             let _ = execute_pfaedle_rs(
+                path.as_str(),
+                "./railonly-north-america-latest.osm.pbf",
+                Some(vec![String::from("rail")]),
+                true,
+                false,
+            )
+            .await?;
+        }
         "f-dpz-gotransit" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
