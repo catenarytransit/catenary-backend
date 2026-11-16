@@ -767,7 +767,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-chicago~ohare~ats" => {
-             let _ = execute_pfaedle_rs(
+             let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
