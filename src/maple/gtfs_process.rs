@@ -771,7 +771,7 @@ pub async fn gtfs_process_feed(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
-                true,
+                false,
                 false,
             )
             .await?;
