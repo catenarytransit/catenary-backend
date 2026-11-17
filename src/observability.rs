@@ -4,7 +4,7 @@
 use std::net::UdpSocket;
 use std::sync::OnceLock;
 use std::time::Instant;
-use actix_web::{body::MessageBody, dev::{ServiceRequest, ServiceResponse}, middleware::Next, Error};
+use actix_web::{body::{BoxBody, MessageBody}, dev::{ServiceRequest, ServiceResponse}, middleware::Next, Error};
 static METRICS: OnceLock<Option<Exporter>> = OnceLock::new();
 struct Exporter { socket: UdpSocket, address: String, service: &'static str, env: String }
 pub fn init(service: &'static str) {
@@ -56,8 +56,8 @@ pub fn country(header: Option<&str>) -> &str {
 pub async fn http_metrics(
     req: ServiceRequest,
     next: Next<impl MessageBody>,
-) -> Result<ServiceResponse<impl MessageBody>, Error> {
-    if !enabled() { return next.call(req).await; }
+) -> Result<ServiceResponse<BoxBody>, Error> {
+    if !enabled() { return next.call(req).await.map(ServiceResponse::map_into_boxed_body); }
     let started = Instant::now();
     let country = country(req.headers().get("CF-IPCountry").and_then(|h| h.to_str().ok())).to_owned();
     let result = next.call(req).await;
@@ -78,7 +78,7 @@ pub async fn http_metrics(
             count("spruce.initial_requests", &[("endpoint", &endpoint), ("country", &country)]);
         }
     }
-    result
+    result.map(ServiceResponse::map_into_boxed_body)
 }
 /// Distinct GTFS chateaus in a single returned nearby response.
 pub fn nearby_chateaus(data: &crate::nearby_departures::NearbyDeparturesV3Response) -> std::collections::HashSet<String> {
