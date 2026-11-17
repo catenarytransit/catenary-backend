@@ -56,3 +56,12 @@ For temporary packet-level verification, set `DATADOG_DEBUG_METRICS=1` in
 the Spruce systemd unit and restart the service. Journal output will include
 the exact `spruce.*` DogStatsD UDP packets plus socket send errors. **Disable
 this after troubleshooting**: it adds synchronous logging to each emission.
+
+## Synthetic monitoring exclusion
+
+HTTP requests identified by a User-Agent containing `synthetics`, a
+`sec-datadog` header containing `synthetics`, or an `x-datadog-origin`
+header containing `synthetics` (case-insensitive) are excluded from
+HTTP request and duration metrics. Birch and Spruce nearby-departures handlers
+also exclude these requests from per-chateau counters, which are emitted
+independently of HTTP middleware. The API response is not changed.

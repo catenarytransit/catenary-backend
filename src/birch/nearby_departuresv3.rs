@@ -1,4 +1,4 @@
-use actix_web::{HttpResponse, Responder, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use catenary::nearby_departures::{NearbyFromCoordsV3, RouteSelection, prepare_nearby};
 use catenary::postgres_tools::CatenaryPostgresPool;
 use std::sync::Arc;
@@ -6,6 +6,7 @@ use std::sync::Arc;
 #[actix_web::get("/nearbydeparturesfromcoordsv3")]
 #[tracing::instrument(name = "nearby_from_coords_v3", skip(pool, cache), fields(lat = ?query.lat, lon = ?query.lon))]
 pub async fn nearby_from_coords_v3(
+    req: HttpRequest,
     query: web::Query<NearbyFromCoordsV3>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
     cache: web::Data<Arc<catenary::aspen::lib::AspenChateauCache>>,
@@ -24,9 +25,11 @@ pub async fn nearby_from_coords_v3(
             .await
         {
             Ok(data) => {
-                catenary::observability::record_chateaus(catenary::observability::nearby_chateaus(
-                    &data,
-                ));
+                if !catenary::observability::is_synthetics_request(req.headers()) {
+                    catenary::observability::record_chateaus(
+                        catenary::observability::nearby_chateaus(&data),
+                    );
+                }
                 HttpResponse::Ok().json(data)
             }
             Err(error) => HttpResponse::InternalServerError().body(error),
