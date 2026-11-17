@@ -1420,7 +1420,7 @@ pub async fn directory_route(
         }
     };
 
-    let map_deeplink = format!
+    let map_deeplink = format!(
         "https://maps.catenarymaps.org/?page=route&chateau={}&route={}",
         urlencoding::encode(&chateau),
         urlencoding::encode(&route_id)
