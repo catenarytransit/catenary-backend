@@ -83,6 +83,31 @@ pub enum ClientMessage {
     Ping,
 }
 
+/// Low-cardinality counters that identify the actual Spruce WebSocket message
+/// type; HTTP upgrade counters alone cannot tell whether any messages arrive.
+fn record_ws_message(endpoint: &'static str, message: &Result<ClientMessage, serde_json::Error>) {
+    if !catenary::observability::enabled() {
+        return;
+    }
+    let kind = match message {
+        Ok(ClientMessage::SubscribeTrip { .. }) => "subscribe_trip",
+        Ok(ClientMessage::UnsubscribeTrip { .. }) => "unsubscribe_trip",
+        Ok(ClientMessage::UnsubscribeAllTrips) => "unsubscribe_all_trips",
+        Ok(ClientMessage::UpdateMap { .. }) => "update_map",
+        Ok(ClientMessage::NearbyDepartures { .. }) => "nearby_departures",
+        Ok(ClientMessage::SubscribeTrajectories { .. }) => "subscribe_trajectories",
+        Ok(ClientMessage::UnsubscribeTrajectories) => "unsubscribe_trajectories",
+        Ok(ClientMessage::SubscribeMapV2 { .. }) => "subscribe_map_v2",
+        Ok(ClientMessage::UnsubscribeMapV2) => "unsubscribe_map_v2",
+        Ok(ClientMessage::Ping) => "ping",
+        Err(_) => "invalid",
+    };
+    catenary::observability::count(
+        "spruce.ws.messages",
+        &[("endpoint", endpoint), ("type", kind)],
+    );
+}
+
 #[derive(Deserialize, Clone)]
 pub struct SubscribeMapV2Params {
     pub categories: Vec<String>,

@@ -34,3 +34,25 @@ from V2 bounding boxes that matched no chateaus. `catenary.spruce.chateau_reques
 now also covers distinct chateaus in HTTP and WebSocket nearby-departures results.
 Ensure the running Spruce release binary includes this PR; a systemd unit
 setting `DATADOG_ENABLED=1` enables export but does not deploy new code.
+
+## Debugging Spruce WebSocket chateau counts
+
+An HTTP GET to `/ws/live` is a WebSocket upgrade and is reported as
+`catenary.spruce.initial_requests`; it does **not** imply the client sent any
+map subscription. Query:
+
+```text
+sum:catenary.spruce.ws.messages{service:spruce} by {endpoint,type}.as_count()
+sum:catenary.spruce.map_requests{service:spruce} by {mode}.as_count()
+sum:catenary.spruce.chateau_requests{service:spruce} by {chateau}.as_count()
+```
+
+If only initial requests are visible, and no `spruce.ws.messages`, verify
+the client is actually sending WebSocket text messages to Spruce. If messages
+appear as `type:invalid`, inspect the WebSocket protocol (e.g. missing
+`type` or incorrect `#[serde(flatten)]` fields) rather than Datadog.
+
+For temporary packet-level verification, set `DATADOG_DEBUG_METRICS=1` in
+the Spruce systemd unit and restart the service. Journal output will include
+the exact `spruce.*` DogStatsD UDP packets plus socket send errors. **Disable
+this after troubleshooting**: it adds synchronous logging to each emission.

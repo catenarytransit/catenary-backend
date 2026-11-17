@@ -76,9 +76,19 @@ fn emit(name: &str, value: String, kind: &str, tags: &[(&str, &str)]) {
         message.push(':');
         message.push_str(&safe_tag(value));
     }
-    let _ = exporter
+    if matches!(std::env::var("DATADOG_DEBUG_METRICS").as_deref(), Ok("1" | "true"))
+        && name.starts_with("spruce.")
+    {
+        eprintln!("DogStatsD -> {}: {}", exporter.address, message);
+    }
+    if let Err(error) = exporter
         .socket
-        .send_to(message.as_bytes(), &exporter.address);
+        .send_to(message.as_bytes(), &exporter.address)
+    {
+        if matches!(std::env::var("DATADOG_DEBUG_METRICS").as_deref(), Ok("1" | "true")) {
+            eprintln!("DogStatsD send failed: {error}");
+        }
+    }
 }
 pub fn count(name: &str, tags: &[(&str, &str)]) {
     emit(name, "1".into(), "c", tags);
