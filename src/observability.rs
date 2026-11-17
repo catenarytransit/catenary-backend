@@ -175,6 +175,12 @@ pub fn nearby_chateaus(
     );
     result
 }
+/// Emit one Spruce usage count per distinct chateau in a logical request.
+pub fn record_spruce_chateaus(chateaus: impl IntoIterator<Item = String>) {
+    for chateau in chateaus {
+        count("spruce.chateau_requests", &[("chateau", &chateau)]);
+    }
+}
 pub fn record_chateaus(chateaus: impl IntoIterator<Item = String>) {
     for chateau in chateaus {
         count("nearby.chateau_accesses", &[("chateau", &chateau)]);
