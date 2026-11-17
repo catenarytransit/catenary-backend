@@ -110,6 +110,20 @@ fn is_datadog_synthetics_user_agent(user_agent: Option<&str>) -> bool {
     })
 }
 
+/// Identify Datadog Synthetics traffic before emitting request-scoped metrics.
+/// Datadog API tests may send proprietary headers even when their user agent varies.
+pub fn is_synthetics_request(headers: &actix_web::http::header::HeaderMap) -> bool {
+    let contains_synthetics = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().contains("synthetics"))
+    };
+    contains_synthetics("user-agent")
+        || contains_synthetics("sec-datadog")
+        || contains_synthetics("x-datadog-origin")
+}
+
 pub async fn http_metrics(
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
@@ -220,6 +234,35 @@ mod tests {
         assert!(!is_datadog_synthetics_user_agent(Some("Datadog")));
         assert!(!is_datadog_synthetics_user_agent(Some("Mozilla/5.0")));
         assert!(!is_datadog_synthetics_user_agent(None));
+    }
+    #[test]
+    fn synthetics_request_detection() {
+        use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
+        let mut headers = HeaderMap::new();
+        assert!(!is_synthetics_request(&headers));
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("Datadog/Synthetics"),
+        );
+        assert!(is_synthetics_request(&headers));
+        headers.clear();
+        headers.insert(
+            HeaderName::from_static("sec-datadog"),
+            HeaderValue::from_static("Request sent by a Datadog Synthetics API Test"),
+        );
+        assert!(is_synthetics_request(&headers));
+        headers.clear();
+        headers.insert(
+            HeaderName::from_static("x-datadog-origin"),
+            HeaderValue::from_static("synthetics"),
+        );
+        assert!(is_synthetics_request(&headers));
+        headers.clear();
+        headers.insert(
+            HeaderName::from_static("user-agent"),
+            HeaderValue::from_static("Mozilla/5.0"),
+        );
+        assert!(!is_synthetics_request(&headers));
     }
     #[test]
     fn cloudflare_country_validation() {
