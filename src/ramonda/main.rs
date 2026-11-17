@@ -253,6 +253,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                         self.subscriptions.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
+                        catenary::observability::count("trip.views", &[("chateau", &chateau)]);
                         self.subscriptions
                             .insert((chateau.clone(), params.clone()), None);
 
@@ -338,6 +339,7 @@ async fn index_root() -> HttpResponse {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    catenary::observability::init("ramonda");
     let pool = Arc::new(make_async_pool().await.unwrap());
     let catenary_config = catenary::catenaryconfig::config();
 
@@ -430,6 +432,7 @@ async fn main() -> std::io::Result<()> {
 
     let server = HttpServer::new(move || {
         App::new()
+            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(aspen_chateau_cache.clone()))
             .app_data(web::Data::new(aspen_client_manager.clone()))

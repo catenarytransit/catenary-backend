@@ -35,6 +35,7 @@
 #[macro_use]
 extern crate diesel_derive_newtype;
 
+pub mod observability;
 pub mod departures_shared;
 pub mod departure_realtime;
 pub mod departure_realtime_loader;

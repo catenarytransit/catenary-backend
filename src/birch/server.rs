@@ -806,6 +806,7 @@ async fn ip_addr_to_geo_api(
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    catenary::observability::init("birch");
     let catenary_config = catenaryconfig::config();
 
     let region_names_directory =
@@ -920,6 +921,7 @@ async fn main() -> std::io::Result<()> {
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
+            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
             .wrap(
                 DefaultHeaders::new()
                     .add(("Access-Control-Allow-Origin", "*"))

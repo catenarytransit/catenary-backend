@@ -41,6 +41,7 @@ impl RamondaWebSocket {
 
     pub fn fetch_nearby(&mut self, request_id: String, params: NearbyFromCoordsV3,
         progressive: Option<bool>, ctx: &mut ws::WebsocketContext<Self>) {
+        catenary::observability::count("nearby.requests", &[("transport", "websocket")]);
         self.cancel_nearby(ctx);
         let generation = self.nearby_generation;
         let pool = self.pool.clone();
@@ -56,11 +57,17 @@ impl RamondaWebSocket {
                 if progressive {
                     let routes = prepared.priority_selection(pool.clone()).await?;
                     let data = prepared.load(pool.clone(), cache.clone(), RouteSelection::Only(routes.clone())).await?;
+                    let mut seen = catenary::observability::nearby_chateaus(&data);
                     address.do_send(NearbyFrame { generation, request_id: request_id.clone(),
                         phase: "priority", complete: false, result: Ok(data) });
-                    prepared.load(pool, cache, RouteSelection::Except(routes)).await
+                    let remaining = prepared.load(pool, cache, RouteSelection::Except(routes)).await;
+                    if let Ok(ref result) = remaining { seen.extend(catenary::observability::nearby_chateaus(result)); }
+                    catenary::observability::record_chateaus(seen);
+                    remaining
                 } else {
-                    prepared.load(pool, cache, RouteSelection::All).await
+                    let all = prepared.load(pool, cache, RouteSelection::All).await;
+                    if let Ok(ref result) = all { catenary::observability::record_chateaus(catenary::observability::nearby_chateaus(result)); }
+                    all
                 }
             }.await;
             address.do_send(NearbyFrame { generation, request_id,

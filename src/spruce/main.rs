@@ -183,6 +183,7 @@ async fn index_root() -> HttpResponse {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    catenary::observability::init("spruce");
     // std::env::set_var("RUST_LOG", "debug");
     // env_logger::init();
 
@@ -301,6 +302,7 @@ async fn main() -> std::io::Result<()> {
 
     let server = HttpServer::new(move || {
         App::new()
+            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(etcd_connection_ips.clone()))
             .app_data(web::Data::new(etcd_connection_options.clone()))
