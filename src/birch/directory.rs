@@ -187,6 +187,18 @@ pub struct RouteDirectionPattern {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ConnectingRouteCard {
+    pub chateau: String,
+    pub route_id: String,
+    pub short_name: Option<String>,
+    pub long_name: Option<String>,
+    pub route_type: i16,
+    pub color: Option<String>,
+    pub text_color: Option<String>,
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
 pub struct RoutePageResponse {
     pub schema_version: u32,
     pub locale: String,
@@ -195,6 +207,7 @@ pub struct RoutePageResponse {
     pub agency: RoutePageAgency,
     pub region_breadcrumbs: Vec<RegionLink>,
     pub direction_patterns: Vec<RouteDirectionPattern>,
+    pub connections_per_stop: BTreeMap<String, Vec<ConnectingRouteCard>>,
     pub alternate_locales: Vec<StableLocaleLink>,
     pub map_deeplink: String,
 }
@@ -800,6 +813,114 @@ async fn fetch_direction_patterns(
     Ok(patterns.into_values().collect())
 }
 
+
+ // Find route connections for all stops with one spatial query. Nearby platforms
+ // can belong to other GTFS feeds/chateaux, so use both identities.
+ async fn fetch_route_connections(
+     pool: &PgPool,
+     chateau: &str,
+     route_id: &str,
+     locale: &str,
+     patterns: &[RouteDirectionPattern],
+ ) -> Result<BTreeMap<String, Vec<ConnectingRouteCard>>, sqlx::Error> {
+     let stop_ids: Vec<String> = patterns
+         .iter()
+         .flat_map(|pattern| pattern.stops.iter().map(|stop| stop.stop_id.clone()))
+         .collect::<BTreeSet<_>>()
+         .into_iter()
+         .collect();
+     if stop_ids.is_empty() {
+         return Ok(BTreeMap::new());
+     }
+
+     // ~60m at the equator; the same approximate geometry units as the
+     // existing connection lookup. This includes adjacent station platforms.
+     // Each source stop is queried once, even when it occurs in many patterns.
+     let rows = sqlx::query(
+         r#"
+         WITH base AS (
+             SELECT DISTINCT ON (s.gtfs_id) s.gtfs_id, s.point
+             FROM gtfs.stops s
+             WHERE s.chateau = $1
+               AND s.gtfs_id = ANY($2)
+               AND s.point IS NOT NULL
+               AND s.allowed_spatial_query = TRUE
+             ORDER BY s.gtfs_id, s.onestop_feed_id, s.attempt_id
+         )
+         SELECT DISTINCT
+             b.gtfs_id AS base_stop_id,
+             r.chateau,
+             r.route_id,
+             r.short_name,
+             r.long_name,
+             r.route_type,
+             r.color,
+             r.text_color,
+             a.unified_agency_id,
+             r.url_slug_for_unified_agency
+         FROM base b
+         JOIN gtfs.stops nearby
+           ON nearby.point && ST_Expand(b.point, 0.00055)
+          AND ST_DWithin(nearby.point, b.point, 0.00055)
+          AND nearby.allowed_spatial_query = TRUE
+         JOIN gtfs.routes r
+           ON r.chateau = nearby.chateau
+          AND r.onestop_feed_id = nearby.onestop_feed_id
+          AND r.attempt_id = nearby.attempt_id
+          AND r.route_id = ANY(nearby.routes)
+         LEFT JOIN gtfs.agencies a
+           ON a.static_onestop_id = r.onestop_feed_id
+          AND a.attempt_id = r.attempt_id
+          AND a.chateau = r.chateau
+          AND a.agency_id = r.agency_id
+         WHERE NOT (r.chateau = $1 AND r.route_id = $3)
+         "#,
+     )
+     .bind(chateau)
+     .bind(&stop_ids)
+     .bind(route_id)
+     .fetch_all(pool)
+     .await?;
+
+     let mut result: BTreeMap<String, BTreeMap<(String, String), ConnectingRouteCard>> =
+         BTreeMap::new();
+     for row in rows {
+         let stop_id: String = row.try_get("base_stop_id")?;
+         let connection_chateau: String = row.try_get("chateau")?;
+         let connection_route: String = row.try_get("route_id")?;
+         let agency_id: Option<String> = row.try_get("unified_agency_id")?;
+         let slug: Option<String> = row.try_get("url_slug_for_unified_agency")?;
+         let path = agency_id.zip(slug).map(|(agency, slug)| {
+             route_path(locale, &agency, &slug)
+         });
+         let card = ConnectingRouteCard {
+             chateau: connection_chateau.clone(),
+             route_id: connection_route.clone(),
+             short_name: row.try_get("short_name")?,
+             long_name: row.try_get("long_name")?,
+             route_type: row.try_get("route_type")?,
+             color: row.try_get("color")?,
+             text_color: row.try_get("text_color")?,
+             path,
+         };
+         let entry = result.entry(stop_id).or_default();
+         entry.entry((connection_chateau, connection_route))
+             .and_modify(|previous| {
+                 if previous.path.is_none() && card.path.is_some() {
+                     previous.path = card.path.clone();
+                 }
+             })
+             .or_insert(card);
+     }
+     Ok(result.into_iter().map(|(stop, routes)| {
+         let mut routes: Vec<_> = routes.into_values().collect();
+         routes.sort_by(|a, b| a.route_type.cmp(&b.route_type)
+             .then_with(|| a.short_name.cmp(&b.short_name))
+             .then_with(|| a.route_id.cmp(&b.route_id)));
+         (stop, routes)
+     }).collect())
+ }
+
 async fn resolve_route_slug(
     pool: &PgPool,
     unified_agency_id: &str,
@@ -1281,7 +1402,25 @@ pub async fn directory_route(
             }
         };
 
-    let map_deeplink = format!(
+    let connections_per_stop = match fetch_route_connections(
+        pool.get_ref().as_ref(),
+        &chateau,
+        &route_id,
+        &locale,
+        &direction_patterns,
+    )
+    .await {
+        Ok(connections) => connections,
+        Err(error) => {
+            eprintln!("directory route connections query failed: {error}");
+            return json_error(
+                actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "could not query connecting routes",
+            );
+        }
+    };
+
+    let map_deeplink = format!
         "https://maps.catenarymaps.org/?page=route&chateau={}&route={}",
         urlencoding::encode(&chateau),
         urlencoding::encode(&route_id)
@@ -1311,6 +1450,7 @@ pub async fn directory_route(
             },
             region_breadcrumbs,
             direction_patterns,
+            connections_per_stop,
             alternate_locales: stable_locale_links(&store.geography, |alternate_locale| {
                 route_path(alternate_locale, &unified_agency_id, &route_slug)
             }),
