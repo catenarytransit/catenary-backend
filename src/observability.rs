@@ -104,11 +104,23 @@ pub fn country(header: Option<&str>) -> &str {
         _ => "unknown",
     }
 }
+fn is_datadog_synthetics_user_agent(user_agent: Option<&str>) -> bool {
+    user_agent.is_some_and(|agent| {
+        agent.to_ascii_lowercase().contains("datadog/synthetics")
+    })
+}
+
 pub async fn http_metrics(
     req: ServiceRequest,
     next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
-    if !enabled() {
+    if !enabled()
+        || is_datadog_synthetics_user_agent(
+            req.headers()
+                .get(actix_web::http::header::USER_AGENT)
+                .and_then(|value| value.to_str().ok()),
+        )
+    {
         return next
             .call(req)
             .await
@@ -199,6 +211,16 @@ pub fn record_chateaus(chateaus: impl IntoIterator<Item = String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn datadog_synthetics_user_agents_are_excluded() {
+        assert!(is_datadog_synthetics_user_agent(Some("Datadog/Synthetics")));
+        assert!(is_datadog_synthetics_user_agent(Some("Datadog/Synthetics/1.0")));
+        assert!(is_datadog_synthetics_user_agent(Some("Mozilla/5.0 Datadog/Synthetics/1.0")));
+        assert!(is_datadog_synthetics_user_agent(Some("datadog/synthetics")));
+        assert!(!is_datadog_synthetics_user_agent(Some("Datadog")));
+        assert!(!is_datadog_synthetics_user_agent(Some("Mozilla/5.0")));
+        assert!(!is_datadog_synthetics_user_agent(None));
+    }
     #[test]
     fn cloudflare_country_validation() {
         assert_eq!(country(Some("US")), "US");
