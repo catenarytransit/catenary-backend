@@ -204,6 +204,7 @@ pub async fn get_trip_init(
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
+    catenary::observability::count("trip.views", &[("chateau", &chateau)]);
     let query_params = query.into_inner();
 
     match fetch_trip_information(

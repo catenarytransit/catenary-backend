@@ -1,5 +1,7 @@
 use super::*;
-use catenary::nearby_departures::{NearbyDeparturesV3Response, NearbyFromCoordsV3, RouteSelection, prepare_nearby};
+use catenary::nearby_departures::{
+    NearbyDeparturesV3Response, NearbyFromCoordsV3, RouteSelection, prepare_nearby,
+};
 
 #[derive(Message)]
 #[rtype(result = "()")]
@@ -14,7 +16,9 @@ pub struct NearbyFrame {
 impl Handler<NearbyFrame> for RamondaWebSocket {
     type Result = ();
     fn handle(&mut self, frame: NearbyFrame, ctx: &mut Self::Context) {
-        if frame.generation != self.nearby_generation { return; }
+        if frame.generation != self.nearby_generation {
+            return;
+        }
         if frame.complete {
             self.nearby_fetch = None;
             self.nearby_loaded |= frame.result.is_ok();
@@ -36,11 +40,19 @@ impl Handler<NearbyFrame> for RamondaWebSocket {
 impl RamondaWebSocket {
     pub fn cancel_nearby(&mut self, ctx: &mut ws::WebsocketContext<Self>) {
         self.nearby_generation = self.nearby_generation.wrapping_add(1);
-        if let Some(handle) = self.nearby_fetch.take() { ctx.cancel_future(handle); }
+        if let Some(handle) = self.nearby_fetch.take() {
+            ctx.cancel_future(handle);
+        }
     }
 
-    pub fn fetch_nearby(&mut self, request_id: String, params: NearbyFromCoordsV3,
-        progressive: Option<bool>, ctx: &mut ws::WebsocketContext<Self>) {
+    pub fn fetch_nearby(
+        &mut self,
+        request_id: String,
+        params: NearbyFromCoordsV3,
+        progressive: Option<bool>,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        catenary::observability::count("nearby.requests", &[("transport", "websocket")]);
         self.cancel_nearby(ctx);
         let generation = self.nearby_generation;
         let pool = self.pool.clone();
@@ -55,16 +67,47 @@ impl RamondaWebSocket {
                 let prepared = prepare_nearby(params, pool.clone()).await?;
                 if progressive {
                     let routes = prepared.priority_selection(pool.clone()).await?;
-                    let data = prepared.load(pool.clone(), cache.clone(), RouteSelection::Only(routes.clone())).await?;
-                    address.do_send(NearbyFrame { generation, request_id: request_id.clone(),
-                        phase: "priority", complete: false, result: Ok(data) });
-                    prepared.load(pool, cache, RouteSelection::Except(routes)).await
+                    let data = prepared
+                        .load(
+                            pool.clone(),
+                            cache.clone(),
+                            RouteSelection::Only(routes.clone()),
+                        )
+                        .await?;
+                    let mut seen = catenary::observability::nearby_chateaus(&data);
+                    address.do_send(NearbyFrame {
+                        generation,
+                        request_id: request_id.clone(),
+                        phase: "priority",
+                        complete: false,
+                        result: Ok(data),
+                    });
+                    let remaining = prepared
+                        .load(pool, cache, RouteSelection::Except(routes))
+                        .await;
+                    if let Ok(ref result) = remaining {
+                        seen.extend(catenary::observability::nearby_chateaus(result));
+                    }
+                    catenary::observability::record_chateaus(seen);
+                    remaining
                 } else {
-                    prepared.load(pool, cache, RouteSelection::All).await
+                    let all = prepared.load(pool, cache, RouteSelection::All).await;
+                    if let Ok(ref result) = all {
+                        catenary::observability::record_chateaus(
+                            catenary::observability::nearby_chateaus(result),
+                        );
+                    }
+                    all
                 }
-            }.await;
-            address.do_send(NearbyFrame { generation, request_id,
-                phase: if progressive { "remaining" } else { "full" }, complete: true, result });
+            }
+            .await;
+            address.do_send(NearbyFrame {
+                generation,
+                request_id,
+                phase: if progressive { "remaining" } else { "full" },
+                complete: true,
+                result,
+            });
         };
         self.nearby_fetch = Some(ctx.spawn(actix::fut::wrap_future(future).map(|_, _, _| ())));
     }
@@ -76,12 +119,19 @@ mod tests {
 
     #[test]
     fn nearby_request_parameters_do_not_interfere_with_envelope_fields() {
-        let message: ClientMessage = serde_json::from_str(r#"{
+        let message: ClientMessage = serde_json::from_str(
+            r#"{
             "type":"nearby_departures", "request_id":"r1", "progressive":false,
             "lat":34.05, "lon":-118.25, "departure_time":1794355200
-        }"#).unwrap();
+        }"#,
+        )
+        .unwrap();
         match message {
-            ClientMessage::NearbyDepartures { request_id, params, progressive } => {
+            ClientMessage::NearbyDepartures {
+                request_id,
+                params,
+                progressive,
+            } => {
                 assert_eq!(request_id, "r1");
                 assert_eq!(progressive, Some(false));
                 assert_eq!(params.departure_time, Some(1794355200));
@@ -89,11 +139,23 @@ mod tests {
             }
             _ => panic!("wrong request type"),
         }
-        let message: ClientMessage = serde_json::from_str(r#"{
+        let message: ClientMessage = serde_json::from_str(
+            r#"{
             "type":"nearby_departures", "request_id":"r2", "lat":34.05, "lon":-118.25
-        }"#).unwrap();
-        assert!(matches!(message, ClientMessage::NearbyDepartures { progressive: None, .. }));
-        assert!(matches!(serde_json::from_str::<ClientMessage>(r#"{"type":"cancel_nearby_departures"}"#).unwrap(),
-            ClientMessage::CancelNearbyDepartures));
+        }"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            message,
+            ClientMessage::NearbyDepartures {
+                progressive: None,
+                ..
+            }
+        ));
+        assert!(matches!(
+            serde_json::from_str::<ClientMessage>(r#"{"type":"cancel_nearby_departures"}"#)
+                .unwrap(),
+            ClientMessage::CancelNearbyDepartures
+        ));
     }
 }

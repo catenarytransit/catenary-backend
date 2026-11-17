@@ -763,6 +763,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
                 match msg {
                     Ok(ClientMessage::UpdateMap { params }) => {
+                        for chateau in params
+                            .chateaus
+                            .iter()
+                            .collect::<std::collections::HashSet<_>>()
+                        {
+                            catenary::observability::count(
+                                "spruce.chateau_requests",
+                                &[("chateau", chateau)],
+                            );
+                        }
                         let new_chateaus: HashSet<String> =
                             params.chateaus.iter().cloned().collect();
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);

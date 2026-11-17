@@ -9,8 +9,8 @@ use catenary::routing_common::{
     raptor_query::{Journey, Leg},
     timetable::{Clasz, RouteIdx, TransportIdx, ZeroCopyTimetable},
 };
-use postgres::{Client, NoTls};
 use chrono::{TimeZone, Utc};
+use postgres::{Client, NoTls};
 use prost::Message;
 use rayon::prelude::*;
 use serde_json::{Value, json};
@@ -716,22 +716,42 @@ fn trip_instance(meta: &TripInfo, first_departure: i64) -> Option<(String, Strin
     let offset = i64::from(meta.first_departure_offset?);
     let starts: Box<dyn Iterator<Item = i64>> = if meta.has_frequencies {
         let data = catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto::decode(
-            meta.frequencies.as_deref()?
-        ).ok()?;
-        Box::new(data.frequencies.into_iter().filter(|w| w.headway_secs > 0)
-            .flat_map(move |w| (u64::from(w.start_time)..u64::from(w.end_time))
-                .step_by(w.headway_secs as usize).map(move |t| t as i64 - offset)))
-    } else { Box::new(std::iter::once(meta.start_time?)) };
+            meta.frequencies.as_deref()?,
+        )
+        .ok()?;
+        Box::new(
+            data.frequencies
+                .into_iter()
+                .filter(|w| w.headway_secs > 0)
+                .flat_map(move |w| {
+                    (u64::from(w.start_time)..u64::from(w.end_time))
+                        .step_by(w.headway_secs as usize)
+                        .map(move |t| t as i64 - offset)
+                }),
+        )
+    } else {
+        Box::new(std::iter::once(meta.start_time?))
+    };
     for start in starts {
         let anchor = first_departure.checked_sub(start)?.checked_sub(offset)?;
         let noon = chrono::DateTime::<Utc>::from_timestamp(anchor.checked_add(43_200)?, 0)?
             .with_timezone(&tz);
         let date = noon.date_naive();
-        let expected = tz.from_local_datetime(&date.and_hms_opt(12, 0, 0)?).single()?
-            .timestamp() - 43_200;
+        let expected = tz
+            .from_local_datetime(&date.and_hms_opt(12, 0, 0)?)
+            .single()?
+            .timestamp()
+            - 43_200;
         if expected == anchor && start >= 0 {
-            return Some((date.format("%Y%m%d").to_string(),
-                format!("{:02}:{:02}:{:02}", start / 3600, start / 60 % 60, start % 60)));
+            return Some((
+                date.format("%Y%m%d").to_string(),
+                format!(
+                    "{:02}:{:02}:{:02}",
+                    start / 3600,
+                    start / 60 % 60,
+                    start % 60
+                ),
+            ));
         }
     }
     None
@@ -995,8 +1015,10 @@ mod tests {
 
     fn instance_meta(start: i64, timezone: &str) -> TripInfo {
         TripInfo {
-            start_time: Some(start), timezone: Some(timezone.into()),
-            first_departure_offset: Some(120), ..TripInfo::default()
+            start_time: Some(start),
+            timezone: Some(timezone.into()),
+            first_departure_offset: Some(120),
+            ..TripInfo::default()
         }
     }
 
@@ -1004,18 +1026,30 @@ mod tests {
     fn trip_instance_preserves_overnight_service_date_and_first_stop_dwell() {
         let meta = instance_meta(25 * 3600, "America/Los_Angeles");
         // 01:02 PST on Nov 14 belongs to the Nov 13 service date.
-        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T09:02:00Z").unwrap().timestamp();
-        assert_eq!(trip_instance(&meta, first), Some(("20261113".into(), "25:00:00".into())));
+        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T09:02:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            trip_instance(&meta, first),
+            Some(("20261113".into(), "25:00:00".into()))
+        );
     }
 
     #[test]
     fn trip_instance_uses_gtfs_noon_anchor_on_both_dst_transitions() {
         let meta = instance_meta(3600, "America/Los_Angeles");
         // Noon-minus-12h is 23:00 on the spring transition and 01:00 in fall.
-        for (first, date) in [("2026-03-08T08:02:00Z", "20260308"),
-                              ("2026-11-01T09:02:00Z", "20261101")] {
-            let first = chrono::DateTime::parse_from_rfc3339(first).unwrap().timestamp();
-            assert_eq!(trip_instance(&meta, first), Some((date.into(), "01:00:00".into())));
+        for (first, date) in [
+            ("2026-03-08T08:02:00Z", "20260308"),
+            ("2026-11-01T09:02:00Z", "20261101"),
+        ] {
+            let first = chrono::DateTime::parse_from_rfc3339(first)
+                .unwrap()
+                .timestamp();
+            assert_eq!(
+                trip_instance(&meta, first),
+                Some((date.into(), "01:00:00".into()))
+            );
         }
     }
 
@@ -1023,21 +1057,38 @@ mod tests {
     fn frequency_instance_selects_exact_compiled_departure() {
         let mut meta = instance_meta(0, "Europe/London");
         meta.has_frequencies = true;
-        meta.frequencies = Some(catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto {
-            frequencies: vec![catenary::gtfs_schedule_protobuf::GtfsFrequencyProto {
-                start_time: 25 * 3600, end_time: 26 * 3600, headway_secs: 600, exact_times: Some(1),
-            }],
-        }.encode_to_vec());
-        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T01:10:00Z").unwrap().timestamp();
-        assert_eq!(trip_instance(&meta, first), Some(("20261113".into(), "25:08:00".into())));
+        meta.frequencies = Some(
+            catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto {
+                frequencies: vec![catenary::gtfs_schedule_protobuf::GtfsFrequencyProto {
+                    start_time: 25 * 3600,
+                    end_time: 26 * 3600,
+                    headway_secs: 600,
+                    exact_times: Some(1),
+                }],
+            }
+            .encode_to_vec(),
+        );
+        let first = chrono::DateTime::parse_from_rfc3339("2026-11-14T01:10:00Z")
+            .unwrap()
+            .timestamp();
+        assert_eq!(
+            trip_instance(&meta, first),
+            Some(("20261113".into(), "25:08:00".into()))
+        );
         assert_eq!(trip_instance(&TripInfo::default(), first), None);
     }
     #[test]
     fn places_transmit_local_iana_timezones() {
-        assert_eq!(point_timezone(-118.2437, 34.0522), Some("America/Los_Angeles"));
+        assert_eq!(
+            point_timezone(-118.2437, 34.0522),
+            Some("America/Los_Angeles")
+        );
         assert_eq!(point_timezone(-74.0060, 40.7128), Some("America/New_York"));
         let endpoint = coordinate_place(
-            Coordinates { lat: 40.7128, lon: -74.0060 },
+            Coordinates {
+                lat: 40.7128,
+                lon: -74.0060,
+            },
             "Destination",
         );
         assert_eq!(endpoint["timezone"], "America/New_York");
