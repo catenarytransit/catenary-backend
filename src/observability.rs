@@ -55,7 +55,7 @@ pub fn country(header: Option<&str>) -> &str {
 }
 pub async fn http_metrics(
     req: ServiceRequest,
-    next: Next<impl MessageBody>,
+    next: Next<impl MessageBody + 'static>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
     if !enabled() { return next.call(req).await.map(ServiceResponse::map_into_boxed_body); }
     let started = Instant::now();
