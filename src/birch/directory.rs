@@ -833,22 +833,76 @@ async fn fetch_direction_patterns(
          return Ok(BTreeMap::new());
      }
 
-     // ~60m at the equator; the same approximate geometry units as the
-     // existing connection lookup. This includes adjacent station platforms.
-     // Each source stop is queried once, even when it occurs in many patterns.
+     // Combine exact-stop services from direction patterns with nearby
+     // services within ~60m. Exact-stop transfers do not depend on geometry.
      let rows = sqlx::query(
          r#"
          WITH base AS (
-             SELECT DISTINCT ON (s.gtfs_id) s.gtfs_id, s.point
-             FROM gtfs.stops s
-             WHERE s.chateau = $1
-               AND s.gtfs_id = ANY($2)
-               AND s.point IS NOT NULL
-               AND s.allowed_spatial_query = TRUE
-             ORDER BY s.gtfs_id, s.onestop_feed_id, s.attempt_id
+             -- Follow the feed/attempt selected for the displayed route's
+             -- direction patterns, rather than an arbitrary stop version.
+             SELECT DISTINCT
+                 d.stop_id AS gtfs_id,
+                 d.chateau,
+                 d.onestop_feed_id,
+                 d.attempt_id,
+                 s.point,
+                 s.allowed_spatial_query
+             FROM gtfs.direction_pattern_meta p
+             JOIN gtfs.direction_pattern d
+               ON d.chateau = p.chateau
+              AND d.onestop_feed_id = p.onestop_feed_id
+              AND d.attempt_id = p.attempt_id
+              AND d.direction_pattern_id = p.direction_pattern_id
+             LEFT JOIN gtfs.stops s
+               ON s.chateau = d.chateau
+              AND s.onestop_feed_id = d.onestop_feed_id
+              AND s.attempt_id = d.attempt_id
+              AND s.gtfs_id = d.stop_id
+             WHERE p.chateau = $1
+               AND p.route_id = $3
+               AND d.stop_id = ANY($2)
+         ),
+         candidate_routes AS (
+             -- Exact GTFS stop identity: do not require coordinates,
+             -- allowed_spatial_query, or a populated stops.routes array.
+             SELECT DISTINCT
+                 b.gtfs_id AS base_stop_id,
+                 m.chateau,
+                 m.onestop_feed_id,
+                 m.attempt_id,
+                 m.route_id
+             FROM base b
+             JOIN gtfs.direction_pattern d
+               ON d.chateau = b.chateau
+              AND d.onestop_feed_id = b.onestop_feed_id
+              AND d.attempt_id = b.attempt_id
+              AND d.stop_id = b.gtfs_id
+             JOIN gtfs.direction_pattern_meta m
+               ON m.chateau = d.chateau
+              AND m.onestop_feed_id = d.onestop_feed_id
+              AND m.attempt_id = d.attempt_id
+              AND m.direction_pattern_id = d.direction_pattern_id
+             WHERE m.route_id IS NOT NULL
+
+             UNION
+
+             -- Retain transfers to nearby platforms and neighboring stops.
+             SELECT
+                 b.gtfs_id AS base_stop_id,
+                 nearby.chateau,
+                 nearby.onestop_feed_id,
+                 nearby.attempt_id,
+                 unnest(nearby.routes) AS route_id
+             FROM base b
+             JOIN gtfs.stops nearby
+               ON b.point IS NOT NULL
+              AND b.allowed_spatial_query = TRUE
+              AND nearby.allowed_spatial_query = TRUE
+              AND nearby.point && ST_Expand(b.point, 0.00055)
+              AND ST_DWithin(nearby.point, b.point, 0.00055)
          )
          SELECT DISTINCT
-             b.gtfs_id AS base_stop_id,
+             c.base_stop_id,
              r.chateau,
              r.route_id,
              r.short_name,
@@ -858,16 +912,12 @@ async fn fetch_direction_patterns(
              r.text_color,
              a.unified_agency_id,
              r.url_slug_for_unified_agency
-         FROM base b
-         JOIN gtfs.stops nearby
-           ON nearby.point && ST_Expand(b.point, 0.00055)
-          AND ST_DWithin(nearby.point, b.point, 0.00055)
-          AND nearby.allowed_spatial_query = TRUE
+         FROM candidate_routes c
          JOIN gtfs.routes r
-           ON r.chateau = nearby.chateau
-          AND r.onestop_feed_id = nearby.onestop_feed_id
-          AND r.attempt_id = nearby.attempt_id
-          AND r.route_id = ANY(nearby.routes)
+           ON r.chateau = c.chateau
+          AND r.onestop_feed_id = c.onestop_feed_id
+          AND r.attempt_id = c.attempt_id
+          AND r.route_id = c.route_id
          LEFT JOIN gtfs.agencies a
            ON a.static_onestop_id = r.onestop_feed_id
           AND a.attempt_id = r.attempt_id
