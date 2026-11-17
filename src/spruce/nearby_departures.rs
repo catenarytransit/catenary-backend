@@ -414,7 +414,9 @@ pub async fn nearby_from_coords_v3(
     )
     .await;
 
-    catenary::observability::record_spruce_chateaus(spruce_nearby_chateaus(&final_response));
+    if !catenary::observability::is_synthetics_request(req.headers()) {
+        catenary::observability::record_spruce_chateaus(spruce_nearby_chateaus(&final_response));
+    }
     HttpResponse::Ok().json(final_response)
 }
 
