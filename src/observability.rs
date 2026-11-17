@@ -73,7 +73,8 @@ pub async fn http_metrics(
         if (endpoint.contains("tile") || endpoint.contains("tiles")) && response.status().is_success() {
             count("tiles.sent", &[("endpoint", &endpoint)]);
         }
-        if endpoint == "/getinitdata" || endpoint == "/ws/" || endpoint == "/ws/live" || endpoint == "/ws/trip" {
+        if METRICS.get().and_then(Option::as_ref).is_some_and(|e| e.service == "spruce")
+            && (endpoint == "/getinitdata" || endpoint == "/ws/" || endpoint == "/ws/live" || endpoint == "/ws/trip") {
             count("spruce.initial_requests", &[("endpoint", &endpoint), ("country", &country)]);
         }
     }
