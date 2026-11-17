@@ -820,6 +820,7 @@ async fn fetch_direction_patterns(
      pool: &PgPool,
      chateau: &str,
      route_id: &str,
+     input_route_type: i16,
      locale: &str,
      patterns: &[RouteDirectionPattern],
  ) -> Result<BTreeMap<String, Vec<ConnectingRouteCard>>, sqlx::Error> {
@@ -833,8 +834,10 @@ async fn fetch_direction_patterns(
          return Ok(BTreeMap::new());
      }
 
-     // Combine exact-stop services from direction patterns with nearby
-     // services within ~60m. Exact-stop transfers do not depend on geometry.
+     // Combine exact-stop services with the same mode-dependent transfer
+     // distances as route_info::connections_lookup. The broad 0.006-degree
+     // spatial search is followed by a distance-in-metres filter. Exact-stop
+     // transfers do not depend on geometry.
      let rows = sqlx::query(
          r#"
          WITH base AS (
@@ -898,8 +901,35 @@ async fn fetch_direction_patterns(
                ON b.point IS NOT NULL
               AND b.allowed_spatial_query = TRUE
               AND nearby.allowed_spatial_query = TRUE
-              AND nearby.point && ST_Expand(b.point, 0.00055)
-              AND ST_DWithin(nearby.point, b.point, 0.00055)
+              AND nearby.point && ST_Expand(b.point, 0.006)
+              AND ST_DWithin(nearby.point, b.point, 0.006)
+              AND ST_DistanceSphere(nearby.point, b.point) <=
+                  CASE
+                      WHEN $4 IN (0, 1) THEN
+                          CASE nearby.primary_route_type
+                              WHEN 3 THEN 150.0
+                              WHEN 0 THEN 200.0
+                              WHEN 1 THEN 200.0
+                              WHEN 2 THEN 400.0
+                              ELSE 300.0
+                          END
+                      WHEN $4 = 2 THEN
+                          CASE nearby.primary_route_type
+                              WHEN 3 THEN 200.0
+                              WHEN 0 THEN 300.0
+                              WHEN 1 THEN 300.0
+                              WHEN 2 THEN 300.0
+                              ELSE 300.0
+                          END
+                      ELSE
+                          CASE nearby.primary_route_type
+                              WHEN 3 THEN 150.0
+                              WHEN 0 THEN 200.0
+                              WHEN 1 THEN 200.0
+                              WHEN 2 THEN 300.0
+                              ELSE 300.0
+                          END
+                  END
          )
          SELECT DISTINCT
              c.base_stop_id,
@@ -929,6 +959,7 @@ async fn fetch_direction_patterns(
      .bind(chateau)
      .bind(&stop_ids)
      .bind(route_id)
+     .bind(input_route_type)
      .fetch_all(pool)
      .await?;
 
@@ -1456,6 +1487,7 @@ pub async fn directory_route(
         pool.get_ref().as_ref(),
         &chateau,
         &route_id,
+        route.route_type,
         &locale,
         &direction_patterns,
     )
