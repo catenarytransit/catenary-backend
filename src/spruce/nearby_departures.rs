@@ -66,6 +66,24 @@ pub struct NearbyDeparturesV3Response {
     pub debug: NearbyDeparturesDebug,
 }
 
+/// Return distinct chateaus represented in a Spruce nearby response, including
+/// both regional and long-distance departures. Each logical request is counted
+/// once per chateau, not once per route, stop, or realtime hydration frame.
+pub fn spruce_nearby_chateaus(
+    response: &NearbyDeparturesV3Response,
+) -> std::collections::HashSet<String> {
+    let mut result = std::collections::HashSet::new();
+    result.extend(response.routes.keys().cloned());
+    result.extend(response.stops.keys().cloned());
+    result.extend(response.local.iter().map(|route| route.chateau_id.clone()));
+    result.extend(
+        response.long_distance.iter().flat_map(|station| {
+            station.departures.iter().map(|departure| departure.chateau_id.clone())
+        }),
+    );
+    result
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct NearbyDeparturesDebug {
     pub total_time_ms: u128,
@@ -396,6 +414,7 @@ pub async fn nearby_from_coords_v3(
     )
     .await;
 
+    catenary::observability::record_spruce_chateaus(spruce_nearby_chateaus(&final_response));
     HttpResponse::Ok().json(final_response)
 }
 

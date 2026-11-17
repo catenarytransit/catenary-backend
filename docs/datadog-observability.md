@@ -27,3 +27,10 @@ not be considered authoritative.
 Datadog logs and traces can be collected by an external Datadog Agent using
 existing application stdout and tracing pipelines; this change adds the metric
 exporter, not a new application log exporter.
+
+Spruce diagnostics: `catenary.spruce.map_requests` by `mode` (legacy or v2) and
+`catenary.spruce.map_empty{mode:v2}` distinguish received map subscriptions
+from V2 bounding boxes that matched no chateaus. `catenary.spruce.chateau_requests`
+now also covers distinct chateaus in HTTP and WebSocket nearby-departures results.
+Ensure the running Spruce release binary includes this PR; a systemd unit
+setting `DATADOG_ENABLED=1` enables export but does not deploy new code.
