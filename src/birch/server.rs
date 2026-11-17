@@ -921,7 +921,9 @@ async fn main() -> std::io::Result<()> {
     // Create a new HTTP server.
     let builder = HttpServer::new(move || {
         App::new()
-            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
+            .wrap(actix_web::middleware::from_fn(
+                catenary::observability::http_metrics,
+            ))
             .wrap(
                 DefaultHeaders::new()
                     .add(("Access-Control-Allow-Origin", "*"))

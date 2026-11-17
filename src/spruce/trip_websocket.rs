@@ -190,7 +190,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         self.subscriptions.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
-                        catenary::observability::count("spruce.chateau_requests", &[("chateau", &chateau)]);
+                        catenary::observability::count(
+                            "spruce.chateau_requests",
+                            &[("chateau", &chateau)],
+                        );
                         catenary::observability::count("trip.views", &[("chateau", &chateau)]);
                         self.subscriptions
                             .insert((chateau.clone(), params.clone()), None);

@@ -302,7 +302,9 @@ async fn main() -> std::io::Result<()> {
 
     let server = HttpServer::new(move || {
         App::new()
-            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
+            .wrap(actix_web::middleware::from_fn(
+                catenary::observability::http_metrics,
+            ))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(etcd_connection_ips.clone()))
             .app_data(web::Data::new(etcd_connection_options.clone()))

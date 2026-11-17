@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 pub type StopDataResult = (
-    String,                                                       // chateau_id
+    String,                                                    // chateau_id
     BTreeMap<String, Vec<crate::models::ItineraryPatternRow>>, // itins_btreemap
     BTreeMap<String, crate::models::ItineraryPatternMeta>,     // itin_meta_btreemap
     BTreeMap<String, crate::models::DirectionPatternMeta>,     // direction_meta_btreemap
@@ -25,7 +25,7 @@ pub type StopDataResult = (
     BTreeMap<String, Vec<crate::models::DirectionPatternRow>>, // direction_rows_for_chateau
     BTreeMap<String, crate::models::Route>,                    // routes_btreemap
     BTreeMap<String, crate::models::Agency>,                   // agencies_btreemap
-    BTreeMap<EcoString, String>,                                  // shape_polyline_for_chateau
+    BTreeMap<EcoString, String>,                               // shape_polyline_for_chateau
     Vec<crate::models::Calendar>,                              // calendar
     Vec<crate::models::CalendarDate>,                          // calendar_dates
 );
@@ -108,8 +108,7 @@ pub async fn fetch_stop_data_for_chateau(
         // );
         let t_section = std::time::Instant::now();
 
-        let mut itin_meta_btreemap =
-            BTreeMap::<String, crate::models::ItineraryPatternMeta>::new();
+        let mut itin_meta_btreemap = BTreeMap::<String, crate::models::ItineraryPatternMeta>::new();
         for itin in &itin_meta {
             itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
         }
@@ -143,8 +142,7 @@ pub async fn fetch_stop_data_for_chateau(
             let mut conn = pool_for_join.get().await.unwrap();
             crate::schema::gtfs::direction_pattern_meta::dsl::direction_pattern_meta
                 .filter(
-                    crate::schema::gtfs::direction_pattern_meta::chateau
-                        .eq(chateau_id_clone_dirs),
+                    crate::schema::gtfs::direction_pattern_meta::chateau.eq(chateau_id_clone_dirs),
                 )
                 .filter(
                     crate::schema::gtfs::direction_pattern_meta::direction_pattern_id
@@ -159,9 +157,7 @@ pub async fn fetch_stop_data_for_chateau(
         let direction_rows_task = async {
             let mut conn = pool_for_join.get().await.unwrap();
             crate::schema::gtfs::direction_pattern::dsl::direction_pattern
-                .filter(
-                    crate::schema::gtfs::direction_pattern::chateau.eq(chateau_id_clone_rows),
-                )
+                .filter(crate::schema::gtfs::direction_pattern::chateau.eq(chateau_id_clone_rows))
                 .filter(
                     crate::schema::gtfs::direction_pattern::direction_pattern_id
                         .eq_any(&direction_ids_clone2),
@@ -343,8 +339,7 @@ pub async fn fetch_stop_data_for_chateau(
 
                 let calendar_dates = crate::schema::gtfs::calendar_dates::dsl::calendar_dates
                     .filter(
-                        crate::schema::gtfs::calendar_dates::chateau
-                            .eq(chateau_id_clone2.clone()),
+                        crate::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()),
                     )
                     .filter(crate::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids))
                     .filter(crate::schema::gtfs::calendar_dates::gtfs_date.ge(start_date))
@@ -420,8 +415,7 @@ pub async fn fetch_stop_data_for_chateau(
                     if let Some(services) = &active_services {
                         let services_vec: Vec<CompactString> = services.iter().cloned().collect();
                         query = query.filter(
-                            crate::schema::gtfs::trips_compressed::service_id
-                                .eq_any(services_vec),
+                            crate::schema::gtfs::trips_compressed::service_id.eq_any(services_vec),
                         );
                     }
 
@@ -469,8 +463,7 @@ pub async fn fetch_stop_data_for_chateau(
         // );
         let t_section = std::time::Instant::now();
 
-        let mut trip_compressed_btreemap =
-            BTreeMap::<String, crate::models::CompressedTrip>::new();
+        let mut trip_compressed_btreemap = BTreeMap::<String, crate::models::CompressedTrip>::new();
 
         for trip in &trips {
             trip_compressed_btreemap.insert(trip.trip_id.clone(), trip.clone());
@@ -494,9 +487,7 @@ pub async fn fetch_stop_data_for_chateau(
         let mut calendar_dates_query = crate::schema::gtfs::calendar_dates::dsl::calendar_dates
             .into_boxed()
             .filter(crate::schema::gtfs::calendar_dates::chateau.eq(chateau_id_clone2.clone()))
-            .filter(
-                crate::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_to_search),
-            );
+            .filter(crate::schema::gtfs::calendar_dates::service_id.eq_any(&service_ids_to_search));
 
         if let Some((start_date, end_date)) = date_filter {
             calendar_dates_query = calendar_dates_query
@@ -604,10 +595,8 @@ impl AlertIndex {
             String,
             Vec<(String, Arc<crate::aspen_dataset::AspenisedAlert>)>,
         > = HashMap::new();
-        let mut by_trip: HashMap<
-            String,
-            Vec<(String, Arc<crate::aspen_dataset::AspenisedAlert>)>,
-        > = HashMap::new();
+        let mut by_trip: HashMap<String, Vec<(String, Arc<crate::aspen_dataset::AspenisedAlert>)>> =
+            HashMap::new();
         let general = Vec::new();
 
         for (id, alert) in alerts {

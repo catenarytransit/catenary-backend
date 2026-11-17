@@ -1631,7 +1631,9 @@ pub async fn new_rt_data(
                             trip_id_to_trip.contains_key(trip_id.as_str()),
                         ) {
                             if let Some(terminal) =
-                                catenary::departure_realtime::compact_headsign_terminal_stop_id(trip_update)
+                                catenary::departure_realtime::compact_headsign_terminal_stop_id(
+                                    trip_update,
+                                )
                             {
                                 stop_ids_to_lookup.insert(terminal.to_string());
                             }

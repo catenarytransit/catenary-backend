@@ -92,8 +92,7 @@ fn pfaedle_skip_enabled(value: &str) -> bool {
 }
 
 fn skip_pfaedle() -> bool {
-    std::env::var("SKIP_PFAEDLE")
-        .is_ok_and(|value| pfaedle_skip_enabled(&value))
+    std::env::var("SKIP_PFAEDLE").is_ok_and(|value| pfaedle_skip_enabled(&value))
 }
 
 async fn execute_pfaedle_brosi(
@@ -767,7 +766,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-chicago~ohare~ats" => {
-             let _ = execute_pfaedle_brosi(
+            let _ = execute_pfaedle_brosi(
                 path.as_str(),
                 "./railonly-north-america-latest.osm.pbf",
                 None,
@@ -3310,10 +3309,16 @@ mod skip_pfaedle_tests {
     #[test]
     fn accepted_skip_pfaedle_environment_values() {
         for enabled in ["1", "true", "TRUE", " yes ", "On"] {
-            assert!(pfaedle_skip_enabled(enabled), "{enabled} must enable the skip");
+            assert!(
+                pfaedle_skip_enabled(enabled),
+                "{enabled} must enable the skip"
+            );
         }
         for disabled in ["", "0", "false", "FALSE", "no", "off", "unrelated"] {
-            assert!(!pfaedle_skip_enabled(disabled), "{disabled} must not enable the skip");
+            assert!(
+                !pfaedle_skip_enabled(disabled),
+                "{disabled} must not enable the skip"
+            );
         }
     }
 }

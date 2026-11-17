@@ -16,13 +16,19 @@ pub async fn nearby_from_coords_v3(
     }
     match prepare_nearby(query, pool.get_ref().clone()).await {
         Ok(prepared) => match prepared
-            .load(pool.get_ref().clone(), cache.get_ref().clone(), RouteSelection::All)
+            .load(
+                pool.get_ref().clone(),
+                cache.get_ref().clone(),
+                RouteSelection::All,
+            )
             .await
         {
             Ok(data) => {
-                catenary::observability::record_chateaus(catenary::observability::nearby_chateaus(&data));
+                catenary::observability::record_chateaus(catenary::observability::nearby_chateaus(
+                    &data,
+                ));
                 HttpResponse::Ok().json(data)
-            },
+            }
             Err(error) => HttpResponse::InternalServerError().body(error),
         },
         Err(error) => HttpResponse::InternalServerError().body(error),

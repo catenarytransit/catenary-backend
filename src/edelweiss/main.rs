@@ -772,13 +772,21 @@ fn run_query_observed(
     timings.query_total_ms = milliseconds(query_start);
     attach_query_timings(&mut response, &timings);
     for (phase, ms) in [
-        ("selection", timings.selection_ms), ("access", timings.access_ms),
-        ("egress", timings.egress_ms), ("direct_walk", timings.direct_walk_ms),
-        ("osr_parallel_wall", timings.osr_parallel_wall_ms), ("raptor", timings.raptor_ms),
-        ("metadata", timings.metadata_ms), ("response_build", timings.response_build_ms),
+        ("selection", timings.selection_ms),
+        ("access", timings.access_ms),
+        ("egress", timings.egress_ms),
+        ("direct_walk", timings.direct_walk_ms),
+        ("osr_parallel_wall", timings.osr_parallel_wall_ms),
+        ("raptor", timings.raptor_ms),
+        ("metadata", timings.metadata_ms),
+        ("response_build", timings.response_build_ms),
         ("query_total", timings.query_total_ms),
     ] {
-        catenary::observability::distribution("routing.phase_ms", ms, &[("region", &selection.transit_region), ("phase", phase)]);
+        catenary::observability::distribution(
+            "routing.phase_ms",
+            ms,
+            &[("region", &selection.transit_region), ("phase", phase)],
+        );
     }
 
     Ok((response, timings))
@@ -1038,7 +1046,9 @@ async fn main() -> Result<()> {
     eprintln!("Edelweiss startup: binding HTTP server to {}", args.listen);
     let server = HttpServer::new(move || {
         let app = App::new()
-            .wrap(actix_web::middleware::from_fn(catenary::observability::http_metrics))
+            .wrap(actix_web::middleware::from_fn(
+                catenary::observability::http_metrics,
+            ))
             .wrap(
                 actix_cors::Cors::default()
                     .allow_any_origin()
