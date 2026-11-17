@@ -763,6 +763,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
                 match msg {
                     Ok(ClientMessage::UpdateMap { params }) => {
+                        catenary::observability::count("spruce.map_requests", &[("mode", "legacy")]);
                         for chateau in params
                             .chateaus
                             .iter()
@@ -813,6 +814,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                         self.trajectory_subscription = None;
                     }
                     Ok(ClientMessage::SubscribeMapV2 { params }) => {
+                        catenary::observability::count("spruce.map_requests", &[("mode", "v2")]);
                         self.client_viewport_v2 = Some(params.clone());
                         let mut new_chateaus = HashSet::new();
 
@@ -861,6 +863,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                                 .chateau_rtree
                                 .locate_in_envelope(bounds.0, bounds.1, bounds.2, bounds.3);
                             new_chateaus.extend(chateaus);
+                        }
+
+                        if new_chateaus.is_empty() {
+                            catenary::observability::count("spruce.map_empty", &[("mode", "v2")]);
                         }
 
                         // Count the distinct chateaus requested by the V2 map viewport.

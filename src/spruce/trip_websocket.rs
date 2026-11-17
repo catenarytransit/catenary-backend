@@ -239,9 +239,15 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                             let stream =
                                 nearby_departures::get_nearby_departures_stream(context, params)
                                     .await;
-                            stream
+                            let mut chateaus = std::collections::HashSet::new();
+                            let responses = stream.collect::<Vec<_>>().await;
+                            let messages = responses
+                                .into_iter()
                                 .enumerate()
-                                .map(move |(idx, (response, is_hydration))| {
+                                .map(|(idx, (response, is_hydration))| {
+                                    chateaus.extend(
+                                        nearby_departures::spruce_nearby_chateaus(&response)
+                                    );
                                     let msg = ServerMessage::NearbyDeparturesChunk {
                                         request_id: request_id_clone.clone(),
                                         chunk_index: idx,
@@ -249,14 +255,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                         is_hydration,
                                         data: response,
                                     };
-                                    if let Ok(text) = serde_json::to_string(&msg) {
-                                        text
-                                    } else {
-                                        "".to_string()
-                                    }
+                                    serde_json::to_string(&msg).unwrap_or_default()
                                 })
-                                .collect::<Vec<String>>()
-                                .await
+                                .collect::<Vec<String>>();
+                            catenary::observability::record_spruce_chateaus(chateaus);
+                            messages
                         };
 
                         let fut = actix::fut::wrap_future(fut).map(
