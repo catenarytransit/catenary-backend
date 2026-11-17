@@ -182,6 +182,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
             }
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
+                crate::record_ws_message("trip", &msg);
                 match msg {
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
                         self.subscriptions.remove(&(chateau, params));

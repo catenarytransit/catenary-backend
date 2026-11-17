@@ -761,6 +761,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
             }
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
+                crate::record_ws_message("live", &msg);
                 match msg {
                     Ok(ClientMessage::UpdateMap { params }) => {
                         catenary::observability::count("spruce.map_requests", &[("mode", "legacy")]);
