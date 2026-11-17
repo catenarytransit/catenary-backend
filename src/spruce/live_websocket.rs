@@ -863,6 +863,16 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                             new_chateaus.extend(chateaus);
                         }
 
+                        // Count the distinct chateaus requested by the V2 map viewport.
+                        // Unlike legacy UpdateMap, SubscribeMapV2 derives these from the
+                        // bounds and has no explicit chateaus list in the message.
+                        for chateau in &new_chateaus {
+                            catenary::observability::count(
+                                "spruce.chateau_requests",
+                                &[("chateau", chateau.as_str())],
+                            );
+                        }
+
                         self.map_update_generation = self.map_update_generation.wrapping_add(1);
                         self.update_map_subscriptions(ctx, new_chateaus);
 
