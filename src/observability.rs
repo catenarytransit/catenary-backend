@@ -4,7 +4,7 @@
 use std::net::UdpSocket;
 use std::sync::OnceLock;
 use std::time::Instant;
-use actix_web::{dev::{ServiceRequest, ServiceResponse, MessageBody}, middleware::Next, Error};
+use actix_web::{body::MessageBody, dev::{ServiceRequest, ServiceResponse}, middleware::Next, Error};
 static METRICS: OnceLock<Option<Exporter>> = OnceLock::new();
 struct Exporter { socket: UdpSocket, address: String, service: &'static str, env: String }
 pub fn init(service: &'static str) {
