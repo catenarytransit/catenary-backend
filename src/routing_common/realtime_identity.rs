@@ -494,7 +494,9 @@ mod tests {
         }
         tt.route_stops.push(PackedStop::new(LocationIdx(0), true, true, true, true).unwrap());
         tt.route_stops.push(PackedStop::new(LocationIdx(1), true, true, true, true).unwrap());
-        tt.route_stop_offsets.push(2);
+        // Return to the same stop, with a distinct original GTFS number.
+        tt.route_stops.push(PackedStop::new(LocationIdx(0), true, true, true, true).unwrap());
+        tt.route_stop_offsets.push(3);
         tt.route_transport_ranges.push(Range { from: 0, to: 1 });
         tt.route_clasz.push(Clasz::Bus as u8);
         tt.route_section_clasz_offsets.push(0);
@@ -512,18 +514,20 @@ mod tests {
         tt.timing_profile_events.extend([
             Delta::from_seconds(0).unwrap(),
             Delta::from_seconds(1800).unwrap(),
+            Delta::from_seconds(1860).unwrap(),
+            Delta::from_seconds(3600).unwrap(),
         ]);
-        tt.timing_profile_offsets.push(2);
+        tt.timing_profile_offsets.push(4);
         let route = tt.add_route_id(a, "route-76").unwrap();
         tt.trip_public_route_ids.push(route);
         tt.add_trip_id(a, TripIdx(0), "trip-1").unwrap();
         tt.trip_transport_ranges.push(TripTransportRange {
-            transport: TransportIdx(0), stop_from: 0, stop_to: 2,
+            transport: TransportIdx(0), stop_from: 0, stop_to: 3,
         });
         tt.trip_transport_offsets.push(1);
         tt.transport_to_trip_section_offsets.push(0);
         let mut builder = GtfsIdentityBuilder::default();
-        builder.push("America/Los_Angeles", "service-2026", 25 * 3600, &[17, 29]).unwrap();
+        builder.push("America/Los_Angeles", "service-2026", 25 * 3600, &[17, 29, 41]).unwrap();
         (tt.encode().unwrap(), builder)
     }
 
@@ -561,6 +565,118 @@ mod tests {
         assert_eq!(catalog.service_id(instance.transport), Some("service-2026"));
         assert_eq!(resolver.stop_for_update(SourceIdx(0), &u.stops[0]).unwrap(),
             (LocationIdx(0), Some(LocationIdx(1))));
+    }
+
+    #[test]
+    fn gtfs_noncontiguous_numbers_resolve_each_circular_stop_occurrence() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let u = update();
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u]).unwrap();
+        let first = crate::routing_common::realtime_source::RoutingStopUpdate {
+            stop_id: Some("start".into()),
+            sequence: Some(17), assigned_stop_id: None,
+            arrival: None, departure: None, schedule_relationship: None,
+        };
+        let last = crate::routing_common::realtime_source::RoutingStopUpdate {
+            sequence: Some(41), ..first.clone()
+        };
+        let ambiguous = crate::routing_common::realtime_source::RoutingStopUpdate {
+            sequence: None, ..first.clone()
+        };
+        let by_number = crate::routing_common::realtime_source::RoutingStopUpdate {
+            stop_id: None, ..last.clone()
+        };
+        assert_eq!(catalog.stop_sequences(TransportIdx(0)), Some(&[17, 29, 41][..]));
+        assert_eq!(resolver.stop_occurrence(SourceIdx(0), TransportIdx(0), &first).unwrap().0, 0);
+        assert_eq!(resolver.stop_occurrence(SourceIdx(0), TransportIdx(0), &last).unwrap().0, 2);
+        assert_eq!(resolver.stop_occurrence(SourceIdx(0), TransportIdx(0), &by_number).unwrap().0, 2);
+        assert!(matches!(
+            resolver.stop_occurrence(SourceIdx(0), TransportIdx(0), &ambiguous),
+            Err(ResolveIssue::AmbiguousStopId(_))
+        ));
+        let wrong_id = crate::routing_common::realtime_source::RoutingStopUpdate {
+            stop_id: Some("end".into()), ..first
+        };
+        assert!(resolver.stop_occurrence(SourceIdx(0), TransportIdx(0), &wrong_id).is_err());
+    }
+
+    #[test]
+    fn prepares_added_and_scheduled_runs_without_mutating_static_service() {
+        use crate::routing_common::realtime_prepare::{
+            added_action, scheduled_action, PreparedAction, PrepareError,
+        };
+        use crate::routing_common::realtime_overlay::RtPatternInput;
+        use crate::routing_common::realtime_source::{RoutingStopUpdate, RoutingTimeUpdate};
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let mut scheduled = update();
+        scheduled.delay_seconds = Some(300);
+        // First event is an absolute time, later events inherit that offset.
+        let base = (i64::from(tt.header().first_utc_day) + 2) * 86_400 + 9 * 3600;
+        scheduled.stops[0].departure = Some(RoutingTimeUpdate {
+            unix_seconds: Some(base + 360), delay_seconds: Some(100),
+        });
+        scheduled.stops[0].assigned_stop_id = None;
+        let resolver = RealtimeGtfsResolver::new(
+            &tt, &catalog, SourceIdx(0), &[scheduled.clone()],
+        ).unwrap();
+        let original = resolver.instance(SourceIdx(0), &scheduled).unwrap();
+        let PreparedAction::Run(run) = scheduled_action(
+            &tt, &resolver, SourceIdx(0), original, &scheduled,
+        ).unwrap() else { panic!("expected scheduled realtime run"); };
+        assert!(matches!(run.pattern, RtPatternInput::Static(_)));
+        assert_eq!(run.event_times, vec![
+            base + 360, base + 1800 + 360, base + 1860 + 360, base + 3600 + 360,
+        ]);
+        assert!(tt.is_transport_active(TransportIdx(0), DayIdx(2)));
+
+        let new_event = |ts| Some(RoutingTimeUpdate {
+            unix_seconds: Some(ts), delay_seconds: None,
+        });
+        let mut added = scheduled.clone();
+        added.update_id = "added-entity".into();
+        added.trip_id = Some("new-service-trip".into());
+        added.schedule_relationship = Some(crate::aspen_dataset::AspenisedTripScheduleRelationship::Added);
+        added.stops = vec![
+            RoutingStopUpdate {
+                stop_id: Some("start".into()), sequence: Some(10),
+                assigned_stop_id: None, arrival: None, departure: new_event(base + 10),
+                schedule_relationship: None,
+            },
+            RoutingStopUpdate {
+                stop_id: Some("end".into()), sequence: Some(70),
+                assigned_stop_id: None, arrival: new_event(base + 500),
+                departure: new_event(base + 600), schedule_relationship: None,
+            },
+            RoutingStopUpdate {
+                stop_id: Some("start".into()), sequence: Some(90),
+                assigned_stop_id: None, arrival: new_event(base + 900),
+                departure: None, schedule_relationship: None,
+            },
+        ];
+        let added_resolver = RealtimeGtfsResolver::new(
+            &tt, &catalog, SourceIdx(0), &[added.clone()],
+        ).unwrap();
+        let PreparedAction::Run(new_run) = added_action(
+            &added_resolver, SourceIdx(0), &added,
+        ).unwrap() else { panic!("expected added run"); };
+        assert!(new_run.original.is_none());
+        assert_eq!(new_run.event_times, vec![base + 10, base + 500, base + 600, base + 900]);
+        let RtPatternInput::Stops(pattern) = new_run.pattern else {
+            panic!("expected internable dynamic stop pattern");
+        };
+        assert_eq!(
+            pattern.iter().map(|s| s.location()).collect::<Vec<_>>(),
+            vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
+        );
+        added.stops[2].arrival = None;
+        assert!(matches!(
+            added_action(&added_resolver, SourceIdx(0), &added),
+            Err(PrepareError::MissingEventTime)
+        ));
     }
 
     #[test]
