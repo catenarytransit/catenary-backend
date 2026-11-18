@@ -91,7 +91,7 @@ async fn fetch_source(
     revision: Option<u64>,
 ) -> Result<Option<SourceSnapshot>> {
     let client = spawn_aspen_client_from_ip(&socket).await
-        .with_context(|| format!("connecting to Aspen {socket}"))?;
+        .map_err(|error| anyhow::anyhow!("connecting to Aspen {socket}: {error}"))?;
     let mut offset = 0u32;
     let mut expected = None;
     let mut updates = Vec::new();
