@@ -41,10 +41,10 @@ pub struct ResolvedStop {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTrip {
-    pub region: String,
+    pub region_index: u16,
     pub source: SourceIdx,
-    pub update_id: String,
-    pub service_id: String,
+    pub update_index: u32,
+    pub service_id_index: u32,
     pub original: ResolvedInstance,
     pub stops: Vec<ResolvedStop>,
 }
@@ -122,7 +122,7 @@ impl RealtimeSources {
     ) {
         let mut alternatives = BTreeMap::<(String, usize), Vec<ResolvedTrip>>::new();
         let mut stop_errors = 0usize;
-        for region in &router.transit {
+        for (region_index, region) in router.transit.iter().enumerate() {
             let Some(catalog) = self.identity_catalogs.get(&region.id) else {
                 continue;
             };
@@ -161,15 +161,19 @@ impl RealtimeSources {
                         }
                     }
                     if !all_stops_resolved { continue; }
-                    let Some(service) = catalog.service_id(original.transport) else { continue };
+                    let Some(identity) = catalog.transports.get(original.transport.idx()) else {
+                        continue;
+                    };
+                    let Ok(region_index) = u16::try_from(region_index) else { continue };
+                    let Ok(update_index_u32) = u32::try_from(update_index) else { continue };
                     alternatives
                         .entry((region.id.clone(), update_index))
                         .or_default()
                         .push(ResolvedTrip {
-                            region: region.id.clone(),
+                            region_index,
                             source,
-                            update_id: update.update_id.clone(),
-                            service_id: service.to_owned(),
+                            update_index: update_index_u32,
+                            service_id_index: identity.service_id,
                             original,
                             stops,
                         });
