@@ -11,6 +11,7 @@ pub mod osm_router;
 pub mod profiles;
 pub mod routing_regions;
 pub mod realtime_overlay;
+pub mod realtime_source;
 pub mod timetable;
 pub mod timetable_mmap;
 pub(crate) mod transfer_optimizer;
