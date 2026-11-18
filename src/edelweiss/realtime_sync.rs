@@ -11,6 +11,11 @@ use catenary::aspen::lib::{
     ChateauMetadataEtcd, spawn_aspen_client_from_ip,
 };
 use catenary::etcd_cache::EtcdCache;
+use catenary::routing_common::realtime_identity::{
+    GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
+};
+use catenary::routing_common::timetable::{LocationIdx, SourceIdx};
+use catenary::routing_common::routing_regions::RoutingRegionsConfig;
 use catenary::routing_common::realtime_source::{
     MAX_ROUTING_PAGE_SIZE, ROUTING_SOURCE_PROTOCOL, RoutingPageState,
     RoutingSourcePageRequest, RoutingTripUpdate,
@@ -19,6 +24,7 @@ use catenary::routing_common::route_manager::Router;
 use futures::StreamExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
+use std::path::Path;
 use std::time::Duration;
 use tarpc::context;
 
@@ -26,10 +32,39 @@ const MAX_UPDATES_PER_SOURCE: usize = 20_000;
 const MAX_STOPS_PER_SOURCE: usize = 500_000;
 const SYNC_CONCURRENCY: usize = 4;
 
+#[derive(Debug, Clone)]
+pub struct ResolvedStop {
+    pub original: LocationIdx,
+    pub assigned: Option<LocationIdx>,
+    pub stop_update_index: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedTrip {
+    pub region: String,
+    pub source: SourceIdx,
+    pub update_id: String,
+    pub service_id: String,
+    pub original: ResolvedInstance,
+    pub stops: Vec<ResolvedStop>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ResolutionStats {
+    pub matched: usize,
+    pub no_match: usize,
+    pub ambiguous: usize,
+    pub unresolved_stops: usize,
+}
+
 #[derive(Debug)]
 pub struct SourceSnapshot {
     pub revision_ms: u64,
     pub updates: Vec<RoutingTripUpdate>,
+    /// Fully validated scheduled instances, retained for a future overlay
+    /// builder; no route suppression is enabled by these lookups yet.
+    pub resolved: Vec<ResolvedTrip>,
+    pub stats: ResolutionStats,
 }
 
 #[derive(Default)]
@@ -38,11 +73,16 @@ pub struct RealtimeSources {
     /// Regional source identity, including the source's attempt ID.
     /// GTFS stop IDs must never be joined across these identities.
     pub region_sources: BTreeMap<String, Vec<(u16, String, String, String)>>,
+    /// Built once by Gentian; only loaded when RAM-only sync is enabled.
+    /// These are static metadata and never rewritten during realtime updates.
+    pub identity_catalogs: BTreeMap<String, Arc<GtfsIdentityCatalog>>,
 }
 
 impl RealtimeSources {
-    pub fn from_router(router: &Router) -> Result<Self> {
+    pub fn from_router(router: &Router, routing_config: &Path) -> Result<Self> {
         let mut region_sources = BTreeMap::new();
+        let mut identity_catalogs = BTreeMap::new();
+        let config = RoutingRegionsConfig::load(routing_config)?;
         for region in &router.transit {
             let tt = region.timetable.view()?;
             let mut sources = Vec::with_capacity(tt.sources().len());
@@ -53,8 +93,106 @@ impl RealtimeSources {
                 sources.push((idx, chateau.to_owned(), feed.to_owned(), attempt.to_owned()));
             }
             region_sources.insert(region.id.clone(), sources);
+            let timetable_path = config.timetable_path(routing_config, &region.id, None)?;
+            let sidecar_path = timetable_path.with_extension("rt-identities.bin");
+            if sidecar_path.is_file() {
+                let data = std::fs::read(&sidecar_path)
+                    .with_context(|| format!("reading {}", sidecar_path.display()))?;
+                let catalog: GtfsIdentityCatalog =
+                    catenary::bincode_deserialize(&data)
+                    .with_context(|| format!("decoding {}", sidecar_path.display()))?;
+                catalog.validate(&tt)
+                    .with_context(|| format!("validating {}", sidecar_path.display()))?;
+                identity_catalogs.insert(region.id.clone(), Arc::new(catalog));
+            } else {
+                eprintln!("Edelweiss routing source sync: region {} has no GTFS service-identity sidecar yet; compile Gentian with this PR", region.id);
+            }
         }
-        Ok(Self { inner: RwLock::new(HashMap::new()), region_sources })
+        Ok(Self { inner: RwLock::new(HashMap::new()), region_sources, identity_catalogs })
+    }
+
+    /// Resolve a complete Chateau snapshot against each source-scoped Gentian
+    /// catalog. Multiple feed matches for one update are ambiguous: never
+    /// choose a transport from another feed or invent a service-day match.
+    pub fn resolve_for_chateau(
+        &self,
+        router: &Router,
+        chateau: &str,
+        snapshot: &mut SourceSnapshot,
+    ) {
+        let mut alternatives = BTreeMap::<(String, usize), Vec<ResolvedTrip>>::new();
+        let mut stop_errors = 0usize;
+        for region in &router.transit {
+            let Some(catalog) = self.identity_catalogs.get(&region.id) else {
+                continue;
+            };
+            let Some(sources) = self.region_sources.get(&region.id) else {
+                continue;
+            };
+            let Ok(tt) = region.timetable.view() else { continue };
+            for &(source, ref assigned_chateau, _, _) in sources {
+                if assigned_chateau != chateau { continue; }
+                let source = SourceIdx(source);
+                let Ok(resolver) = RealtimeGtfsResolver::new(
+                    &tt, catalog, source, &snapshot.updates,
+                ) else {
+                    continue;
+                };
+                for (update_index, update) in snapshot.updates.iter().enumerate() {
+                    let Ok(original) = resolver.instance(source, update) else { continue };
+                    let mut stops = Vec::new();
+                    for (index, stop) in update.stops.iter().enumerate() {
+                        if let Ok((original_stop, assigned)) =
+                            resolver.stop_for_update(source, stop)
+                        {
+                            stops.push(ResolvedStop {
+                                original: original_stop,
+                                assigned,
+                                stop_update_index: index as u32,
+                            });
+                        } else {
+                            stop_errors += 1;
+                        }
+                    }
+                    let Some(service) = catalog.service_id(original.transport) else { continue };
+                    alternatives
+                        .entry((region.id.clone(), update_index))
+                        .or_default()
+                        .push(ResolvedTrip {
+                            region: region.id.clone(),
+                            source,
+                            update_id: update.update_id.clone(),
+                            service_id: service.to_owned(),
+                            original,
+                            stops,
+                        });
+                }
+            }
+        }
+        let mut matched = 0;
+        let mut ambiguous = 0;
+        let mut unresolved = 0;
+        for region in &router.transit {
+            if !self.identity_catalogs.contains_key(&region.id) {
+                continue;
+            }
+            for (index, _) in snapshot.updates.iter().enumerate() {
+                match alternatives.remove(&(region.id.clone(), index)) {
+                    Some(mut candidates) if candidates.len() == 1 => {
+                        snapshot.resolved.push(candidates.pop().unwrap());
+                        matched += 1;
+                    }
+                    Some(_) => ambiguous += 1,
+                    None => unresolved += 1,
+                }
+            }
+        }
+        snapshot.stats = ResolutionStats {
+            matched,
+            ambiguous,
+            no_match: unresolved,
+            unresolved_stops: stop_errors,
+        };
     }
 
     pub fn chateaux(&self) -> BTreeSet<String> {
@@ -133,6 +271,8 @@ async fn fetch_source(
                     return Ok(Some(SourceSnapshot {
                         revision_ms: page.revision_ms,
                         updates,
+                        resolved: Vec::new(),
+                        stats: ResolutionStats::default(),
                     }));
                 }
             }
@@ -143,6 +283,7 @@ async fn fetch_source(
 
 pub async fn synchronize(
     sources: Arc<RealtimeSources>,
+    router: Arc<Router>,
     etcd_urls: Vec<String>,
     username: Option<String>,
     password: Option<String>,
@@ -168,6 +309,7 @@ pub async fn synchronize(
         futures::stream::iter(chateaux.iter().cloned())
             .for_each_concurrent(SYNC_CONCURRENCY, |chateau| {
                 let sources = Arc::clone(&sources);
+                let router = Arc::clone(&router);
                 let assigned = assignments.get(&chateau);
                 async move {
                     let Some(assigned) = assigned else {
@@ -180,7 +322,19 @@ pub async fn synchronize(
                         &chateau,
                         current.as_ref().map(|s| s.revision_ms),
                     ).await {
-                        Ok(Some(snapshot)) => sources.publish(chateau, snapshot),
+                        Ok(Some(mut snapshot)) => {
+                            let started = std::time::Instant::now();
+                            sources.resolve_for_chateau(&router, &chateau, &mut snapshot);
+                            eprintln!(
+                                "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} unresolved_stops={} elapsed_ms={:.1}",
+                                snapshot.stats.matched,
+                                snapshot.stats.ambiguous,
+                                snapshot.stats.no_match,
+                                snapshot.stats.unresolved_stops,
+                                started.elapsed().as_secs_f64() * 1000.0,
+                            );
+                            sources.publish(chateau, snapshot);
+                        },
                         Ok(None) => {},
                         Err(error) => eprintln!("Edelweiss routing source sync: {chateau}: {error:#}"),
                     }
@@ -200,11 +354,11 @@ mod tests {
     #[test]
     fn publish_is_monotonic_and_old_readers_remain_valid() {
         let snapshots = RealtimeSources::default();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, updates: vec![] });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
         let old = snapshots.get("a").unwrap();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, updates: vec![] });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 5);
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, updates: vec![] });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 6);
         assert_eq!(old.revision_ms, 5);
     }
