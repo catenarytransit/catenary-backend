@@ -11,6 +11,13 @@ use catenary::aspen::lib::{
     ChateauMetadataEtcd, spawn_aspen_client_from_ip,
 };
 use catenary::etcd_cache::EtcdCache;
+use catenary::aspen_dataset::AspenisedTripScheduleRelationship as TripRelationship;
+use catenary::routing_common::realtime_prepare::{
+    PreparedAction, added_action, scheduled_action,
+};
+use catenary::routing_common::realtime_overlay::{
+    RealtimeOverlay, RealtimeOverlayBuilder, StaticInstance,
+};
 use catenary::routing_common::realtime_identity::{
     GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
 };
@@ -37,6 +44,7 @@ pub struct ResolvedStop {
     pub original: LocationIdx,
     pub assigned: Option<LocationIdx>,
     pub stop_update_index: u32,
+    pub occurrence_index: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +63,10 @@ pub struct ResolutionStats {
     pub no_match: usize,
     pub ambiguous: usize,
     pub unresolved_stops: usize,
+    pub prepared_runs: usize,
+    pub prepared_cancellations: usize,
+    pub prepared_added: usize,
+    pub invalid_updates: usize,
 }
 
 #[derive(Debug)]
@@ -64,6 +76,9 @@ pub struct SourceSnapshot {
     /// Fully validated scheduled instances, retained for a future overlay
     /// builder; no route suppression is enabled by these lookups yet.
     pub resolved: Vec<ResolvedTrip>,
+    /// One immutable chateau-local region overlay per region. These are
+    /// staging snapshots: RAPTOR does not consume them yet.
+    pub overlays: BTreeMap<u16, Arc<RealtimeOverlay>>,
     pub stats: ResolutionStats,
 }
 
@@ -120,16 +135,21 @@ impl RealtimeSources {
         chateau: &str,
         snapshot: &mut SourceSnapshot,
     ) {
-        let mut alternatives = BTreeMap::<(String, usize), Vec<ResolvedTrip>>::new();
-        let mut stop_errors = 0usize;
+        let mut stats = ResolutionStats::default();
         for (region_index, region) in router.transit.iter().enumerate() {
-            let Some(catalog) = self.identity_catalogs.get(&region.id) else {
-                continue;
-            };
-            let Some(sources) = self.region_sources.get(&region.id) else {
-                continue;
-            };
+            let Some(catalog) = self.identity_catalogs.get(&region.id) else { continue };
+            let Some(sources) = self.region_sources.get(&region.id) else { continue };
             let Ok(tt) = region.timetable.view() else { continue };
+            let Ok(region_index) = u16::try_from(region_index) else { continue };
+
+            // A Chateau may contain several GTFS feeds. Each update must
+            // match exactly one candidate source within this region; never
+            // assign a same-named trip or stop to an arbitrary feed.
+            let mut scheduled: Vec<Vec<(ResolvedTrip, PreparedAction)>> =
+                (0..snapshot.updates.len()).map(|_| Vec::new()).collect();
+            let mut added: Vec<Vec<PreparedAction>> =
+                (0..snapshot.updates.len()).map(|_| Vec::new()).collect();
+
             for &(source, ref assigned_chateau, _, _) in sources {
                 if assigned_chateau != chateau { continue; }
                 let source = SourceIdx(source);
@@ -139,85 +159,163 @@ impl RealtimeSources {
                     continue;
                 };
                 for (update_index, update) in snapshot.updates.iter().enumerate() {
-                    let Ok(original) = resolver.instance(source, update) else { continue };
-                    let mut stops = Vec::new();
-                    let mut all_stops_resolved = true;
-                    let route = tt.transport_route()[original.transport.idx()];
-                    let static_stops = tt.stops_on(route);
-                    for (index, stop) in update.stops.iter().enumerate() {
-                        if let Ok((original_stop, assigned)) =
-                            resolver.stop_for_update(source, stop)
-                        {
-                            // Circular routes can visit the same LocationIdx
-                            // several times. V6 stores the ordered pattern but
-                            // not the original GTFS stop_sequence numbers.
-                            // We can only bind this stop update if its
-                            // occurrence is unique within the static pattern.
-                            let occurrences = static_stops.iter()
-                                .filter(|s| s.location() == original_stop).count();
-                            if occurrences != 1 {
-                                all_stops_resolved = false;
-                                stop_errors += 1;
-                                continue;
-                            }
-                            stops.push(ResolvedStop {
-                                original: original_stop,
-                                assigned,
-                                stop_update_index: index as u32,
-                            });
-                        } else {
-                            // GTFS stop_sequence is not necessarily contiguous
-                            // and the current V6 timetable discarded original
-                            // stop_sequence numbers. Never guess an occurrence
-                            // index or silently drop a rerouted stop.
-                            all_stops_resolved = false;
-                            stop_errors += 1;
+                    if matches!(
+                        update.schedule_relationship,
+                        Some(TripRelationship::Added | TripRelationship::Unscheduled | TripRelationship::Duplicated)
+                    ) {
+                        // A known public route is required when the descriptor
+                        // carries route_id. Without one, stop membership alone
+                        // must uniquely identify the static source.
+                        if update.route_id.as_deref().is_some_and(|route_id|
+                            tt.route_by_source_id(source, route_id).is_none()
+                        ) {
+                            continue;
                         }
+                        if let Ok(action) = added_action(&resolver, source, update) {
+                            added[update_index].push(action);
+                        }
+                        continue;
                     }
-                    if !all_stops_resolved { continue; }
-                    let Some(identity) = catalog.transports.get(original.transport.idx()) else {
+
+                    let Ok(original) = resolver.instance(source, update) else { continue };
+                    let Ok(action) = scheduled_action(
+                        &tt, &resolver, source, original, update,
+                    ) else {
+                        stats.invalid_updates += 1;
                         continue;
                     };
-                    let Ok(region_index) = u16::try_from(region_index) else { continue };
+                    let mut stops = Vec::new();
+                    let mut valid = true;
+                    for (index, stop) in update.stops.iter().enumerate() {
+                        match resolver.stop_occurrence(source, original.transport, stop) {
+                            Ok((occurrence, original_stop, assigned)) => {
+                                let (Ok(stop_update_index), Ok(occurrence_index)) =
+                                    (u32::try_from(index), u16::try_from(occurrence))
+                                else {
+                                    valid = false;
+                                    break;
+                                };
+                                stops.push(ResolvedStop {
+                                    original: original_stop,
+                                    assigned,
+                                    stop_update_index,
+                                    occurrence_index,
+                                });
+                            }
+                            Err(_) => {
+                                stats.unresolved_stops += 1;
+                                valid = false;
+                            }
+                        }
+                    }
+                    if !valid { continue };
+                    let Some(row) = catalog.transports.get(original.transport.idx()) else { continue };
                     let Ok(update_index_u32) = u32::try_from(update_index) else { continue };
-                    alternatives
-                        .entry((region.id.clone(), update_index))
-                        .or_default()
-                        .push(ResolvedTrip {
+                    scheduled[update_index].push((
+                        ResolvedTrip {
                             region_index,
                             source,
                             update_index: update_index_u32,
-                            service_id_index: identity.service_id,
+                            service_id_index: row.service_id,
                             original,
                             stops,
-                        });
+                        },
+                        action,
+                    ));
                 }
             }
-        }
-        let mut matched = 0;
-        let mut ambiguous = 0;
-        let mut unresolved = 0;
-        for region in &router.transit {
-            if !self.identity_catalogs.contains_key(&region.id) {
-                continue;
-            }
+
+            let mut actions = Vec::new();
             for (index, _) in snapshot.updates.iter().enumerate() {
-                match alternatives.remove(&(region.id.clone(), index)) {
-                    Some(mut candidates) if candidates.len() == 1 => {
-                        snapshot.resolved.push(candidates.pop().unwrap());
-                        matched += 1;
+                if !added[index].is_empty() {
+                    if added[index].len() == 1 {
+                        actions.push(added[index].pop().expect("one added action"));
+                        stats.prepared_added += 1;
+                    } else {
+                        stats.ambiguous += 1;
                     }
-                    Some(_) => ambiguous += 1,
-                    None => unresolved += 1,
+                } else {
+                    match scheduled[index].len() {
+                        1 => {
+                            let (trip, action) = scheduled[index].pop().expect("one scheduled action");
+                            snapshot.resolved.push(trip);
+                            stats.matched += 1;
+                            actions.push(action);
+                        }
+                        0 => stats.no_match += 1,
+                        _ => stats.ambiguous += 1,
+                    }
                 }
             }
+
+            // Safeguard against multiple GTFS-RT entities targeting the same
+            // scheduled instance. Neither cancellation nor replacement takes
+            // effect unless exactly one complete action targets that instance.
+            let mut scheduled_actions = BTreeMap::<StaticInstance, Vec<PreparedAction>>::new();
+            let mut unscheduled_actions = Vec::new();
+            for action in actions {
+                let key = match &action {
+                    PreparedAction::Cancel(transport, day) =>
+                        Some(StaticInstance { transport: transport.0, day: day.0 }),
+                    PreparedAction::Run(run) =>
+                        run.original.map(|(transport, day)| StaticInstance {
+                            transport: transport.0, day: day.0,
+                        }),
+                    PreparedAction::NoChange => None,
+                };
+                if let Some(key) = key {
+                    scheduled_actions.entry(key).or_default().push(action);
+                } else if !matches!(action, PreparedAction::NoChange) {
+                    unscheduled_actions.push(action);
+                }
+            }
+
+            // Intern only dynamic patterns for each chateau, not every route
+            // in the whole region. The timetable remains mmap-backed and the
+            // published overlay lives exclusively in RAM.
+            let mut builder = RealtimeOverlayBuilder::new_sparse(
+                &tt, catalog.timetable_fingerprint, snapshot.revision_ms,
+            );
+            for (_instance, mut candidates) in scheduled_actions {
+                if candidates.len() != 1 {
+                    stats.ambiguous += 1;
+                    continue;
+                }
+                match candidates.pop().expect("one scheduled action") {
+                    PreparedAction::Cancel(transport, day) => {
+                        if builder.cancel_static(transport, day).is_ok() {
+                            stats.prepared_cancellations += 1;
+                        } else {
+                            stats.invalid_updates += 1;
+                        }
+                    }
+                    PreparedAction::Run(run) => {
+                        if builder.add_run(run).is_ok() {
+                            stats.prepared_runs += 1;
+                        } else {
+                            stats.invalid_updates += 1;
+                        }
+                    }
+                    PreparedAction::NoChange => {}
+                }
+            }
+            for action in unscheduled_actions {
+                if let PreparedAction::Run(run) = action {
+                    if builder.add_run(run).is_ok() {
+                        stats.prepared_runs += 1;
+                    } else {
+                        stats.invalid_updates += 1;
+                    }
+                }
+            }
+            match builder.finish() {
+                Ok(overlay) => {
+                    snapshot.overlays.insert(region_index, Arc::new(overlay));
+                }
+                Err(_) => stats.invalid_updates += 1,
+            }
         }
-        snapshot.stats = ResolutionStats {
-            matched,
-            ambiguous,
-            no_match: unresolved,
-            unresolved_stops: stop_errors,
-        };
+        snapshot.stats = stats;
     }
 
     pub fn chateaux(&self) -> BTreeSet<String> {
@@ -297,6 +395,7 @@ async fn fetch_source(
                         revision_ms: page.revision_ms,
                         updates,
                         resolved: Vec::new(),
+                        overlays: BTreeMap::new(),
                         stats: ResolutionStats::default(),
                     }));
                 }
@@ -397,11 +496,11 @@ mod tests {
     #[test]
     fn publish_is_monotonic_and_old_readers_remain_valid() {
         let snapshots = RealtimeSources::default();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         let old = snapshots.get("a").unwrap();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 5);
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, updates: vec![], resolved: vec![], stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 6);
         assert_eq!(old.revision_ms, 5);
     }
