@@ -66,6 +66,11 @@ pub trait AspenRpc {
         stop_ids: Vec<String>,
     ) -> Option<AHashMap<String, AspenisedStop>>;
 
+    /// Bounded routing-only realtime source snapshot, backed by compressed Aspen RAM.
+    async fn get_routing_source_page(
+        request: crate::routing_common::realtime_source::RoutingSourcePageRequest,
+    ) -> Option<crate::routing_common::realtime_source::RoutingSourcePage>;
+
     async fn full_trip_updates_dataset_dump(
         chateau_id: String,
     ) -> Option<AHashMap<CompactString, AspenisedTripUpdate>>;
