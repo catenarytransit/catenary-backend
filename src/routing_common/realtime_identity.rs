@@ -165,8 +165,8 @@ pub enum ResolveIssue {
 pub struct RealtimeGtfsResolver<'tt, 'data> {
     tt: &'tt ZeroCopyTimetable<'data>,
     catalog: &'tt GtfsIdentityCatalog,
-    stops: HashMap<(u16, &'data str), Vec<LocationIdx>>,
-    trips: HashMap<(u16, &'data str), Vec<TripIdx>>,
+    stops: HashMap<(u16, &'tt str), Vec<LocationIdx>>,
+    trips: HashMap<(u16, &'tt str), Vec<TripIdx>>,
 }
 
 impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
