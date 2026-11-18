@@ -141,6 +141,7 @@ impl RealtimeSources {
                 for (update_index, update) in snapshot.updates.iter().enumerate() {
                     let Ok(original) = resolver.instance(source, update) else { continue };
                     let mut stops = Vec::new();
+                    let mut all_stops_resolved = true;
                     for (index, stop) in update.stops.iter().enumerate() {
                         if let Ok((original_stop, assigned)) =
                             resolver.stop_for_update(source, stop)
@@ -151,9 +152,15 @@ impl RealtimeSources {
                                 stop_update_index: index as u32,
                             });
                         } else {
+                            // GTFS stop_sequence is not necessarily contiguous
+                            // and the current V6 timetable discarded original
+                            // stop_sequence numbers. Never guess an occurrence
+                            // index or silently drop a rerouted stop.
+                            all_stops_resolved = false;
                             stop_errors += 1;
                         }
                     }
+                    if !all_stops_resolved { continue; }
                     let Some(service) = catalog.service_id(original.transport) else { continue };
                     alternatives
                         .entry((region.id.clone(), update_index))
