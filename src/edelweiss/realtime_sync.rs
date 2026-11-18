@@ -142,10 +142,24 @@ impl RealtimeSources {
                     let Ok(original) = resolver.instance(source, update) else { continue };
                     let mut stops = Vec::new();
                     let mut all_stops_resolved = true;
+                    let route = tt.transport_route()[original.transport.idx()];
+                    let static_stops = tt.stops_on(route);
                     for (index, stop) in update.stops.iter().enumerate() {
                         if let Ok((original_stop, assigned)) =
                             resolver.stop_for_update(source, stop)
                         {
+                            // Circular routes can visit the same LocationIdx
+                            // several times. V6 stores the ordered pattern but
+                            // not the original GTFS stop_sequence numbers.
+                            // We can only bind this stop update if its
+                            // occurrence is unique within the static pattern.
+                            let occurrences = static_stops.iter()
+                                .filter(|s| s.location() == original_stop).count();
+                            if occurrences != 1 {
+                                all_stops_resolved = false;
+                                stop_errors += 1;
+                                continue;
+                            }
                             stops.push(ResolvedStop {
                                 original: original_stop,
                                 assigned,
