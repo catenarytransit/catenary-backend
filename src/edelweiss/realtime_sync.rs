@@ -329,18 +329,36 @@ pub async fn synchronize(
                         &chateau,
                         current.as_ref().map(|s| s.revision_ms),
                     ).await {
-                        Ok(Some(mut snapshot)) => {
-                            let started = std::time::Instant::now();
-                            sources.resolve_for_chateau(&router, &chateau, &mut snapshot);
-                            eprintln!(
-                                "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} unresolved_stops={} elapsed_ms={:.1}",
-                                snapshot.stats.matched,
-                                snapshot.stats.ambiguous,
-                                snapshot.stats.no_match,
-                                snapshot.stats.unresolved_stops,
-                                started.elapsed().as_secs_f64() * 1000.0,
-                            );
-                            sources.publish(chateau, snapshot);
+                        Ok(Some(snapshot)) => {
+                            // Region-scale source and trip-ID scans can take
+                            // significant CPU time; never block an Actix/Tokio
+                            // reactor while resolving the new Aspen snapshot.
+                            let resolving_sources = Arc::clone(&sources);
+                            let resolving_router = Arc::clone(&router);
+                            let resolving_chateau = chateau.clone();
+                            match tokio::task::spawn_blocking(move || {
+                                let mut snapshot = snapshot;
+                                let started = std::time::Instant::now();
+                                resolving_sources.resolve_for_chateau(
+                                    &resolving_router, &resolving_chateau, &mut snapshot,
+                                );
+                                (snapshot, started.elapsed())
+                            }).await {
+                                Ok((snapshot, elapsed)) => {
+                                    eprintln!(
+                                        "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} unresolved_stops={} elapsed_ms={:.1}",
+                                        snapshot.stats.matched,
+                                        snapshot.stats.ambiguous,
+                                        snapshot.stats.no_match,
+                                        snapshot.stats.unresolved_stops,
+                                        elapsed.as_secs_f64() * 1000.0,
+                                    );
+                                    sources.publish(chateau, snapshot);
+                                },
+                                Err(error) => eprintln!(
+                                    "Edelweiss routing resolver {chateau}: task failed: {error}",
+                                ),
+                            }
                         },
                         Ok(None) => {},
                         Err(error) => eprintln!("Edelweiss routing source sync: {chateau}: {error:#}"),
