@@ -99,7 +99,11 @@ pub fn project_routing_source_page(
                 let trip = update.trip();
                 RoutingTripUpdate {
                     update_id: update_id.to_owned(),
-                    trip_id: trip.trip_id.map(str::to_owned),
+                    // TripModification can place the original trip identity in
+                    // ModifiedTripSelector instead of the outer descriptor.
+                    trip_id: trip.trip_id
+                        .or_else(|| trip.modified_trip.and_then(|m| m.affected_trip_id.as_deref()))
+                        .map(str::to_owned),
                     route_id: trip.route_id.map(str::to_owned),
                     service_date: trip.effective_start_date(),
                     start_time: trip.effective_start_time().map(str::to_owned),
