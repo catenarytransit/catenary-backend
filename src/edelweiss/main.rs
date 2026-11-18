@@ -956,6 +956,11 @@ fn advise_startup_mappings(router: &Router, osr: &NativeOsr, advice: StartupMmap
 #[actix_web::main]
 async fn main() -> Result<()> {
     catenary::observability::init("edelweiss");
+    if !catenary::observability::enabled() {
+        eprintln!(
+            "Edelweiss DogStatsD export is disabled; set DATADOG_ENABLED=1 in the Edelweiss service environment to export routing metrics"
+        );
+    }
     let startup_started = Instant::now();
     let args = Args::parse();
     let mmap_advice = startup_mmap_advice(&args.catenary_config)?;
