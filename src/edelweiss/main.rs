@@ -1084,7 +1084,7 @@ async fn main() -> Result<()> {
     // RAPTOR does not read these snapshots yet, so incomplete matching cannot
     // create false journeys or incorrectly suppress scheduled departures.
     let realtime_sources = if args.enable_realtime_source_sync {
-        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router)?);
+        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router, &args.regions_config)?);
         let settings: catenary::catenaryconfig::CatenaryConfig =
             toml::from_str(&fs::read_to_string(&args.catenary_config)?)?;
         let urls = std::env::var("ETCD_URLS").ok()
@@ -1094,10 +1094,11 @@ async fn main() -> Result<()> {
         let username = std::env::var("ETCD_USERNAME").ok().or(settings.aspen.etcd_username);
         let password = std::env::var("ETCD_PASSWORD").ok().or(settings.aspen.etcd_password);
         let sync_sources = Arc::clone(&sources);
+        let sync_router = Arc::clone(&router);
         let sync_interval = Duration::from_secs(args.realtime_source_sync_seconds.max(5));
         tokio::spawn(async move {
             if let Err(error) = realtime_sync::synchronize(
-                sync_sources, urls, username, password, sync_interval,
+                sync_sources, sync_router, urls, username, password, sync_interval,
             ).await {
                 eprintln!("Edelweiss realtime source sync disabled after error: {error:#}");
             }
