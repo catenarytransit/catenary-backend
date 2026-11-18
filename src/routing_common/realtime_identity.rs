@@ -680,6 +680,68 @@ mod tests {
     }
 
     #[test]
+    fn skipped_stops_platform_changes_and_no_data_remain_lossless() {
+        use crate::aspen_dataset::AspenisedStopTimeScheduleRelationship as StopRelation;
+        use crate::routing_common::realtime_prepare::{scheduled_action, PreparedAction, PrepareError};
+        use crate::routing_common::realtime_overlay::RtPatternInput;
+        use crate::routing_common::realtime_source::{RoutingStopUpdate, RoutingTimeUpdate};
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let mut u = update();
+        u.delay_seconds = Some(300);
+        u.stops[0].schedule_relationship = Some(StopRelation::Skipped);
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        let original = resolver.instance(SourceIdx(0), &u).unwrap();
+        let PreparedAction::Run(run) = scheduled_action(
+            &tt, &resolver, SourceIdx(0), original, &u,
+        ).unwrap() else { panic!("skipped stop should produce a run"); };
+        let RtPatternInput::Stops(pattern) = run.pattern else {
+            panic!("a reassigned/skipped stop must use dynamic pattern");
+        };
+        assert_eq!(pattern[0].location(), LocationIdx(1));
+        assert!(!pattern[0].inbound());
+        assert!(!pattern[0].outbound());
+        assert!(!pattern[0].wheelchair_in());
+        let first_departure = (i64::from(tt.header().first_utc_day) + 2) * 86_400 + 9 * 3600;
+        assert_eq!(run.event_times[0], first_departure + 300);
+
+        let mut no_data = u.clone();
+        no_data.stops = vec![RoutingStopUpdate {
+            stop_id: Some("end".into()), sequence: Some(29), assigned_stop_id: None,
+            arrival: None, departure: None,
+            schedule_relationship: Some(StopRelation::NoData),
+        }];
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[no_data.clone()]).unwrap();
+        let PreparedAction::Run(run) = scheduled_action(
+            &tt, &resolver, SourceIdx(0), original, &no_data,
+        ).unwrap() else { panic!("NO_DATA must fall back to schedule"); };
+        assert_eq!(run.event_times, vec![
+            first_departure + 300,
+            first_departure + 1800,
+            first_departure + 1860,
+            first_departure + 3600,
+        ]);
+
+        let mut contradictory = no_data.clone();
+        contradictory.stops[0].schedule_relationship = None;
+        contradictory.stops[0].arrival = Some(RoutingTimeUpdate {
+            unix_seconds: Some(first_departure + 100), delay_seconds: None,
+        });
+        contradictory.stops.push(RoutingStopUpdate {
+            stop_id: Some("start".into()), sequence: Some(17), assigned_stop_id: None,
+            arrival: None, departure: Some(RoutingTimeUpdate {
+                unix_seconds: Some(first_departure + 4000), delay_seconds: None,
+            }), schedule_relationship: None,
+        });
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[contradictory.clone()]).unwrap();
+        assert!(matches!(
+            scheduled_action(&tt, &resolver, SourceIdx(0), original, &contradictory),
+            Err(PrepareError::InvalidEventTimes)
+        ));
+    }
+
+    #[test]
     fn stop_ids_and_trip_ids_must_match_source_and_route() {
         let (bytes, identities) = fixture();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
