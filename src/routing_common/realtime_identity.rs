@@ -358,4 +358,127 @@ mod tests {
             assert_eq!(parse_gtfs_start_time(time),Err(ResolveIssue::InvalidStartTime));
         }
     }
+    fn fixture() -> (Vec<u8>, GtfsIdentityBuilder) {
+        use crate::routing_common::timetable::{
+            BitfieldIdx, Clasz, Coordinate, Delta, PackedStop, Range,
+            RouteIdx, TimingProfileIdx, TimetableOwned, TrafficDays, TripTransportRange,
+        };
+        let date = NaiveDate::from_ymd_opt(2026, 10, 31).unwrap();
+        let first_day = date.signed_duration_since(
+            NaiveDate::from_ymd_opt(1970, 1, 1).unwrap()).num_days() as i32;
+        let mut tt = TimetableOwned::empty(first_day, 5);
+        let a = tt.add_source("c", "feed-a", "attempt-a").unwrap();
+        let b = tt.add_source("c", "feed-b", "attempt-b").unwrap();
+        for (source, id) in [(a, "start"), (a, "end"), (b, "start")] {
+            let id_ref = tt.add_string(id).unwrap();
+            let name_ref = tt.add_string(id).unwrap();
+            tt.coordinates.push(Coordinate::default());
+            tt.location_id.push(id_ref);
+            tt.location_name.push(name_ref);
+            tt.location_source.push(source);
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_transfer_seconds.push(120);
+            tt.location_type.push(0);
+            tt.location_routes_offsets.push(0);
+            tt.footpaths_out_offsets.push(0);
+            tt.footpaths_in_offsets.push(0);
+        }
+        tt.route_stops.push(PackedStop::new(LocationIdx(0), true, true, true, true).unwrap());
+        tt.route_stops.push(PackedStop::new(LocationIdx(1), true, true, true, true).unwrap());
+        tt.route_stop_offsets.push(2);
+        tt.route_transport_ranges.push(Range { from: 0, to: 1 });
+        tt.route_clasz.push(Clasz::Bus as u8);
+        tt.route_section_clasz_offsets.push(0);
+        tt.section_flag_offsets.push(0);
+        let mut active = TrafficDays::default();
+        // 2026-11-01 service day at 25:00 LA time = 2026-11-02 09:00Z.
+        active.set(2, true).unwrap();
+        tt.bitfields.push(active);
+        tt.route_traffic_days.push(BitfieldIdx(1));
+        tt.transport_traffic_days.push(BitfieldIdx(1));
+        tt.transport_route.push(RouteIdx(0));
+        tt.transport_timing_profile.push(TimingProfileIdx(0));
+        tt.transport_first_dep_offset.push(Delta::from_seconds(9 * 3600).unwrap());
+        tt.transport_initial_day_offset.push(0);
+        tt.timing_profile_events.extend([
+            Delta::from_seconds(0).unwrap(),
+            Delta::from_seconds(1800).unwrap(),
+        ]);
+        tt.timing_profile_offsets.push(2);
+        let route = tt.add_route_id(a, "route-76").unwrap();
+        tt.trip_public_route_ids.push(route);
+        tt.add_trip_id(a, TripIdx(0), "trip-1").unwrap();
+        tt.trip_transport_ranges.push(TripTransportRange {
+            transport: TransportIdx(0), stop_from: 0, stop_to: 2,
+        });
+        tt.trip_transport_offsets.push(1);
+        tt.transport_to_trip_section_offsets.push(0);
+        let mut builder = GtfsIdentityBuilder::default();
+        builder.push("America/Los_Angeles", "service-2026", 25 * 3600).unwrap();
+        (tt.encode().unwrap(), builder)
+    }
+
+    fn update() -> RoutingTripUpdate {
+        RoutingTripUpdate {
+            update_id: "feed-entity".into(),
+            trip_id: Some("trip-1".into()),
+            route_id: Some("route-76".into()),
+            service_date: NaiveDate::from_ymd_opt(2026,11,1),
+            start_time: Some("25:00:00".into()),
+            schedule_relationship: None,
+            delay_seconds: Some(0),
+            stops: vec![crate::routing_common::realtime_source::RoutingStopUpdate {
+                stop_id: Some("start".into()),
+                assigned_stop_id: Some("end".into()),
+                sequence: Some(17),
+                arrival: None,
+                departure: None,
+                schedule_relationship: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn resolves_original_gtfs_service_day_after_midnight_and_dst() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        catalog.validate(&tt).unwrap();
+        let u = update();
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        let instance = resolver.instance(SourceIdx(0), &u).unwrap();
+        assert_eq!(instance.transport, TransportIdx(0));
+        assert_eq!(instance.service_day_utc, DayIdx(2));
+        assert_eq!(catalog.service_id(instance.transport), Some("service-2026"));
+        assert_eq!(resolver.stop_for_update(SourceIdx(0), &u.stops[0]).unwrap(),
+            (LocationIdx(0), Some(LocationIdx(1))));
+    }
+
+    #[test]
+    fn stop_ids_and_trip_ids_must_match_source_and_route() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let mut u = update();
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        assert!(matches!(resolver.stop(SourceIdx(1), "start"), Err(ResolveIssue::UnknownStopId(_))));
+        u.route_id = Some("wrong-route".into());
+        assert_eq!(resolver.instance(SourceIdx(0), &u),Err(ResolveIssue::NoActiveService));
+    }
+
+    #[test]
+    fn stale_catalog_and_wrong_local_start_time_are_rejected() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut catalog = identities.finish(&tt).unwrap();
+        catalog.timetable_fingerprint[0] ^= 1;
+        assert!(catalog.validate(&tt).is_err());
+        // Recover a valid catalog and confirm that 24:00 cannot map a 25:00 trip.
+        catalog.timetable_fingerprint[0] ^= 1;
+        let mut u = update();
+        u.start_time = Some("24:00:00".into());
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        assert_eq!(resolver.instance(SourceIdx(0), &u), Err(ResolveIssue::NoActiveService));
+    }
+
 }
