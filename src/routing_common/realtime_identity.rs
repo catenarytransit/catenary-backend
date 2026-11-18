@@ -257,6 +257,19 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
             .ok_or(ResolveIssue::TripIdNotFound)?;
         let mut found: Option<ResolvedInstance> = None;
         for &trip in trip_candidates {
+            // Some GTFS feeds reuse a trip_id for multiple public routes.
+            // Never conflate those runs when GTFS-RT provides route_id.
+            if let Some(route_id) = update.route_id.as_deref() {
+                let public = *self.tt.trip_public_route_ids().get(trip.idx())
+                    .ok_or(ResolveIssue::BadCatalog)?;
+                let record = self.tt.route_ids().get(public.idx())
+                    .ok_or(ResolveIssue::BadCatalog)?;
+                if record.source != source ||
+                    self.tt.get_string(record.id) != Some(route_id)
+                {
+                    continue;
+                }
+            }
             let from = *self.tt.trip_transport_offsets().get(trip.idx())
                 .ok_or(ResolveIssue::BadCatalog)? as usize;
             let to = *self.tt.trip_transport_offsets().get(trip.idx() + 1)
