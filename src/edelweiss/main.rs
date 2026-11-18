@@ -5,6 +5,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod footpath_debug;
 mod motis_response;
 mod pagination;
+mod realtime_sync;
 mod startup;
 mod websocket;
 
@@ -50,6 +51,12 @@ struct Args {
     /// Opt-in, read-only transfer-closure inspection. Disabled in production by default.
     #[arg(long, env = "EDELWEISS_ENABLE_FOOTPATH_DEBUG")]
     enable_footpath_debug: bool,
+    /// Opt-in Aspen source RPC sync (observe-only; routing results unchanged).
+    #[arg(long, env = "EDELWEISS_ENABLE_REALTIME_SOURCE_SYNC")]
+    enable_realtime_source_sync: bool,
+    /// Minimum delay between finished synchronization passes.
+    #[arg(long, default_value_t = 60, env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS")]
+    realtime_source_sync_seconds: u64,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -172,6 +179,7 @@ struct State {
     router: Arc<Router>,
     database_url: Option<String>,
     osr: Arc<NativeOsr>,
+    realtime_sources: Option<Arc<realtime_sync::RealtimeSources>>,
 }
 
 fn osr_access(
@@ -1071,10 +1079,38 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
+    // Observe-only staging: get source-scoped updates from Aspen without
+    // allocating expanded GTFS datasets or writing overlay files to NVMe.
+    // RAPTOR does not read these snapshots yet, so incomplete matching cannot
+    // create false journeys or incorrectly suppress scheduled departures.
+    let realtime_sources = if args.enable_realtime_source_sync {
+        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router)?);
+        let settings: catenary::catenaryconfig::CatenaryConfig =
+            toml::from_str(&fs::read_to_string(&args.catenary_config)?)?;
+        let urls = std::env::var("ETCD_URLS").ok()
+            .map(|s| s.split(',').map(str::to_owned).collect::<Vec<_>>())
+            .or(settings.aspen.etcd_urls)
+            .unwrap_or_else(|| vec!["localhost:2379".to_owned()]);
+        let username = std::env::var("ETCD_USERNAME").ok().or(settings.aspen.etcd_username);
+        let password = std::env::var("ETCD_PASSWORD").ok().or(settings.aspen.etcd_password);
+        let sync_sources = Arc::clone(&sources);
+        tokio::spawn(async move {
+            if let Err(error) = realtime_sync::synchronize(
+                sync_sources, urls, username, password,
+                Duration::from_secs(args.realtime_source_sync_seconds.max(5)),
+            ).await {
+                eprintln!("Edelweiss realtime source sync disabled after error: {error:#}");
+            }
+        });
+        Some(sources)
+    } else {
+        None
+    };
     let state = web::Data::new(State {
         router,
         database_url,
         osr,
+        realtime_sources,
     });
     let enable_footpath_debug = args.enable_footpath_debug;
     eprintln!("Edelweiss startup: binding HTTP server to {}", args.listen);
