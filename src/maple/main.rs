@@ -76,6 +76,7 @@ mod gtfs_process;
 //mod large_gtfs_insertion;
 pub mod osm_station_matching;
 mod raw_file_agency_remover;
+mod polygon_union;
 mod refresh_metadata_tables;
 mod route_url_slugs;
 mod shapes_reader;
