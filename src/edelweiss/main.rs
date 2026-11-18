@@ -1094,10 +1094,10 @@ async fn main() -> Result<()> {
         let username = std::env::var("ETCD_USERNAME").ok().or(settings.aspen.etcd_username);
         let password = std::env::var("ETCD_PASSWORD").ok().or(settings.aspen.etcd_password);
         let sync_sources = Arc::clone(&sources);
+        let sync_interval = Duration::from_secs(args.realtime_source_sync_seconds.max(5));
         tokio::spawn(async move {
             if let Err(error) = realtime_sync::synchronize(
-                sync_sources, urls, username, password,
-                Duration::from_secs(args.realtime_source_sync_seconds.max(5)),
+                sync_sources, urls, username, password, sync_interval,
             ).await {
                 eprintln!("Edelweiss realtime source sync disabled after error: {error:#}");
             }
