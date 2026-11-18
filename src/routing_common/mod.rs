@@ -10,6 +10,7 @@ pub mod mmap_residency;
 pub mod osm_router;
 pub mod profiles;
 pub mod routing_regions;
+pub mod realtime_overlay;
 pub mod timetable;
 pub mod timetable_mmap;
 pub(crate) mod transfer_optimizer;
