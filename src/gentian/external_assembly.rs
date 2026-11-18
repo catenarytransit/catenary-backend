@@ -34,6 +34,8 @@ pub(super) fn charge(s: &Schedule) -> usize {
     size_of::<Schedule>()
         .saturating_add(s.trip_id.capacity())
         .saturating_add(s.route_id.capacity())
+        .saturating_add(s.service_id.capacity())
+        .saturating_add(s.timezone_name.capacity())
         .saturating_add(
             s.locations
                 .capacity()
@@ -55,6 +57,9 @@ fn compare(a: &Schedule, b: &Schedule) -> Ordering {
         })
         .then_with(|| a.first_second.cmp(&b.first_second))
         .then_with(|| a.trip_id.cmp(&b.trip_id))
+        .then_with(|| a.service_id.cmp(&b.service_id))
+        .then_with(|| a.timezone_name.cmp(&b.timezone_name))
+        .then_with(|| a.gtfs_first_departure_seconds.cmp(&b.gtfs_first_departure_seconds))
         // Stable, deterministic ordering for repeated trips with different
         // timezone-dependent relative events on distinct service days.
         .then_with(|| {
@@ -295,9 +300,11 @@ fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
         s.locations.len() == s.events.len(),
         "schedule stop count mismatch"
     );
-    let len = 84usize
+    let len = 96usize
         .checked_add(s.route_id.len())
         .and_then(|v| v.checked_add(s.trip_id.len()))
+        .and_then(|v| v.checked_add(s.service_id.len()))
+        .and_then(|v| v.checked_add(s.timezone_name.len()))
         .and_then(|v| v.checked_add(s.events.len().checked_mul(20)?))
         .context("schedule record exceeds addressable memory")?;
     let len = u32::try_from(len).context("schedule record exceeds 4 GiB")?;
@@ -305,14 +312,19 @@ fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
     w.write_all(&s.source.to_le_bytes())?;
     w.write_all(&s.route_type.to_le_bytes())?;
     w.write_all(&s.first_second.to_le_bytes())?;
+    w.write_all(&s.gtfs_first_departure_seconds.to_le_bytes())?;
     w.write_all(&u32::try_from(s.route_id.len())?.to_le_bytes())?;
     w.write_all(&u32::try_from(s.trip_id.len())?.to_le_bytes())?;
+    w.write_all(&u32::try_from(s.service_id.len())?.to_le_bytes())?;
+    w.write_all(&u32::try_from(s.timezone_name.len())?.to_le_bytes())?;
     w.write_all(&u32::try_from(s.events.len())?.to_le_bytes())?;
     for word in s.days.words {
         w.write_all(&word.to_le_bytes())?;
     }
     w.write_all(s.route_id.as_bytes())?;
     w.write_all(s.trip_id.as_bytes())?;
+    w.write_all(s.service_id.as_bytes())?;
+    w.write_all(s.timezone_name.as_bytes())?;
     for (location, event) in s.locations.iter().zip(&s.events) {
         ensure!(*location == event.stop, "schedule stop sequence mismatch");
         w.write_all(&location.0.to_le_bytes())?;
@@ -330,7 +342,7 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     r.read_exact(&mut size[1..])?;
     let payload = u32::from_le_bytes(size) as usize;
     ensure!(
-        payload >= 84 && payload <= limit / RECORD_DIVISOR,
+        payload >= 96 && payload <= limit / RECORD_DIVISOR,
         "invalid or oversized sort-run record"
     );
     let mut reader = r.take(payload as u64);
@@ -362,12 +374,17 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     let source = u16le(&mut reader)?;
     let route_type = i16le(&mut reader)?;
     let first_second = u32le(&mut reader)?;
+    let gtfs_first_departure_seconds = u32le(&mut reader)?;
     let route_len = u32le(&mut reader)? as usize;
     let trip_len = u32le(&mut reader)? as usize;
+    let service_len = u32le(&mut reader)? as usize;
+    let timezone_len = u32le(&mut reader)? as usize;
     let stops = u32le(&mut reader)? as usize;
-    let expected = 84usize
+    let expected = 96usize
         .checked_add(route_len)
         .and_then(|n| n.checked_add(trip_len))
+        .and_then(|n| n.checked_add(service_len))
+        .and_then(|n| n.checked_add(timezone_len))
         .and_then(|n| n.checked_add(stops.checked_mul(20)?))
         .context("invalid sort-run record lengths")?;
     ensure!(expected == payload, "malformed sort-run record length");
@@ -381,6 +398,12 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
     let mut trip = vec![0u8; trip_len];
     reader.read_exact(&mut trip)?;
     let trip_id = String::from_utf8(trip).context("invalid trip ID in run")?;
+    let mut service = vec![0u8; service_len];
+    reader.read_exact(&mut service)?;
+    let service_id = String::from_utf8(service).context("invalid service ID in run")?;
+    let mut timezone = vec![0u8; timezone_len];
+    reader.read_exact(&mut timezone)?;
+    let timezone_name = String::from_utf8(timezone).context("invalid timezone in run")?;
     let mut locations = Vec::with_capacity(stops);
     let mut events = Vec::with_capacity(stops);
     for _ in 0..stops {
@@ -398,6 +421,9 @@ fn read_record(r: &mut impl Read, limit: usize) -> Result<Option<Schedule>> {
         source,
         route_id,
         route_type,
+        service_id,
+        timezone_name,
+        gtfs_first_departure_seconds,
         locations,
         events,
         first_second,
@@ -414,6 +440,9 @@ mod tests {
             source: 0,
             route_id: "R".into(),
             route_type: 3,
+            service_id: "test".into(),
+            timezone_name: "UTC".into(),
+            gtfs_first_departure_seconds: second,
             locations: stops.iter().copied().map(LocationIdx).collect(),
             events: stops
                 .iter()
