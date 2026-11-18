@@ -292,6 +292,15 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
                         }
                     }
                 }
+                // Avoid hashing the entire regional static timetable for
+                // every Chateau. The precompiled stop->route CSR narrows the
+                // candidates to routes visiting the pattern's first stop.
+                // Compare full PackedStop values (including all flags).
+                for &route in self.tt.routes_at(stops[0].location()) {
+                    if self.tt.stops_on(route) == stops.as_slice() {
+                        return Ok(RtPatternRef::Static(route.0));
+                    }
+                }
                 if let Some(patterns) = self.dynamic_by_hash.get(&key) {
                     for &id in patterns {
                         if self.dynamic_patterns[id as usize] == stops {
