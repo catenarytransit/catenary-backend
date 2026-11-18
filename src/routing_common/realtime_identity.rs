@@ -103,6 +103,8 @@ pub fn timetable_fingerprint(tt: &ZeroCopyTimetable<'_>) -> [u8; 32] {
     h.update(bytemuck::cast_slice(tt.trip_public_route_ids()));
     h.update(bytemuck::cast_slice(tt.transport_route()));
     h.update(bytemuck::cast_slice(tt.transport_traffic_days()));
+    h.update(bytemuck::cast_slice(tt.bitfields()));
+    h.update(bytemuck::cast_slice(tt.timing_profile_events()));
     h.update(bytemuck::cast_slice(tt.transport_first_dep_offset()));
     h.update(bytemuck::cast_slice(tt.transport_initial_day_offset()));
     h.update(bytemuck::cast_slice(tt.route_stop_offsets()));
