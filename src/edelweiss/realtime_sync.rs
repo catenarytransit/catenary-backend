@@ -16,7 +16,7 @@ use catenary::routing_common::realtime_prepare::{
     PrepareError, PreparedAction, added_action, scheduled_action,
 };
 use catenary::routing_common::realtime_overlay::{
-    RealtimeOverlay, RealtimeOverlayBuilder, StaticInstance,
+    RealtimeOverlay, RealtimeOverlayBuilder, RtRunInput, StaticInstance,
 };
 use catenary::routing_common::realtime_identity::{
     GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
@@ -202,7 +202,6 @@ impl RealtimeSources {
                 if !added[index].is_empty() {
                     if added[index].len() == 1 {
                         actions.push(added[index].pop().expect("one added action"));
-                        stats.prepared_added += 1;
                     } else {
                         stats.ambiguous += 1;
                     }
@@ -271,13 +270,31 @@ impl RealtimeSources {
                     PreparedAction::NoChange => {}
                 }
             }
+            let mut added_by_instance = BTreeMap::<(u16, String), Vec<RtRunInput>>::new();
             for action in unscheduled_actions {
                 if let PreparedAction::Run(run) = action {
-                    if builder.add_run(run).is_ok() {
-                        stats.prepared_runs += 1;
-                    } else {
+                    let Some(ref id) = run.external_id else {
                         stats.invalid_updates += 1;
-                    }
+                        continue;
+                    };
+                    added_by_instance.entry((run.source.0, id.clone()))
+                        .or_default().push(run);
+                }
+            }
+            for (_instance, mut candidates) in added_by_instance {
+                if candidates.len() != 1 {
+                    // Two different GTFS-RT entities may report one physical
+                    // added trip; never scan it twice or arbitrarily choose
+                    // one contradictory event-time vector.
+                    stats.ambiguous += 1;
+                    continue;
+                }
+                let run = candidates.pop().expect("one added run");
+                if builder.add_run(run).is_ok() {
+                    stats.prepared_added += 1;
+                    stats.prepared_runs += 1;
+                } else {
+                    stats.invalid_updates += 1;
                 }
             }
             match builder.finish() {
