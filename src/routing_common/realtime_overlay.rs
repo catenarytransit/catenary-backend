@@ -485,6 +485,9 @@ mod tests {
         tt.route_traffic_days.push(BitfieldIdx(0));
         tt.route_section_clasz_offsets.push(0);
         tt.section_flag_offsets.push(0);
+        // CSR: route 0 visits locations 0, 1, and 2 exactly once.
+        tt.location_routes_offsets = vec![0, 1, 2, 3, 3];
+        tt.location_routes = vec![RouteIdx(0), RouteIdx(0), RouteIdx(0)];
         tt.encode().unwrap()
     }
 
@@ -519,6 +522,25 @@ mod tests {
         assert_eq!(snap.runs_for(RtPatternRef::Dynamic(0)).count(), 2);
         assert_eq!(snap.event_time(&snap.runs[2], 3), Some(epoch + 299));
         assert_eq!(snap.stops(&tt, RtPatternRef::Dynamic(0)).unwrap(), stops(&[0, 1, 3]));
+    }
+
+    #[test]
+    fn low_memory_builder_reuses_static_pattern_via_stop_route_index() {
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let epoch = i64::from(tt.header().first_utc_day) * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [8; 32], 5);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: None,
+            service_date: 20_000,
+            external_id: Some("added-exact".into()),
+            pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
+            event_times: vec![epoch + 2, epoch + 50, epoch + 70, epoch + 200],
+        }).unwrap();
+        let rt = builder.finish().unwrap();
+        assert_eq!(rt.runs[0].pattern, RtPatternRef::Static(0));
+        assert!(rt.dynamic_pattern_stops.is_empty());
     }
 
     #[test]
