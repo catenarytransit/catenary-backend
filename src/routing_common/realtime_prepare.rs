@@ -243,8 +243,15 @@ pub fn added_action(
         source,
         original: None,
         service_date,
-        external_id: Some(format!("{}|{}|{}|{}", id, update.start_time.as_deref().unwrap_or(""),
-            service_date, update.update_id)),
+        // Stable instance identity: same source, trip ID, local service date
+        // and start time is one run, even if Aspen has multiple entity IDs.
+        // Length prefixes avoid ambiguous concatenations in GTFS IDs.
+        external_id: Some(format!("{}:{}{}:{}:{}",
+            id.len(), id,
+            update.start_time.as_deref().unwrap_or("").len(),
+            update.start_time.as_deref().unwrap_or(""),
+            service_date,
+        )),
         pattern: RtPatternInput::Stops(stops),
         event_times: events,
     }))
