@@ -27,7 +27,10 @@ The identity sidecar preserves, for each compiled transport:
 - The first departure's GTFS-local seconds (supports values beyond 86,400).
 - A dictionary reference to the **original GTFS stop_sequence numbers**.
   Numbers are stored once per unique sequence, even across thousands of
-  transports with identical ordered stops.
+  transports with identical ordered stops. Gentian reads
+  `gtfs.itinerary_pattern.gtfs_stop_sequence`, not its separate positional
+  `stop_sequence` column; Maple's itinerary hash includes these original
+  GTFS numbers.
 
 The resolver computes:
 
