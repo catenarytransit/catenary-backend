@@ -13,6 +13,26 @@ Counters: `catenary.http.requests`, `catenary.nearby.requests`,
 `catenary.directory.requests`, `catenary.spruce.initial_requests`,
 `catenary.spruce.chateau_requests`, and `catenary.routing.queries`.
 
+Stop/station boards export `catenary.stop_board.chateau_accesses` tagged by
+`service:birch`, `endpoint:departures_at_stop|departures_at_osm_station`,
+and `chateau`. Only unique chateaus in the final returned departure events
+are counted (one count per chateau per HTTP request), not every nearby candidate
+or route metadata entry. Empty boards emit no chateau counter.
+
+Routing exports `catenary.routing.chateau_accesses` tagged by
+`service:edelweiss` and `chateau`, counting each distinct chateau present
+in the returned `itineraries[*].legs` or `direct[*].legs` once per completed
+HTTP or WebSocket routing query. Intermediate WebSocket PONG updates are not
+counted again; failed/empty queries yield no chateau counter.
+
+Both counters exclude Datadog Synthetics requests using the same header
+detection as nearby departures. Sample Datadog queries:
+
+```text
+sum:catenary.stop_board.chateau_accesses{service:birch} by {endpoint,chateau}.as_count()
+sum:catenary.routing.chateau_accesses{service:edelweiss} by {chateau}.as_count()
+```
+
 Distributions: `catenary.http.duration_ms` and
 `catenary.routing.phase_ms` (selection, access, egress, direct_walk,
 osr_parallel_wall, raptor, metadata, response_build, query_total).
