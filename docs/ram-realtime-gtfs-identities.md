@@ -25,6 +25,9 @@ The identity sidecar preserves, for each compiled transport:
 - The original `service_id` (dictionary index, source-specific in meaning).
 - The source GTFS timezone (`Tz` from the static itinerary).
 - The first departure's GTFS-local seconds (supports values beyond 86,400).
+- A dictionary reference to the **original GTFS stop_sequence numbers**.
+  Numbers are stored once per unique sequence, even across thousands of
+  transports with identical ordered stops.
 
 The resolver computes:
 
@@ -54,19 +57,19 @@ resolution time. The immutable static timetable's string pool is borrowed;
 Edelweiss does not create an extra full-region hash map of all static
 GTFS IDs.
 
-For a scheduled update, an original stop must match **exactly one**
-occurrence of the static route pattern. This is intentionally conservative:
-Gentian V6 stores ordered packed stops but not the original raw GTFS
-`stop_sequence` values (which need not be contiguous). For routes that
-visit the same stop more than once, or updates containing only a
-`stop_sequence` with no `stop_id`, the stop is marked unresolved.
-A later metadata extension should preserve raw stop sequence mapping.
+For a scheduled update, original stop numbers from the identity catalog
+allow mapping a raw GTFS-RT `stop_sequence` to an exact **occurrence** in
+the static route pattern. The mapping is source-scoped. Numbering may be
+non-contiguous, and circular routes may visit the same LocationIdx more
+than once. If only the stop ID is present, it must uniquely identify one
+occurrence. If both ID and sequence are present, they must agree. No
+stop-sequence-number-to-index arithmetic is used.
 `assigned_stop_id` is looked up separately for platform changes; it
 must not be substituted for the original stop identity.
 
 ## Deployment and memory behavior
 
-Gentian writes the static `.rt-identities.bin` sidecar when the static
+Gentian writes the version-2 static `.rt-identities.bin` sidecar when the static
 timetable is compiled. It contains a dictionary of service/timezone strings
 and one compact row per transport. Edelweiss verifies the companion
 catalog using SHA-256 of the identity-bearing V6 timetable columns.
@@ -80,16 +83,47 @@ worker and atomically publishes a complete **RAM-only** snapshot.
 No periodic realtime graph files are written to the NVMe drive.
 
 The resolved snapshot stores numeric references (`region_index`,
-`SourceIdx`, `TransportIdx`, `DayIdx`, service dictionary index,
-stop indices) instead of duplicating service ID or region name strings.
+`SourceIdx`, `TransportIdx`, `DayIdx`, service dictionary index)
+instead of duplicating service ID or region name strings.
+
+## Preparing a realtime run
+
+The staging compiler creates an immutable chateau-local overlay for each
+loaded region, containing only fully validated updates.
+
+- **Scheduled modifications:** reconstruct the entire event vector from
+  Gentian's shared timing profile with exact-second Unix timestamps.
+  Apply explicit event times first, then delay overrides; propagate the
+  last known delay to subsequent events. A NO_DATA stop resets propagation
+  to scheduled times. Reject non-monotonic timelines rather than fabricating
+  corrected times. Stop flags are updated for SKIPPED stops, and a resolved
+  assigned platform produces a changed PackedStop sequence.
+- **Cancellations/deletions:** suppress the exact resolved
+  (TransportIdx, UTC traffic day) only. Conflicting update entities targeting
+  the same instance are all rejected.
+- **ADDED/UNSCHEDULED/DUPLICATED:** construct a new, independently
+  identified run from the ordered stop IDs and explicit arrival/departure
+  Unix times. A delay-only added trip has no static reference clock and is
+  rejected. New patterns are interned; if a pattern exactly matches a static
+  route, the first stop's mmap-backed stop-to-route index can reuse that
+  static pattern without a region-wide hash table.
+
+Raw Aspen updates and chateau-local overlays are still **observe-only**.
+A later routing integration must merge chateau-local revisions into one
+generation-compatible region snapshot and implement correct RAPTOR/PONG
+scanning and reconstruction.
 
 ## Limitations before activating RAPTOR
 
 - RAPTOR, PONG and reconstruction currently ignore these source snapshots.
-- Aspen does not yet provide raw static `stop_sequence` mappings, and
-  realtime added trips have no matching static `TransportIdx`.
-- Trip modifications with changed stops and unknown assigned platforms must
-  be represented as dynamic patterns, not silently forced onto static routes.
+- The original GTFS stop_sequence mapping is now in the static sidecar,
+  but Aspen still stores GTFS-RT stop sequence numbers as u16. Numbers
+  outside that range cannot be matched by number alone without a separate
+  Aspen wire-format change.
+- Trip modifications involving inserted/deleted intermediate stops,
+  changed pickup/dropoff semantics or novel stops not in the compiled
+  source require further support. Unknown assigned platforms must not be
+  silently forced onto static routes.
 - The source RPC currently serves a consistent, paged per-chateau snapshot
   rather than a compressed incremental delta protocol.
 - Service-date or stop ambiguities **must not suppress scheduled service**.
