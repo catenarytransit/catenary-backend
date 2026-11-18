@@ -20,10 +20,19 @@ are counted (one count per chateau per HTTP request), not every nearby candidate
 or route metadata entry. Empty boards emit no chateau counter.
 
 Routing exports `catenary.routing.chateau_accesses` tagged by
-`service:edelweiss` and `chateau`, counting each distinct chateau present
-in the returned `itineraries[*].legs` or `direct[*].legs` once per completed
-HTTP or WebSocket routing query. Intermediate WebSocket PONG updates are not
-counted again; failed/empty queries yield no chateau counter.
+`service:edelweiss` and `chateau`. It extracts GTFS provenance directly
+from compiled timetable transit rides, not from hydrated MOTIS response JSON.
+Each distinct chateau is counted once per logical query, as soon as it appears
+in a rendered result. Progressive WebSocket snapshots and a subsequent final
+result do not double count, even if the query ends early. Walk-only routes
+emit no chateau counter.
+
+**Deployment:** Edelweiss must be rebuilt/restarted with the updated binary,
+and its own systemd unit/container must set `DATADOG_ENABLED=1`; enabling
+the exporter for Birch or Spruce does not enable it for Edelweiss. Also
+ensure `DD_AGENT_HOST`/`DD_DOGSTATSD_PORT` point to a reachable DogStatsD
+agent. Check `catenary.routing.queries{service:edelweiss}` first: if it
+is missing too, troubleshoot exporter enablement before chateau extraction.
 
 Both counters exclude Datadog Synthetics requests using the same header
 detection as nearby departures. Sample Datadog queries:
