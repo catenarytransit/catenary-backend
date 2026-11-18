@@ -187,6 +187,25 @@ fn ride_identity(
     })
 }
 
+/// Distinct chateaus used by the actual returned transit rides.
+/// Read compiled trip provenance rather than depending on response JSON hydration.
+pub fn journey_chateaus(
+    tt: &ZeroCopyTimetable<'_>,
+    index: &MetadataIndex,
+    journeys: &[Journey],
+) -> std::collections::HashSet<String> {
+    journeys
+        .iter()
+        .flat_map(|journey| journey.legs.iter())
+        .filter_map(|leg| match leg {
+            Leg::Ride { transport, .. } => ride_identity(tt, index, *transport)
+                .map(|key| key.chateau),
+            _ => None,
+        })
+        .filter(|chateau| !chateau.is_empty())
+        .collect()
+}
+
 /// Resolve only returned trips, with one batch per chateau.
 /// A dedicated four-thread pool bounds database concurrency across HTTP requests.
 /// Timetable attempt identity is retained only to map results to the correct leg.

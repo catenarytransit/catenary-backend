@@ -269,6 +269,7 @@ fn run_query(
         url,
         osr,
         false,
+        false,
         &AtomicBool::new(false),
         &mut |_| Ok(()),
     )
@@ -306,6 +307,7 @@ fn run_query_observed(
     url: Option<&str>,
     osr: &NativeOsr,
     streaming: bool,
+    emit_chateau_metrics: bool,
     cancelled: &AtomicBool,
     observer: &mut dyn FnMut(serde_json::Value) -> Result<()>,
 ) -> Result<(serde_json::Value, QueryTimings)> {
@@ -552,6 +554,9 @@ fn run_query_observed(
     let mut template = None;
     let mut metadata_total = 0.0;
     let mut rendering_total = 0.0;
+    // Count each distinct GTFS source once per logical query, even when the
+    // client receives progressive WS results and cancels before completion.
+    let mut counted_chateaus = HashSet::<String>::new();
     let mut render = |journeys: &[Journey], stats: &RaptorStats| -> Result<serde_json::Value> {
         anyhow::ensure!(
             !cancelled.load(Ordering::Relaxed),
@@ -623,6 +628,16 @@ fn run_query_observed(
             "raptor":stats, "timetableView":request.timetable_view, "arriveBy":arrive_by,
             "routingEngine":if request.timetable_view { "nigiri-raptor-labels-pong-v5" } else { "point-raptor" },
         });
+        if emit_chateau_metrics {
+            for chateau in motis_response::journey_chateaus(&timetable, index, journeys) {
+                if counted_chateaus.insert(chateau.clone()) {
+                    catenary::observability::count(
+                        "routing.chateau_accesses",
+                        &[("chateau", &chateau)],
+                    );
+                }
+            }
+        }
         rendering_total += milliseconds(start);
         Ok(response)
     };
@@ -816,12 +831,10 @@ async fn route_ws(
             state.database_url.as_deref(),
             &state.osr,
             true,
+            !is_synthetics,
             &cancelled,
             observer,
         )?;
-        if !is_synthetics {
-            catenary::observability::record_routing_chateaus(&answer);
-        }
         Ok(answer)
     });
     websocket::start(request, payload, runner)
@@ -855,6 +868,8 @@ async fn route(
     http_request: HttpRequest,
     payload: web::Json<Request>,
 ) -> HttpResponse {
+    let emit_chateau_metrics =
+        !catenary::observability::is_synthetics_request(http_request.headers());
     let state = state.into_inner();
     let request = payload.into_inner();
     let id = match request_id(&request) {
@@ -866,19 +881,20 @@ async fn route(
         }
     };
     let result = web::block(move || {
-        run_query(
+        run_query_observed(
             &state.router,
             request,
             state.database_url.as_deref(),
             &state.osr,
+            false,
+            emit_chateau_metrics,
+            &AtomicBool::new(false),
+            &mut |_| Ok(()),
         )
     })
     .await;
     match result {
         Ok(Ok((answer, _timings))) => {
-            if !catenary::observability::is_synthetics_request(http_request.headers()) {
-                catenary::observability::record_routing_chateaus(&answer);
-            }
             HttpResponse::Ok().json(answer)
         },
         Ok(Err(err)) => HttpResponse::UnprocessableEntity()
@@ -940,6 +956,11 @@ fn advise_startup_mappings(router: &Router, osr: &NativeOsr, advice: StartupMmap
 #[actix_web::main]
 async fn main() -> Result<()> {
     catenary::observability::init("edelweiss");
+    if !catenary::observability::enabled() {
+        eprintln!(
+            "Edelweiss DogStatsD export is disabled; set DATADOG_ENABLED=1 in the Edelweiss service environment to export routing metrics"
+        );
+    }
     let startup_started = Instant::now();
     let args = Args::parse();
     let mmap_advice = startup_mmap_advice(&args.catenary_config)?;
