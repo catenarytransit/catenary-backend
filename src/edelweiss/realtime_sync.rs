@@ -13,7 +13,7 @@ use catenary::aspen::lib::{
 use catenary::etcd_cache::EtcdCache;
 use catenary::aspen_dataset::AspenisedTripScheduleRelationship as TripRelationship;
 use catenary::routing_common::realtime_prepare::{
-    PreparedAction, added_action, scheduled_action,
+    PrepareError, PreparedAction, added_action, scheduled_action,
 };
 use catenary::routing_common::realtime_overlay::{
     RealtimeOverlay, RealtimeOverlayBuilder, StaticInstance,
@@ -21,7 +21,7 @@ use catenary::routing_common::realtime_overlay::{
 use catenary::routing_common::realtime_identity::{
     GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
 };
-use catenary::routing_common::timetable::{LocationIdx, SourceIdx};
+use catenary::routing_common::timetable::SourceIdx;
 use catenary::routing_common::routing_regions::RoutingRegionsConfig;
 use catenary::routing_common::realtime_source::{
     MAX_ROUTING_PAGE_SIZE, ROUTING_SOURCE_PROTOCOL, RoutingPageState,
@@ -40,21 +40,12 @@ const MAX_STOPS_PER_SOURCE: usize = 500_000;
 const SYNC_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone)]
-pub struct ResolvedStop {
-    pub original: LocationIdx,
-    pub assigned: Option<LocationIdx>,
-    pub stop_update_index: u32,
-    pub occurrence_index: u16,
-}
-
-#[derive(Debug, Clone)]
 pub struct ResolvedTrip {
     pub region_index: u16,
     pub source: SourceIdx,
     pub update_index: u32,
     pub service_id_index: u32,
     pub original: ResolvedInstance,
-    pub stops: Vec<ResolvedStop>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -178,37 +169,19 @@ impl RealtimeSources {
                     }
 
                     let Ok(original) = resolver.instance(source, update) else { continue };
-                    let Ok(action) = scheduled_action(
+                    let action = match scheduled_action(
                         &tt, &resolver, source, original, update,
-                    ) else {
-                        stats.invalid_updates += 1;
-                        continue;
-                    };
-                    let mut stops = Vec::new();
-                    let mut valid = true;
-                    for (index, stop) in update.stops.iter().enumerate() {
-                        match resolver.stop_occurrence(source, original.transport, stop) {
-                            Ok((occurrence, original_stop, assigned)) => {
-                                let (Ok(stop_update_index), Ok(occurrence_index)) =
-                                    (u32::try_from(index), u16::try_from(occurrence))
-                                else {
-                                    valid = false;
-                                    break;
-                                };
-                                stops.push(ResolvedStop {
-                                    original: original_stop,
-                                    assigned,
-                                    stop_update_index,
-                                    occurrence_index,
-                                });
-                            }
-                            Err(_) => {
-                                stats.unresolved_stops += 1;
-                                valid = false;
-                            }
+                    ) {
+                        Ok(action) => action,
+                        Err(PrepareError::Identity(_)) => {
+                            stats.unresolved_stops += 1;
+                            continue;
                         }
-                    }
-                    if !valid { continue };
+                        Err(_) => {
+                            stats.invalid_updates += 1;
+                            continue;
+                        }
+                    };
                     let Some(row) = catalog.transports.get(original.transport.idx()) else { continue };
                     let Ok(update_index_u32) = u32::try_from(update_index) else { continue };
                     scheduled[update_index].push((
@@ -218,7 +191,6 @@ impl RealtimeSources {
                             update_index: update_index_u32,
                             service_id_index: row.service_id,
                             original,
-                            stops,
                         },
                         action,
                     ));
