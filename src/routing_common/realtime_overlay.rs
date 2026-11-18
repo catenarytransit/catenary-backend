@@ -198,6 +198,28 @@ pub struct RealtimeOverlayBuilder<'tt, 'data> {
 }
 
 impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
+    /// Low-memory mode for building a chateau-local overlay. Dynamic patterns
+    /// are interned against each other; unchanged scheduled runs explicitly
+    /// borrow Static(RouteIdx). Avoid scanning and hashing every static route
+    /// again for each chateau/revision.
+    pub fn new_sparse(
+        tt: &'tt ZeroCopyTimetable<'data>,
+        generation: [u8; 32],
+        revision: u64,
+    ) -> Self {
+        Self {
+            tt,
+            snapshot: RealtimeOverlay::empty(
+                generation, revision,
+                i64::from(tt.header().first_utc_day) * 86_400,
+            ),
+            static_patterns: HashMap::new(),
+            dynamic_patterns: Vec::new(),
+            dynamic_by_hash: HashMap::new(),
+            suppressed: BTreeSet::new(),
+        }
+    }
+
     pub fn new(
         tt: &'tt ZeroCopyTimetable<'data>,
         generation: [u8; 32],
