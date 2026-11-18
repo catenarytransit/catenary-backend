@@ -39,6 +39,8 @@ struct Pattern {
     route_type: i16,
     timezone: Tz,
     stops: Vec<(String, i32, i32)>,
+    /// Original GTFS stop_sequence, which need not be 1-based or contiguous.
+    stop_sequences: Vec<u32>,
 }
 
 /// A negative value in any stored GTFS offset invalidates the entire pattern.
@@ -78,6 +80,7 @@ pub(super) struct Schedule {
     pub(super) timezone_name: String,
     pub(super) gtfs_first_departure_seconds: u32,
     pub(super) locations: Vec<LocationIdx>,
+    pub(super) stop_sequences: Vec<u32>,
     pub(super) events: Vec<Event>,
     pub(super) first_second: u32,
     pub(super) days: TrafficDays,
@@ -420,8 +423,8 @@ fn make_schedules_from_anchors(
     // Normalize its events to the first departure so a frequency window's
     // start_time always refers to the departure from the first stop.
     ensure!(
-        pattern.stops.len() >= 2,
-        "trip {trip_id} needs at least two stops"
+        pattern.stops.len() >= 2 && pattern.stop_sequences.len() == pattern.stops.len(),
+        "trip {trip_id} has invalid stop sequence metadata"
     );
     ensure!(
         pattern_stops_monotonic(pattern, stop_lookup),
@@ -463,6 +466,7 @@ fn make_schedules_from_anchors(
             timezone_name: pattern.timezone.name().to_owned(),
             gtfs_first_departure_seconds: first_departure_secs,
             locations: locations.clone(),
+            stop_sequences: pattern.stop_sequences.clone(),
             events: events.clone(),
             first_second,
             days,
@@ -610,7 +614,7 @@ fn assemble_batch(
                     .push(Delta::from_seconds(schedule.first_second)?);
                 tt.transport_initial_day_offset.push(0);
                 identities.push(&schedule.timezone_name, &schedule.service_id,
-                    schedule.gtfs_first_departure_seconds)?;
+                    schedule.gtfs_first_departure_seconds, &schedule.stop_sequences)?;
                 let trip_idx = TripIdx(as_u32(tt.trip_public_route_ids.len())?);
                 tt.trip_public_route_ids.push(public_route_id);
                 tt.add_trip_id(
@@ -846,6 +850,7 @@ fn compile_source(
                     route_id,
                     timezone,
                     stops: Vec::new(),
+                    stop_sequences: Vec::new(),
                 },
             );
             Ok(())
@@ -857,7 +862,7 @@ fn compile_source(
         "
         SELECT itinerary_pattern_id, stop_id,
             arrival_time_since_start, departure_time_since_start,
-            interpolated_time_since_start
+            interpolated_time_since_start, stop_sequence::bigint
         FROM gtfs.itinerary_pattern
         WHERE onestop_feed_id = $1 AND attempt_id = $2
         ORDER BY itinerary_pattern_id, stop_sequence
@@ -872,8 +877,18 @@ fn compile_source(
                 invalid_metadata_patterns.insert(id);
                 return Ok(());
             };
+            let raw_sequence: i64 = r.get(5);
+            let Ok(raw_sequence) = u32::try_from(raw_sequence) else {
+                negative_patterns.insert(id);
+                pattern.stops.clear();
+                pattern.stop_sequences.clear();
+                return Ok(());
+            };
             if !append_pattern_stop(pattern, r.get(1), r.get(2), r.get(3), r.get(4))? {
                 negative_patterns.insert(id);
+                pattern.stop_sequences.clear();
+            } else {
+                pattern.stop_sequences.push(raw_sequence);
             }
             Ok(())
         },
@@ -1299,6 +1314,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Toronto".parse().unwrap(),
             stops: vec![("first".into(), 0, 0)],
+            stop_sequences: vec![11],
         };
         for (arrival, departure, interpolated) in [
             (Some(-5520), Some(-5520), None),
@@ -1322,6 +1338,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Toronto".parse().unwrap(),
             stops: Vec::new(),
+            stop_sequences: Vec::new(),
         };
         assert!(append_pattern_stop(&mut pattern, "a".into(), Some(0), Some(30), None,).unwrap());
         assert!(append_pattern_stop(&mut pattern, "b".into(), None, None, Some(90),).unwrap());
@@ -1526,6 +1543,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Los_Angeles".parse().unwrap(),
             stops: vec![("a".into(), 0, 0), ("b".into(), 20, 80)],
+            stop_sequences: vec![2, 9],
         };
         let mut stop_lookup = HashMap::new();
         stop_lookup.insert("a".into(), LocationIdx(0));
@@ -1603,6 +1621,7 @@ mod tests {
             timezone_name: "UTC".into(),
             gtfs_first_departure_seconds: first,
             locations: vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
+            stop_sequences: vec![10, 18, 31],
             events: vec![
                 Event {
                     stop: LocationIdx(0),
@@ -1683,6 +1702,7 @@ mod tests {
                 timezone_name: "UTC".into(),
                 gtfs_first_departure_seconds: i * 25,
                 locations: vec![LocationIdx(0), LocationIdx(1)],
+                stop_sequences: vec![2, 4],
                 events: vec![
                     Event {
                         stop: LocationIdx(0),
@@ -1721,6 +1741,7 @@ mod tests {
             route_id: "R".into(),
             route_type: 3,
             timezone: timezone.parse().unwrap(),
+            stop_sequences: vec![7, 12],
             stops: vec![
                 ("a".into(), 0, first_stop_dwell),
                 ("b".into(), 1800 + first_stop_dwell, 1800 + first_stop_dwell),
@@ -1975,6 +1996,7 @@ mod tests {
             timezone_name: "UTC".into(),
             gtfs_first_departure_seconds: 60,
             locations: vec![LocationIdx(0), LocationIdx(1)],
+            stop_sequences: vec![1, 2],
             events: vec![event(0), event(20)],
             first_second: 60,
             days: TrafficDays::default(),
