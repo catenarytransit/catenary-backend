@@ -862,7 +862,7 @@ fn compile_source(
         "
         SELECT itinerary_pattern_id, stop_id,
             arrival_time_since_start, departure_time_since_start,
-            interpolated_time_since_start, stop_sequence::bigint
+            interpolated_time_since_start, gtfs_stop_sequence::bigint
         FROM gtfs.itinerary_pattern
         WHERE onestop_feed_id = $1 AND attempt_id = $2
         ORDER BY itinerary_pattern_id, stop_sequence
