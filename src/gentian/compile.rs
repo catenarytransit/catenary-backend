@@ -2,6 +2,7 @@ use super::external_assembly::ScheduleRuns;
 use anyhow::{Context, Result, ensure};
 use catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto;
 use catenary::routing_common::routing_regions::ChateauSource;
+use catenary::routing_common::realtime_identity::GtfsIdentityBuilder;
 use catenary::routing_common::timetable::{
     BitfieldIdx, Clasz, Coordinate, Delta, LocationIdx, PackedFootpath, PackedStop, Range,
     RouteIdx, TimetableOwned, TimingProfileIdx, TrafficDays, TransportIdx, TripIdx,
@@ -73,6 +74,9 @@ pub(super) struct Schedule {
     pub(super) source: u16,
     pub(super) route_id: String,
     pub(super) route_type: i16,
+    pub(super) service_id: String,
+    pub(super) timezone_name: String,
+    pub(super) gtfs_first_departure_seconds: u32,
     pub(super) locations: Vec<LocationIdx>,
     pub(super) events: Vec<Event>,
     pub(super) first_second: u32,
@@ -364,6 +368,7 @@ fn make_schedules(
 ) -> Result<Vec<Schedule>> {
     let anchors = service_utc_anchors(calendar, pattern.timezone, first_utc_day, day_count)?;
     make_schedules_from_anchors(
+        "test-service",
         trip_id,
         source_idx,
         pattern,
@@ -401,6 +406,7 @@ fn invalid_itinerary_patterns(
 }
 
 fn make_schedules_from_anchors(
+    service_id: &str,
     trip_id: &str,
     source_idx: u16,
     pattern: &Pattern,
@@ -453,6 +459,9 @@ fn make_schedules_from_anchors(
             source: source_idx,
             route_id: pattern.route_id.clone(),
             route_type: pattern.route_type,
+            service_id: service_id.to_owned(),
+            timezone_name: pattern.timezone.name().to_owned(),
+            gtfs_first_departure_seconds: first_departure_secs,
             locations: locations.clone(),
             events: events.clone(),
             first_second,
@@ -505,6 +514,7 @@ fn assemble_batch(
     days_index: &mut HashMap<TrafficDays, BitfieldIdx>,
     route_id_index: &mut HashMap<(u16, String), catenary::routing_common::timetable::RouteIdIdx>,
     profile_index: &mut HashMap<Vec<u32>, TimingProfileIdx>,
+    identities: &mut GtfsIdentityBuilder,
 ) -> Result<()> {
     ensure!(!schedules.is_empty(), "empty schedule batch");
     let source = schedules[0].source;
@@ -599,6 +609,8 @@ fn assemble_batch(
                 tt.transport_first_dep_offset
                     .push(Delta::from_seconds(schedule.first_second)?);
                 tt.transport_initial_day_offset.push(0);
+                identities.push(&schedule.timezone_name, &schedule.service_id,
+                    schedule.gtfs_first_departure_seconds)?;
                 let trip_idx = TripIdx(as_u32(tt.trip_public_route_ids.len())?);
                 tt.trip_public_route_ids.push(public_route_id);
                 tt.add_trip_id(
@@ -696,11 +708,12 @@ fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
     Ok(())
 }
 
-fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<()> {
+fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<GtfsIdentityBuilder> {
     let mut days_index = HashMap::new();
     days_index.insert(TrafficDays::default(), BitfieldIdx(0));
     let mut route_id_index = HashMap::new();
     let mut profile_index = HashMap::new();
+    let mut identities = GtfsIdentityBuilder::default();
     schedules.consume(|batch| {
         assemble_batch(
             tt,
@@ -708,9 +721,11 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<(
             &mut days_index,
             &mut route_id_index,
             &mut profile_index,
+            &mut identities,
         )
     })?;
-    build_stop_routes_index(tt)
+    build_stop_routes_index(tt)?;
+    Ok(identities)
 }
 
 enum TripDepartures {
@@ -930,6 +945,7 @@ fn compile_source(
             };
             let mut add_departure = |first_departure: u32| -> Result<()> {
                 for schedule in make_schedules_from_anchors(
+                    &service,
                     &trip_id,
                     source_idx,
                     pattern,
@@ -1146,7 +1162,7 @@ pub fn build(
             "Gentian warning: no scheduled trips in selected timetable horizon; publishing a timetable with zero transports"
         );
     }
-    assemble_routes(&mut tt, schedules)?;
+    let identities = assemble_routes(&mut tt, schedules)?;
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
     let transfers = super::footpaths::compute(
         osr_dir,
@@ -1162,6 +1178,14 @@ pub fn build(
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
+    // Static-build-only sidecar. Realtime updates never write it; Edelweiss
+    // validates the timetable fingerprint before using it to resolve trips.
+    let mapped = catenary::routing_common::timetable_mmap::MappedTimetable::open(output)?;
+    let catalog = identities.finish(&mapped.view()?)?;
+    let identity_path = output.with_extension("rt-identities.bin");
+    let identity_staging = output.with_extension("rt-identities.bin.tmp");
+    std::fs::write(&identity_staging, catenary::bincode_serialize(&catalog)?)?;
+    std::fs::rename(&identity_staging, &identity_path)?;
     let sidecar = output.with_extension("platforms.json");
     let staging = sidecar.with_extension("platforms.json.tmp");
     std::fs::write(&staging, serde_json::to_vec(&platform_metadata)?)?;
@@ -1477,6 +1501,7 @@ mod tests {
             panic!("expected scheduled trip");
         };
         let schedules = make_schedules_from_anchors(
+            "weekday",
             "valid-trip",
             0,
             pattern,
@@ -1574,6 +1599,9 @@ mod tests {
             source: 0,
             route_id: "R".into(),
             route_type: 3,
+            service_id: "fixture".into(),
+            timezone_name: "UTC".into(),
+            gtfs_first_departure_seconds: first,
             locations: vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
             events: vec![
                 Event {
@@ -1651,6 +1679,9 @@ mod tests {
                 source: 0,
                 route_id: "R".into(),
                 route_type: 3,
+                service_id: "fixture".into(),
+                timezone_name: "UTC".into(),
+                gtfs_first_departure_seconds: i * 25,
                 locations: vec![LocationIdx(0), LocationIdx(1)],
                 events: vec![
                     Event {
@@ -1940,6 +1971,9 @@ mod tests {
             source: 0,
             route_id: "r".into(),
             route_type: 3,
+            service_id: "fixture".into(),
+            timezone_name: "UTC".into(),
+            gtfs_first_departure_seconds: 60,
             locations: vec![LocationIdx(0), LocationIdx(1)],
             events: vec![event(0), event(20)],
             first_second: 60,
