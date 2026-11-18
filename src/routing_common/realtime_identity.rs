@@ -306,6 +306,52 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
         Ok((original, assigned))
     }
 
+    /// Resolve the *occurrence*, not only the LocationIdx. GTFS stop_sequence
+    /// values are not guaranteed to be contiguous. When a stop is visited
+    /// twice (circular routes), the original GTFS number disambiguates it.
+    /// A stop_id alone is accepted only if the location occurs exactly once.
+    pub fn stop_occurrence(
+        &self,
+        source: SourceIdx,
+        transport: TransportIdx,
+        update: &crate::routing_common::realtime_source::RoutingStopUpdate,
+    ) -> Result<(usize, LocationIdx, Option<LocationIdx>), ResolveIssue> {
+        let route = *self.tt.transport_route().get(transport.idx())
+            .ok_or(ResolveIssue::BadCatalog)?;
+        let stops = self.tt.stops_on(route);
+        let sequences = self.catalog.stop_sequences(transport)
+            .ok_or(ResolveIssue::BadCatalog)?;
+        if sequences.len() != stops.len() {
+            return Err(ResolveIssue::BadCatalog);
+        }
+        let original = update.stop_id.as_deref()
+            .map(|id| self.stop(source, id)).transpose()?;
+        let matched: Vec<usize> = stops.iter().enumerate()
+            .filter(|(i, stop)| {
+                original.is_none_or(|id| stop.location() == id)
+                    && update.sequence.is_none_or(|number|
+                        sequences[*i] == u32::from(number))
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if original.is_none() && update.sequence.is_none() {
+            return Err(ResolveIssue::StopIdMissing);
+        }
+        let index = match matched.as_slice() {
+            [only] => *only,
+            [] => return Err(ResolveIssue::UnknownStopId(
+                update.stop_id.clone().unwrap_or_else(|| format!("sequence {:?}", update.sequence))
+            )),
+            _ => return Err(ResolveIssue::AmbiguousStopId(
+                update.stop_id.clone().unwrap_or_else(|| format!("sequence {:?}", update.sequence))
+            )),
+        };
+        let location = stops[index].location();
+        let assigned = update.assigned_stop_id.as_deref()
+            .map(|id| self.stop(source, id)).transpose()?;
+        Ok((index, location, assigned))
+    }
+
     /// GTFS-RT's service date is LOCAL and does not equal Gentian's UTC
     /// traffic-day index. Use the same noon anchor and exact first departure
     /// seconds Gentian used at compile time. No nearest-day heuristics.
