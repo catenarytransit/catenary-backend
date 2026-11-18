@@ -16,13 +16,15 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
-pub const IDENTITY_FORMAT_VERSION: u32 = 1;
+pub const IDENTITY_FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TransportGtfsIdentity {
     pub timezone: u16,
     pub service_id: u32,
     pub first_departure_gtfs_seconds: u32,
+    /// Index into shared original GTFS stop_sequence lists.
+    pub stop_sequence_pattern: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -34,6 +36,10 @@ pub struct GtfsIdentityCatalog {
     pub timezones: Vec<String>,
     pub service_ids: Vec<String>,
     pub transports: Vec<TransportGtfsIdentity>,
+    /// Interned, *original* stop_sequence numbers; non-contiguous values
+    /// and circular routes are preserved exactly as supplied by GTFS.
+    pub stop_sequence_offsets: Vec<u32>,
+    pub stop_sequence_values: Vec<u32>,
 }
 
 #[derive(Default)]
@@ -43,10 +49,36 @@ pub struct GtfsIdentityBuilder {
     timezone_ids: HashMap<String, u16>,
     service_ids_map: HashMap<String, u32>,
     transports: Vec<TransportGtfsIdentity>,
+    stop_sequences: Vec<Vec<u32>>,
+    sequence_lookup: HashMap<u64, Vec<u32>>,
 }
 
 impl GtfsIdentityBuilder {
-    pub fn push(&mut self, tz: &str, service: &str, departure: u32) -> anyhow::Result<()> {
+    pub fn push(&mut self, tz: &str, service: &str, departure: u32, stop_sequences: &[u32]) -> anyhow::Result<()> {
+        anyhow::ensure!(stop_sequences.len() >= 2, "missing GTFS stop_sequence pattern");
+        let sequence_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            stop_sequences.hash(&mut hash);
+            hash.finish()
+        };
+        let mut sequence_pattern = None;
+        if let Some(indices) = self.sequence_lookup.get(&sequence_hash) {
+            for &id in indices {
+                if self.stop_sequences[id as usize] == stop_sequences {
+                    sequence_pattern = Some(id);
+                    break;
+                }
+            }
+        }
+        let sequence_pattern = if let Some(id) = sequence_pattern {
+            id
+        } else {
+            let id = u32::try_from(self.stop_sequences.len())?;
+            self.stop_sequences.push(stop_sequences.to_vec());
+            self.sequence_lookup.entry(sequence_hash).or_default().push(id);
+            id
+        };
         let timezone = if let Some(&id) = self.timezone_ids.get(tz) {
             id
         } else {
@@ -68,6 +100,7 @@ impl GtfsIdentityBuilder {
         self.transports.push(TransportGtfsIdentity {
             timezone, service_id,
             first_departure_gtfs_seconds: departure,
+            stop_sequence_pattern: sequence_pattern,
         });
         Ok(())
     }
@@ -77,6 +110,13 @@ impl GtfsIdentityBuilder {
             self.transports.len() == tt.transport_route().len(),
             "GTFS identity sidecar transport count mismatch"
         );
+        let mut sequence_offsets = Vec::with_capacity(self.stop_sequences.len() + 1);
+        let mut sequence_values = Vec::new();
+        sequence_offsets.push(0);
+        for sequence in self.stop_sequences {
+            sequence_values.extend(sequence);
+            sequence_offsets.push(u32::try_from(sequence_values.len())?);
+        }
         Ok(GtfsIdentityCatalog {
             version: IDENTITY_FORMAT_VERSION,
             first_utc_day: tt.header().first_utc_day,
@@ -85,6 +125,8 @@ impl GtfsIdentityBuilder {
             timezones: self.timezones,
             service_ids: self.service_ids,
             transports: self.transports,
+            stop_sequence_offsets: sequence_offsets,
+            stop_sequence_values: sequence_values,
         })
     }
 }
@@ -122,14 +164,33 @@ impl GtfsIdentityCatalog {
         anyhow::ensure!(self.day_count == tt.header().day_count, "horizon mismatch");
         anyhow::ensure!(self.transports.len() == tt.transport_route().len(), "transport count mismatch");
         anyhow::ensure!(self.timetable_fingerprint == timetable_fingerprint(tt), "stale realtime identity catalog");
-        anyhow::ensure!(self.transports.iter().all(|r|
-            (r.timezone as usize) < self.timezones.len() &&
-            (r.service_id as usize) < self.service_ids.len()
-        ), "invalid realtime identity dictionary index");
+        anyhow::ensure!(self.stop_sequence_offsets.first() == Some(&0)
+            && self.stop_sequence_offsets.last() == Some(&(self.stop_sequence_values.len() as u32))
+            && self.stop_sequence_offsets.windows(2).all(|p| p[0] <= p[1]),
+            "invalid GTFS stop_sequence dictionary");
+        anyhow::ensure!(self.transports.iter().enumerate().all(|(i, r)| {
+            let Some(&start) = self.stop_sequence_offsets.get(r.stop_sequence_pattern as usize) else {
+                return false;
+            };
+            let Some(&end) = self.stop_sequence_offsets.get(r.stop_sequence_pattern as usize + 1) else {
+                return false;
+            };
+            (r.timezone as usize) < self.timezones.len()
+                && (r.service_id as usize) < self.service_ids.len()
+                && end >= start
+                && (end - start) as usize == tt.stops_on(tt.transport_route()[i]).len()
+        }), "invalid realtime identity dictionary index");
         for zone in &self.timezones {
             let _: Tz = zone.parse().map_err(anyhow::Error::msg)?;
         }
         Ok(())
+    }
+
+    pub fn stop_sequences(&self, transport: TransportIdx) -> Option<&[u32]> {
+        let row = self.transports.get(transport.idx())?;
+        let start = *self.stop_sequence_offsets.get(row.stop_sequence_pattern as usize)? as usize;
+        let end = *self.stop_sequence_offsets.get(row.stop_sequence_pattern as usize + 1)? as usize;
+        self.stop_sequence_values.get(start..end)
     }
 
     pub fn service_id(&self, transport: TransportIdx) -> Option<&str> {
@@ -416,7 +477,7 @@ mod tests {
         tt.trip_transport_offsets.push(1);
         tt.transport_to_trip_section_offsets.push(0);
         let mut builder = GtfsIdentityBuilder::default();
-        builder.push("America/Los_Angeles", "service-2026", 25 * 3600).unwrap();
+        builder.push("America/Los_Angeles", "service-2026", 25 * 3600, &[17, 29]).unwrap();
         (tt.encode().unwrap(), builder)
     }
 
