@@ -798,6 +798,7 @@ async fn route_ws(
     payload: web::Payload,
 ) -> Result<HttpResponse, actix_web::Error> {
     let state = state.into_inner();
+    let is_synthetics = catenary::observability::is_synthetics_request(request.headers());
     let runner: Arc<websocket::Runner> = Arc::new(move |query, request_id, cancelled, observer| {
         let mut request: Request = serde_json::from_value(query)?;
         anyhow::ensure!(
@@ -818,6 +819,9 @@ async fn route_ws(
             &cancelled,
             observer,
         )?;
+        if !is_synthetics {
+            catenary::observability::record_routing_chateaus(&answer);
+        }
         Ok(answer)
     });
     websocket::start(request, payload, runner)
@@ -846,7 +850,11 @@ async fn health() -> HttpResponse {
         }))
 }
 
-async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResponse {
+async fn route(
+    state: web::Data<State>,
+    http_request: HttpRequest,
+    payload: web::Json<Request>,
+) -> HttpResponse {
     let state = state.into_inner();
     let request = payload.into_inner();
     let id = match request_id(&request) {
@@ -867,7 +875,12 @@ async fn route(state: web::Data<State>, payload: web::Json<Request>) -> HttpResp
     })
     .await;
     match result {
-        Ok(Ok((answer, _timings))) => HttpResponse::Ok().json(answer),
+        Ok(Ok((answer, _timings))) => {
+            if !catenary::observability::is_synthetics_request(http_request.headers()) {
+                catenary::observability::record_routing_chateaus(&answer);
+            }
+            HttpResponse::Ok().json(answer)
+        },
         Ok(Err(err)) => HttpResponse::UnprocessableEntity()
             .json(serde_json::json!({"requestId":id,"error":err.to_string()})),
         Err(err) => HttpResponse::InternalServerError()

@@ -217,6 +217,42 @@ pub fn record_spruce_chateaus(chateaus: impl IntoIterator<Item = String>) {
         count("spruce.chateau_requests", &[("chateau", &chateau)]);
     }
 }
+/// Record one count per chateau actually present on a returned stop/station board.
+/// No metrics are emitted for empty boards or purely looked-up candidate feeds.
+pub fn record_stop_board_chateaus(
+    endpoint: &'static str,
+    chateaus: impl IntoIterator<Item = String>,
+) {
+    let distinct: std::collections::HashSet<String> = chateaus.into_iter().collect();
+    for chateau in distinct {
+        count(
+            "stop_board.chateau_accesses",
+            &[("endpoint", endpoint), ("chateau", &chateau)],
+        );
+    }
+}
+
+/// Extract distinct chateaus from legs in the returned MOTIS routing list,
+/// excluding empty/unknown values and lookup-only candidates.
+pub fn routing_chateaus(response: &serde_json::Value) -> std::collections::HashSet<String> {
+    ["itineraries", "direct"]
+        .into_iter()
+        .filter_map(|field| response.get(field).and_then(serde_json::Value::as_array))
+        .flat_map(|journeys| journeys.iter())
+        .filter_map(|journey| journey.get("legs").and_then(serde_json::Value::as_array))
+        .flat_map(|legs| legs.iter())
+        .filter_map(|leg| leg.get("chateau").and_then(serde_json::Value::as_str))
+        .filter(|chateau| !chateau.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+pub fn record_routing_chateaus(response: &serde_json::Value) {
+    for chateau in routing_chateaus(response) {
+        count("routing.chateau_accesses", &[("chateau", &chateau)]);
+    }
+}
+
 pub fn record_chateaus(chateaus: impl IntoIterator<Item = String>) {
     for chateau in chateaus {
         count("nearby.chateau_accesses", &[("chateau", &chateau)]);
@@ -263,6 +299,21 @@ mod tests {
             HeaderValue::from_static("Mozilla/5.0"),
         );
         assert!(!is_synthetics_request(&headers));
+    }
+    #[test]
+    fn routing_chateaus_only_counts_returned_leg_sources_once() {
+        let response = serde_json::json!({
+            "itineraries": [
+                {"legs": [{"chateau":"amtrak"}, {"chateau":"amtrak"}, {"chateau":null}]},
+                {"legs": [{"chateau":"schweiz"}, {"chateau":""}]}
+            ],
+            "direct": [{"legs": [{"chateau":"amtrak"}]}]
+        });
+        let result = routing_chateaus(&response);
+        assert_eq!(result.len(), 2);
+        assert!(result.contains("amtrak"));
+        assert!(result.contains("schweiz"));
+        assert!(routing_chateaus(&serde_json::json!({"itineraries":[]})).is_empty());
     }
     #[test]
     fn cloudflare_country_validation() {

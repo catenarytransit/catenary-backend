@@ -1378,5 +1378,11 @@ pub async fn departures_at_stop(
         agencies: agencies,
     };
 
+    if !catenary::observability::is_synthetics_request(req.headers()) {
+        catenary::observability::record_stop_board_chateaus(
+            "departures_at_stop",
+            response.events.iter().map(|event| event.chateau.clone()),
+        );
+    }
     HttpResponse::Ok().json(response)
 }

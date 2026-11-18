@@ -1185,6 +1185,12 @@ pub async fn departures_at_osm_station(
 
     let event_generation_time = event_generation_timer.elapsed();
 
+    if !catenary::observability::is_synthetics_request(req.headers()) {
+        catenary::observability::record_stop_board_chateaus(
+            "departures_at_osm_station",
+            events.iter().map(|event| event.chateau.clone()),
+        );
+    }
     HttpResponse::Ok().json(DeparturesAtOsmStationResponse {
         realtime_stops,
         osm_station: osm_station_info,
