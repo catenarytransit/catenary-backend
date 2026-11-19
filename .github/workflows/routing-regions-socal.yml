@@ -215,8 +215,18 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
-          curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
-          python3 src/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
+          # Geofabrik may refuse the first connection or take minutes before
+          # answering. Plain curl --retry does NOT retry connection failures.
+          # Retry connection errors and transient HTTP failures explicitly.
+          curl --fail --location --silent --show-error \
+            --retry 10 --retry-all-errors --retry-connrefused \
+            --retry-delay 30 --retry-max-time 2400 \
+            --connect-timeout 180 --max-time 600 \
+            --output routing_regions/socal.geojson \
+            https://download.geofabrik.de/north-america/us/california/socal.geojson
+          test -s routing_regions/socal.geojson
+          python3 src/routing_regions/prepare_socal_test.py \
+            --geojson routing_regions/socal.geojson
           git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
       - name: Build native OSR reader and matching extractor
         shell: bash
@@ -242,10 +252,29 @@ jobs:
           bash src/osm_manager/build_matched_extractor.sh
           test -x ./osr-extract
       - name: Download and extract Southern California OSR graph
+        # Large Geofabrik PBFs sometimes take minutes before the first byte.
+        # The manager uses these overrides for both reqwest metadata/TLS
+        # connections and GNU wget's resumable PBF download. A failed manager
+        # attempt leaves a partial PBF that the next attempt can resume.
+        env:
+          CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS: "180"
+          CATENARY_GEOFABRIK_READ_TIMEOUT_SECONDS: "600"
         run: |
           set -euo pipefail
-          ./src/osm_manager/target/release/osm_manager \
-            --config catenaryconfig.toml run
+          for attempt in 1 2 3 4; do
+            echo "Geofabrik SoCal download/extract attempt ${attempt}/4"
+            if ./src/osm_manager/target/release/osm_manager \
+              --config catenaryconfig.toml run; then
+              break
+            fi
+            if [ "${attempt}" -eq 4 ]; then
+              echo "Geofabrik SoCal download/extraction failed after four attempts" >&2
+              exit 1
+            fi
+            # Retries also cover slow checksum/HEAD and GeoJSON requests from
+            # the OSM manager, not only the resumable wget PBF transfer.
+            sleep $((attempt * 30))
+          done
           test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
       - name: Verify extracted graph opens with the same native OSR reader
         shell: bash
