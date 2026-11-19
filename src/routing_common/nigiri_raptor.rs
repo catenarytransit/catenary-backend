@@ -187,11 +187,12 @@ impl NigiriRaptor {
             realtime: None,
         })
     }
-    /// Enable both forward and reverse RT scans on a single pinned snapshot.
-    /// This is a kernel API, NOT a production routing toggle yet: PONG must
-    /// also retain realtime run handles in deferred reconstruction.
+    /// Enable forward and reverse RT scans on a published pinned snapshot.
+    /// Incomplete chateau coverage is safe: only static transport/day keys
+    /// actually present in a published shard can be suppressed; every missing
+    /// source continues to use its regular static timetable services.
     pub(crate) fn enable_realtime(&mut self, region: Arc<RegionRealtimeSnapshot>) -> Result<()> {
-        ensure!(region.is_complete(), "realtime region coverage is incomplete");
+        ensure!(region.is_published(), "realtime region has not been published");
         ensure!(region.event_epoch == self.base_, "realtime timetable epoch mismatch");
         // Nigiri rt_timetable::update_lbs updates the shortest-path graph
         // for new/faster RT edges. Until that compact overlay is implemented,
