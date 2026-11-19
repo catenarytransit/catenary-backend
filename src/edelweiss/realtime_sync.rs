@@ -739,6 +739,35 @@ mod tests {
     }
 
     #[test]
+    fn static_chateaux_without_aspen_assignments_do_not_block_rt_coverage() {
+        use catenary::routing_common::timetable::ZeroCopyTimetable;
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let empty_expected = BTreeSet::new();
+        let no_snapshots = HashMap::new();
+        let baseline = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [9; 32], 0, &empty_expected, Vec::new(),
+        ).unwrap());
+        assert!(!baseline.is_complete()); // no first Aspen sweep yet
+
+        let ready = compose_region(
+            &tt, [9; 32], 0, &empty_expected, &no_snapshots, Some(&baseline),
+        ).unwrap().unwrap();
+        assert_eq!(ready.publication_seq, 1);
+        assert!(ready.is_complete()); // no live RT assignments, static remains valid
+        assert!(compose_region(
+            &tt, [9; 32], 0, &empty_expected, &no_snapshots, Some(&ready),
+        ).unwrap().is_none());
+
+        let newly_assigned = BTreeSet::from(["chateau-a".to_owned()]);
+        let waiting = compose_region(
+            &tt, [9; 32], 0, &newly_assigned, &no_snapshots, Some(&ready),
+        ).unwrap().unwrap();
+        assert!(!waiting.is_complete());
+        assert_eq!(waiting.missing_chateaux, ["chateau-a"]);
+    }
+
+    #[test]
     fn region_snapshot_is_atomic_across_chateaux_and_withdrawals() {
         use catenary::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
         let bytes = fixture();
