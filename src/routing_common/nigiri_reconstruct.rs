@@ -5,9 +5,88 @@ use crate::routing_common::nigiri_raptor::{
     NigiriRaptor, PointJourney, better, shift, sorted_offsets, transfer_duration,
 };
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
-use crate::routing_common::raptor_query::{Journey, Leg, Query, transport_event_second};
-use crate::routing_common::timetable::{LocationIdx, TransportIdx, ZeroCopyTimetable};
+use crate::routing_common::raptor_query::{Journey, Leg, Query, RtRideRef, transport_event_second};
+use crate::routing_common::realtime_overlay::RtPatternRef;
+use crate::routing_common::timetable::{DayIdx, LocationIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, anyhow, ensure};
+
+/// Nigiri reconstruct.cc:get_transport probes realtime transports before
+/// static routes, using the same pinned snapshot as both PING and PONG.
+fn find_realtime_transport(
+    state: &NigiriRaptor,
+    tt: &ZeroCopyTimetable<'_>,
+    k: usize,
+    location: usize,
+    time: i64,
+) -> Option<Leg> {
+    let snapshot = state.realtime.as_deref()?;
+    let reverse = state.reverse;
+    for &pattern in snapshot.patterns_at(LocationIdx(location as u32)) {
+        let stops = snapshot.stops(tt, pattern)?;
+        for handle in snapshot.run_handles_for(pattern) {
+            let run = snapshot.run(handle)?;
+            for (finish, stop) in stops.iter().enumerate() {
+                if stop.location().idx() != location ||
+                    !(if reverse {
+                        finish + 1 < stops.len() && stop.outbound()
+                    } else {
+                        finish > 0 && stop.inbound()
+                    }) {
+                    continue;
+                }
+                let finish_slot = if reverse { finish * 2 } else { finish * 2 - 1 };
+                // As in the static reconstruction, match the same exact
+                // event used by the round label. Never substitute a different
+                // run merely because it visits the same location.
+                if snapshot.run_event_time(handle, finish_slot)? != time {
+                    continue;
+                }
+                for dist in 1..=if reverse { stops.len()-finish-1 } else { finish } {
+                    let start = if reverse { finish+dist } else { finish-dist };
+                    let entry = stops[start];
+                    if !(if reverse { entry.inbound() } else { entry.outbound() }) {
+                        continue;
+                    }
+                    let start_slot = if reverse { start * 2 - 1 } else { start * 2 };
+                    let Some(event) = snapshot.run_event_time(handle, start_slot) else { continue };
+                    let ready = state.round_times_[k - 1][entry.location().idx()];
+                    if ready == state.invalid() ||
+                        better(event, state.to_unix(ready), reverse) {
+                        continue;
+                    }
+                    let (from, to, board, alight, dep, arr) = if reverse {
+                        (location, entry.location().idx(), finish, start, time, event)
+                    } else {
+                        (entry.location().idx(), location, start, finish, event, time)
+                    };
+                    let original = run.original;
+                    return Some(Leg::Ride {
+                        from_stop: from as u32,
+                        to_stop: to as u32,
+                        route: match run.pattern {
+                            RtPatternRef::Static(route) => route,
+                            RtPatternRef::Dynamic(_) => original.and_then(|o|
+                                tt.transport_route().get(o.transport as usize).map(|r| r.0))
+                                .unwrap_or(u32::MAX),
+                        },
+                        transport: original.map_or(u32::MAX, |o| o.transport),
+                        service_day: original.map_or(0, |o| o.day),
+                        board_stop_index: board,
+                        alight_stop_index: alight,
+                        departure_unix_seconds: dep,
+                        arrival_unix_seconds: arr,
+                        realtime: Some(RtRideRef {
+                            publication_seq: snapshot.publication_seq,
+                            run: handle,
+                            pattern,
+                        }),
+                    });
+                }
+            }
+        }
+    }
+    None
+}
 
 fn find_transport(
     state: &NigiriRaptor,
@@ -16,6 +95,9 @@ fn find_transport(
     location: usize,
     time: i64,
 ) -> Option<Leg> {
+    if let Some(ride) = find_realtime_transport(state, tt, k, location, time) {
+        return Some(ride);
+    }
     let reverse = state.reverse;
     let base = i64::from(tt.header().first_utc_day) * 86_400;
     for &route in tt.routes_at(LocationIdx(location as u32)) {
@@ -48,6 +130,8 @@ fn find_transport(
                     || day >= i64::from(tt.header().day_count)
                     || !tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
                         .test(day as usize)
+                    || state.realtime.as_ref().is_some_and(|rt|
+                        rt.is_static_suppressed(transport, DayIdx(day as u16)))
                 {
                     continue;
                 }
