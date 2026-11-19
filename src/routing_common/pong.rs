@@ -956,6 +956,98 @@ mod tests {
     }
 
     #[test]
+    fn realtime_delay_invalidates_transfer_but_preserves_earlier_alternative() {
+        // Train 0 used to arrive at 08:20 in time for train 1's 08:25
+        // departure. Realtime moves its arrival to 08:28. A different train
+        // still arrives at 08:15, so a valid two-ride chain remains.
+        let bytes = timetable(&[
+            (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
+            (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
+            (0, 1, 8 * 3600, 15 * 60),
+        ], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 1);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: Some((
+                crate::routing_common::timetable::TransportIdx(0),
+                crate::routing_common::timetable::DayIdx(0),
+            )),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Static(RouteIdx(0)),
+            event_times: vec![
+                base + 8 * 3600 + 18 * 60,
+                base + 8 * 3600 + 28 * 60,
+            ],
+            metadata: None,
+        }).unwrap();
+        // Other expected chateaux are allowed to be offline; the published
+        // shard still suppresses and replaces its own static instance.
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4; 32], 1,
+            &BTreeSet::from(["test".to_owned(), "not-yet-available".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".to_owned(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        assert!(snapshot.is_published());
+        assert!(!snapshot.is_complete());
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base + if reverse { 8 * 3600 + 35 * 60 } else { 7 * 3600 + 55 * 60 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None,
+                max_boardings: 3,
+                max_duration_seconds: 7200,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1,
+                    search_window_seconds: 3600,
+                    max_journey_duration_seconds: 7200,
+                    ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(!journeys.is_empty(), "lost feasible alternative reverse={reverse}");
+            for journey in &journeys {
+                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid transfer reverse={reverse}: {journey:?}");
+                assert!(!journey.legs.iter().any(|leg|
+                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
+                    "reconstructed suppressed static instance: {journey:?}");
+                let mut latest_arrival = None;
+                for leg in &journey.legs {
+                    if let Leg::Ride {
+                        departure_unix_seconds, arrival_unix_seconds, ..
+                    } = leg {
+                        if let Some(previous) = latest_arrival {
+                            assert!(previous <= *departure_unix_seconds,
+                                "connection uses a delayed arrival after its next departure");
+                        }
+                        latest_arrival = Some(*arrival_unix_seconds);
+                    }
+                }
+            }
+            assert!(journeys.iter().any(|j| {
+                j.boardings == 2 && j.legs.iter().any(|leg| matches!(
+                    leg, Leg::Ride {
+                        transport: 2,
+                        departure_unix_seconds: d, arrival_unix_seconds: a, ..
+                    } if *d == base + 8 * 3600 && *a == base + 8 * 3600 + 15 * 60
+                ))
+            }), "missing feasible earlier 08:00 train reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
     fn pong_dynamic_detour_preserves_stop_occurrence_and_never_boards_skipped_stop() {
         let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
