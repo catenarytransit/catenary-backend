@@ -338,7 +338,8 @@ fn reconstruct(
                     alight_stop_index,
                     departure_unix_seconds: ride_departure,
                     arrival_unix_seconds: arrival,
-                });
+                
+                    realtime: None,});
                 clock = arrival;
                 stop = to;
                 boardings += 1;
