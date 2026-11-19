@@ -50,7 +50,7 @@ pub fn scan_realtime_round_with(
     ready_at: impl Fn(usize) -> Option<i64>,
     mut emit: impl FnMut(RtScanCandidate),
 ) {
-    if marked.is_empty() || !snapshot.is_complete() { return; }
+    if marked.is_empty() || !snapshot.is_published() { return; }
     let marked_set = marked.iter().copied().collect::<HashSet<_>>();
     let mut patterns = BTreeSet::<RegionRtPattern>::new();
     for &stop in marked {
@@ -177,6 +177,9 @@ mod tests {
         }).unwrap();
         let mut expected = BTreeSet::new();
         expected.insert("c".to_owned());
+        // Missing realtime feeds elsewhere in the region must not disable
+        // this source's forward/reverse scans.
+        expected.insert("other-chateau-without-snapshot".to_owned());
         let rt = RegionRealtimeSnapshot::compose(
             &tt, [3; 32], 1, &expected,
             vec![ChateauRealtimeShard {
@@ -185,6 +188,8 @@ mod tests {
             }],
         ).unwrap();
 
+        assert!(rt.is_published());
+        assert!(!rt.is_complete());
         let mut prev = vec![i64::MAX; 4];
         prev[0] = epoch+90;
         let mut candidates = Vec::new();

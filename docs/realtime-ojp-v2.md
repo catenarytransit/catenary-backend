@@ -16,7 +16,7 @@ Environment="EDELWEISS_ENABLE_REALTIME_SOURCE_SYNC=1"
 Environment="EDELWEISS_ENABLE_REALTIME_ROUTING=1"
 ```
 
-The routing flag is checked per request. Edelweiss only activates RT when its region-wide snapshot is complete; incomplete or unavailable sources retain static routing. Both routing and the MOTIS-style v1 response pin one Arc and expose the revision in debugOutput. The v1 transit leg carries realTime, scheduledStartTime / scheduledEndTime, departureStatus / arrivalStatus, skipped intermediate calls, and no stale GTFS shape if its stop pattern changes.
+The routing flag is checked per request. Edelweiss activates RT for each published source shard even if its region-wide snapshot is incomplete. Unavailable sources retain static routing: only specific static transport/day instances explicitly replaced or cancelled by available realtime shards are suppressed. The region-wide completeness flag is diagnostic, not a query admission gate. Both routing and the MOTIS-style v1 response pin one Arc and expose the revision in debugOutput. The v1 transit leg carries realTime, scheduledStartTime / scheduledEndTime, departureStatus / arrivalStatus, skipped intermediate calls, and no stale GTFS shape if its stop pattern changes.
 
 Nigiri references:
 - https://github.com/motis-project/nigiri/blob/master/include/nigiri/routing/raptor/raptor.h
