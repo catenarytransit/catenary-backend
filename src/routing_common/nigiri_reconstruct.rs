@@ -1,4 +1,4 @@
-//! Deferred static/no-via reconstruction from Nigiri 82e55ced,
+//! Deferred static and realtime no-via reconstruction from Nigiri 82e55ced,
 //! src/routing/raptor/reconstruct.cc. MIT: third_party/nigiri-LICENSE.
 //! Walk round labels backwards through timetable events; no parent pointers.
 use crate::routing_common::nigiri_raptor::{
