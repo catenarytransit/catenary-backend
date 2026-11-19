@@ -159,8 +159,11 @@ impl RegionRealtimeSnapshot {
         })
     }
 
+    /// A fresh Aspen assignment sweep must occur before coverage is ready.
+    /// Some static GTFS chateaux have no realtime feed and are therefore not
+    /// part of the expected *realtime* source set.
     pub fn is_complete(&self) -> bool {
-        self.missing_chateaux.is_empty()
+        self.publication_seq > 0 && self.missing_chateaux.is_empty()
     }
 
     pub fn chateau_revisions(&self) -> impl Iterator<Item = (&str, u64)> {
