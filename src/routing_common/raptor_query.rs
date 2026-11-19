@@ -915,7 +915,8 @@ fn reconstruct(
                     alight_stop_index,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
-                });
+                
+                    realtime: None,});
                 loc = from;
                 if level == 0 {
                     return None;
