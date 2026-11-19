@@ -676,7 +676,8 @@ fn earliest_alternative(
                             alight_stop_index: pos,
                             departure_unix_seconds: selected.event,
                             arrival_unix_seconds: arrival,
-                        },
+                            realtime: None,
+},
                         Leg::Transfer {
                             from_stop: stop.location().0,
                             to_stop: to,
