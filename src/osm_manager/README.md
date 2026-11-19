@@ -103,3 +103,41 @@ The workflow `.github/workflows/osm-manager.yml` builds *only* this
 crate, downloads the upstream Linux `osr-extract` release, extracts
 Andorra with a tiny test TOML, verifies the OSR native files and
 boundary registry, checks coordinate lookup, and checks idempotency.
+
+## Fast OSR graph identities (Edelweiss startup)
+
+The manager now writes `graph-identity.json` after validating each extracted OSR
+graph, before publication. It contains a BLAKE3 identity plus the historical
+SHA-256 identity of the same ordered .bin content. Both are calculated in a
+single offline streaming pass. The old identity remains necessary for existing
+V6 Gentian timetables; never replace it with an unrelated new digest.
+
+To backfill already extracted graphs **without rerunning osr-extract or
+recompiling any timetables**, run:
+
+```sh
+bash src/osm_manager/backfill_fingerprints.sh catenaryconfig.toml
+```
+
+Alternatively use the already built manager:
+```sh
+src/osm_manager/target/release/osm_manager --config catenaryconfig.toml fingerprint
+```
+
+The backfill enumerates graph IDs in `data_dir/regions.geojson` and reads
+existing .bin files to calculate the digests once. It does not contact
+Geofabrik. Run it only on an immutable dataset while Edelweiss is not reading
+a changing graph directory. An OSR graph update must be staged and atomically
+published together with its identity. The manifest is trusted at runtime;
+Edelweiss intentionally skips full content verification during boot.
+
+If an identity is missing, Edelweiss still opens the native router but disables
+precomputed waypoint matches, falling back to live matching instead. This is
+safe but can significantly increase query latency. Run the backfill before
+restarting production. Invalid manifest JSON or unknown versions are startup
+errors rather than reasons to hash huge files during boot.
+
+The native OSR library still performs its own decoding and required structural
+operations: this change specifically removes duplicate whole-file fingerprint
+passes, not native graph loading. BLAKE3 speeds the offline hashing phase; its
+digest is not an authentication or signature for untrusted graph artifacts.

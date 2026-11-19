@@ -160,6 +160,7 @@ struct Config {
 struct Graph {
     router: cxx::SharedPtr<ffi::Router>,
     fingerprint: [u8; 32],
+    legacy_fingerprint: Option<[u8; 32]>,
     node_count: u64,
     way_count: u64,
 }
@@ -234,8 +235,15 @@ impl NativeOsr {
                 continue;
             }
             let dir = config.osm_manager.data_dir.join("regions").join(id);
-            eprintln!("Edelweiss startup: fingerprinting and opening native OSR graph {id}");
-            let fingerprint = super::osr_graph_identity::fingerprint(&dir)?;
+            let (fingerprint, legacy_fingerprint) =
+                match super::osr_graph_identity::published_fingerprints(&dir)? {
+                    Some((fast, legacy)) => (fast, Some(legacy)),
+                    None => {
+                        eprintln!("Warning: OSR {id} missing graph-identity.json; precomputed matches disabled");
+                        ([0; 32], None)
+                    }
+                };
+            eprintln!("Edelweiss startup: opening native OSR graph {id} without hashing");
             let metadata_load_mode = match config
                 .osr_worker
                 .region_load_modes
@@ -252,10 +260,6 @@ impl NativeOsr {
             .with_context(|| format!("opening native OSR graph {id}"))?;
             ensure!(!router.is_null(), "OSR returned null graph for {id}");
             ensure!(
-                fingerprint == super::osr_graph_identity::fingerprint(&dir)?,
-                "OSR graph {id} changed while opening; retry with immutable graph artifacts"
-            );
-            ensure!(
                 graphs
                     .insert(
                         id.to_owned(),
@@ -264,6 +268,7 @@ impl NativeOsr {
                             way_count: router.way_count(),
                             router,
                             fingerprint,
+                            legacy_fingerprint,
                         }
                     )
                     .is_none(),
@@ -391,7 +396,8 @@ impl NativeOsr {
 impl Graph {
     fn can_reuse(&self, tt: &ZeroCopyTimetable<'_>, radius: f64) -> bool {
         tt.osr_match_graphs().first().is_some_and(|saved| {
-            saved.fingerprint == self.fingerprint
+            (saved.fingerprint == self.fingerprint
+                || self.legacy_fingerprint.is_some_and(|old| saved.fingerprint == old))
                 && saved.node_count == self.node_count
                 && saved.way_count == self.way_count
                 && f64::from(saved.raw_radius_meters) >= radius
