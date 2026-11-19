@@ -22,9 +22,13 @@ fn find_realtime_transport(
     let snapshot = state.realtime.as_deref()?;
     let reverse = state.reverse;
     for &pattern in snapshot.patterns_at(LocationIdx(location as u32)) {
-        let stops = snapshot.stops(tt, pattern)?;
+        let Some(stops) = snapshot.stops(tt, pattern) else {
+            continue;
+        };
         for handle in snapshot.run_handles_for(pattern) {
-            let run = snapshot.run(handle)?;
+            let Some(run) = snapshot.run(handle) else {
+                continue;
+            };
             for (finish, stop) in stops.iter().enumerate() {
                 if stop.location().idx() != location ||
                     !(if reverse {
@@ -38,7 +42,7 @@ fn find_realtime_transport(
                 // As in the static reconstruction, match the same exact
                 // event used by the round label. Never substitute a different
                 // run merely because it visits the same location.
-                if snapshot.run_event_time(handle, finish_slot)? != time {
+                if snapshot.run_event_time(handle, finish_slot) != Some(time) {
                     continue;
                 }
                 for dist in 1..=if reverse { stops.len()-finish-1 } else { finish } {
