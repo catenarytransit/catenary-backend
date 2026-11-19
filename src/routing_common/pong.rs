@@ -43,6 +43,8 @@ struct Candidate {
     dest_time: i64,
     boardings: usize,
     journey: Option<Journey>,
+    /// An invalid reconstructed candidate cannot dominate valid alternatives.
+    rejected: bool,
 }
 
 impl Candidate {
@@ -52,6 +54,7 @@ impl Candidate {
             dest_time: point.dest_time,
             boardings: point.boardings,
             journey: None,
+            rejected: false,
         }
     }
 
@@ -71,10 +74,10 @@ impl Candidate {
 }
 
 fn pareto_add(results: &mut Vec<Candidate>, candidate: Candidate) {
-    if results.iter().any(|old| old.dominates(&candidate)) {
+    if results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
         return;
     }
-    results.retain(|old| !candidate.dominates(old));
+    results.retain(|old| old.rejected || !candidate.dominates(old));
     results.push(candidate);
 }
 
@@ -313,7 +316,8 @@ pub(crate) fn route_pong_observed(
             results
                 .iter()
                 .filter(|j| {
-                    better(j.dest_time, cursor, arrive_by)
+                    !j.rejected
+                        && better(j.dest_time, cursor, arrive_by)
                         && (include_too_slow
                             || (j.travel_time() < fastest_direct
                                 && j.travel_time() <= u64::from(max_travel_time)))
@@ -326,7 +330,7 @@ pub(crate) fn route_pong_observed(
             results
                 .iter()
                 .filter(|j| {
-                    j.journey.is_some()
+                    !j.rejected && j.journey.is_some()
                         && better(j.dest_time, cursor, arrive_by)
                         && better(j.dest_time, lookahead_end, arrive_by)
                         && j.travel_time() < fastest_direct
@@ -380,7 +384,7 @@ pub(crate) fn route_pong_observed(
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
             let candidate = Candidate::point(journey);
-            if !results.iter().any(|old| old.dominates(&candidate)) {
+            if !results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
                 pareto_add(&mut ping_results, candidate);
             }
         }
@@ -401,7 +405,7 @@ pub(crate) fn route_pong_observed(
             // established the latest departure for this arrival/boarding
             // pair. Reuse its oriented key instead of searching again.
             if let Some(known) = results.iter().find(|pong_j| {
-                pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
             }) {
                 ping_j.start_time = known.dest_time;
                 known_result_hits += 1;
@@ -425,7 +429,7 @@ pub(crate) fn route_pong_observed(
             let matched = results
                 .iter_mut()
                 .find(|pong_j| {
-                    pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                    !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
                 })
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -447,10 +451,20 @@ pub(crate) fn route_pong_observed(
                     &kernel_query,
                     point,
                 );
-                if journey.is_err() {
-                    state.stats_.profile_journeys_rejected += 1;
+                match journey {
+                    Ok(valid) => matched.journey = Some(valid),
+                    Err(error) => {
+                        state.stats_.profile_journeys_rejected += 1;
+                        matched.rejected = true;
+                        tracing::warn!(
+                            error = %error,
+                            boardings = point.boardings,
+                            start_time = point.start_time,
+                            dest_time = point.dest_time,
+                            "discarding invalid Nigiri PONG candidate"
+                        );
+                    }
                 }
-                matched.journey = Some(journey?);
             }
             ping_j.start_time = matched.dest_time;
         }
@@ -952,6 +966,114 @@ mod tests {
                     arrival_unix_seconds: arr, ..
                 } if *dep == base + 8*3600+1200 && *arr == base + 8*3600+1680))),
                 "missing added RT trip reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
+    fn rejected_pong_candidate_does_not_dominate_valid_alternative() {
+        let rejected_point = PointJourney {
+            start_time: 100, dest_time: 400, boardings: 2,
+        };
+        let mut rejected = Candidate::point(rejected_point);
+        rejected.rejected = true;
+        let valid = Candidate::point(PointJourney {
+            start_time: 90, dest_time: 410, boardings: 2,
+        });
+        let mut results = vec![rejected];
+        pareto_add(&mut results, valid);
+        assert!(results.iter().any(|candidate| !candidate.rejected
+            && candidate.start_time == 90 && candidate.dest_time == 410));
+    }
+
+    #[test]
+    fn realtime_delay_invalidates_transfer_but_preserves_earlier_alternative() {
+        // Train 0 used to arrive at 08:20 in time for train 1's 08:25
+        // departure. Realtime moves its arrival to 08:28. A different train
+        // still arrives at 08:15, so a valid two-ride chain remains.
+        let bytes = timetable(&[
+            (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
+            (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
+            (0, 1, 8 * 3600, 15 * 60),
+        ], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 1);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: Some((
+                crate::routing_common::timetable::TransportIdx(0),
+                crate::routing_common::timetable::DayIdx(0),
+            )),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Static(RouteIdx(0)),
+            event_times: vec![
+                base + 8 * 3600 + 18 * 60,
+                base + 8 * 3600 + 28 * 60,
+            ],
+            metadata: None,
+        }).unwrap();
+        // Other expected chateaux are allowed to be offline; the published
+        // shard still suppresses and replaces its own static instance.
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4; 32], 1,
+            &BTreeSet::from(["test".to_owned(), "not-yet-available".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".to_owned(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        assert!(snapshot.is_published());
+        assert!(!snapshot.is_complete());
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base + if reverse { 8 * 3600 + 35 * 60 } else { 7 * 3600 + 55 * 60 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None,
+                max_boardings: 3,
+                max_duration_seconds: 7200,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1,
+                    search_window_seconds: 3600,
+                    max_journey_duration_seconds: 7200,
+                    ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(!journeys.is_empty(), "lost feasible alternative reverse={reverse}");
+            for journey in &journeys {
+                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid transfer reverse={reverse}: {journey:?}");
+                assert!(!journey.legs.iter().any(|leg|
+                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
+                    "reconstructed suppressed static instance: {journey:?}");
+                let mut latest_arrival = None;
+                for leg in &journey.legs {
+                    if let Leg::Ride {
+                        departure_unix_seconds, arrival_unix_seconds, ..
+                    } = leg {
+                        if let Some(previous) = latest_arrival {
+                            assert!(previous <= *departure_unix_seconds,
+                                "connection uses a delayed arrival after its next departure");
+                        }
+                        latest_arrival = Some(*arrival_unix_seconds);
+                    }
+                }
+            }
+            assert!(journeys.iter().any(|j| {
+                j.boardings == 2 && j.legs.iter().any(|leg| matches!(
+                    leg, Leg::Ride {
+                        transport: 2,
+                        departure_unix_seconds: d, arrival_unix_seconds: a, ..
+                    } if *d == base + 8 * 3600 && *a == base + 8 * 3600 + 15 * 60
+                ))
+            }), "missing feasible earlier 08:00 train reverse={reverse}: {journeys:?}");
         }
     }
 

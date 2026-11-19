@@ -297,7 +297,7 @@ pub(super) fn valid_journey_with_realtime(
                 if let Some(rt) = realtime {
                     let Some(snapshot) = realtime_snapshot else { return false; };
                     if snapshot.publication_seq != rt.publication_seq ||
-                        !snapshot.is_complete() {
+                        !snapshot.is_published() {
                         return false;
                     }
                     let Some(run) = snapshot.run(rt.run) else { return false };

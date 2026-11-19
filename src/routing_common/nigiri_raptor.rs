@@ -372,8 +372,10 @@ impl NigiriRaptor {
             std::mem::swap(&mut self.prev_station_mark_, &mut self.station_mark_);
             self.station_mark_.clear();
             let scan = Instant::now();
-            self.scan_routes(tt, k);
+            // Scan live run instances before static transport chains, as in Nigiri.
+            // Suppressed transport-days are excluded by the static scanner.
             self.scan_realtime(tt, k);
+            self.scan_routes(tt, k);
             self.stats_.route_scan_ms += scan.elapsed().as_secs_f64() * 1000.0;
             self.route_mark_.clear();
             std::mem::swap(&mut self.prev_station_mark_, &mut self.station_mark_);
