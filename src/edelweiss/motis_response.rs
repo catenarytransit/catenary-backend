@@ -1196,6 +1196,14 @@ pub fn build(
 mod tests {
     use super::*;
 
+    #[test]
+    fn added_gtfs_trip_identity_keeps_colons_and_long_start_times() {
+        let encoded = format!("{}:{}{}:{}:{}", 7, "trip:id", 8, "25:00:31", 20_000);
+        assert_eq!(gtfs_trip_id_from_external(&encoded), Some("trip:id"));
+        assert_eq!(gtfs_start_time_from_external(&encoded), Some("25:00:31"));
+        assert_eq!(gtfs_start_time_from_external("not-a-trip"), None);
+    }
+
     fn instance_meta(start: i64, timezone: &str) -> TripInfo {
         TripInfo {
             start_time: Some(start),
