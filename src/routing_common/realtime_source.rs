@@ -142,6 +142,71 @@ pub fn project_routing_source_page(
     }
 }
 
+/// Read a raw GTFS-RT TripUpdates protobuf *offline* in the SoCal CI
+/// fixture. The production path is still Aspen's compressed tarpc RPC.
+/// This adapter uses the same Aspen descriptor/relationship conversions
+/// without ever starting an Aspen worker or touching its persistent stores.
+pub fn project_raw_gtfs_rt_trip_feed(
+    bytes: &[u8],
+) -> anyhow::Result<Vec<RoutingTripUpdate>> {
+    use prost::Message;
+    anyhow::ensure!(bytes.len() <= 32 * 1024 * 1024, "GTFS-RT fixture exceeds 32 MiB");
+    let feed = gtfs_realtime::FeedMessage::decode(bytes)?;
+    // Differential messages cannot safely be interpreted as a complete
+    // region update. Birch normally returns full snapshots; refuse a delta.
+    anyhow::ensure!(
+        feed.header.incrementality != Some(1),
+        "differential GTFS-RT is not a standalone realtime snapshot",
+    );
+    let mut output = Vec::new();
+    for entity in &feed.entity {
+        if entity.is_deleted == Some(true) {
+            // Entity deletion in a differential feed is NOT trip cancellation.
+            continue;
+        }
+        let Some(update) = entity.trip_update.as_ref() else { continue };
+        let trip: crate::aspen_dataset::AspenRawTripInfo = update.trip.clone().into();
+        // A raw sequence above u16 must not be silently truncated or mapped
+        // to a different occurrence in the original GTFS timetable.
+        // Until Aspen's wire format is widened, reject the entire entity.
+        if update.stop_time_update.iter().any(|s|
+            s.stop_sequence.is_some_and(|n| u16::try_from(n).is_err())
+        ) {
+            continue;
+        }
+        output.push(RoutingTripUpdate {
+            update_id: entity.id.clone(),
+            trip_id: trip.trip_id.or_else(|| {
+                trip.modified_trip.as_ref().and_then(|m| m.affected_trip_id.clone())
+            }),
+            route_id: trip.route_id,
+            service_date: trip.effective_start_date(),
+            start_time: trip.effective_start_time().map(str::to_owned),
+            schedule_relationship: trip.schedule_relationship,
+            delay_seconds: update.delay,
+            stops: update.stop_time_update.iter().map(|stop| RoutingStopUpdate {
+                sequence: stop.stop_sequence.map(|n| n as u16),
+                stop_id: stop.stop_id.clone(),
+                assigned_stop_id: stop.stop_time_properties.as_ref()
+                    .and_then(|p| p.assigned_stop_id.clone()),
+                arrival: stop.arrival.as_ref().map(|event| RoutingTimeUpdate {
+                    unix_seconds: event.time,
+                    delay_seconds: event.delay,
+                }),
+                departure: stop.departure.as_ref().map(|event| RoutingTimeUpdate {
+                    unix_seconds: event.time,
+                    delay_seconds: event.delay,
+                }),
+                schedule_relationship: crate::aspen_dataset::
+                    option_i32_to_stop_time_schedule_relationship(
+                        &stop.schedule_relationship,
+                    ),
+            }).collect(),
+        });
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
