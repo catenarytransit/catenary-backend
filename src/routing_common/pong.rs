@@ -941,6 +941,65 @@ mod tests {
     }
 
     #[test]
+    fn pong_two_ride_transfer_reconstructs_mixed_static_and_rt_in_both_directions() {
+        let bytes = timetable(&[
+            (0, 1, 8*3600, 600),
+            (1, 2, 8*3600+900, 600),
+        ], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4;32], 1);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: Some((
+                crate::routing_common::timetable::TransportIdx(1),
+                crate::routing_common::timetable::DayIdx(0),
+            )),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Static(RouteIdx(1)),
+            event_times: vec![base+8*3600+1200, base+8*3600+1800],
+            metadata: None,
+        }).unwrap();
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4;32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".to_owned(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base+8*3600+if reverse { 2100 } else { -120 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None, max_boardings: 3, max_duration_seconds: 3600,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1, search_window_seconds: 600,
+                    max_journey_duration_seconds: 3600, ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(journeys.iter().any(|j| {
+                j.boardings == 2
+                    && valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
+                    && j.legs.iter().any(|leg| matches!(leg,
+                        Leg::Ride { transport: 0, realtime: None, .. }))
+                    && j.legs.iter().any(|leg| matches!(leg,
+                        Leg::Ride { transport: 1, realtime: Some(_),
+                            departure_unix_seconds: d, arrival_unix_seconds: a, .. }
+                        if *d == base+8*3600+1200 && *a == base+8*3600+1800
+                    ))
+            }), "no valid mixed transfer for reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
     fn pong_does_not_return_cancelled_static_run() {
         let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
