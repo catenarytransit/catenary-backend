@@ -57,6 +57,22 @@ struct Args {
     /// Minimum delay between finished synchronization passes.
     #[arg(long, default_value_t = 60, env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS")]
     realtime_source_sync_seconds: u64,
+    /// Offline Birch TripUpdates protobuf fixture (no Aspen worker or etcd).
+    /// Only used by SoCal CI; does not enable live realtime journey scanning.
+    #[arg(long, requires_all = ["realtime_probe_region", "realtime_probe_static_feed"])]
+    realtime_probe_file: Option<PathBuf>,
+    /// Gentian region whose static timetable and identity sidecar are checked.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_region: Option<String>,
+    /// Unique static GTFS feed ID; resolves the exact Chateau from Gentian.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_static_feed: Option<String>,
+    /// Enforce that at least N complete runs are present (manual live CI).
+    #[arg(long, default_value_t = 0, requires = "realtime_probe_file")]
+    realtime_probe_min_runs: usize,
+    /// Optional machine-readable CI diagnostics.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_report: Option<PathBuf>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -1049,6 +1065,24 @@ async fn main() -> Result<()> {
     // Every startup scan/check is complete. Advise once before CLI queries or
     // HTTP traffic can fault the useful working set back in.
     advise_startup_mappings(&router, &osr, mmap_advice);
+    if let Some(path) = args.realtime_probe_file.as_ref() {
+        let region = args.realtime_probe_region.as_deref()
+            .context("--realtime-probe-region is required")?;
+        let feed = args.realtime_probe_static_feed.as_deref()
+            .context("--realtime-probe-static-feed is required")?;
+        let protobuf = fs::read(path)
+            .with_context(|| format!("reading raw Birch GTFS-RT fixture {}", path.display()))?;
+        let result = realtime_sync::probe_raw_gtfs_rt(
+            &router, &args.regions_config, region, feed,
+            &protobuf, args.realtime_probe_min_runs,
+        )?;
+        if let Some(path) = &args.realtime_probe_report {
+            fs::write(path, serde_json::to_vec_pretty(&result)?)
+                .with_context(|| format!("writing realtime probe report {}", path.display()))?;
+        }
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     if let Some(path) = args.query {
         let timing_output = args.query_timings.clone();
         let request: Request = serde_json::from_slice(
