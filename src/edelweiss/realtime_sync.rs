@@ -38,8 +38,6 @@ use std::path::Path;
 use std::time::Duration;
 use tarpc::context;
 
-const MAX_UPDATES_PER_SOURCE: usize = 20_000;
-const MAX_STOPS_PER_SOURCE: usize = 500_000;
 const SYNC_CONCURRENCY: usize = 4;
 
 #[derive(Debug, Clone)]
@@ -202,6 +200,8 @@ impl RealtimeSources {
                 (0..snapshot.updates.len()).map(|_| Vec::new()).collect();
             let mut rejections: Vec<Option<ResolveIssue>> =
                 (0..snapshot.updates.len()).map(|_| None).collect();
+            let mut preparation_rejections: Vec<Option<&'static str>> =
+                (0..snapshot.updates.len()).map(|_| None).collect();
 
             for &(source, ref assigned_chateau, _, _) in sources {
                 if assigned_chateau != chateau { continue; }
@@ -228,10 +228,16 @@ impl RealtimeSources {
                         if update.route_id.as_deref().is_some_and(|route_id|
                             tt.route_by_source_id(source, route_id).is_none()
                         ) {
+                            preparation_rejections[update_index]
+                                .get_or_insert("added_route_not_in_source");
                             continue;
                         }
-                        if let Ok(action) = added_action(&resolver, source, update) {
-                            added[update_index].push(action);
+                        match added_action(&resolver, source, update) {
+                            Ok(action) => added[update_index].push(action),
+                            Err(error) => {
+                                preparation_rejections[update_index]
+                                    .get_or_insert(error.diagnostic_code());
+                            }
                         }
                         continue;
                     }
@@ -247,12 +253,16 @@ impl RealtimeSources {
                         &tt, &resolver, source, original, update,
                     ) {
                         Ok(action) => action,
-                        Err(PrepareError::Identity(_)) => {
+                        Err(PrepareError::Identity(issue)) => {
                             stats.unresolved_stops += 1;
+                            preparation_rejections[update_index]
+                                .get_or_insert(issue.diagnostic_code());
                             continue;
                         }
-                        Err(_) => {
+                        Err(error) => {
                             stats.invalid_updates += 1;
+                            preparation_rejections[update_index]
+                                .get_or_insert(error.diagnostic_code());
                             continue;
                         }
                     };
@@ -289,8 +299,9 @@ impl RealtimeSources {
                         }
                         0 => {
                             stats.no_match += 1;
-                            let reason = rejections[index].as_ref()
-                                .map_or("no_resolved_action", ResolveIssue::diagnostic_code);
+                            let reason = preparation_rejections[index].or_else(|| {
+                                rejections[index].as_ref().map(ResolveIssue::diagnostic_code)
+                            }).unwrap_or("no_resolved_action");
                             *stats.no_match_reasons.entry(reason).or_default() += 1;
                         },
                         _ => stats.ambiguous += 1,
@@ -551,7 +562,6 @@ async fn fetch_source(
     let mut offset = 0u32;
     let mut expected = None;
     let mut updates = Vec::new();
-    let mut stop_count = 0usize;
     loop {
         let request = RoutingSourcePageRequest {
             chateau_id: chateau.to_owned(),
@@ -566,7 +576,6 @@ async fn fetch_source(
         ).await.context("Aspen RPC deadline exceeded")??
             .context("Aspen has no authoritative chateau snapshot")?;
         ensure!(page.protocol == ROUTING_SOURCE_PROTOCOL, "incompatible Aspen routing RPC protocol");
-        ensure!(page.total_updates as usize <= MAX_UPDATES_PER_SOURCE, "source exceeds realtime update budget");
         match page.state {
             RoutingPageState::NotModified if offset == 0 => {
                 return Ok(None);
@@ -577,10 +586,7 @@ async fn fetch_source(
                     expected = Some(page.revision_ms);
                 }
                 ensure!(expected == Some(page.revision_ms), "Aspen revision changed during snapshot paging");
-                stop_count += page_updates.iter().map(|u| u.stops.len()).sum::<usize>();
-                ensure!(stop_count <= MAX_STOPS_PER_SOURCE, "source exceeds realtime stop budget");
                 updates.extend(page_updates);
-                ensure!(updates.len() <= MAX_UPDATES_PER_SOURCE, "source exceeds realtime update budget");
                 if let Some(next) = next_offset {
                     ensure!(next > offset && next as usize == updates.len(), "invalid Aspen page cursor");
                     offset = next;
@@ -764,11 +770,6 @@ pub fn probe_raw_gtfs_rt(
     let updates = catenary::routing_common::realtime_source::
         project_raw_gtfs_rt_trip_feed(protobuf)?;
     ensure!(!updates.is_empty(), "Birch trip feed has no decodable TripUpdates");
-    ensure!(updates.len() <= MAX_UPDATES_PER_SOURCE, "GTFS-RT fixture exceeds source update cap");
-    ensure!(
-        updates.iter().map(|x| x.stops.len()).sum::<usize>() <= MAX_STOPS_PER_SOURCE,
-        "GTFS-RT fixture exceeds source stop cap",
-    );
     let received_count = updates.len();
     let sources = RealtimeSources::from_router(router, routing_config)?;
     let mut source_snapshot = SourceSnapshot {
@@ -906,6 +907,27 @@ mod tests {
             overlays: BTreeMap::from([(0, Arc::new(builder.finish().unwrap()))]),
             stats: ResolutionStats::default(),
         }
+    }
+
+    #[test]
+    fn preparation_errors_have_specific_stable_log_categories() {
+        assert_eq!(
+            PrepareError::Identity(ResolveIssue::UnknownStopId("stop".into()))
+                .diagnostic_code(),
+            "unknown_stop_id",
+        );
+        assert_eq!(
+            PrepareError::MissingEventTime.diagnostic_code(),
+            "prepare_missing_event_time",
+        );
+        assert_eq!(
+            PrepareError::InvalidEventTimes.diagnostic_code(),
+            "prepare_invalid_event_times",
+        );
+        assert_eq!(
+            PrepareError::InvalidStopOrder.diagnostic_code(),
+            "prepare_invalid_stop_order",
+        );
     }
 
     #[test]

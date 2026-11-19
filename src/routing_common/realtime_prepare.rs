@@ -34,6 +34,25 @@ pub enum PrepareError {
     UnsupportedRelationship,
 }
 
+impl PrepareError {
+    /// Low-cardinality category for per-chateau rejection reporting.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::Identity(issue) => issue.diagnostic_code(),
+            Self::MissingServiceDate => "prepare_missing_service_date",
+            Self::MissingTripIdentity => "prepare_missing_trip_identity",
+            Self::MissingStop => "prepare_missing_stop",
+            Self::MissingEventTime => "prepare_missing_event_time",
+            Self::InvalidStopOrder => "prepare_invalid_stop_order",
+            Self::DuplicateOccurrence => "prepare_duplicate_occurrence",
+            Self::InvalidEventTimes => "prepare_invalid_event_times",
+            Self::InvalidStaticProfile => "prepare_invalid_static_profile",
+            Self::TimeOverflow => "prepare_time_overflow",
+            Self::UnsupportedRelationship => "prepare_unsupported_relationship",
+        }
+    }
+}
+
 impl From<ResolveIssue> for PrepareError {
     fn from(e: ResolveIssue) -> Self {
         Self::Identity(e)
