@@ -1217,7 +1217,7 @@ mod tests {
             ChateauRealtimeShard, RegionRealtimeSnapshot, RegionRtPattern, RegionRtRun,
         };
         use catenary::routing_common::timetable::{
-            Coordinate, PackedStop, SourceIdx, StringRef, TimetableOwned,
+            Coordinate, PackedStop, TimetableOwned,
         };
         use std::collections::BTreeSet;
         use std::sync::Arc;
