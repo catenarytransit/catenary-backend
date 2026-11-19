@@ -19,17 +19,18 @@ use crate::routing_common::timetable::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use serde::Serialize;
 
 /// Identifies a realtime pattern within *one pinned region snapshot*.
 /// The slot is an index into RegionRealtimeSnapshot::chateaux.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RegionRtPattern {
     pub chateau_slot: u32,
     pub pattern: RtPatternRef,
 }
 
 /// Run handle scoped to one pinned regional realtime snapshot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RegionRtRun {
     pub chateau_slot: u32,
     pub run_index: u32,
