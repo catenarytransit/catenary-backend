@@ -848,6 +848,7 @@ mod tests {
                 PackedStop::new(LocationIdx(stop), true, true, true, true).unwrap(),
                 PackedStop::new(LocationIdx(stop + 1), true, true, true, true).unwrap(),
             ]),
+            metadata: None,
             event_times: vec![epoch + revision as i64, epoch + revision as i64 + 100],
         }).unwrap();
         SourceSnapshot {
