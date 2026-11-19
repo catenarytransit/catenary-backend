@@ -443,15 +443,17 @@ fn run_query_observed(
     let selection = router.select(request.from, request.to)?;
     timings.selection_ms = milliseconds(phase);
     catenary::observability::count("routing.queries", &[("region", &selection.transit_region)]);
-    // Feature-gated until the full snapshot-aware PONG reconstruction and
-    // response adapter are validated for each region. The same Arc is held
-    // across PING/PONG, progressive rendering and the final response.
+    // Feature-gated realtime routing pins one immutable regional publication.
+    // Each published chateau shard is authoritative only for that chateau;
+    // missing chateaux retain their static timetable runs. Full regional
+    // coverage is not required, since most regions have sparse RT sources.
+    // The same Arc is held across PING/PONG and journey reconstruction.
     let realtime_snapshot = if request.timetable_view
         && std::env::var("EDELWEISS_ENABLE_REALTIME_ROUTING").ok()
             .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
     {
         router.pin_realtime(&selection.transit_region)
-            .filter(|snapshot| snapshot.is_complete())
+            .filter(|snapshot| snapshot.is_published())
     } else {
         None
     };
@@ -676,6 +678,9 @@ fn run_query_observed(
             "routingEngine":if realtime_snapshot.is_some() { "nigiri-raptor-pong-realtime-v1" }
                 else if request.timetable_view { "nigiri-raptor-labels-pong-v5" } else { "point-raptor" },
             "realtimeSnapshotRevision":realtime_snapshot.as_ref().map(|rt| rt.publication_seq),
+            "realtimeSnapshotComplete":realtime_snapshot.as_ref().map(|rt| rt.is_complete()),
+            "realtimeSourcesLoaded":realtime_snapshot.as_ref().map(|rt| rt.chateaux.len()),
+            "realtimeSourcesExpected":realtime_snapshot.as_ref().map(|rt| rt.expected_chateaux),
         });
         if emit_chateau_metrics {
             for chateau in motis_response::journey_chateaus(&timetable, index, journeys, realtime_snapshot.as_deref()) {
