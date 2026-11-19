@@ -688,7 +688,7 @@ fn pattern_distinguishes_missing_sequence_zero_and_repeated_stops() {
         let mut stops = Vec::new();
         for (j, id) in ["A", "B", "A", ""].into_iter().enumerate() {
             let mut stop = empty_stop();
-            stop.stop_id = if j == 3 && i % 2 == 0 { None } else { Some(Arc::from(id)) };
+            stop.stop_id = if j == 3 && i % 4 < 2 { None } else { Some(Arc::from(id)) };
             stop.stop_sequence = match j {
                 0 if i % 2 == 0 => None,
                 0 => Some(0),
