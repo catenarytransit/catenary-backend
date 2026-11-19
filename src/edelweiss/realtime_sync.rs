@@ -100,6 +100,14 @@ pub struct RealtimeSources {
     pub identity_catalogs: BTreeMap<String, Arc<GtfsIdentityCatalog>>,
 }
 
+fn region_contains_chateau(
+    region_chateaux: &BTreeMap<String, BTreeSet<String>>,
+    region: &str,
+    chateau: &str,
+) -> bool {
+    region_chateaux.get(region).is_some_and(|names| names.contains(chateau))
+}
+
 fn record_rejection(slot: &mut Option<ResolveIssue>, issue: ResolveIssue) {
     if slot.as_ref().is_none_or(|previous| {
         issue.diagnostic_depth() > previous.diagnostic_depth()
@@ -172,6 +180,14 @@ impl RealtimeSources {
     ) {
         let mut stats = ResolutionStats::default();
         for (region_index, region) in router.transit.iter().enumerate() {
+            // A Chateau normally has compiled GTFS data in only one region.
+            // Without this guard, every update was counted as no_match in
+            // every unrelated region (typically four false no_candidate_source
+            // failures per update). The identity sidecar is scoped to its
+            // corresponding timetable, not a global catalog.
+            if !region_contains_chateau(&self.region_chateaux, &region.id, chateau) {
+                continue;
+            }
             let Some(catalog) = self.identity_catalogs.get(&region.id) else { continue };
             let Some(sources) = self.region_sources.get(&region.id) else { continue };
             let Ok(tt) = region.timetable.view() else { continue };
@@ -274,7 +290,7 @@ impl RealtimeSources {
                         0 => {
                             stats.no_match += 1;
                             let reason = rejections[index].as_ref()
-                                .map_or("no_candidate_source", ResolveIssue::diagnostic_code);
+                                .map_or("no_resolved_action", ResolveIssue::diagnostic_code);
                             *stats.no_match_reasons.entry(reason).or_default() += 1;
                         },
                         _ => stats.ambiguous += 1,
@@ -890,6 +906,20 @@ mod tests {
             overlays: BTreeMap::from([(0, Arc::new(builder.finish().unwrap()))]),
             stats: ResolutionStats::default(),
         }
+    }
+
+    #[test]
+    fn realtime_resolution_scopes_chateau_to_compiled_regions() {
+        let region_chateaux = BTreeMap::from([
+            ("europe".to_owned(), BTreeSet::from(["schweiz".to_owned()])),
+            ("us".to_owned(), BTreeSet::from(["metro~losangeles".to_owned()])),
+            ("canada".to_owned(), BTreeSet::from(["ttc".to_owned()])),
+        ]);
+        assert!(region_contains_chateau(&region_chateaux, "europe", "schweiz"));
+        assert!(!region_contains_chateau(&region_chateaux, "us", "schweiz"));
+        assert!(!region_contains_chateau(&region_chateaux, "canada", "schweiz"));
+        assert!(!region_contains_chateau(&region_chateaux, "australia", "schweiz"));
+        assert!(region_contains_chateau(&region_chateaux, "us", "metro~losangeles"));
     }
 
     #[test]
