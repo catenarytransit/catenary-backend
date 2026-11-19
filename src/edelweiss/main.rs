@@ -669,7 +669,7 @@ fn run_query_observed(
             "realtimeSnapshotRevision":realtime_snapshot.as_ref().map(|rt| rt.publication_seq),
         });
         if emit_chateau_metrics {
-            for chateau in motis_response::journey_chateaus(&timetable, index, journeys) {
+            for chateau in motis_response::journey_chateaus(&timetable, index, journeys, realtime_snapshot.as_deref()) {
                 if counted_chateaus.insert(chateau.clone()) {
                     catenary::observability::count(
                         "routing.chateau_accesses",
