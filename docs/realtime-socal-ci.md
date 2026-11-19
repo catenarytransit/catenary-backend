@@ -94,10 +94,12 @@ fixture import mode makes this test reproducible without introducing an
 insecure production RPC backdoor, sharing Aspen leases, or writing a
 realtime overlay to NVMe.
 
-The test **does not** exercise the Aspen tarpc transport itself; that is
-covered by its protocol/unit tests. It also does not yet exercise realtime
-RAPTOR forward/reverse scanning or journey reconstruction. Those capabilities
-must be tested after routing integration is enabled.
+The test **does not** exercise the Aspen tarpc transport itself; the
+separate RPC protocol has unit tests, but a complete real Aspen tarpc
+request/response integration test still needs a provisioned Aspen worker.
+It also does not yet exercise realtime RAPTOR forward/reverse scanning or
+journey reconstruction. Those capabilities must be tested after routing
+integration is enabled.
 
 Live feeds may be unavailable or have incomplete \`TripDescriptor.start_date\`
 fields, so the live network-dependent probe is intentionally opt-in. A failed
