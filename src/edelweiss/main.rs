@@ -52,9 +52,7 @@ struct Args {
     /// Opt-in, read-only transfer-closure inspection. Disabled in production by default.
     #[arg(long, env = "EDELWEISS_ENABLE_FOOTPATH_DEBUG")]
     enable_footpath_debug: bool,
-    /// Opt-in Aspen source RPC sync (observe-only; routing results unchanged).
-    #[arg(long, env = "EDELWEISS_ENABLE_REALTIME_SOURCE_SYNC")]
-    enable_realtime_source_sync: bool,
+    // Aspen realtime source synchronization is always started in server mode.
     /// Minimum delay between finished synchronization passes.
     #[arg(long, default_value_t = 60, env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS")]
     realtime_source_sync_seconds: u64,
@@ -448,15 +446,10 @@ fn run_query_observed(
     // missing chateaux retain their static timetable runs. Full regional
     // coverage is not required, since most regions have sparse RT sources.
     // The same Arc is held across PING/PONG and journey reconstruction.
-    let realtime_snapshot = if request.timetable_view
-        && std::env::var("EDELWEISS_ENABLE_REALTIME_ROUTING").ok()
-            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
-    {
+    let realtime_snapshot = request.timetable_view.then(|| {
         router.pin_realtime(&selection.transit_region)
             .filter(|snapshot| snapshot.is_published())
-    } else {
-        None
-    };
+    }).flatten();
 
     // Access, egress and direct walking have no data dependencies.
     // Use Rayon's existing bounded pool, rather than spawning up to three
@@ -1182,11 +1175,11 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
-    // Observe-only staging: get source-scoped updates from Aspen without
-    // allocating expanded GTFS datasets or writing overlay files to NVMe.
-    // RAPTOR does not read these snapshots yet, so incomplete matching cannot
-    // create false journeys or incorrectly suppress scheduled departures.
-    let realtime_sources = if args.enable_realtime_source_sync {
+    // Default realtime source sync. Each successful publication is immutable;
+    // queries use the available chateau shards and retain static service for
+    // chateaux with no realtime snapshot. The source sync runs independently
+    // of the HTTP server so an Aspen outage does not stop scheduled routing.
+    let realtime_sources = {
         let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router, &args.regions_config)?);
         let settings: catenary::catenaryconfig::CatenaryConfig =
             toml::from_str(&fs::read_to_string(&args.catenary_config)?)?;
@@ -1207,8 +1200,6 @@ async fn main() -> Result<()> {
             }
         });
         Some(sources)
-    } else {
-        None
     };
     let state = web::Data::new(State {
         router,
