@@ -228,7 +228,14 @@ impl RegionRealtimeSnapshot {
         })
     }
 
-    /// A fresh Aspen assignment sweep must occur before coverage is ready.
+    /// A successfully composed publication is safe to query even when some
+    /// expected realtime chateaux are missing. Only instances present in the
+    /// published source shards are suppressed; missing sources use static runs.
+    pub fn is_published(&self) -> bool {
+        self.publication_seq > 0
+    }
+
+    /// Full expected realtime coverage, for diagnostics and monitoring only.
     /// Some static GTFS chateaux have no realtime feed and are therefore not
     /// part of the expected *realtime* source set.
     pub fn is_complete(&self) -> bool {
@@ -464,7 +471,9 @@ mod tests {
             &tt, [1; 32], 1, &expected, vec![one.clone()],
         ).unwrap();
         assert!(!partial.is_complete());
+        assert!(partial.is_published());
         assert_eq!(partial.missing_chateaux, ["chateau-b"]);
+        assert_eq!(partial.run_count(), 1);
         let wrong = RegionRealtimeSnapshot::compose(
             &tt, [2; 32], 2, &expected, vec![one],
         );
