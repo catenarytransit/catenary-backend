@@ -17,6 +17,43 @@ use crate::routing_common::realtime_overlay::{
 use crate::routing_common::timetable::{
     DayIdx, LocationIdx, PackedStop, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
+
+/// Nigiri updates its per-profile lower-bound graph when a realtime segment
+/// becomes a shortcut. In this RAM-constrained adapter we conservatively
+/// invalidate static lower bounds only when some RT run may introduce a
+/// faster or newly boardable connection. Pure delays, skip-only changes and
+/// cancellations cannot shorten a path, so the original bounds remain valid.
+fn overlay_may_shortcut(tt: &ZeroCopyTimetable<'_>, overlay: &RealtimeOverlay) -> bool {
+    overlay.runs.iter().any(|run| {
+        let Some(original) = run.original else { return true };
+        let Some(route) = tt.transport_route().get(original.transport as usize) else {
+            return true;
+        };
+        let old = tt.stops_on(*route);
+        let Some(new) = overlay.stops(tt, run.pattern) else { return true };
+        if old.len() != new.len() { return true; }
+        for (prev, next) in old.iter().zip(new) {
+            if prev.location() != next.location() ||
+                (!prev.outbound() && next.outbound()) ||
+                (!prev.inbound() && next.inbound()) ||
+                (!prev.wheelchair_in() && next.wheelchair_in()) ||
+                (!prev.wheelchair_out() && next.wheelchair_out())
+            {
+                return true;
+            }
+        }
+        let Some(static_events) = tt.events_for_transport(TransportIdx(original.transport))
+        else { return true };
+        (0..new.len()-1).any(|i| {
+            let Some(rt_dep) = overlay.event_time(run, i*2) else { return true };
+            let Some(rt_arr) = overlay.event_time(run, i*2+1) else { return true };
+            let Some(old_dep) = static_events.get(i*2) else { return true };
+            let Some(old_arr) = static_events.get(i*2+1) else { return true };
+            rt_arr.saturating_sub(rt_dep) <
+                i64::from(old_arr.seconds() - old_dep.seconds())
+        })
+    })
+}
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use serde::Serialize;
@@ -55,6 +92,9 @@ pub struct RegionRealtimeSnapshot {
     pub chateaux: Vec<ChateauRealtimeShard>,
     pub expected_chateaux: usize,
     pub missing_chateaux: Vec<String>,
+    /// True when a new or faster RT edge can invalidate static-only bounds.
+    /// Computed once at publication, never by every PONG query.
+    pub may_shortcut: bool,
     location_patterns: BTreeMap<u32, Vec<RegionRtPattern>>,
     // Sorted compact union; a persistent BTreeSet would allocate a node
     // per canceled transport-day instance on every regional revision.
@@ -103,6 +143,7 @@ impl RegionRealtimeSnapshot {
         let mut original_instance_runs = BTreeMap::new();
         let mut chateaux = Vec::with_capacity(shards.len());
         let mut observed = BTreeSet::new();
+        let mut may_shortcut = false;
 
         for shard in shards {
             if !expected_chateaux.contains(&shard.chateau) {
@@ -128,6 +169,7 @@ impl RegionRealtimeSnapshot {
                 }
             }
 
+            may_shortcut |= overlay_may_shortcut(tt, &shard.overlay);
             let chateau_slot =
                 u32::try_from(chateaux.len()).map_err(|_| RegionSnapshotError::TooManyChateaux)?;
             for (i, run) in shard.overlay.runs.iter().enumerate() {
@@ -178,6 +220,7 @@ impl RegionRealtimeSnapshot {
             chateaux,
             expected_chateaux: expected_chateaux.len(),
             missing_chateaux,
+            may_shortcut,
             location_patterns,
             suppressed_static: suppressed_static.into_iter().collect(),
             cancelled_static: cancelled_static.into_iter().collect(),
