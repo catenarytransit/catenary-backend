@@ -31,13 +31,30 @@ pub fn scan_realtime_round(
     previous: &[i64],
     marked: &[usize],
     reverse: bool,
+    emit: impl FnMut(RtScanCandidate),
+) {
+    scan_realtime_round_with(
+        tt, snapshot, marked, reverse,
+        |stop| previous.get(stop).copied(), emit,
+    );
+}
+
+/// Zero-copy version for NigiriRaptor: pass the compressed previous-round
+/// i32 label slice through a closure instead of allocating an extra i64
+/// label array on every round.
+pub fn scan_realtime_round_with(
+    tt: &ZeroCopyTimetable<'_>,
+    snapshot: &RegionRealtimeSnapshot,
+    marked: &[usize],
+    reverse: bool,
+    ready_at: impl Fn(usize) -> Option<i64>,
     mut emit: impl FnMut(RtScanCandidate),
 ) {
     if marked.is_empty() || !snapshot.is_complete() { return; }
     let marked_set = marked.iter().copied().collect::<HashSet<_>>();
     let mut patterns = BTreeSet::<RegionRtPattern>::new();
     for &stop in marked {
-        let Some(&ready) = previous.get(stop) else { continue };
+        let Some(ready) = ready_at(stop) else { continue };
         if ready == if reverse { i64::MIN } else { i64::MAX } { continue; }
         for &pattern in snapshot.patterns_at(LocationIdx(stop as u32)) {
             patterns.insert(pattern);
@@ -70,7 +87,7 @@ pub fn scan_realtime_round(
                         }
                     }
                     if pos > 0 && stop.inbound() && marked_set.contains(&loc)
-                        && let Some(&ready) = previous.get(loc)
+                        && let Some(ready) = ready_at(loc)
                         && ready != i64::MIN
                         && let Some(arrival) = snapshot.run_event_time(handle, pos * 2 - 1)
                         && arrival <= ready
@@ -98,7 +115,7 @@ pub fn scan_realtime_round(
                     }
                     if pos + 1 < stops.len() && stop.outbound() && carried.is_none()
                         && marked_set.contains(&loc)
-                        && let Some(&ready) = previous.get(loc)
+                        && let Some(ready) = ready_at(loc)
                         && ready != i64::MAX
                         && let Some(departure) = snapshot.run_event_time(handle, pos * 2)
                         && departure >= ready
