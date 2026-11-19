@@ -6,6 +6,7 @@
 use crate::routing_common::raptor_query::RaptorStats;
 use crate::routing_common::timetable::{BitfieldIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use std::collections::HashMap;
+use crate::routing_common::routing_index::IndexArray;
 
 const DAY: i64 = 86_400;
 
@@ -20,15 +21,15 @@ pub(crate) struct SelectedTransport {
 /// Nigiri's event_times: first departure + event-major pattern offset.
 /// No expanded stop-times matrix or query-local calendar index is needed.
 pub(crate) struct TransportChain {
-    transports: Vec<TransportIdx>,
-    first_departures: Vec<u32>,
-    patterns: Vec<usize>,
-    offsets: Vec<u32>,
-    n_patterns: usize,
-    calendars: Vec<BitfieldIdx>,
+    pub(crate) transports: IndexArray<TransportIdx>,
+    pub(crate) first_departures: IndexArray<u32>,
+    pub(crate) patterns: IndexArray<usize>,
+    pub(crate) offsets: IndexArray<u32>,
+    pub(crate) n_patterns: usize,
+    pub(crate) calendars: IndexArray<BitfieldIdx>,
     /// Union of service calendars shifted to all days on which a vehicle runs.
     /// This can extend past the last start day for overnight vehicles.
-    event_days: Vec<u64>,
+    pub(crate) event_days: IndexArray<u64>,
 }
 
 impl TransportChain {
@@ -157,7 +158,7 @@ impl TransportChain {
 }
 
 pub(crate) struct TransportIndex {
-    routes: Vec<Vec<TransportChain>>,
+    pub(crate) routes: Vec<Vec<TransportChain>>,
 }
 
 impl TransportIndex {
@@ -274,13 +275,13 @@ impl TransportIndex {
                     }
                 }
                 chains.push(TransportChain {
-                    transports,
-                    first_departures,
-                    patterns,
-                    offsets,
+                    transports: IndexArray::owned(transports),
+                    first_departures: IndexArray::owned(first_departures),
+                    patterns: IndexArray::owned(patterns),
+                    offsets: IndexArray::owned(offsets),
                     n_patterns,
-                    calendars,
-                    event_days,
+                    calendars: IndexArray::owned(calendars),
+                    event_days: IndexArray::owned(event_days),
                 });
             }
             routes.push(chains);
