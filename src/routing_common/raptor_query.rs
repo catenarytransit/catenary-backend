@@ -1190,7 +1190,8 @@ mod tests {
                     alight_stop_index: 2,
                     departure_unix_seconds: first_boarding,
                     arrival_unix_seconds: final_arrival,
-                },
+                    realtime: None,
+},
                 Leg::Egress {
                     from_stop: 2,
                     seconds: 0,
@@ -1240,7 +1241,8 @@ mod tests {
                     alight_stop_index: 1,
                     departure_unix_seconds: searched_at + 100,
                     arrival_unix_seconds: searched_at + 300,
-                },
+                    realtime: None,
+},
             ],
         };
         optimize_initial_departure(&mut too_late);
