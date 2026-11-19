@@ -19,6 +19,10 @@ pub struct RaptorStats {
     pub transport_days_tested: u64,
     pub active_transport_days: u64,
     pub stop_events_scanned: u64,
+    /// RT run sections tested in the per-run bidirectional scanner.
+    pub realtime_ride_candidates: u64,
+    /// RT ride endpoint relaxations improving a previous-round label.
+    pub realtime_label_improvements: u64,
     pub footpath_edges_examined: u64,
     pub walking_heap_pushes: u64,
     pub labels_improved: u64,
