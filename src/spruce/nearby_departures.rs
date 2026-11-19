@@ -76,11 +76,12 @@ pub fn spruce_nearby_chateaus(
     result.extend(response.routes.keys().cloned());
     result.extend(response.stops.keys().cloned());
     result.extend(response.local.iter().map(|route| route.chateau_id.clone()));
-    result.extend(
-        response.long_distance.iter().flat_map(|station| {
-            station.departures.iter().map(|departure| departure.chateau_id.clone())
-        }),
-    );
+    result.extend(response.long_distance.iter().flat_map(|station| {
+        station
+            .departures
+            .iter()
+            .map(|departure| departure.chateau_id.clone())
+    }));
     result
 }
 

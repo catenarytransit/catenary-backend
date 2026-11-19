@@ -9,13 +9,11 @@
 //! atomic-in-memory publication. Aspen RPC import and RAPTOR scans are separate
 //! integration steps; neither is silently enabled by this module.
 
+use crate::routing_common::realtime_status::{RtEventKind, RtRunMetadata, StaticRunStatus};
 use crate::routing_common::timetable::{
     DayIdx, LocationIdx, PackedStop, RouteIdx, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
 use serde::{Deserialize, Serialize};
-use crate::routing_common::realtime_status::{
-    RtEventKind, RtRunMetadata, StaticRunStatus,
-};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
@@ -168,16 +166,24 @@ impl RealtimeOverlay {
 
     pub fn event_kind(&self, run_index: u32, slot: usize) -> Option<RtEventKind> {
         let run = self.runs.get(run_index as usize)?;
-        if slot >= (run.event_to - run.event_from) as usize { return None; }
+        if slot >= (run.event_to - run.event_from) as usize {
+            return None;
+        }
         Some(self.run_metadata(run_index).map_or(
-            if run.original.is_none() { RtEventKind::Estimated }
-            else { RtEventKind::Timetabled },
+            if run.original.is_none() {
+                RtEventKind::Estimated
+            } else {
+                RtEventKind::Timetabled
+            },
             |meta| meta.event_kind(slot, run.original.is_none()),
         ))
     }
 
     pub fn static_status(&self, transport: TransportIdx, day: DayIdx) -> StaticRunStatus {
-        let key = StaticInstance { transport: transport.0, day: day.0 };
+        let key = StaticInstance {
+            transport: transport.0,
+            day: day.0,
+        };
         if self.cancelled_static.binary_search(&key).is_ok() {
             StaticRunStatus::Cancelled
         } else if self.suppressed_static.binary_search(&key).is_ok() {
@@ -251,7 +257,8 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         Self {
             tt,
             snapshot: RealtimeOverlay::empty(
-                generation, revision,
+                generation,
+                revision,
                 i64::from(tt.header().first_utc_day) * 86_400,
             ),
             static_patterns: HashMap::new(),
@@ -262,11 +269,7 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         }
     }
 
-    pub fn new(
-        tt: &'tt ZeroCopyTimetable<'data>,
-        generation: [u8; 32],
-        revision: u64,
-    ) -> Self {
+    pub fn new(tt: &'tt ZeroCopyTimetable<'data>, generation: [u8; 32], revision: u64) -> Self {
         let mut static_patterns = HashMap::<(usize, u64), Vec<u32>>::new();
         for route in 0..tt.route_transport_ranges().len() {
             let stops = tt.stops_on(RouteIdx(route as u32));
@@ -326,7 +329,9 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             }
             RtPatternInput::Stops(stops) => {
                 if stops.len() < 2
-                    || stops.iter().any(|s| s.location().idx() >= self.tt.coordinates().len())
+                    || stops
+                        .iter()
+                        .any(|s| s.location().idx() >= self.tt.coordinates().len())
                 {
                     return Err(OverlayError::InvalidLocation);
                 }
@@ -388,11 +393,18 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         };
         if stop_count < 2
             || input.event_times.len() != (stop_count - 1) * 2
-            || input.event_times.windows(2).any(|times| times[0] > times[1])
+            || input
+                .event_times
+                .windows(2)
+                .any(|times| times[0] > times[1])
         {
             return Err(OverlayError::InvalidEvents);
         }
-        if input.metadata.as_ref().is_some_and(|m| !m.validate(input.event_times.len(), stop_count)) {
+        if input
+            .metadata
+            .as_ref()
+            .is_some_and(|m| !m.validate(input.event_times.len(), stop_count))
+        {
             return Err(OverlayError::InvalidEvents);
         }
         // Validate the entire time sequence before mutating the builder.
@@ -400,7 +412,8 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             .event_times
             .iter()
             .map(|t| {
-                let diff = t.checked_sub(self.snapshot.event_epoch)
+                let diff = t
+                    .checked_sub(self.snapshot.event_epoch)
                     .ok_or(OverlayError::TimeOutOfRange)?;
                 i32::try_from(diff).map_err(|_| OverlayError::TimeOutOfRange)
             })
@@ -411,8 +424,8 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             .checked_add(u32::try_from(offsets.len()).map_err(|_| OverlayError::TooManyEntries)?)
             .ok_or(OverlayError::TooManyEntries)?;
         let pattern = self.intern_pattern(input.pattern)?;
-        let run_id = u32::try_from(self.snapshot.runs.len())
-            .map_err(|_| OverlayError::TooManyEntries)?;
+        let run_id =
+            u32::try_from(self.snapshot.runs.len()).map_err(|_| OverlayError::TooManyEntries)?;
         self.snapshot.event_offsets_seconds.extend(offsets);
         self.snapshot.runs.push(RtRun {
             source: input.source.0,
@@ -423,7 +436,11 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             event_from: from,
             event_to: to,
         });
-        self.snapshot.pattern_runs.entry(pattern).or_default().push(run_id);
+        self.snapshot
+            .pattern_runs
+            .entry(pattern)
+            .or_default()
+            .push(run_id);
         if let Some(meta) = input.metadata {
             if !meta.events.is_empty() || !meta.stops.is_empty() {
                 self.snapshot.run_metadata.push((run_id, meta));
@@ -437,13 +454,18 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
 
     pub fn finish(mut self) -> Result<RealtimeOverlay, OverlayError> {
         for stops in self.dynamic_patterns {
-            let end = self.snapshot.dynamic_pattern_stops.len()
+            let end = self
+                .snapshot
+                .dynamic_pattern_stops
+                .len()
                 .checked_add(stops.len())
                 .ok_or(OverlayError::TooManyEntries)?;
-            self.snapshot.dynamic_pattern_offsets.push(
-                u32::try_from(end).map_err(|_| OverlayError::TooManyEntries)?,
-            );
-            self.snapshot.dynamic_pattern_stops.extend(stops.into_iter().map(|s| s.0));
+            self.snapshot
+                .dynamic_pattern_offsets
+                .push(u32::try_from(end).map_err(|_| OverlayError::TooManyEntries)?);
+            self.snapshot
+                .dynamic_pattern_stops
+                .extend(stops.into_iter().map(|s| s.0));
         }
         self.snapshot.suppressed_static = self.suppressed.into_iter().collect();
         self.snapshot.cancelled_static = self.cancelled.into_iter().collect();
@@ -452,18 +474,28 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         for &pattern in self.snapshot.pattern_runs.keys() {
             let mut unique = HashSet::new();
             let stops: Vec<_> = match pattern {
-                RtPatternRef::Static(route) => self.tt.stops_on(RouteIdx(route))
-                    .iter().map(|s| s.location().0).collect(),
+                RtPatternRef::Static(route) => self
+                    .tt
+                    .stops_on(RouteIdx(route))
+                    .iter()
+                    .map(|s| s.location().0)
+                    .collect(),
                 RtPatternRef::Dynamic(index) => {
                     let start = self.snapshot.dynamic_pattern_offsets[index as usize] as usize;
                     let end = self.snapshot.dynamic_pattern_offsets[index as usize + 1] as usize;
                     self.snapshot.dynamic_pattern_stops[start..end]
-                        .iter().map(|s| s & PackedStop::LOCATION_MASK).collect()
+                        .iter()
+                        .map(|s| s & PackedStop::LOCATION_MASK)
+                        .collect()
                 }
             };
             for stop in stops {
                 if unique.insert(stop) {
-                    self.snapshot.location_patterns.entry(stop).or_default().push(pattern);
+                    self.snapshot
+                        .location_patterns
+                        .entry(stop)
+                        .or_default()
+                        .push(pattern);
                 }
             }
         }
@@ -481,9 +513,7 @@ pub struct RealtimeOverlayStore {
 impl RealtimeOverlayStore {
     pub fn new(generation: [u8; 32], event_epoch: i64) -> Self {
         Self {
-            snapshot: RwLock::new(Arc::new(RealtimeOverlay::empty(
-                generation, 0, event_epoch,
-            ))),
+            snapshot: RwLock::new(Arc::new(RealtimeOverlay::empty(generation, 0, event_epoch))),
         }
     }
 
@@ -510,8 +540,7 @@ impl RealtimeOverlayStore {
 mod tests {
     use super::*;
     use crate::routing_common::timetable::{
-        BitfieldIdx, Clasz, Coordinate, LocationIdx, Range, StringRef,
-        TimetableOwned,
+        BitfieldIdx, Clasz, Coordinate, LocationIdx, Range, StringRef, TimetableOwned,
     };
 
     fn fixture() -> Vec<u8> {
@@ -530,9 +559,8 @@ mod tests {
             tt.footpaths_in_offsets.push(0);
         }
         for stop in 0..3 {
-            tt.route_stops.push(PackedStop::new(
-                LocationIdx(stop), true, true, true, true
-            ).unwrap());
+            tt.route_stops
+                .push(PackedStop::new(LocationIdx(stop), true, true, true, true).unwrap());
         }
         tt.route_stop_offsets.push(3);
         tt.route_transport_ranges.push(Range { from: 0, to: 0 });
@@ -547,9 +575,9 @@ mod tests {
     }
 
     fn stops(seq: &[u32]) -> Vec<PackedStop> {
-        seq.iter().map(|&id| {
-            PackedStop::new(LocationIdx(id), true, true, true, true).unwrap()
-        }).collect()
+        seq.iter()
+            .map(|&id| PackedStop::new(LocationIdx(id), true, true, true, true).unwrap())
+            .collect()
     }
 
     #[test]
@@ -559,15 +587,17 @@ mod tests {
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut builder = RealtimeOverlayBuilder::new(&tt, [7; 32], 1);
         for (id, seq) in [(0, vec![0, 1, 2]), (1, vec![0, 1, 3]), (2, vec![0, 1, 3])] {
-            builder.add_run(RtRunInput {
-                source: SourceIdx(0),
-                original: None,
-                service_date: 20_000,
-                external_id: Some(format!("added-{id}")),
-                pattern: RtPatternInput::Stops(stops(&seq)),
-                metadata: None,
-                event_times: vec![epoch + 11, epoch + 123, epoch + 125, epoch + 299],
-            }).unwrap();
+            builder
+                .add_run(RtRunInput {
+                    source: SourceIdx(0),
+                    original: None,
+                    service_date: 20_000,
+                    external_id: Some(format!("added-{id}")),
+                    pattern: RtPatternInput::Stops(stops(&seq)),
+                    metadata: None,
+                    event_times: vec![epoch + 11, epoch + 123, epoch + 125, epoch + 299],
+                })
+                .unwrap();
         }
         let snap = builder.finish().unwrap();
         assert_eq!(snap.dynamic_pattern_offsets, vec![0, 3]);
@@ -577,7 +607,10 @@ mod tests {
         assert_eq!(snap.patterns_at(LocationIdx(1)).len(), 2);
         assert_eq!(snap.runs_for(RtPatternRef::Dynamic(0)).count(), 2);
         assert_eq!(snap.event_time(&snap.runs[2], 3), Some(epoch + 299));
-        assert_eq!(snap.stops(&tt, RtPatternRef::Dynamic(0)).unwrap(), stops(&[0, 1, 3]));
+        assert_eq!(
+            snap.stops(&tt, RtPatternRef::Dynamic(0)).unwrap(),
+            stops(&[0, 1, 3])
+        );
     }
 
     #[test]
@@ -586,15 +619,17 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [8; 32], 5);
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: None,
-            service_date: 20_000,
-            external_id: Some("added-exact".into()),
-            pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
-            metadata: None,
-            event_times: vec![epoch + 2, epoch + 50, epoch + 70, epoch + 200],
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("added-exact".into()),
+                pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
+                metadata: None,
+                event_times: vec![epoch + 2, epoch + 50, epoch + 70, epoch + 200],
+            })
+            .unwrap();
         let rt = builder.finish().unwrap();
         assert_eq!(rt.runs[0].pattern, RtPatternRef::Static(0));
         assert!(rt.dynamic_pattern_stops.is_empty());
@@ -608,15 +643,17 @@ mod tests {
         let mut builder = RealtimeOverlayBuilder::new(&tt, [7; 32], 1);
         let mut changed = stops(&[0, 1, 2]);
         changed[1] = PackedStop::new(LocationIdx(1), false, true, true, true).unwrap();
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: None,
-            service_date: 20_000,
-            external_id: Some("restricted".to_string()),
-            pattern: RtPatternInput::Stops(changed),
-            metadata: None,
-            event_times: vec![epoch + 1, epoch + 2, epoch + 3, epoch + 4],
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("restricted".to_string()),
+                pattern: RtPatternInput::Stops(changed),
+                metadata: None,
+                event_times: vec![epoch + 1, epoch + 2, epoch + 3, epoch + 4],
+            })
+            .unwrap();
         let snap = builder.finish().unwrap();
         assert_eq!(snap.runs[0].pattern, RtPatternRef::Dynamic(0));
     }
@@ -648,29 +685,59 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [1; 32], 2);
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: None,
-            service_date: 20_000,
-            external_id: Some("test-added".into()),
-            pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
-            event_times: vec![epoch + 1, epoch + 20, epoch + 30, epoch + 40],
-            metadata: Some(RtRunMetadata {
-                events: vec![RtEventAnnotation { slot: 1, kind: RtEventKind::NoData }],
-                stops: vec![RtStopChange {
-                    position: 1, skipped: true, no_data: false, original_location: None,
-                }],
-            }),
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("test-added".into()),
+                pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
+                event_times: vec![epoch + 1, epoch + 20, epoch + 30, epoch + 40],
+                metadata: Some(RtRunMetadata {
+                    events: vec![RtEventAnnotation {
+                        slot: 1,
+                        kind: RtEventKind::NoData,
+                    }],
+                    stops: vec![RtStopChange {
+                        position: 1,
+                        skipped: true,
+                        no_data: false,
+                        original_location: None,
+                    }],
+                }),
+            })
+            .unwrap();
         let mut overlay = builder.finish().unwrap();
         assert_eq!(overlay.event_kind(0, 0), Some(RtEventKind::Estimated));
         assert_eq!(overlay.event_kind(0, 1), Some(RtEventKind::NoData));
-        assert!(overlay.run_metadata(0).unwrap().stop_change(1).unwrap().skipped);
-        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Scheduled);
-        overlay.suppressed_static.push(StaticInstance { transport: 2, day: 1 });
-        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Replaced);
-        overlay.cancelled_static.push(StaticInstance { transport: 2, day: 1 });
-        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Cancelled);
+        assert!(
+            overlay
+                .run_metadata(0)
+                .unwrap()
+                .stop_change(1)
+                .unwrap()
+                .skipped
+        );
+        assert_eq!(
+            overlay.static_status(TransportIdx(2), DayIdx(1)),
+            StaticRunStatus::Scheduled
+        );
+        overlay.suppressed_static.push(StaticInstance {
+            transport: 2,
+            day: 1,
+        });
+        assert_eq!(
+            overlay.static_status(TransportIdx(2), DayIdx(1)),
+            StaticRunStatus::Replaced
+        );
+        overlay.cancelled_static.push(StaticInstance {
+            transport: 2,
+            day: 1,
+        });
+        assert_eq!(
+            overlay.static_status(TransportIdx(2), DayIdx(1)),
+            StaticRunStatus::Cancelled
+        );
     }
 
     #[test]
@@ -679,15 +746,17 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut builder = RealtimeOverlayBuilder::new(&tt, [1; 32], 1);
-        let err = builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: None,
-            service_date: 20_000,
-            external_id: Some("far-future".into()),
-            pattern: RtPatternInput::Static(RouteIdx(0)),
-            metadata: None,
-            event_times: vec![epoch + i64::from(i32::MAX) + 1; 4],
-        }).unwrap_err();
+        let err = builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("far-future".into()),
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                metadata: None,
+                event_times: vec![epoch + i64::from(i32::MAX) + 1; 4],
+            })
+            .unwrap_err();
         assert_eq!(err, OverlayError::TimeOutOfRange);
     }
 }

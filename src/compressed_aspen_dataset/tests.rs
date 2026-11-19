@@ -642,7 +642,8 @@ fn identical_stop_sequences_share_pattern_without_sharing_times() {
             stop.departure = stop.arrival.clone();
             stops.push(stop);
         }
-        data.trip_updates.insert(format!("t-{i}").into(), trip(stops));
+        data.trip_updates
+            .insert(format!("t-{i}").into(), trip(stops));
     }
     let expected = serde_json::to_value(&data).unwrap();
     let compressed = data.into_compressed();
@@ -650,18 +651,49 @@ fn identical_stop_sequences_share_pattern_without_sharing_times() {
     assert!(compressed.trip_updates().uses_shared_stop_patterns());
     assert_eq!(compressed.trip_updates().stop_pattern_count(), 1);
     assert_ne!(
-        compressed.trip_updates().get("t-3").unwrap().stops().next().unwrap().arrival().unwrap().time,
-        compressed.trip_updates().get("t-4").unwrap().stops().next().unwrap().arrival().unwrap().time,
+        compressed
+            .trip_updates()
+            .get("t-3")
+            .unwrap()
+            .stops()
+            .next()
+            .unwrap()
+            .arrival()
+            .unwrap()
+            .time,
+        compressed
+            .trip_updates()
+            .get("t-4")
+            .unwrap()
+            .stops()
+            .next()
+            .unwrap()
+            .arrival()
+            .unwrap()
+            .time,
     );
     assert_eq!(
-        compressed.trip_updates().get("t-3").unwrap().stops().nth(2).unwrap().stop_sequence(),
+        compressed
+            .trip_updates()
+            .get("t-3")
+            .unwrap()
+            .stops()
+            .nth(2)
+            .unwrap()
+            .stop_sequence(),
         Some(8),
     );
-    assert_eq!(serde_json::to_value(compressed.to_expanded()).unwrap(), expected);
+    assert_eq!(
+        serde_json::to_value(compressed.to_expanded()).unwrap(),
+        expected
+    );
     let bytes = crate::bincode_serialize(&compressed).unwrap();
     let decoded: CompressedAspenisedData = crate::bincode_deserialize(&bytes).unwrap();
     assert!(decoded.trip_updates().uses_shared_stop_patterns());
-    assert_eq!(serde_json::to_value(decoded.into_expanded()).unwrap(), expected);
+    assert_eq!(
+        serde_json::to_value(decoded.into_expanded()).unwrap(),
+        expected
+    );
 }
 
 #[test]
@@ -675,9 +707,16 @@ fn unique_sequences_use_flat_rows() {
             stop.stop_sequence = Some(j + 1);
             stops.push(stop);
         }
-        data.trip_updates.insert(format!("t-{i}").into(), trip(stops));
+        data.trip_updates
+            .insert(format!("t-{i}").into(), trip(stops));
     }
-    assert!(!data.clone().into_compressed().trip_updates().uses_shared_stop_patterns());
+    assert!(
+        !data
+            .clone()
+            .into_compressed()
+            .trip_updates()
+            .uses_shared_stop_patterns()
+    );
     assert_round_trip(data);
 }
 
@@ -688,7 +727,11 @@ fn pattern_distinguishes_missing_sequence_zero_and_repeated_stops() {
         let mut stops = Vec::new();
         for (j, id) in ["A", "B", "A", ""].into_iter().enumerate() {
             let mut stop = empty_stop();
-            stop.stop_id = if j == 3 && i % 4 < 2 { None } else { Some(Arc::from(id)) };
+            stop.stop_id = if j == 3 && i % 4 < 2 {
+                None
+            } else {
+                Some(Arc::from(id))
+            };
             stop.stop_sequence = match j {
                 0 if i % 2 == 0 => None,
                 0 => Some(0),
@@ -698,19 +741,28 @@ fn pattern_distinguishes_missing_sequence_zero_and_repeated_stops() {
             };
             stops.push(stop);
         }
-        data.trip_updates.insert(format!("t-{i}").into(), trip(stops));
+        data.trip_updates
+            .insert(format!("t-{i}").into(), trip(stops));
     }
     let expected = serde_json::to_value(&data).unwrap();
     let compressed = data.into_compressed();
     assert!(compressed.trip_updates().uses_shared_stop_patterns());
     assert_eq!(compressed.trip_updates().stop_pattern_count(), 4);
     for id in ["t-0", "t-1", "t-2", "t-3"] {
-        let stops: Vec<_> = compressed.trip_updates().get(id).unwrap().stops()
-            .map(|s| (s.stop_id().map(str::to_owned), s.stop_sequence())).collect();
+        let stops: Vec<_> = compressed
+            .trip_updates()
+            .get(id)
+            .unwrap()
+            .stops()
+            .map(|s| (s.stop_id().map(str::to_owned), s.stop_sequence()))
+            .collect();
         assert_eq!(stops[0].0.as_deref(), Some("A"));
         assert_eq!(stops[2], (Some("A".to_owned()), Some(10)));
     }
-    assert_eq!(serde_json::to_value(compressed.to_expanded()).unwrap(), expected);
+    assert_eq!(
+        serde_json::to_value(compressed.to_expanded()).unwrap(),
+        expected
+    );
 }
 
 #[test]
@@ -724,13 +776,25 @@ fn historical_v1_snapshots_decode_and_upgrade_on_borrow() {
     let old_trips = legacy_trips::CompressedTripUpdates::from(data.trip_updates.clone());
     let metadata = data.into_compressed().metadata().clone();
     let old = CompressedAspenisedData::V1(Box::new(AspenSnapshotV1 {
-        metadata, trips: old_trips, upgraded: OnceLock::new(),
+        metadata,
+        trips: old_trips,
+        upgraded: OnceLock::new(),
     }));
     let bytes = crate::bincode_serialize(&old).unwrap();
     let decoded: CompressedAspenisedData = crate::bincode_deserialize(&bytes).unwrap();
     assert_eq!(
-        decoded.trip_updates().get("legacy").unwrap().stops().next().unwrap().stop_sequence(),
+        decoded
+            .trip_updates()
+            .get("legacy")
+            .unwrap()
+            .stops()
+            .next()
+            .unwrap()
+            .stop_sequence(),
         Some(42),
     );
-    assert_eq!(serde_json::to_value(decoded.into_expanded()).unwrap(), expected);
+    assert_eq!(
+        serde_json::to_value(decoded.into_expanded()).unwrap(),
+        expected
+    );
 }

@@ -116,12 +116,21 @@ impl<'a, T: Pod> IntoIterator for &'a IndexArray<T> {
 fn read_slice<T: Pod>(bytes: &[u8], sec: Section) -> Result<&[T]> {
     let start = usize::try_from(sec.offset)?;
     let count = usize::try_from(sec.count)?;
-    let size = count.checked_mul(std::mem::size_of::<T>())
+    let size = count
+        .checked_mul(std::mem::size_of::<T>())
         .context("routing index section length overflow")?;
-    let end = start.checked_add(size).context("routing index section offset overflow")?;
-    ensure!(start % std::mem::align_of::<T>() == 0, "unaligned routing index section");
-    let slice = bytes.get(start..end).context("truncated routing index section")?;
-    bytemuck::try_cast_slice(slice).map_err(|_| anyhow::anyhow!("invalid routing index section alignment"))
+    let end = start
+        .checked_add(size)
+        .context("routing index section offset overflow")?;
+    ensure!(
+        start % std::mem::align_of::<T>() == 0,
+        "unaligned routing index section"
+    );
+    let slice = bytes
+        .get(start..end)
+        .context("truncated routing index section")?;
+    bytemuck::try_cast_slice(slice)
+        .map_err(|_| anyhow::anyhow!("invalid routing index section alignment"))
 }
 
 fn write_slice<T: Pod>(out: &mut BufWriter<File>, values: &[T]) -> Result<Section> {
@@ -132,7 +141,10 @@ fn write_slice<T: Pod>(out: &mut BufWriter<File>, values: &[T]) -> Result<Sectio
     }
     let offset = out.stream_position()?;
     out.write_all(bytemuck::cast_slice(values))?;
-    Ok(Section { offset, count: u64::try_from(values.len())? })
+    Ok(Section {
+        offset,
+        count: u64::try_from(values.len())?,
+    })
 }
 
 fn write_usize(out: &mut BufWriter<File>, values: &[usize]) -> Result<Section> {
@@ -142,8 +154,10 @@ fn write_usize(out: &mut BufWriter<File>, values: &[usize]) -> Result<Section> {
 }
 
 fn read_usize(bytes: &[u8], section: Section) -> Result<Vec<usize>> {
-    read_slice::<u64>(bytes, section)?.iter()
-        .map(|&value| usize::try_from(value).map_err(Into::into)).collect()
+    read_slice::<u64>(bytes, section)?
+        .iter()
+        .map(|&value| usize::try_from(value).map_err(Into::into))
+        .collect()
 }
 
 fn write_edges(out: &mut BufWriter<File>, edges: &[(u32, u32)]) -> Result<Section> {
@@ -154,20 +168,37 @@ fn write_edges(out: &mut BufWriter<File>, edges: &[(u32, u32)]) -> Result<Sectio
     }
     let offset = out.stream_position()?;
     for chunk in edges.chunks(4096) {
-        let packed = chunk.iter().map(|&(to, cost)| Edge { to, cost }).collect::<Vec<_>>();
+        let packed = chunk
+            .iter()
+            .map(|&(to, cost)| Edge { to, cost })
+            .collect::<Vec<_>>();
         out.write_all(bytemuck::cast_slice(&packed))?;
     }
-    Ok(Section { offset, count: u64::try_from(edges.len())? })
+    Ok(Section {
+        offset,
+        count: u64::try_from(edges.len())?,
+    })
 }
 
 fn read_graph(bytes: &[u8], offsets: Section, edges: Section, n: usize) -> Result<CsrGraph> {
     let offsets = read_usize(bytes, offsets)?;
     let pairs = read_slice::<Edge>(bytes, edges)?;
-    ensure!(offsets.len() == n + 1, "routing-index CSR row count mismatch");
-    ensure!(offsets.first() == Some(&0) && offsets.last() == Some(&pairs.len()),
-        "routing-index CSR offsets mismatch");
-    ensure!(offsets.windows(2).all(|pair| pair[0] <= pair[1]), "unordered CSR offsets");
-    ensure!(pairs.iter().all(|edge| (edge.to as usize) < n), "invalid CSR target");
+    ensure!(
+        offsets.len() == n + 1,
+        "routing-index CSR row count mismatch"
+    );
+    ensure!(
+        offsets.first() == Some(&0) && offsets.last() == Some(&pairs.len()),
+        "routing-index CSR offsets mismatch"
+    );
+    ensure!(
+        offsets.windows(2).all(|pair| pair[0] <= pair[1]),
+        "unordered CSR offsets"
+    );
+    ensure!(
+        pairs.iter().all(|edge| (edge.to as usize) < n),
+        "invalid CSR target"
+    );
     Ok(CsrGraph {
         offsets,
         edges: pairs.iter().map(|edge| (edge.to, edge.cost)).collect(),
@@ -208,7 +239,10 @@ pub fn build_for_timetable(timetable_path: &Path) -> Result<PathBuf> {
 }
 
 pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
-    ensure!(cfg!(target_endian = "little"), "routing index requires little-endian machine");
+    ensure!(
+        cfg!(target_endian = "little"),
+        "routing index requires little-endian machine"
+    );
     let mapped = MappedTimetable::open_fast(timetable_path)?;
     let tt = mapped.view()?;
     let started = std::time::Instant::now();
@@ -261,7 +295,11 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
         h.reverse_offsets = write_usize(&mut out, &index.reverse.offsets)?;
         h.reverse_edges = write_edges(&mut out, &index.reverse.edges)?;
         h.stations = write_usize(&mut out, &index.stations)?;
-        let sensitive: Vec<u8> = index.transfer_sensitive.iter().map(|&v| u8::from(v)).collect();
+        let sensitive: Vec<u8> = index
+            .transfer_sensitive
+            .iter()
+            .map(|&v| u8::from(v))
+            .collect();
         h.transfer_sensitive = write_slice(&mut out, &sensitive)?;
         h.importance_roots = write_usize(&mut out, &index.importance.roots)?;
         h.importance_values = write_slice(&mut out, &index.importance.values)?;
@@ -272,8 +310,12 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
         let file = out.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
         // Always inspect the published representation before installation.
-        let checked = unsafe { MmapOptions::new().map(&file) }
-            .with_context(|| format!("mapping temporary routing index {} for validation", temp.display()))?;
+        let checked = unsafe { MmapOptions::new().map(&file) }.with_context(|| {
+            format!(
+                "mapping temporary routing index {} for validation",
+                temp.display()
+            )
+        })?;
         validate(&checked, &tt, identity)?;
         drop(checked);
         fs::rename(&temp, index_path)?;
@@ -294,54 +336,130 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
 }
 
 fn validate(bytes: &[u8], tt: &ZeroCopyTimetable<'_>, identity: [u8; 32]) -> Result<Header> {
-    ensure!(bytes.len() >= std::mem::size_of::<Header>(), "routing index too small");
+    ensure!(
+        bytes.len() >= std::mem::size_of::<Header>(),
+        "routing index too small"
+    );
     let h: Header = bytemuck::pod_read_unaligned(&bytes[..std::mem::size_of::<Header>()]);
-    ensure!(h.magic == MAGIC && h.version == VERSION, "unsupported routing index version");
-    ensure!(h.file_size == bytes.len() as u64, "routing index length mismatch");
-    ensure!(h.identity == identity, "routing index belongs to another timetable generation");
-    ensure!(h.stops == tt.coordinates().len() as u64, "routing-index stop count mismatch");
-    ensure!(h.routes == tt.route_transport_ranges().len() as u64, "routing-index route count mismatch");
+    ensure!(
+        h.magic == MAGIC && h.version == VERSION,
+        "unsupported routing index version"
+    );
+    ensure!(
+        h.file_size == bytes.len() as u64,
+        "routing index length mismatch"
+    );
+    ensure!(
+        h.identity == identity,
+        "routing index belongs to another timetable generation"
+    );
+    ensure!(
+        h.stops == tt.coordinates().len() as u64,
+        "routing-index stop count mismatch"
+    );
+    ensure!(
+        h.routes == tt.route_transport_ranges().len() as u64,
+        "routing-index route count mismatch"
+    );
     let n = tt.coordinates().len();
     let route_offsets = read_slice::<u64>(bytes, h.route_chain_offsets)?;
     let chain_records = read_slice::<ChainRecord>(bytes, h.chains)?;
-    ensure!(route_offsets.len() == tt.route_transport_ranges().len() + 1, "route-chain count mismatch");
-    ensure!(route_offsets.first() == Some(&0) && route_offsets.last() == Some(&(chain_records.len() as u64)),
-        "route-chain index boundaries mismatch");
-    ensure!(route_offsets.windows(2).all(|p| p[0] <= p[1]), "invalid route-chain offsets");
+    ensure!(
+        route_offsets.len() == tt.route_transport_ranges().len() + 1,
+        "route-chain count mismatch"
+    );
+    ensure!(
+        route_offsets.first() == Some(&0)
+            && route_offsets.last() == Some(&(chain_records.len() as u64)),
+        "route-chain index boundaries mismatch"
+    );
+    ensure!(
+        route_offsets.windows(2).all(|p| p[0] <= p[1]),
+        "invalid route-chain offsets"
+    );
     for chain in chain_records {
-        let transports = read_slice::<crate::routing_common::timetable::TransportIdx>(bytes, chain.transports)?;
+        let transports =
+            read_slice::<crate::routing_common::timetable::TransportIdx>(bytes, chain.transports)?;
         let first = read_slice::<u32>(bytes, chain.first_departures)?;
         let patterns = read_slice::<usize>(bytes, chain.patterns)?;
-        let calendars = read_slice::<crate::routing_common::timetable::BitfieldIdx>(bytes, chain.calendars)?;
+        let calendars =
+            read_slice::<crate::routing_common::timetable::BitfieldIdx>(bytes, chain.calendars)?;
         let offsets = read_slice::<u32>(bytes, chain.offsets)?;
         read_slice::<u64>(bytes, chain.event_days)?;
-        ensure!(first.len() == transports.len() && patterns.len() == transports.len() &&
-            calendars.len() == transports.len(), "transport-chain column length mismatch");
-        ensure!(chain.n_patterns > 0 && chain.n_patterns <= transports.len() as u64, "invalid timing pattern count");
-        ensure!(patterns.iter().all(|&p| p < chain.n_patterns as usize), "timing pattern outside chain");
-        ensure!(offsets.len() % chain.n_patterns as usize == 0, "timing offset table length mismatch");
-        ensure!(transports.iter().all(|t| t.idx() < tt.transport_route().len()), "transport index out of bounds");
+        ensure!(
+            first.len() == transports.len()
+                && patterns.len() == transports.len()
+                && calendars.len() == transports.len(),
+            "transport-chain column length mismatch"
+        );
+        ensure!(
+            chain.n_patterns > 0 && chain.n_patterns <= transports.len() as u64,
+            "invalid timing pattern count"
+        );
+        ensure!(
+            patterns.iter().all(|&p| p < chain.n_patterns as usize),
+            "timing pattern outside chain"
+        );
+        ensure!(
+            offsets.len() % chain.n_patterns as usize == 0,
+            "timing offset table length mismatch"
+        );
+        ensure!(
+            transports
+                .iter()
+                .all(|t| t.idx() < tt.transport_route().len()),
+            "transport index out of bounds"
+        );
     }
-    for (offsets, edges) in [(h.forward_offsets, h.forward_edges), (h.reverse_offsets, h.reverse_edges)] {
+    for (offsets, edges) in [
+        (h.forward_offsets, h.forward_edges),
+        (h.reverse_offsets, h.reverse_edges),
+    ] {
         let rows = read_slice::<u64>(bytes, offsets)?;
         let links = read_slice::<Edge>(bytes, edges)?;
-        ensure!(rows.len() == n + 1 && rows[0] == 0 && rows[n] == links.len() as u64,
-            "invalid lower-bound graph offsets");
-        ensure!(rows.windows(2).all(|p| p[0] <= p[1]), "unordered lower-bound graph offsets");
-        ensure!(links.iter().all(|link| (link.to as usize) < n), "lower-bound target out of bounds");
+        ensure!(
+            rows.len() == n + 1 && rows[0] == 0 && rows[n] == links.len() as u64,
+            "invalid lower-bound graph offsets"
+        );
+        ensure!(
+            rows.windows(2).all(|p| p[0] <= p[1]),
+            "unordered lower-bound graph offsets"
+        );
+        ensure!(
+            links.iter().all(|link| (link.to as usize) < n),
+            "lower-bound target out of bounds"
+        );
     }
-    ensure!(read_slice::<u64>(bytes, h.stations)?.len() == n, "station root count mismatch");
-    ensure!(read_slice::<u8>(bytes, h.transfer_sensitive)?.len() == n, "transfer flags mismatch");
-    ensure!(read_slice::<u64>(bytes, h.importance_roots)?.len() == n, "importance roots mismatch");
-    ensure!(read_slice::<u64>(bytes, h.importance_values)?.len() == n, "importance values mismatch");
+    ensure!(
+        read_slice::<u64>(bytes, h.stations)?.len() == n,
+        "station root count mismatch"
+    );
+    ensure!(
+        read_slice::<u8>(bytes, h.transfer_sensitive)?.len() == n,
+        "transfer flags mismatch"
+    );
+    ensure!(
+        read_slice::<u64>(bytes, h.importance_roots)?.len() == n,
+        "importance roots mismatch"
+    );
+    ensure!(
+        read_slice::<u64>(bytes, h.importance_values)?.len() == n,
+        "importance values mismatch"
+    );
     Ok(h)
 }
 
-pub(crate) fn load(timetable_path: &Path, tt: &ZeroCopyTimetable<'_>) -> Result<LowerBoundTopology> {
-    ensure!(cfg!(target_endian = "little") && std::mem::size_of::<usize>() == 8,
-        "routing index requires 64-bit little-endian machine");
+pub(crate) fn load(
+    timetable_path: &Path,
+    tt: &ZeroCopyTimetable<'_>,
+) -> Result<LowerBoundTopology> {
+    ensure!(
+        cfg!(target_endian = "little") && std::mem::size_of::<usize>() == 8,
+        "routing index requires 64-bit little-endian machine"
+    );
     let path = sidecar_path(timetable_path);
-    let file = File::open(&path).with_context(|| format!("opening precompiled routing index {}", path.display()))?;
+    let file = File::open(&path)
+        .with_context(|| format!("opening precompiled routing index {}", path.display()))?;
     let bytes = Arc::new(unsafe { MmapOptions::new().map(&file)? });
     let h = validate(&bytes, tt, source_identity(timetable_path, tt)?)?;
     let route_offsets = read_slice::<u64>(&bytes, h.route_chain_offsets)?;
@@ -352,7 +470,10 @@ pub(crate) fn load(timetable_path: &Path, tt: &ZeroCopyTimetable<'_>) -> Result<
         for descriptor in &descriptors[row[0] as usize..row[1] as usize] {
             chains.push(TransportChain {
                 transports: IndexArray::mapped(Arc::clone(&bytes), descriptor.transports)?,
-                first_departures: IndexArray::mapped(Arc::clone(&bytes), descriptor.first_departures)?,
+                first_departures: IndexArray::mapped(
+                    Arc::clone(&bytes),
+                    descriptor.first_departures,
+                )?,
                 patterns: IndexArray::mapped(Arc::clone(&bytes), descriptor.patterns)?,
                 offsets: IndexArray::mapped(Arc::clone(&bytes), descriptor.offsets)?,
                 n_patterns: descriptor.n_patterns as usize,
@@ -364,11 +485,19 @@ pub(crate) fn load(timetable_path: &Path, tt: &ZeroCopyTimetable<'_>) -> Result<
     }
     let n = tt.coordinates().len();
     let stations = read_usize(&bytes, h.stations)?;
-    ensure!(stations.iter().all(|&s| s < n), "station root outside timetable");
+    ensure!(
+        stations.iter().all(|&s| s < n),
+        "station root outside timetable"
+    );
     let transfer_sensitive = read_slice::<u8>(&bytes, h.transfer_sensitive)?
-        .iter().map(|&v| v != 0).collect::<Vec<_>>();
+        .iter()
+        .map(|&v| v != 0)
+        .collect::<Vec<_>>();
     let roots = read_usize(&bytes, h.importance_roots)?;
-    ensure!(roots.iter().all(|&r| r < n), "importance root outside timetable");
+    ensure!(
+        roots.iter().all(|&r| r < n),
+        "importance root outside timetable"
+    );
     let importance = StationImportance {
         roots,
         values: read_slice::<u64>(&bytes, h.importance_values)?.to_vec(),
@@ -403,7 +532,10 @@ mod tests {
         assert_eq!(cached.stations, original.stations);
         assert_eq!(cached.forward.offsets, original.forward.offsets);
         assert_eq!(cached.reverse.edges, original.reverse.edges);
-        assert_eq!(cached.transports.routes.len(), original.transports.routes.len());
+        assert_eq!(
+            cached.transports.routes.len(),
+            original.transports.routes.len()
+        );
         // An atomic timetable replacement must invalidate this companion file.
         let replacement = dir.join("replacement.bin");
         fs::write(&replacement, tt.encode().unwrap()).unwrap();

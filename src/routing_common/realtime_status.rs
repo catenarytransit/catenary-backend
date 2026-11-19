@@ -62,21 +62,31 @@ pub enum StaticRunStatus {
 
 impl RtRunMetadata {
     pub fn event_kind(&self, slot: usize, added: bool) -> RtEventKind {
-        self.events.binary_search_by_key(&(slot as u32), |a| a.slot)
+        self.events
+            .binary_search_by_key(&(slot as u32), |a| a.slot)
             .ok()
             .map(|i| self.events[i].kind)
-            .unwrap_or(if added { RtEventKind::Estimated } else { RtEventKind::Timetabled })
+            .unwrap_or(if added {
+                RtEventKind::Estimated
+            } else {
+                RtEventKind::Timetabled
+            })
     }
 
     pub fn stop_change(&self, occurrence: usize) -> Option<&RtStopChange> {
-        self.stops.binary_search_by_key(&(occurrence as u32), |s| s.position)
-            .ok().map(|i| &self.stops[i])
+        self.stops
+            .binary_search_by_key(&(occurrence as u32), |s| s.position)
+            .ok()
+            .map(|i| &self.stops[i])
     }
 
     pub fn validate(&self, event_count: usize, stop_count: usize) -> bool {
         self.events.iter().all(|a| (a.slot as usize) < event_count)
             && self.events.windows(2).all(|w| w[0].slot < w[1].slot)
-            && self.stops.iter().all(|a| (a.position as usize) < stop_count)
+            && self
+                .stops
+                .iter()
+                .all(|a| (a.position as usize) < stop_count)
             && self.stops.windows(2).all(|w| w[0].position < w[1].position)
     }
 }
@@ -93,10 +103,14 @@ pub fn scheduled_event_unix(
     let first = i64::from(tt.header().first_utc_day)
         .checked_add(i64::from(service_day.0))?
         .checked_mul(86_400)?
-        .checked_add(i64::from(tt.transport_first_dep_offset()
-            .get(transport.idx())?.seconds()))?;
-    first.checked_add(i64::from(tt.events_for_transport(transport)?
-        .get(slot)?.seconds()))
+        .checked_add(i64::from(
+            tt.transport_first_dep_offset()
+                .get(transport.idx())?
+                .seconds(),
+        ))?;
+    first.checked_add(i64::from(
+        tt.events_for_transport(transport)?.get(slot)?.seconds(),
+    ))
 }
 
 #[cfg(test)]
@@ -112,8 +126,14 @@ mod tests {
     fn sparse_annotations_preserve_no_data_and_platform_change() {
         let data = RtRunMetadata {
             events: vec![
-                RtEventAnnotation { slot: 0, kind: RtEventKind::Estimated },
-                RtEventAnnotation { slot: 2, kind: RtEventKind::NoData },
+                RtEventAnnotation {
+                    slot: 0,
+                    kind: RtEventKind::Estimated,
+                },
+                RtEventAnnotation {
+                    slot: 2,
+                    kind: RtEventKind::NoData,
+                },
             ],
             stops: vec![RtStopChange {
                 position: 1,
@@ -127,9 +147,12 @@ mod tests {
         assert_eq!(data.event_kind(1, false), RtEventKind::Timetabled);
         assert_eq!(data.event_kind(2, false), RtEventKind::NoData);
         assert!(data.stop_change(1).unwrap().skipped);
-        assert!(!RtRunMetadata {
-            events: vec![data.events[1].clone(), data.events[0].clone()],
-            stops: Vec::new(),
-        }.validate(4, 3));
+        assert!(
+            !RtRunMetadata {
+                events: vec![data.events[1].clone(), data.events[0].clone()],
+                stops: Vec::new(),
+            }
+            .validate(4, 3)
+        );
     }
 }

@@ -40,7 +40,10 @@ impl MappedTimetable {
         let validated_header = ZeroCopyTimetable::new_fast(&bytes)
             .with_context(|| format!("checking timetable layout {}", path.display()))?
             .validated_header();
-        Ok(Self { bytes, validated_header })
+        Ok(Self {
+            bytes,
+            validated_header,
+        })
     }
 
     pub fn view(&self) -> std::result::Result<ZeroCopyTimetable<'_>, FormatError> {

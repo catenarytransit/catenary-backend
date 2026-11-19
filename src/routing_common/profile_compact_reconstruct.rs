@@ -6,8 +6,10 @@ use crate::routing_common::profile_compact::{Parent, PathLink, Round, Stage};
 use crate::routing_common::raptor_query::{
     Journey, Leg, Query, RaptorStats, optimize_same_trip_endpoint_walks, transport_event_second,
 };
-use crate::routing_common::timetable::{DayIdx, LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
+use crate::routing_common::timetable::{
+    DayIdx, LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable,
+};
 
 pub(super) fn reconstruct(
     rounds: &[Round],
@@ -184,8 +186,9 @@ pub(super) fn reconstruct_snapshot(
                     alight_stop_index: alight_pos,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
-                
-                    realtime: None,});
+
+                    realtime: None,
+                });
             }
             Parent::Walk { from, to, seconds } => {
                 legs.push(Leg::Transfer {
@@ -295,31 +298,43 @@ pub(super) fn valid_journey_with_realtime(
                     return false;
                 }
                 if let Some(rt) = realtime {
-                    let Some(snapshot) = realtime_snapshot else { return false; };
-                    if snapshot.publication_seq != rt.publication_seq ||
-                        !snapshot.is_published() {
+                    let Some(snapshot) = realtime_snapshot else {
+                        return false;
+                    };
+                    if snapshot.publication_seq != rt.publication_seq || !snapshot.is_published() {
                         return false;
                     }
-                    let Some(run) = snapshot.run(rt.run) else { return false };
-                    if run.pattern != rt.pattern.pattern ||
-                        rt.pattern.chateau_slot != rt.run.chateau_slot {
+                    let Some(run) = snapshot.run(rt.run) else {
+                        return false;
+                    };
+                    if run.pattern != rt.pattern.pattern
+                        || rt.pattern.chateau_slot != rt.run.chateau_slot
+                    {
                         return false;
                     }
-                    let Some(stops) = snapshot.stops(tt, rt.pattern) else { return false };
-                    if stops.get(board_stop_index).is_none_or(|s|
-                        s.location().0 != from_stop || !s.outbound()) ||
-                       stops.get(alight_stop_index).is_none_or(|s|
-                        s.location().0 != to_stop || !s.inbound()) ||
-                       snapshot.run_event_time(rt.run, board_stop_index * 2)
-                           != Some(departure_unix_seconds) ||
-                       snapshot.run_event_time(rt.run, alight_stop_index * 2 - 1)
-                           != Some(arrival_unix_seconds) {
+                    let Some(stops) = snapshot.stops(tt, rt.pattern) else {
+                        return false;
+                    };
+                    if stops
+                        .get(board_stop_index)
+                        .is_none_or(|s| s.location().0 != from_stop || !s.outbound())
+                        || stops
+                            .get(alight_stop_index)
+                            .is_none_or(|s| s.location().0 != to_stop || !s.inbound())
+                        || snapshot.run_event_time(rt.run, board_stop_index * 2)
+                            != Some(departure_unix_seconds)
+                        || snapshot.run_event_time(rt.run, alight_stop_index * 2 - 1)
+                            != Some(arrival_unix_seconds)
+                    {
                         return false;
                     }
                     if let Some(original) = run.original {
-                        if transport != original.transport || service_day != original.day ||
-                            !snapshot.is_static_suppressed(
-                                TransportIdx(original.transport), DayIdx(original.day))
+                        if transport != original.transport
+                            || service_day != original.day
+                            || !snapshot.is_static_suppressed(
+                                TransportIdx(original.transport),
+                                DayIdx(original.day),
+                            )
                         {
                             return false;
                         }
@@ -346,13 +361,14 @@ pub(super) fn valid_journey_with_realtime(
                             .get(t.idx())
                             .and_then(|b| tt.bitfields().get(b.idx()))
                             .is_some_and(|bits| bits.test(service_day as usize))
-                        || realtime_snapshot.is_some_and(|snapshot|
-                            snapshot.is_static_suppressed(t, DayIdx(service_day)))
+                        || realtime_snapshot.is_some_and(|snapshot| {
+                            snapshot.is_static_suppressed(t, DayIdx(service_day))
+                        })
                     {
                         return false;
                     }
-                    let midnight = (i64::from(tt.header().first_utc_day)
-                        + i64::from(service_day)) * 86_400;
+                    let midnight =
+                        (i64::from(tt.header().first_utc_day) + i64::from(service_day)) * 86_400;
                     if transport_event_second(tt, r, t, board_stop_index, false, midnight)
                         != Some(departure_unix_seconds)
                         || transport_event_second(tt, r, t, alight_stop_index, true, midnight)

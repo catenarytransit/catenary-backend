@@ -1,7 +1,7 @@
+use crate::routing_common::realtime_region::{RegionRtPattern, RegionRtRun};
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
 use serde::Serialize;
-use crate::routing_common::realtime_region::{RegionRtPattern, RegionRtRun};
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -919,8 +919,9 @@ fn reconstruct(
                     alight_stop_index,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
-                
-                    realtime: None,});
+
+                    realtime: None,
+                });
                 loc = from;
                 if level == 0 {
                     return None;
@@ -1196,7 +1197,7 @@ mod tests {
                     departure_unix_seconds: first_boarding,
                     arrival_unix_seconds: final_arrival,
                     realtime: None,
-},
+                },
                 Leg::Egress {
                     from_stop: 2,
                     seconds: 0,
@@ -1247,7 +1248,7 @@ mod tests {
                     departure_unix_seconds: searched_at + 100,
                     arrival_unix_seconds: searched_at + 300,
                     realtime: None,
-},
+                },
             ],
         };
         optimize_initial_departure(&mut too_late);

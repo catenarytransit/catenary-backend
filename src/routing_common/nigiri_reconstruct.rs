@@ -46,15 +46,21 @@ fn visit_realtime_transports(
     exact: bool,
     visit: &mut impl FnMut(Leg) -> bool,
 ) -> bool {
-    let Some(snapshot) = state.realtime.as_deref() else { return false };
+    let Some(snapshot) = state.realtime.as_deref() else {
+        return false;
+    };
     if !snapshot.is_published() {
         return false;
     }
     let reverse = state.reverse;
     for &pattern in snapshot.patterns_at(LocationIdx(location as u32)) {
-        let Some(stops) = snapshot.stops(tt, pattern) else { continue };
+        let Some(stops) = snapshot.stops(tt, pattern) else {
+            continue;
+        };
         for handle in snapshot.run_handles_for(pattern) {
-            let Some(run) = snapshot.run(handle) else { continue };
+            let Some(run) = snapshot.run(handle) else {
+                continue;
+            };
             if run.pattern != pattern.pattern {
                 continue;
             }
@@ -75,11 +81,23 @@ fn visit_realtime_transports(
                 if !finish_matches(finish_time, limit, reverse, exact) {
                     continue;
                 }
-                let count = if reverse { stops.len() - finish - 1 } else { finish };
+                let count = if reverse {
+                    stops.len() - finish - 1
+                } else {
+                    finish
+                };
                 for distance in 1..=count {
-                    let start = if reverse { finish + distance } else { finish - distance };
+                    let start = if reverse {
+                        finish + distance
+                    } else {
+                        finish - distance
+                    };
                     let entry = stops[start];
-                    if !(if reverse { entry.inbound() } else { entry.outbound() }) {
+                    if !(if reverse {
+                        entry.inbound()
+                    } else {
+                        entry.outbound()
+                    }) {
                         continue;
                     }
                     let start_slot = if reverse { start * 2 - 1 } else { start * 2 };
@@ -87,15 +105,28 @@ fn visit_realtime_transports(
                         continue;
                     };
                     let ready = state.round_times_[k - 1][entry.location().idx()];
-                    if ready == state.invalid()
-                        || better(start_time, state.to_unix(ready), reverse)
+                    if ready == state.invalid() || better(start_time, state.to_unix(ready), reverse)
                     {
                         continue;
                     }
                     let (from, to, board, alight, departure, arrival) = if reverse {
-                        (location, entry.location().idx(), finish, start, finish_time, start_time)
+                        (
+                            location,
+                            entry.location().idx(),
+                            finish,
+                            start,
+                            finish_time,
+                            start_time,
+                        )
                     } else {
-                        (entry.location().idx(), location, start, finish, start_time, finish_time)
+                        (
+                            entry.location().idx(),
+                            location,
+                            start,
+                            finish,
+                            start_time,
+                            finish_time,
+                        )
                     };
                     if arrival < departure {
                         continue;
@@ -104,7 +135,9 @@ fn visit_realtime_transports(
                     let route = match run.pattern {
                         RtPatternRef::Static(route) => route,
                         RtPatternRef::Dynamic(_) => original
-                            .and_then(|o| tt.transport_route().get(o.transport as usize).map(|r| r.0))
+                            .and_then(|o| {
+                                tt.transport_route().get(o.transport as usize).map(|r| r.0)
+                            })
                             .unwrap_or(u32::MAX),
                     };
                     if visit(Leg::Ride {
@@ -164,8 +197,12 @@ fn visit_static_transports(
             let range = tt.route_transport_ranges()[route.idx()];
             for transport_number in range.from..range.to {
                 let transport = TransportIdx(transport_number);
-                let Some(events) = tt.events_for_transport(transport) else { continue };
-                let Some(finish_event) = events.get(finish_slot) else { continue };
+                let Some(events) = tt.events_for_transport(transport) else {
+                    continue;
+                };
+                let Some(finish_event) = events.get(finish_slot) else {
+                    continue;
+                };
                 let offset = i64::from(tt.transport_first_dep_offset()[transport.idx()].seconds())
                     + i64::from(finish_event.seconds());
                 let delta = limit - base - offset;
@@ -175,11 +212,19 @@ fn visit_static_transports(
                     }
                     (delta.div_euclid(DAY), delta.div_euclid(DAY))
                 } else if reverse {
-                    (delta.div_euclid(DAY),
-                     delta.saturating_add(i64::from(q.max_duration_seconds)).div_euclid(DAY))
+                    (
+                        delta.div_euclid(DAY),
+                        delta
+                            .saturating_add(i64::from(q.max_duration_seconds))
+                            .div_euclid(DAY),
+                    )
                 } else {
-                    (delta.saturating_sub(i64::from(q.max_duration_seconds)).div_euclid(DAY),
-                     delta.div_euclid(DAY))
+                    (
+                        delta
+                            .saturating_sub(i64::from(q.max_duration_seconds))
+                            .div_euclid(DAY),
+                        delta.div_euclid(DAY),
+                    )
                 };
                 let first_day = first_day.max(0);
                 let last_day = last_day.min(i64::from(tt.header().day_count) - 1);
@@ -187,8 +232,10 @@ fn visit_static_transports(
                     let day_index = DayIdx(day as u16);
                     if !tt.bitfields()[tt.transport_traffic_days()[transport.idx()].idx()]
                         .test(day as usize)
-                        || state.realtime.as_ref().is_some_and(|rt|
-                            rt.is_static_suppressed(transport, day_index))
+                        || state
+                            .realtime
+                            .as_ref()
+                            .is_some_and(|rt| rt.is_static_suppressed(transport, day_index))
                     {
                         continue;
                     }
@@ -197,16 +244,30 @@ fn visit_static_transports(
                     if !finish_matches(finish_time, limit, reverse, exact) {
                         continue;
                     }
-                    let count = if reverse { stops.len() - finish - 1 } else { finish };
+                    let count = if reverse {
+                        stops.len() - finish - 1
+                    } else {
+                        finish
+                    };
                     for distance in 1..=count {
-                        let start = if reverse { finish + distance } else { finish - distance };
+                        let start = if reverse {
+                            finish + distance
+                        } else {
+                            finish - distance
+                        };
                         let entry = stops[start];
-                        if !(if reverse { entry.inbound() } else { entry.outbound() }) {
+                        if !(if reverse {
+                            entry.inbound()
+                        } else {
+                            entry.outbound()
+                        }) {
                             continue;
                         }
-                        let Some(start_time) = transport_event_second(
-                            tt, route, transport, start, reverse, midnight
-                        ) else { continue };
+                        let Some(start_time) =
+                            transport_event_second(tt, route, transport, start, reverse, midnight)
+                        else {
+                            continue;
+                        };
                         let ready = state.round_times_[k - 1][entry.location().idx()];
                         if ready == state.invalid()
                             || better(start_time, state.to_unix(ready), reverse)
@@ -214,9 +275,23 @@ fn visit_static_transports(
                             continue;
                         }
                         let (from, to, board, alight, departure, arrival) = if reverse {
-                            (location, entry.location().idx(), finish, start, finish_time, start_time)
+                            (
+                                location,
+                                entry.location().idx(),
+                                finish,
+                                start,
+                                finish_time,
+                                start_time,
+                            )
                         } else {
-                            (entry.location().idx(), location, start, finish, start_time, finish_time)
+                            (
+                                entry.location().idx(),
+                                location,
+                                start,
+                                finish,
+                                start_time,
+                                finish_time,
+                            )
                         };
                         if arrival < departure {
                             continue;
@@ -278,44 +353,55 @@ fn visit_legs(
         for ep in ends {
             let event = shift(current_time, ep.seconds, !reverse);
             let walk = if reverse {
-                Leg::Access { to_stop: ep.stop.0, seconds: ep.seconds }
+                Leg::Access {
+                    to_stop: ep.stop.0,
+                    seconds: ep.seconds,
+                }
             } else {
-                Leg::Egress { from_stop: ep.stop.0, seconds: ep.seconds }
+                Leg::Egress {
+                    from_stop: ep.stop.0,
+                    seconds: ep.seconds,
+                }
             };
-            if visit_transports(state, tt, q, k, ep.stop.idx(), event, true,
-                &mut |ride| visit(walk.clone(), ride))
-            {
+            if visit_transports(state, tt, q, k, ep.stop.idx(), event, true, &mut |ride| {
+                visit(walk.clone(), ride)
+            }) {
                 return true;
             }
         }
         return false;
     }
 
-    let mut try_transfer = |from: usize, to: usize, target: usize,
-                            raw_seconds: u32, effective_seconds: u32| -> bool {
-        let Some(Leg::Ride {
-            from_stop: adjacent_from, to_stop: adjacent_to,
-            departure_unix_seconds: adjacent_dep,
-            arrival_unix_seconds: adjacent_arr, ..
-        }) = adjacent else { return false };
-        if (!reverse && *adjacent_from != to as u32)
-            || (reverse && *adjacent_to != from as u32)
-        {
-            return false;
-        }
-        let cutoff = if reverse {
-            adjacent_arr.saturating_add(i64::from(effective_seconds))
-        } else {
-            adjacent_dep.saturating_sub(i64::from(effective_seconds))
+    let mut try_transfer =
+        |from: usize, to: usize, target: usize, raw_seconds: u32, effective_seconds: u32| -> bool {
+            let Some(Leg::Ride {
+                from_stop: adjacent_from,
+                to_stop: adjacent_to,
+                departure_unix_seconds: adjacent_dep,
+                arrival_unix_seconds: adjacent_arr,
+                ..
+            }) = adjacent
+            else {
+                return false;
+            };
+            if (!reverse && *adjacent_from != to as u32) || (reverse && *adjacent_to != from as u32)
+            {
+                return false;
+            }
+            let cutoff = if reverse {
+                adjacent_arr.saturating_add(i64::from(effective_seconds))
+            } else {
+                adjacent_dep.saturating_sub(i64::from(effective_seconds))
+            };
+            let walk = Leg::Transfer {
+                from_stop: from as u32,
+                to_stop: to as u32,
+                seconds: raw_seconds,
+            };
+            visit_transports(state, tt, q, k, target, cutoff, false, &mut |ride| {
+                visit(walk.clone(), ride)
+            })
         };
-        let walk = Leg::Transfer {
-            from_stop: from as u32,
-            to_stop: to as u32,
-            seconds: raw_seconds,
-        };
-        visit_transports(state, tt, q, k, target, cutoff, false,
-            &mut |ride| visit(walk.clone(), ride))
-    };
 
     if let Some(duration) = transfer_duration(tt, location, location, 0) {
         if try_transfer(location, location, location, duration, duration) {
@@ -329,7 +415,11 @@ fn visit_legs(
     };
     for fp in paths {
         let other = fp.target().idx();
-        let (from, to) = if reverse { (location, other) } else { (other, location) };
+        let (from, to) = if reverse {
+            (location, other)
+        } else {
+            (other, location)
+        };
         let Some(duration) = transfer_duration(tt, from, to, fp.seconds()) else {
             continue;
         };
@@ -347,32 +437,59 @@ fn complete_journey(
     point: PointJourney,
     legs_backwards: &[Leg],
 ) -> Option<Journey> {
-    let Leg::Ride { from_stop, to_stop, departure_unix_seconds,
-                    arrival_unix_seconds, .. } = legs_backwards.last()? else {
+    let Leg::Ride {
+        from_stop,
+        to_stop,
+        departure_unix_seconds,
+        arrival_unix_seconds,
+        ..
+    } = legs_backwards.last()?
+    else {
         return None;
     };
     let location = if state.reverse { *to_stop } else { *from_stop };
-    let first_event = if state.reverse { *arrival_unix_seconds } else { *departure_unix_seconds };
+    let first_event = if state.reverse {
+        *arrival_unix_seconds
+    } else {
+        *departure_unix_seconds
+    };
     let starts = sorted_offsets(if state.reverse { &q.egress } else { &q.access });
     for ep in starts {
         if ep.stop.0 != location
-            || better(shift(first_event, ep.seconds, !state.reverse),
-                      point.start_time, state.reverse)
+            || better(
+                shift(first_event, ep.seconds, !state.reverse),
+                point.start_time,
+                state.reverse,
+            )
         {
             continue;
         }
         let mut legs = legs_backwards.to_vec();
         legs.push(if state.reverse {
-            Leg::Egress { from_stop: location, seconds: ep.seconds }
+            Leg::Egress {
+                from_stop: location,
+                seconds: ep.seconds,
+            }
         } else {
-            Leg::Access { to_stop: location, seconds: ep.seconds }
+            Leg::Access {
+                to_stop: location,
+                seconds: ep.seconds,
+            }
         });
         if !state.reverse {
             legs.reverse();
         }
         let mut journey = Journey {
-            departure_unix_seconds: if state.reverse { point.dest_time } else { point.start_time },
-            arrival_unix_seconds: if state.reverse { point.start_time } else { point.dest_time },
+            departure_unix_seconds: if state.reverse {
+                point.dest_time
+            } else {
+                point.start_time
+            },
+            arrival_unix_seconds: if state.reverse {
+                point.start_time
+            } else {
+                point.dest_time
+            },
             boardings: point.boardings,
             legs,
         };
@@ -381,12 +498,20 @@ fn complete_journey(
         }
         // Nigiri finalizes footpaths only after the complete run sequence is
         // feasible. The legacy optimizer is static-only: never retime RT runs.
-        if !journey.legs.iter().any(|leg| matches!(
-            leg, Leg::Ride { realtime: Some(_), .. }
-        )) {
+        if !journey.legs.iter().any(|leg| {
+            matches!(
+                leg,
+                Leg::Ride {
+                    realtime: Some(_),
+                    ..
+                }
+            )
+        }) {
             let mut optimized = journey.clone();
             crate::routing_common::transfer_optimizer::optimize_internal_transfers_with_importance(
-                tt, &state.importance, &mut optimized
+                tt,
+                &state.importance,
+                &mut optimized,
             );
             if valid_journey_with_realtime(tt, q, &optimized, state.realtime.as_deref()) {
                 journey = optimized;
@@ -415,28 +540,53 @@ fn search_chain(
         return true; // Stop traversing; caller reports exhaustion, not an invalid journey.
     }
     let adjacent = legs_backwards.last().cloned();
-    visit_legs(state, tt, q, point, k, location, adjacent.as_ref(), &mut |walk, ride| {
-        *candidates += 1;
-        if *candidates > MAX_RECONSTRUCTION_CANDIDATES {
-            return true;
-        }
-        let next_location = match &ride {
-            Leg::Ride { from_stop, to_stop, .. } =>
-                if state.reverse { *to_stop as usize } else { *from_stop as usize },
-            _ => unreachable!(),
-        };
-        legs_backwards.push(walk);
-        legs_backwards.push(ride);
-        if k == 1 {
-            *answer = complete_journey(state, tt, q, point, legs_backwards);
-        } else {
-            search_chain(state, tt, q, point, k - 1, next_location,
-                         legs_backwards, candidates, answer);
-        }
-        legs_backwards.pop();
-        legs_backwards.pop();
-        answer.is_some() || *candidates >= MAX_RECONSTRUCTION_CANDIDATES
-    })
+    visit_legs(
+        state,
+        tt,
+        q,
+        point,
+        k,
+        location,
+        adjacent.as_ref(),
+        &mut |walk, ride| {
+            *candidates += 1;
+            if *candidates > MAX_RECONSTRUCTION_CANDIDATES {
+                return true;
+            }
+            let next_location = match &ride {
+                Leg::Ride {
+                    from_stop, to_stop, ..
+                } => {
+                    if state.reverse {
+                        *to_stop as usize
+                    } else {
+                        *from_stop as usize
+                    }
+                }
+                _ => unreachable!(),
+            };
+            legs_backwards.push(walk);
+            legs_backwards.push(ride);
+            if k == 1 {
+                *answer = complete_journey(state, tt, q, point, legs_backwards);
+            } else {
+                search_chain(
+                    state,
+                    tt,
+                    q,
+                    point,
+                    k - 1,
+                    next_location,
+                    legs_backwards,
+                    candidates,
+                    answer,
+                );
+            }
+            legs_backwards.pop();
+            legs_backwards.pop();
+            answer.is_some() || *candidates >= MAX_RECONSTRUCTION_CANDIDATES
+        },
+    )
 }
 
 pub(crate) fn reconstruct(
@@ -452,14 +602,28 @@ pub(crate) fn reconstruct(
     let mut legs = Vec::with_capacity(point.boardings * 2);
     let mut candidates = 0;
     let mut journey = None;
-    search_chain(state, tt, q, point, point.boardings, state.target,
-                 &mut legs, &mut candidates, &mut journey);
-    journey.ok_or_else(|| anyhow!(
-        "deferred Nigiri reconstruction found no transfer-feasible realtime/static run chain \
+    search_chain(
+        state,
+        tt,
+        q,
+        point,
+        point.boardings,
+        state.target,
+        &mut legs,
+        &mut candidates,
+        &mut journey,
+    );
+    journey.ok_or_else(|| {
+        anyhow!(
+            "deferred Nigiri reconstruction found no transfer-feasible realtime/static run chain \
          (boardings={}, target={}, reverse={}, examined={}, snapshot={})",
-        point.boardings, state.target, state.reverse, candidates,
-        state.realtime.as_ref().map_or(0, |s| s.publication_seq),
-    ))
+            point.boardings,
+            state.target,
+            state.reverse,
+            candidates,
+            state.realtime.as_ref().map_or(0, |s| s.publication_seq),
+        )
+    })
 }
 
 #[cfg(test)]

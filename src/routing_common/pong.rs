@@ -14,17 +14,17 @@ use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
 use crate::routing_common::profile_compact::LowerBoundTopology;
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
 use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
-use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::raptor_query::{
     Journey, Leg, Query, RaptorStats, transport_event_second,
 };
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Result, ensure};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 const DAY: u32 = 86_400;
@@ -74,7 +74,10 @@ impl Candidate {
 }
 
 fn pareto_add(results: &mut Vec<Candidate>, candidate: Candidate) {
-    if results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
+    if results
+        .iter()
+        .any(|old| !old.rejected && old.dominates(&candidate))
+    {
         return;
     }
     results.retain(|old| old.rejected || !candidate.dominates(old));
@@ -330,7 +333,8 @@ pub(crate) fn route_pong_observed(
             results
                 .iter()
                 .filter(|j| {
-                    !j.rejected && j.journey.is_some()
+                    !j.rejected
+                        && j.journey.is_some()
                         && better(j.dest_time, cursor, arrive_by)
                         && better(j.dest_time, lookahead_end, arrive_by)
                         && j.travel_time() < fastest_direct
@@ -384,7 +388,10 @@ pub(crate) fn route_pong_observed(
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
             let candidate = Candidate::point(journey);
-            if !results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
+            if !results
+                .iter()
+                .any(|old| !old.rejected && old.dominates(&candidate))
+            {
                 pareto_add(&mut ping_results, candidate);
             }
         }
@@ -405,7 +412,9 @@ pub(crate) fn route_pong_observed(
             // established the latest departure for this arrival/boarding
             // pair. Reuse its oriented key instead of searching again.
             if let Some(known) = results.iter().find(|pong_j| {
-                !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                !pong_j.rejected
+                    && pong_j.boardings == ping_j.boardings
+                    && pong_j.start_time == ping_j.dest_time
             }) {
                 ping_j.start_time = known.dest_time;
                 known_result_hits += 1;
@@ -429,7 +438,9 @@ pub(crate) fn route_pong_observed(
             let matched = results
                 .iter_mut()
                 .find(|pong_j| {
-                    !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                    !pong_j.rejected
+                        && pong_j.boardings == ping_j.boardings
+                        && pong_j.start_time == ping_j.dest_time
                 })
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -699,7 +710,7 @@ fn earliest_alternative(
                             departure_unix_seconds: selected.event,
                             arrival_unix_seconds: arrival,
                             realtime: None,
-},
+                        },
                         Leg::Transfer {
                             from_stop: stop.location().0,
                             to_stop: to,
@@ -771,19 +782,17 @@ fn improve_middle_rides(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing_common::profile_compact_reconstruct::valid_journey_with_realtime;
     use crate::routing_common::raptor_query::WalkingEndpoint;
     use crate::routing_common::realtime_overlay::{
         RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
     };
-    use crate::routing_common::realtime_region::{
-        ChateauRealtimeShard, RegionRealtimeSnapshot,
-    };
-    use crate::routing_common::profile_compact_reconstruct::valid_journey_with_realtime;
-    use std::collections::BTreeSet;
+    use crate::routing_common::realtime_region::{ChateauRealtimeShard, RegionRealtimeSnapshot};
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, RouteIdx, SourceIdx, StationTransferRule,
         TimetableOwned, TimingProfileIdx, TrafficDays,
     };
+    use std::collections::BTreeSet;
 
     // A slow direct train (08:00-09:00) competes with a faster two-ride
     // connection (08:10-08:30). The next ping rediscovers a known PONG
@@ -878,111 +887,175 @@ mod tests {
         let mut builder = RealtimeOverlayBuilder::new_sparse(tt, [4; 32], 1);
         let base = i64::from(tt.header().first_utc_day) * 86_400;
         if replace_static {
-            builder.add_run(RtRunInput {
-                source: SourceIdx(0),
-                original: Some((crate::routing_common::timetable::TransportIdx(0),
-                    crate::routing_common::timetable::DayIdx(0))),
-                service_date: 20_000,
-                external_id: None,
-                pattern: RtPatternInput::Static(RouteIdx(0)),
-                event_times: vec![base+8*3600+300, base+8*3600+900],
-                metadata: None,
-            }).unwrap();
+            builder
+                .add_run(RtRunInput {
+                    source: SourceIdx(0),
+                    original: Some((
+                        crate::routing_common::timetable::TransportIdx(0),
+                        crate::routing_common::timetable::DayIdx(0),
+                    )),
+                    service_date: 20_000,
+                    external_id: None,
+                    pattern: RtPatternInput::Static(RouteIdx(0)),
+                    event_times: vec![base + 8 * 3600 + 300, base + 8 * 3600 + 900],
+                    metadata: None,
+                })
+                .unwrap();
         }
         if added {
-            builder.add_run(RtRunInput {
-                source: SourceIdx(0),
-                original: None,
-                service_date: 20_000,
-                external_id: Some("5:extra0::20000".into()),
-                pattern: RtPatternInput::Static(RouteIdx(0)),
-                event_times: vec![base+8*3600+1200, base+8*3600+1680],
-                metadata: None,
-            }).unwrap();
+            builder
+                .add_run(RtRunInput {
+                    source: SourceIdx(0),
+                    original: None,
+                    service_date: 20_000,
+                    external_id: Some("5:extra0::20000".into()),
+                    pattern: RtPatternInput::Static(RouteIdx(0)),
+                    event_times: vec![base + 8 * 3600 + 1200, base + 8 * 3600 + 1680],
+                    metadata: None,
+                })
+                .unwrap();
         }
-        Arc::new(RegionRealtimeSnapshot::compose(
-            tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
-            vec![ChateauRealtimeShard {
-                chateau: "test".into(),
-                overlay: Arc::new(builder.finish().unwrap()),
-            }],
-        ).unwrap())
+        Arc::new(
+            RegionRealtimeSnapshot::compose(
+                tt,
+                [4; 32],
+                1,
+                &BTreeSet::from(["test".to_owned()]),
+                vec![ChateauRealtimeShard {
+                    chateau: "test".into(),
+                    overlay: Arc::new(builder.finish().unwrap()),
+                }],
+            )
+            .unwrap(),
+        )
     }
 
     #[test]
     fn pong_reconstructs_modified_and_added_trips_in_both_directions() {
-        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let bytes = timetable(&[(0, 2, 8 * 3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
         let delayed_only = rt_region(&tt, true, false);
-        assert!(!delayed_only.may_shortcut, "pure delay must preserve static lower bounds");
+        assert!(
+            !delayed_only.may_shortcut,
+            "pure delay must preserve static lower bounds"
+        );
         let snapshot = rt_region(&tt, true, true);
-        assert!(snapshot.may_shortcut, "added run may create a new fastest path");
+        assert!(
+            snapshot.may_shortcut,
+            "added run may create a new fastest path"
+        );
         for reverse in [false, true] {
             let q = Query {
-                departure_unix_seconds: base + 8*3600 + if reverse { 1900 } else { 240 },
-                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                departure_unix_seconds: base + 8 * 3600 + if reverse { 1900 } else { 240 },
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
                 direct_walk_seconds: None,
                 max_boardings: 2,
                 max_duration_seconds: 7200,
             };
             let (journeys, _) = route_pong_observed(
-                &tt, &q,
+                &tt,
+                &q,
                 ProfileOptions {
                     min_itineraries: 1,
                     search_window_seconds: 1800,
                     max_journey_duration_seconds: 7200,
                     ..Default::default()
                 },
-                reverse, None,
-                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                reverse,
+                None,
+                &PongControl {
+                    realtime: Some(Arc::clone(&snapshot)),
+                    ..Default::default()
+                },
                 &mut |_, _| Ok(()),
-            ).unwrap();
+            )
+            .unwrap();
             assert!(!journeys.is_empty(), "reverse={reverse}");
             for journey in &journeys {
-                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
-                    "invalid RT journey reverse={reverse}: {journey:?}");
-                assert!(!journey.legs.iter().any(|leg|
-                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
-                    "suppressed static run reconstructed: {journey:?}");
-                if journey.legs.iter().any(|leg| matches!(leg, Leg::Ride { realtime: Some(_), .. })) {
+                assert!(
+                    valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid RT journey reverse={reverse}: {journey:?}"
+                );
+                assert!(
+                    !journey.legs.iter().any(|leg| matches!(
+                        leg,
+                        Leg::Ride {
+                            realtime: None,
+                            transport: 0,
+                            service_day: 0,
+                            ..
+                        }
+                    )),
+                    "suppressed static run reconstructed: {journey:?}"
+                );
+                if journey.legs.iter().any(|leg| {
+                    matches!(
+                        leg,
+                        Leg::Ride {
+                            realtime: Some(_),
+                            ..
+                        }
+                    )
+                }) {
                     let mut stale = journey.clone();
                     for leg in &mut stale.legs {
-                        if let Leg::Ride { realtime: Some(rt), .. } = leg {
+                        if let Leg::Ride {
+                            realtime: Some(rt), ..
+                        } = leg
+                        {
                             rt.publication_seq = rt.publication_seq.saturating_add(1);
                         }
                     }
-                    assert!(!valid_journey_with_realtime(&tt, &q, &stale, Some(&snapshot)),
-                        "a stale RT handle must never pass journey validation");
-                    assert!(!valid_journey_with_realtime(&tt, &q, journey, None),
-                        "RT journey cannot validate against a static-only timetable");
+                    assert!(
+                        !valid_journey_with_realtime(&tt, &q, &stale, Some(&snapshot)),
+                        "a stale RT handle must never pass journey validation"
+                    );
+                    assert!(
+                        !valid_journey_with_realtime(&tt, &q, journey, None),
+                        "RT journey cannot validate against a static-only timetable"
+                    );
                 }
             }
-            assert!(journeys.iter().any(|j| j.legs.iter().any(|leg|
-                matches!(leg, Leg::Ride {
+            assert!(
+                journeys
+                    .iter()
+                    .any(|j| j.legs.iter().any(|leg| matches!(leg, Leg::Ride {
                     realtime: Some(_),
                     departure_unix_seconds: dep,
                     arrival_unix_seconds: arr, ..
                 } if *dep == base + 8*3600+1200 && *arr == base + 8*3600+1680))),
-                "missing added RT trip reverse={reverse}: {journeys:?}");
+                "missing added RT trip reverse={reverse}: {journeys:?}"
+            );
         }
     }
 
     #[test]
     fn rejected_pong_candidate_does_not_dominate_valid_alternative() {
         let rejected_point = PointJourney {
-            start_time: 100, dest_time: 400, boardings: 2,
+            start_time: 100,
+            dest_time: 400,
+            boardings: 2,
         };
         let mut rejected = Candidate::point(rejected_point);
         rejected.rejected = true;
         let valid = Candidate::point(PointJourney {
-            start_time: 90, dest_time: 410, boardings: 2,
+            start_time: 90,
+            dest_time: 410,
+            boardings: 2,
         });
         let mut results = vec![rejected];
         pareto_add(&mut results, valid);
         assert!(results.iter().any(|candidate| !candidate.rejected
-            && candidate.start_time == 90 && candidate.dest_time == 410));
+            && candidate.start_time == 90
+            && candidate.dest_time == 410));
     }
 
     #[test]
@@ -990,258 +1063,427 @@ mod tests {
         // Train 0 used to arrive at 08:20 in time for train 1's 08:25
         // departure. Realtime moves its arrival to 08:28. A different train
         // still arrives at 08:15, so a valid two-ride chain remains.
-        let bytes = timetable(&[
-            (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
-            (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
-            (0, 1, 8 * 3600, 15 * 60),
-        ], false).encode().unwrap();
+        let bytes = timetable(
+            &[
+                (0, 1, 8 * 3600 + 10 * 60, 10 * 60),
+                (1, 2, 8 * 3600 + 25 * 60, 5 * 60),
+                (0, 1, 8 * 3600, 15 * 60),
+            ],
+            false,
+        )
+        .encode()
+        .unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
         let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 1);
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: Some((
-                crate::routing_common::timetable::TransportIdx(0),
-                crate::routing_common::timetable::DayIdx(0),
-            )),
-            service_date: 20_000,
-            external_id: None,
-            pattern: RtPatternInput::Static(RouteIdx(0)),
-            event_times: vec![
-                base + 8 * 3600 + 18 * 60,
-                base + 8 * 3600 + 28 * 60,
-            ],
-            metadata: None,
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: Some((
+                    crate::routing_common::timetable::TransportIdx(0),
+                    crate::routing_common::timetable::DayIdx(0),
+                )),
+                service_date: 20_000,
+                external_id: None,
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                event_times: vec![base + 8 * 3600 + 18 * 60, base + 8 * 3600 + 28 * 60],
+                metadata: None,
+            })
+            .unwrap();
         // Other expected chateaux are allowed to be offline; the published
         // shard still suppresses and replaces its own static instance.
-        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
-            &tt, [4; 32], 1,
-            &BTreeSet::from(["test".to_owned(), "not-yet-available".to_owned()]),
-            vec![ChateauRealtimeShard {
-                chateau: "test".to_owned(),
-                overlay: Arc::new(builder.finish().unwrap()),
-            }],
-        ).unwrap());
+        let snapshot = Arc::new(
+            RegionRealtimeSnapshot::compose(
+                &tt,
+                [4; 32],
+                1,
+                &BTreeSet::from(["test".to_owned(), "not-yet-available".to_owned()]),
+                vec![ChateauRealtimeShard {
+                    chateau: "test".to_owned(),
+                    overlay: Arc::new(builder.finish().unwrap()),
+                }],
+            )
+            .unwrap(),
+        );
         assert!(snapshot.is_published());
         assert!(!snapshot.is_complete());
         for reverse in [false, true] {
             let q = Query {
-                departure_unix_seconds: base + if reverse { 8 * 3600 + 35 * 60 } else { 7 * 3600 + 55 * 60 },
-                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                departure_unix_seconds: base
+                    + if reverse {
+                        8 * 3600 + 35 * 60
+                    } else {
+                        7 * 3600 + 55 * 60
+                    },
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
                 direct_walk_seconds: None,
                 max_boardings: 3,
                 max_duration_seconds: 7200,
             };
             let (journeys, _) = route_pong_observed(
-                &tt, &q,
+                &tt,
+                &q,
                 ProfileOptions {
                     min_itineraries: 1,
                     search_window_seconds: 3600,
                     max_journey_duration_seconds: 7200,
                     ..Default::default()
                 },
-                reverse, None,
-                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                reverse,
+                None,
+                &PongControl {
+                    realtime: Some(Arc::clone(&snapshot)),
+                    ..Default::default()
+                },
                 &mut |_, _| Ok(()),
-            ).unwrap();
-            assert!(!journeys.is_empty(), "lost feasible alternative reverse={reverse}");
+            )
+            .unwrap();
+            assert!(
+                !journeys.is_empty(),
+                "lost feasible alternative reverse={reverse}"
+            );
             for journey in &journeys {
-                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
-                    "invalid transfer reverse={reverse}: {journey:?}");
-                assert!(!journey.legs.iter().any(|leg|
-                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
-                    "reconstructed suppressed static instance: {journey:?}");
+                assert!(
+                    valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid transfer reverse={reverse}: {journey:?}"
+                );
+                assert!(
+                    !journey.legs.iter().any(|leg| matches!(
+                        leg,
+                        Leg::Ride {
+                            realtime: None,
+                            transport: 0,
+                            service_day: 0,
+                            ..
+                        }
+                    )),
+                    "reconstructed suppressed static instance: {journey:?}"
+                );
                 let mut latest_arrival = None;
                 for leg in &journey.legs {
                     if let Leg::Ride {
-                        departure_unix_seconds, arrival_unix_seconds, ..
-                    } = leg {
+                        departure_unix_seconds,
+                        arrival_unix_seconds,
+                        ..
+                    } = leg
+                    {
                         if let Some(previous) = latest_arrival {
-                            assert!(previous <= *departure_unix_seconds,
-                                "connection uses a delayed arrival after its next departure");
+                            assert!(
+                                previous <= *departure_unix_seconds,
+                                "connection uses a delayed arrival after its next departure"
+                            );
                         }
                         latest_arrival = Some(*arrival_unix_seconds);
                     }
                 }
             }
-            assert!(journeys.iter().any(|j| {
-                j.boardings == 2 && j.legs.iter().any(|leg| matches!(
-                    leg, Leg::Ride {
-                        transport: 2,
-                        departure_unix_seconds: d, arrival_unix_seconds: a, ..
-                    } if *d == base + 8 * 3600 && *a == base + 8 * 3600 + 15 * 60
-                ))
-            }), "missing feasible earlier 08:00 train reverse={reverse}: {journeys:?}");
+            assert!(
+                journeys.iter().any(|j| {
+                    j.boardings == 2
+                        && j.legs.iter().any(|leg| {
+                            matches!(
+                                leg, Leg::Ride {
+                                    transport: 2,
+                                    departure_unix_seconds: d, arrival_unix_seconds: a, ..
+                                } if *d == base + 8 * 3600 && *a == base + 8 * 3600 + 15 * 60
+                            )
+                        })
+                }),
+                "missing feasible earlier 08:00 train reverse={reverse}: {journeys:?}"
+            );
         }
     }
 
     #[test]
     fn pong_dynamic_detour_preserves_stop_occurrence_and_never_boards_skipped_stop() {
-        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let bytes = timetable(&[(0, 2, 8 * 3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
-        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4;32], 1);
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: Some((
-                crate::routing_common::timetable::TransportIdx(0),
-                crate::routing_common::timetable::DayIdx(0),
-            )),
-            service_date: 20_000,
-            external_id: None,
-            pattern: RtPatternInput::Stops(vec![
-                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
-                PackedStop::new(LocationIdx(1), false, false, false, false).unwrap(),
-                PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
-            ]),
-            event_times: vec![
-                base+8*3600+300, base+8*3600+480,
-                base+8*3600+481, base+8*3600+900,
-            ],
-            metadata: None,
-        }).unwrap();
-        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
-            &tt, [4;32], 1, &BTreeSet::from(["test".into()]),
-            vec![ChateauRealtimeShard {
-                chateau: "test".into(),
-                overlay: Arc::new(builder.finish().unwrap()),
-            }],
-        ).unwrap());
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 1);
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: Some((
+                    crate::routing_common::timetable::TransportIdx(0),
+                    crate::routing_common::timetable::DayIdx(0),
+                )),
+                service_date: 20_000,
+                external_id: None,
+                pattern: RtPatternInput::Stops(vec![
+                    PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                    PackedStop::new(LocationIdx(1), false, false, false, false).unwrap(),
+                    PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
+                ]),
+                event_times: vec![
+                    base + 8 * 3600 + 300,
+                    base + 8 * 3600 + 480,
+                    base + 8 * 3600 + 481,
+                    base + 8 * 3600 + 900,
+                ],
+                metadata: None,
+            })
+            .unwrap();
+        let snapshot = Arc::new(
+            RegionRealtimeSnapshot::compose(
+                &tt,
+                [4; 32],
+                1,
+                &BTreeSet::from(["test".into()]),
+                vec![ChateauRealtimeShard {
+                    chateau: "test".into(),
+                    overlay: Arc::new(builder.finish().unwrap()),
+                }],
+            )
+            .unwrap(),
+        );
         for reverse in [false, true] {
             let q = Query {
-                departure_unix_seconds: base+8*3600+if reverse { 930 } else { 240 },
-                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-                direct_walk_seconds: None, max_boardings: 2, max_duration_seconds: 3600,
+                departure_unix_seconds: base + 8 * 3600 + if reverse { 930 } else { 240 },
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 2,
+                max_duration_seconds: 3600,
             };
             let (journeys, _) = route_pong_observed(
-                &tt, &q,
-                ProfileOptions { min_itineraries: 1, search_window_seconds: 600,
-                    max_journey_duration_seconds: 3600, ..Default::default() },
-                reverse, None,
-                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &tt,
+                &q,
+                ProfileOptions {
+                    min_itineraries: 1,
+                    search_window_seconds: 600,
+                    max_journey_duration_seconds: 3600,
+                    ..Default::default()
+                },
+                reverse,
+                None,
+                &PongControl {
+                    realtime: Some(Arc::clone(&snapshot)),
+                    ..Default::default()
+                },
                 &mut |_, _| Ok(()),
-            ).unwrap();
-            assert!(journeys.iter().any(|j|
-                valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
-                && j.legs.iter().any(|leg| matches!(leg, Leg::Ride {
-                    from_stop: 0, to_stop: 2,
-                    board_stop_index: 0, alight_stop_index: 2,
-                    realtime: Some(_), .. })),
-            ), "dynamic skipped-stop RT ride lost reverse={reverse}: {journeys:?}");
+            )
+            .unwrap();
+            assert!(
+                journeys
+                    .iter()
+                    .any(|j| valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
+                        && j.legs.iter().any(|leg| matches!(
+                            leg,
+                            Leg::Ride {
+                                from_stop: 0,
+                                to_stop: 2,
+                                board_stop_index: 0,
+                                alight_stop_index: 2,
+                                realtime: Some(_),
+                                ..
+                            }
+                        )),),
+                "dynamic skipped-stop RT ride lost reverse={reverse}: {journeys:?}"
+            );
         }
         let q = Query {
-            departure_unix_seconds: base+8*3600,
-            access: vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-            direct_walk_seconds: None, max_boardings: 1, max_duration_seconds: 3600,
+            departure_unix_seconds: base + 8 * 3600,
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(1),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 0,
+            }],
+            direct_walk_seconds: None,
+            max_boardings: 1,
+            max_duration_seconds: 3600,
         };
         let (journeys, _) = route_pong_observed(
-            &tt, &q, ProfileOptions {
-                min_itineraries: 1, search_window_seconds: 900,
-                max_journey_duration_seconds: 3600, ..Default::default()
-            }, false, None,
-            &PongControl { realtime: Some(snapshot), ..Default::default() },
+            &tt,
+            &q,
+            ProfileOptions {
+                min_itineraries: 1,
+                search_window_seconds: 900,
+                max_journey_duration_seconds: 3600,
+                ..Default::default()
+            },
+            false,
+            None,
+            &PongControl {
+                realtime: Some(snapshot),
+                ..Default::default()
+            },
             &mut |_, _| Ok(()),
-        ).unwrap();
+        )
+        .unwrap();
         assert!(journeys.is_empty(), "boarded a skipped stop: {journeys:?}");
     }
 
     #[test]
     fn pong_two_ride_transfer_reconstructs_mixed_static_and_rt_in_both_directions() {
-        let bytes = timetable(&[
-            (0, 1, 8*3600, 600),
-            (1, 2, 8*3600+900, 600),
-        ], false).encode().unwrap();
+        let bytes = timetable(&[(0, 1, 8 * 3600, 600), (1, 2, 8 * 3600 + 900, 600)], false)
+            .encode()
+            .unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
-        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4;32], 1);
-        builder.add_run(RtRunInput {
-            source: SourceIdx(0),
-            original: Some((
-                crate::routing_common::timetable::TransportIdx(1),
-                crate::routing_common::timetable::DayIdx(0),
-            )),
-            service_date: 20_000,
-            external_id: None,
-            pattern: RtPatternInput::Static(RouteIdx(1)),
-            event_times: vec![base+8*3600+1200, base+8*3600+1800],
-            metadata: None,
-        }).unwrap();
-        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
-            &tt, [4;32], 1, &BTreeSet::from(["test".to_owned()]),
-            vec![ChateauRealtimeShard {
-                chateau: "test".to_owned(),
-                overlay: Arc::new(builder.finish().unwrap()),
-            }],
-        ).unwrap());
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 1);
+        builder
+            .add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: Some((
+                    crate::routing_common::timetable::TransportIdx(1),
+                    crate::routing_common::timetable::DayIdx(0),
+                )),
+                service_date: 20_000,
+                external_id: None,
+                pattern: RtPatternInput::Static(RouteIdx(1)),
+                event_times: vec![base + 8 * 3600 + 1200, base + 8 * 3600 + 1800],
+                metadata: None,
+            })
+            .unwrap();
+        let snapshot = Arc::new(
+            RegionRealtimeSnapshot::compose(
+                &tt,
+                [4; 32],
+                1,
+                &BTreeSet::from(["test".to_owned()]),
+                vec![ChateauRealtimeShard {
+                    chateau: "test".to_owned(),
+                    overlay: Arc::new(builder.finish().unwrap()),
+                }],
+            )
+            .unwrap(),
+        );
         for reverse in [false, true] {
             let q = Query {
-                departure_unix_seconds: base+8*3600+if reverse { 2100 } else { -120 },
-                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
-                direct_walk_seconds: None, max_boardings: 3, max_duration_seconds: 3600,
+                departure_unix_seconds: base + 8 * 3600 + if reverse { 2100 } else { -120 },
+                access: vec![WalkingEndpoint {
+                    stop: LocationIdx(0),
+                    seconds: 0,
+                }],
+                egress: vec![WalkingEndpoint {
+                    stop: LocationIdx(2),
+                    seconds: 0,
+                }],
+                direct_walk_seconds: None,
+                max_boardings: 3,
+                max_duration_seconds: 3600,
             };
             let (journeys, _) = route_pong_observed(
-                &tt, &q,
+                &tt,
+                &q,
                 ProfileOptions {
-                    min_itineraries: 1, search_window_seconds: 600,
-                    max_journey_duration_seconds: 3600, ..Default::default()
+                    min_itineraries: 1,
+                    search_window_seconds: 600,
+                    max_journey_duration_seconds: 3600,
+                    ..Default::default()
                 },
-                reverse, None,
-                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                reverse,
+                None,
+                &PongControl {
+                    realtime: Some(Arc::clone(&snapshot)),
+                    ..Default::default()
+                },
                 &mut |_, _| Ok(()),
-            ).unwrap();
-            assert!(journeys.iter().any(|j| {
-                j.boardings == 2
-                    && valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
-                    && j.legs.iter().any(|leg| matches!(leg,
-                        Leg::Ride { transport: 0, realtime: None, .. }))
-                    && j.legs.iter().any(|leg| matches!(leg,
-                        Leg::Ride { transport: 1, realtime: Some(_),
-                            departure_unix_seconds: d, arrival_unix_seconds: a, .. }
-                        if *d == base+8*3600+1200 && *a == base+8*3600+1800
-                    ))
-            }), "no valid mixed transfer for reverse={reverse}: {journeys:?}");
+            )
+            .unwrap();
+            assert!(
+                journeys.iter().any(|j| {
+                    j.boardings == 2
+                        && valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
+                        && j.legs.iter().any(|leg| {
+                            matches!(
+                                leg,
+                                Leg::Ride {
+                                    transport: 0,
+                                    realtime: None,
+                                    ..
+                                }
+                            )
+                        })
+                        && j.legs.iter().any(|leg| {
+                            matches!(leg,
+                                Leg::Ride { transport: 1, realtime: Some(_),
+                                    departure_unix_seconds: d, arrival_unix_seconds: a, .. }
+                                if *d == base+8*3600+1200 && *a == base+8*3600+1800
+                            )
+                        })
+                }),
+                "no valid mixed transfer for reverse={reverse}: {journeys:?}"
+            );
         }
     }
 
     #[test]
     fn pong_does_not_return_cancelled_static_run() {
-        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let bytes = timetable(&[(0, 2, 8 * 3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 2);
-        builder.cancel_static(
-            crate::routing_common::timetable::TransportIdx(0),
-            crate::routing_common::timetable::DayIdx(0),
-        ).unwrap();
-        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
-            &tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
-            vec![ChateauRealtimeShard {
-                chateau: "test".into(),
-                overlay: Arc::new(builder.finish().unwrap()),
-            }],
-        ).unwrap());
+        builder
+            .cancel_static(
+                crate::routing_common::timetable::TransportIdx(0),
+                crate::routing_common::timetable::DayIdx(0),
+            )
+            .unwrap();
+        let snapshot = Arc::new(
+            RegionRealtimeSnapshot::compose(
+                &tt,
+                [4; 32],
+                1,
+                &BTreeSet::from(["test".to_owned()]),
+                vec![ChateauRealtimeShard {
+                    chateau: "test".into(),
+                    overlay: Arc::new(builder.finish().unwrap()),
+                }],
+            )
+            .unwrap(),
+        );
         let q = Query {
-            departure_unix_seconds: 20_000_i64*86_400 + 8*3600,
-            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
-            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600,
+            access: vec![WalkingEndpoint {
+                stop: LocationIdx(0),
+                seconds: 0,
+            }],
+            egress: vec![WalkingEndpoint {
+                stop: LocationIdx(2),
+                seconds: 0,
+            }],
             direct_walk_seconds: None,
-            max_boardings: 2, max_duration_seconds: 3600,
+            max_boardings: 2,
+            max_duration_seconds: 3600,
         };
         let (journeys, _) = route_pong_observed(
-            &tt, &q,
+            &tt,
+            &q,
             ProfileOptions {
-                min_itineraries: 1, search_window_seconds: 900,
-                max_journey_duration_seconds: 3600, ..Default::default()
+                min_itineraries: 1,
+                search_window_seconds: 900,
+                max_journey_duration_seconds: 3600,
+                ..Default::default()
             },
-            false, None,
-            &PongControl { realtime: Some(snapshot), ..Default::default() },
+            false,
+            None,
+            &PongControl {
+                realtime: Some(snapshot),
+                ..Default::default()
+            },
             &mut |_, _| Ok(()),
-        ).unwrap();
-        assert!(journeys.is_empty(), "cancelled service leaked: {journeys:?}");
+        )
+        .unwrap();
+        assert!(
+            journeys.is_empty(),
+            "cancelled service leaked: {journeys:?}"
+        );
     }
 
     #[test]

@@ -5,10 +5,10 @@
 //! or stop vectors. Non-trip metadata is moved without recompression.
 #[path = "compressed_aspen_dataset/columns.rs"]
 mod columns;
-#[path = "compressed_aspen_dataset/trips.rs"]
-mod trips;
 #[path = "compressed_aspen_dataset/legacy_trips.rs"]
 mod legacy_trips;
+#[path = "compressed_aspen_dataset/trips.rs"]
+mod trips;
 
 use crate::aspen_dataset::*;
 use ahash::AHashMap;
@@ -198,7 +198,8 @@ impl AspenMetadata {
 impl CompressedAspenisedData {
     pub fn trip_updates(&self) -> &CompressedTripUpdates {
         match self {
-            Self::V1(snapshot) => snapshot.upgraded
+            Self::V1(snapshot) => snapshot
+                .upgraded
                 .get_or_init(|| snapshot.trips.to_expanded().into()),
             Self::V2(snapshot) => &snapshot.trips,
         }

@@ -77,7 +77,9 @@ fn subscription_is_current(
     key: &TripSubscriptionTuple,
     generation: u64,
 ) -> bool {
-    subscriptions.get(key).is_some_and(|state| state.generation == generation)
+    subscriptions
+        .get(key)
+        .is_some_and(|state| state.generation == generation)
 }
 
 #[cfg(test)]
@@ -99,14 +101,32 @@ mod multi_subscription_tests {
         let first = ("chateau".to_owned(), params("trip", "20261118"));
         let second = ("chateau".to_owned(), params("trip", "20261119"));
         let mut active = std::collections::HashMap::new();
-        active.insert(first.clone(), TripSubscriptionState { generation: 10, last_hash: None });
-        active.insert(second.clone(), TripSubscriptionState { generation: 11, last_hash: None });
+        active.insert(
+            first.clone(),
+            TripSubscriptionState {
+                generation: 10,
+                last_hash: None,
+            },
+        );
+        active.insert(
+            second.clone(),
+            TripSubscriptionState {
+                generation: 11,
+                last_hash: None,
+            },
+        );
         assert!(subscription_is_current(&active, &first, 10));
         assert!(subscription_is_current(&active, &second, 11));
         active.remove(&first);
         assert!(!subscription_is_current(&active, &first, 10));
         assert!(subscription_is_current(&active, &second, 11));
-        active.insert(first.clone(), TripSubscriptionState { generation: 12, last_hash: None });
+        active.insert(
+            first.clone(),
+            TripSubscriptionState {
+                generation: 12,
+                last_hash: None,
+            },
+        );
         assert!(!subscription_is_current(&active, &first, 10));
         assert!(subscription_is_current(&active, &first, 12));
     }
@@ -114,16 +134,18 @@ mod multi_subscription_tests {
     #[test]
     fn identity_serializes_with_all_disambiguating_fields() {
         let identity = TripSubscriptionIdentity::new("chateau".into(), params("same", "20261119"));
-        assert_eq!(serde_json::to_value(&identity).unwrap(), json!({
-            "chateau":"chateau", "trip_id":"same", "route_id":"R",
-            "start_date":"20261119", "start_time":"25:00:00"
-        }));
+        assert_eq!(
+            serde_json::to_value(&identity).unwrap(),
+            json!({
+                "chateau":"chateau", "trip_id":"same", "route_id":"R",
+                "start_date":"20261119", "start_time":"25:00:00"
+            })
+        );
         let roundtrip: TripSubscriptionIdentity =
             serde_json::from_value(serde_json::to_value(&identity).unwrap()).unwrap();
         assert_eq!(identity, roundtrip);
     }
 }
-
 
 #[derive(Serialize)]
 #[serde(tag = "type")]
@@ -370,10 +392,13 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                             self.next_subscription_generation.wrapping_add(1);
                         let generation = self.next_subscription_generation;
                         let key = (chateau.clone(), params.clone());
-                        self.subscriptions.insert(key.clone(), TripSubscriptionState {
-                            generation,
-                            last_hash: None,
-                        });
+                        self.subscriptions.insert(
+                            key.clone(),
+                            TripSubscriptionState {
+                                generation,
+                                last_hash: None,
+                            },
+                        );
                         self.in_progress_trip_fetches.remove(&key);
 
                         let fs = fetch_trip_information(

@@ -1002,8 +1002,7 @@ async fn fetch_chateau_data(
         }
 
         if !stops_to_check.is_empty() {
-            let direction_rows: Vec<crate::models::DirectionPatternRow> =
-                timed_nearby_sql!(
+            let direction_rows: Vec<crate::models::DirectionPatternRow> = timed_nearby_sql!(
                     sql_timings,
                     request_started,
                     &chateau,
@@ -1018,7 +1017,7 @@ async fn fetch_chateau_data(
                         .select(crate::models::DirectionPatternRow::as_select()),
                     crate::models::DirectionPatternRow
                 )
-                .unwrap_or_default();
+            .unwrap_or_default();
 
             let mut best_stops: HashMap<(String, Option<i16>), (f64, String)> = HashMap::new();
             for row in direction_rows {

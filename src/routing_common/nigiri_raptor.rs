@@ -4,9 +4,9 @@
 //! Search labels are best_, tmp_, and round_times_; no predecessor labels
 //! or journey reconstruction participate in route/transfer relaxation.
 use crate::routing_common::profile_compact::{LowerBoundTopology, point_lower_bounds};
+use crate::routing_common::raptor_query::{Query, RaptorStats, WalkingEndpoint};
 use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::realtime_scan::scan_realtime_round_with;
-use crate::routing_common::raptor_query::{Query, RaptorStats, WalkingEndpoint};
 use crate::routing_common::timetable::{DayIdx, Delta, LocationIdx, RouteIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Context, Result, ensure};
@@ -192,8 +192,14 @@ impl NigiriRaptor {
     /// actually present in a published shard can be suppressed; every missing
     /// source continues to use its regular static timetable services.
     pub(crate) fn enable_realtime(&mut self, region: Arc<RegionRealtimeSnapshot>) -> Result<()> {
-        ensure!(region.is_published(), "realtime region has not been published");
-        ensure!(region.event_epoch == self.base_, "realtime timetable epoch mismatch");
+        ensure!(
+            region.is_published(),
+            "realtime region has not been published"
+        );
+        ensure!(
+            region.event_epoch == self.base_,
+            "realtime timetable epoch mismatch"
+        );
         // Nigiri rt_timetable::update_lbs updates the shortest-path graph
         // for new/faster RT edges. Until that compact overlay is implemented,
         // zero static bounds ONLY if the source snapshot can add a shortcut.
@@ -361,10 +367,13 @@ impl NigiriRaptor {
                     self.route_mark_.set(route.idx());
                 }
             }
-            if !any_marked && self.realtime.as_ref().is_none_or(|rt| {
-                !marked.iter().any(|&stop| stop < self.target
-                    && !rt.patterns_at(LocationIdx(stop as u32)).is_empty())
-            }) {
+            if !any_marked
+                && self.realtime.as_ref().is_none_or(|rt| {
+                    !marked.iter().any(|&stop| {
+                        stop < self.target && !rt.patterns_at(LocationIdx(stop as u32)).is_empty()
+                    })
+                })
+            {
                 break;
             }
             self.stats_.rounds += 1;
@@ -411,7 +420,9 @@ impl NigiriRaptor {
     }
 
     fn scan_realtime(&mut self, tt: &ZeroCopyTimetable<'_>, k: usize) {
-        let Some(snapshot) = self.realtime.as_ref() else { return };
+        let Some(snapshot) = self.realtime.as_ref() else {
+            return;
+        };
         let marked = self.prev_station_mark_.indices();
         let previous = &self.round_times_[k - 1];
         let base = self.base_;
@@ -420,20 +431,27 @@ impl NigiriRaptor {
         let station_mark = &mut self.station_mark_;
         let stats = &mut self.stats_;
         scan_realtime_round_with(
-            tt, snapshot, &marked, reverse,
+            tt,
+            snapshot,
+            &marked,
+            reverse,
             |loc| {
                 let t = *previous.get(loc)?;
-                (t != if reverse { NEG_INF } else { INF })
-                    .then_some(base + i64::from(t))
+                (t != if reverse { NEG_INF } else { INF }).then_some(base + i64::from(t))
             },
             |candidate| {
                 stats.realtime_ride_candidates += 1;
                 let (loc, event) = if reverse {
-                    (candidate.from_stop as usize, candidate.departure_unix_seconds)
+                    (
+                        candidate.from_stop as usize,
+                        candidate.departure_unix_seconds,
+                    )
                 } else {
                     (candidate.to_stop as usize, candidate.arrival_unix_seconds)
                 };
-                let Ok(time) = i32::try_from(event - base) else { return };
+                let Ok(time) = i32::try_from(event - base) else {
+                    return;
+                };
                 if better(time, tmp[loc], reverse) {
                     tmp[loc] = time;
                     station_mark.set(loc);
@@ -771,10 +789,13 @@ impl RouteScan<'_> {
                     self.base + i64::from(self.destination_bound),
                     self.lower_bounds[loc],
                     stats,
-                    |transport, day| self.realtime.is_none_or(|rt| {
-                        u16::try_from(day).ok().is_some_and(|d|
-                            !rt.is_static_suppressed(transport, DayIdx(d)))
-                    }),
+                    |transport, day| {
+                        self.realtime.is_none_or(|rt| {
+                            u16::try_from(day)
+                                .ok()
+                                .is_some_and(|d| !rt.is_static_suppressed(transport, DayIdx(d)))
+                        })
+                    },
                 ) else {
                     continue;
                 };

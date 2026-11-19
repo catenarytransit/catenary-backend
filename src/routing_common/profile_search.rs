@@ -1070,7 +1070,7 @@ mod tests {
                     departure_unix_seconds: dep,
                     arrival_unix_seconds: arr,
                     realtime: None,
-}],
+                }],
             }
         }
         let options = route_diverse_pareto(vec![
@@ -1105,7 +1105,7 @@ mod tests {
                     departure_unix_seconds: dep,
                     arrival_unix_seconds: arr,
                     realtime: None,
-}],
+                }],
             }
         }
         let choices = route_diverse_pareto(vec![candidate(100, 1_900), candidate(300, 2_100)]);

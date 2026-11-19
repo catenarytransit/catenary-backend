@@ -54,7 +54,11 @@ struct Args {
     enable_footpath_debug: bool,
     // Aspen realtime source synchronization is always started in server mode.
     /// Minimum delay between finished synchronization passes.
-    #[arg(long, default_value_t = 60, env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS")]
+    #[arg(
+        long,
+        default_value_t = 60,
+        env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS"
+    )]
     realtime_source_sync_seconds: u64,
     /// Offline Birch TripUpdates protobuf fixture (no Aspen worker or etcd).
     /// Only used by SoCal CI; does not enable live realtime journey scanning.
@@ -446,10 +450,14 @@ fn run_query_observed(
     // missing chateaux retain their static timetable runs. Full regional
     // coverage is not required, since most regions have sparse RT sources.
     // The same Arc is held across PING/PONG and journey reconstruction.
-    let realtime_snapshot = request.timetable_view.then(|| {
-        router.pin_realtime(&selection.transit_region)
-            .filter(|snapshot| snapshot.is_published())
-    }).flatten();
+    let realtime_snapshot = request
+        .timetable_view
+        .then(|| {
+            router
+                .pin_realtime(&selection.transit_region)
+                .filter(|snapshot| snapshot.is_published())
+        })
+        .flatten();
 
     // Access, egress and direct walking have no data dependencies.
     // Use Rayon's existing bounded pool, rather than spawning up to three
@@ -631,7 +639,10 @@ fn run_query_observed(
             let mut response = response;
             if v2 {
                 route_v2::enrich(
-                    &mut response, &missing, &timetable, platform,
+                    &mut response,
+                    &missing,
+                    &timetable,
+                    platform,
                     realtime_snapshot.as_deref(),
                 );
             }
@@ -676,7 +687,12 @@ fn run_query_observed(
             "realtimeSourcesExpected":realtime_snapshot.as_ref().map(|rt| rt.expected_chateaux),
         });
         if emit_chateau_metrics {
-            for chateau in motis_response::journey_chateaus(&timetable, index, journeys, realtime_snapshot.as_deref()) {
+            for chateau in motis_response::journey_chateaus(
+                &timetable,
+                index,
+                journeys,
+                realtime_snapshot.as_deref(),
+            ) {
                 if counted_chateaus.insert(chateau.clone()) {
                     catenary::observability::count(
                         "routing.chateau_accesses",
@@ -980,9 +996,7 @@ async fn route_version(
     })
     .await;
     match result {
-        Ok(Ok((answer, _timings))) => {
-            HttpResponse::Ok().json(answer)
-        },
+        Ok(Ok((answer, _timings))) => HttpResponse::Ok().json(answer),
         Ok(Err(err)) => HttpResponse::UnprocessableEntity()
             .json(serde_json::json!({"requestId":id,"error":err.to_string()})),
         Err(err) => HttpResponse::InternalServerError()
@@ -1128,15 +1142,23 @@ async fn main() -> Result<()> {
     // HTTP traffic can fault the useful working set back in.
     advise_startup_mappings(&router, &osr, mmap_advice);
     if let Some(path) = args.realtime_probe_file.as_ref() {
-        let region = args.realtime_probe_region.as_deref()
+        let region = args
+            .realtime_probe_region
+            .as_deref()
             .context("--realtime-probe-region is required")?;
-        let feed = args.realtime_probe_static_feed.as_deref()
+        let feed = args
+            .realtime_probe_static_feed
+            .as_deref()
             .context("--realtime-probe-static-feed is required")?;
         let protobuf = fs::read(path)
             .with_context(|| format!("reading raw Birch GTFS-RT fixture {}", path.display()))?;
         let result = realtime_sync::probe_raw_gtfs_rt(
-            &router, &args.regions_config, region, feed,
-            &protobuf, args.realtime_probe_min_runs,
+            &router,
+            &args.regions_config,
+            region,
+            feed,
+            &protobuf,
+            args.realtime_probe_min_runs,
         )?;
         if let Some(path) = &args.realtime_probe_report {
             fs::write(path, serde_json::to_vec_pretty(&result)?)
@@ -1180,22 +1202,37 @@ async fn main() -> Result<()> {
     // chateaux with no realtime snapshot. The source sync runs independently
     // of the HTTP server so an Aspen outage does not stop scheduled routing.
     let realtime_sources = {
-        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router, &args.regions_config)?);
+        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(
+            &router,
+            &args.regions_config,
+        )?);
         let settings: catenary::catenaryconfig::CatenaryConfig =
             toml::from_str(&fs::read_to_string(&args.catenary_config)?)?;
-        let urls = std::env::var("ETCD_URLS").ok()
+        let urls = std::env::var("ETCD_URLS")
+            .ok()
             .map(|s| s.split(',').map(str::to_owned).collect::<Vec<_>>())
             .or(settings.aspen.etcd_urls)
             .unwrap_or_else(|| vec!["localhost:2379".to_owned()]);
-        let username = std::env::var("ETCD_USERNAME").ok().or(settings.aspen.etcd_username);
-        let password = std::env::var("ETCD_PASSWORD").ok().or(settings.aspen.etcd_password);
+        let username = std::env::var("ETCD_USERNAME")
+            .ok()
+            .or(settings.aspen.etcd_username);
+        let password = std::env::var("ETCD_PASSWORD")
+            .ok()
+            .or(settings.aspen.etcd_password);
         let sync_sources = Arc::clone(&sources);
         let sync_router = Arc::clone(&router);
         let sync_interval = Duration::from_secs(args.realtime_source_sync_seconds.max(5));
         tokio::spawn(async move {
             if let Err(error) = realtime_sync::synchronize(
-                sync_sources, sync_router, urls, username, password, sync_interval,
-            ).await {
+                sync_sources,
+                sync_router,
+                urls,
+                username,
+                password,
+                sync_interval,
+            )
+            .await
+            {
                 eprintln!("Edelweiss realtime source sync disabled after error: {error:#}");
             }
         });

@@ -813,33 +813,32 @@ async fn fetch_direction_patterns(
     Ok(patterns.into_values().collect())
 }
 
+// Find route connections for all stops with one spatial query. Nearby platforms
+// can belong to other GTFS feeds/chateaux, so use both identities.
+async fn fetch_route_connections(
+    pool: &PgPool,
+    chateau: &str,
+    route_id: &str,
+    input_route_type: i16,
+    locale: &str,
+    patterns: &[RouteDirectionPattern],
+) -> Result<BTreeMap<String, Vec<ConnectingRouteCard>>, sqlx::Error> {
+    let stop_ids: Vec<String> = patterns
+        .iter()
+        .flat_map(|pattern| pattern.stops.iter().map(|stop| stop.stop_id.clone()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if stop_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
 
- // Find route connections for all stops with one spatial query. Nearby platforms
- // can belong to other GTFS feeds/chateaux, so use both identities.
- async fn fetch_route_connections(
-     pool: &PgPool,
-     chateau: &str,
-     route_id: &str,
-     input_route_type: i16,
-     locale: &str,
-     patterns: &[RouteDirectionPattern],
- ) -> Result<BTreeMap<String, Vec<ConnectingRouteCard>>, sqlx::Error> {
-     let stop_ids: Vec<String> = patterns
-         .iter()
-         .flat_map(|pattern| pattern.stops.iter().map(|stop| stop.stop_id.clone()))
-         .collect::<BTreeSet<_>>()
-         .into_iter()
-         .collect();
-     if stop_ids.is_empty() {
-         return Ok(BTreeMap::new());
-     }
-
-     // Combine exact-stop services with the same mode-dependent transfer
-     // distances as route_info::connections_lookup. The broad 0.006-degree
-     // spatial search is followed by a distance-in-metres filter. Exact-stop
-     // transfers do not depend on geometry.
-     let rows = sqlx::query(
-         r#"
+    // Combine exact-stop services with the same mode-dependent transfer
+    // distances as route_info::connections_lookup. The broad 0.006-degree
+    // spatial search is followed by a distance-in-metres filter. Exact-stop
+    // transfers do not depend on geometry.
+    let rows = sqlx::query(
+        r#"
          WITH base AS (
              -- Follow the feed/attempt selected for the displayed route's
              -- direction patterns, rather than an arbitrary stop version.
@@ -955,52 +954,59 @@ async fn fetch_direction_patterns(
           AND a.agency_id = r.agency_id
          WHERE NOT (r.chateau = $1 AND r.route_id = $3)
          "#,
-     )
-     .bind(chateau)
-     .bind(&stop_ids)
-     .bind(route_id)
-     .bind(input_route_type)
-     .fetch_all(pool)
-     .await?;
+    )
+    .bind(chateau)
+    .bind(&stop_ids)
+    .bind(route_id)
+    .bind(input_route_type)
+    .fetch_all(pool)
+    .await?;
 
-     let mut result: BTreeMap<String, BTreeMap<(String, String), ConnectingRouteCard>> =
-         BTreeMap::new();
-     for row in rows {
-         let stop_id: String = row.try_get("base_stop_id")?;
-         let connection_chateau: String = row.try_get("chateau")?;
-         let connection_route: String = row.try_get("route_id")?;
-         let agency_id: Option<String> = row.try_get("unified_agency_id")?;
-         let slug: Option<String> = row.try_get("url_slug_for_unified_agency")?;
-         let path = agency_id.zip(slug).map(|(agency, slug)| {
-             route_path(locale, &agency, &slug)
-         });
-         let card = ConnectingRouteCard {
-             chateau: connection_chateau.clone(),
-             route_id: connection_route.clone(),
-             short_name: row.try_get("short_name")?,
-             long_name: row.try_get("long_name")?,
-             route_type: row.try_get("route_type")?,
-             color: row.try_get("color")?,
-             text_color: row.try_get("text_color")?,
-             path,
-         };
-         let entry = result.entry(stop_id).or_default();
-         entry.entry((connection_chateau, connection_route))
-             .and_modify(|previous| {
-                 if previous.path.is_none() && card.path.is_some() {
-                     previous.path = card.path.clone();
-                 }
-             })
-             .or_insert(card);
-     }
-     Ok(result.into_iter().map(|(stop, routes)| {
-         let mut routes: Vec<_> = routes.into_values().collect();
-         routes.sort_by(|a, b| a.route_type.cmp(&b.route_type)
-             .then_with(|| a.short_name.cmp(&b.short_name))
-             .then_with(|| a.route_id.cmp(&b.route_id)));
-         (stop, routes)
-     }).collect())
- }
+    let mut result: BTreeMap<String, BTreeMap<(String, String), ConnectingRouteCard>> =
+        BTreeMap::new();
+    for row in rows {
+        let stop_id: String = row.try_get("base_stop_id")?;
+        let connection_chateau: String = row.try_get("chateau")?;
+        let connection_route: String = row.try_get("route_id")?;
+        let agency_id: Option<String> = row.try_get("unified_agency_id")?;
+        let slug: Option<String> = row.try_get("url_slug_for_unified_agency")?;
+        let path = agency_id
+            .zip(slug)
+            .map(|(agency, slug)| route_path(locale, &agency, &slug));
+        let card = ConnectingRouteCard {
+            chateau: connection_chateau.clone(),
+            route_id: connection_route.clone(),
+            short_name: row.try_get("short_name")?,
+            long_name: row.try_get("long_name")?,
+            route_type: row.try_get("route_type")?,
+            color: row.try_get("color")?,
+            text_color: row.try_get("text_color")?,
+            path,
+        };
+        let entry = result.entry(stop_id).or_default();
+        entry
+            .entry((connection_chateau, connection_route))
+            .and_modify(|previous| {
+                if previous.path.is_none() && card.path.is_some() {
+                    previous.path = card.path.clone();
+                }
+            })
+            .or_insert(card);
+    }
+    Ok(result
+        .into_iter()
+        .map(|(stop, routes)| {
+            let mut routes: Vec<_> = routes.into_values().collect();
+            routes.sort_by(|a, b| {
+                a.route_type
+                    .cmp(&b.route_type)
+                    .then_with(|| a.short_name.cmp(&b.short_name))
+                    .then_with(|| a.route_id.cmp(&b.route_id))
+            });
+            (stop, routes)
+        })
+        .collect())
+}
 
 async fn resolve_route_slug(
     pool: &PgPool,
@@ -1491,7 +1497,8 @@ pub async fn directory_route(
         &locale,
         &direction_patterns,
     )
-    .await {
+    .await
+    {
         Ok(connections) => connections,
         Err(error) => {
             eprintln!("directory route connections query failed: {error}");

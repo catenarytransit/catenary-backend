@@ -4,8 +4,8 @@ pub use crate::routing_common::pong::{PongControl, PongObserver};
 use crate::routing_common::profile_search::ProfileOptions;
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
-use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
+use crate::routing_common::routing_regions::RoutingRegionsConfig;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
 use anyhow::{Context, Result, bail, ensure};
@@ -13,10 +13,10 @@ use geo::{Intersects, Point};
 use geojson::{GeoJson, Value};
 use serde::{Deserialize, Serialize};
 use std::{
-    sync::{Arc, RwLock},
     fs,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::{Arc, RwLock},
     time::Instant,
 };
 
@@ -378,7 +378,8 @@ impl Router {
                 MappedTimetable::open(&path)
             } else {
                 MappedTimetable::open_fast(&path)
-            }).with_context(|| {
+            })
+            .with_context(|| {
                 format!(
                     "mapping transit region {} from {}",
                     region.id,
@@ -388,7 +389,11 @@ impl Router {
             eprintln!(
                 "Edelweiss startup: region {}: timetable mapped and {} checked in {:.3}s ({} stops, {} transports); checking routing sources",
                 region.id,
-                if strict_validation { "fully" } else { "structurally" },
+                if strict_validation {
+                    "fully"
+                } else {
+                    "structurally"
+                },
                 phase.elapsed().as_secs_f64(),
                 timetable.view()?.coordinates().len(),
                 timetable.view()?.transport_route().len(),
@@ -575,15 +580,20 @@ impl Router {
     /// indices from this snapshot remain valid until the Arc is released.
     pub fn pin_realtime(&self, name: &str) -> Option<Arc<RegionRealtimeSnapshot>> {
         let region = self.transit.iter().find(|region| region.id == name)?;
-        region.realtime.read().unwrap_or_else(|e| e.into_inner()).clone()
+        region
+            .realtime
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Publish a fully constructed generation-compatible snapshot, without
     /// modifying the static mmap timetable or writing the overlay to disk.
-    pub fn publish_realtime(
-        &self, name: &str, next: Arc<RegionRealtimeSnapshot>,
-    ) -> Result<()> {
-        let region = self.transit.iter().find(|region| region.id == name)
+    pub fn publish_realtime(&self, name: &str, next: Arc<RegionRealtimeSnapshot>) -> Result<()> {
+        let region = self
+            .transit
+            .iter()
+            .find(|region| region.id == name)
             .with_context(|| format!("unknown realtime transit region {name}"))?;
         let tt = region.timetable.view()?;
         ensure!(

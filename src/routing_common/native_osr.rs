@@ -245,7 +245,9 @@ impl NativeOsr {
             .collect::<Vec<_>>();
         // Malformed registry entries must not become silently invisible.
         ensure!(
-            features.iter().all(|f| f["properties"]["id"].as_str().is_some()),
+            features
+                .iter()
+                .all(|f| f["properties"]["id"].as_str().is_some()),
             "OSR region missing id"
         );
         use rayon::prelude::*;
@@ -303,7 +305,10 @@ impl NativeOsr {
         })?;
         let mut graphs = BTreeMap::new();
         for (id, graph) in loaded {
-            ensure!(graphs.insert(id.clone(), graph).is_none(), "duplicate OSR region {id}");
+            ensure!(
+                graphs.insert(id.clone(), graph).is_none(),
+                "duplicate OSR region {id}"
+            );
         }
         eprintln!(
             "Edelweiss startup: {} OSR graphs loaded with {} workers in {:.3}s",
@@ -433,7 +438,9 @@ impl Graph {
     fn can_reuse(&self, tt: &ZeroCopyTimetable<'_>, radius: f64) -> bool {
         tt.osr_match_graphs().first().is_some_and(|saved| {
             (saved.fingerprint == self.fingerprint
-                || self.legacy_fingerprint.is_some_and(|old| saved.fingerprint == old))
+                || self
+                    .legacy_fingerprint
+                    .is_some_and(|old| saved.fingerprint == old))
                 && saved.node_count == self.node_count
                 && saved.way_count == self.way_count
                 && f64::from(saved.raw_radius_meters) >= radius

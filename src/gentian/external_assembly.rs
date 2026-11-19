@@ -60,7 +60,10 @@ fn compare(a: &Schedule, b: &Schedule) -> Ordering {
         .then_with(|| a.trip_id.cmp(&b.trip_id))
         .then_with(|| a.service_id.cmp(&b.service_id))
         .then_with(|| a.timezone_name.cmp(&b.timezone_name))
-        .then_with(|| a.gtfs_first_departure_seconds.cmp(&b.gtfs_first_departure_seconds))
+        .then_with(|| {
+            a.gtfs_first_departure_seconds
+                .cmp(&b.gtfs_first_departure_seconds)
+        })
         // Stable, deterministic ordering for repeated trips with different
         // timezone-dependent relative events on distinct service days.
         .then_with(|| {
@@ -298,8 +301,7 @@ fn merge_files(paths: &[PathBuf], target: &Path, limit: usize) -> Result<()> {
 
 fn write_record(w: &mut impl Write, s: &Schedule) -> Result<()> {
     ensure!(
-        s.locations.len() == s.events.len()
-            && s.stop_sequences.len() == s.events.len(),
+        s.locations.len() == s.events.len() && s.stop_sequences.len() == s.events.len(),
         "schedule stop count/GTFS sequence mismatch"
     );
     let len = 96usize

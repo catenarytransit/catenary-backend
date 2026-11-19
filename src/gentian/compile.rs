@@ -1,8 +1,8 @@
 use super::external_assembly::ScheduleRuns;
 use anyhow::{Context, Result, ensure};
 use catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto;
-use catenary::routing_common::routing_regions::ChateauSource;
 use catenary::routing_common::realtime_identity::GtfsIdentityBuilder;
+use catenary::routing_common::routing_regions::ChateauSource;
 use catenary::routing_common::timetable::{
     BitfieldIdx, Clasz, Coordinate, Delta, LocationIdx, PackedFootpath, PackedStop, Range,
     RouteIdx, TimetableOwned, TimingProfileIdx, TrafficDays, TransportIdx, TripIdx,
@@ -613,8 +613,12 @@ fn assemble_batch(
                 tt.transport_first_dep_offset
                     .push(Delta::from_seconds(schedule.first_second)?);
                 tt.transport_initial_day_offset.push(0);
-                identities.push(&schedule.timezone_name, &schedule.service_id,
-                    schedule.gtfs_first_departure_seconds, &schedule.stop_sequences)?;
+                identities.push(
+                    &schedule.timezone_name,
+                    &schedule.service_id,
+                    schedule.gtfs_first_departure_seconds,
+                    &schedule.stop_sequences,
+                )?;
                 let trip_idx = TripIdx(as_u32(tt.trip_public_route_ids.len())?);
                 tt.trip_public_route_ids.push(public_route_id);
                 tt.add_trip_id(
@@ -712,7 +716,10 @@ fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
     Ok(())
 }
 
-fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<GtfsIdentityBuilder> {
+fn assemble_routes(
+    tt: &mut TimetableOwned,
+    schedules: ScheduleRuns,
+) -> Result<GtfsIdentityBuilder> {
     let mut days_index = HashMap::new();
     days_index.insert(TrafficDays::default(), BitfieldIdx(0));
     let mut route_id_index = HashMap::new();

@@ -76,8 +76,10 @@ fn emit(name: &str, value: String, kind: &str, tags: &[(&str, &str)]) {
         message.push(':');
         message.push_str(&safe_tag(value));
     }
-    if matches!(std::env::var("DATADOG_DEBUG_METRICS").as_deref(), Ok("1" | "true"))
-        && name.starts_with("spruce.")
+    if matches!(
+        std::env::var("DATADOG_DEBUG_METRICS").as_deref(),
+        Ok("1" | "true")
+    ) && name.starts_with("spruce.")
     {
         eprintln!("DogStatsD -> {}: {}", exporter.address, message);
     }
@@ -85,7 +87,10 @@ fn emit(name: &str, value: String, kind: &str, tags: &[(&str, &str)]) {
         .socket
         .send_to(message.as_bytes(), &exporter.address)
     {
-        if matches!(std::env::var("DATADOG_DEBUG_METRICS").as_deref(), Ok("1" | "true")) {
+        if matches!(
+            std::env::var("DATADOG_DEBUG_METRICS").as_deref(),
+            Ok("1" | "true")
+        ) {
             eprintln!("DogStatsD send failed: {error}");
         }
     }
@@ -105,9 +110,7 @@ pub fn country(header: Option<&str>) -> &str {
     }
 }
 fn is_datadog_synthetics_user_agent(user_agent: Option<&str>) -> bool {
-    user_agent.is_some_and(|agent| {
-        agent.to_ascii_lowercase().contains("datadog/synthetics")
-    })
+    user_agent.is_some_and(|agent| agent.to_ascii_lowercase().contains("datadog/synthetics"))
 }
 
 /// Identify Datadog Synthetics traffic before emitting request-scoped metrics.
@@ -264,8 +267,12 @@ mod tests {
     #[test]
     fn datadog_synthetics_user_agents_are_excluded() {
         assert!(is_datadog_synthetics_user_agent(Some("Datadog/Synthetics")));
-        assert!(is_datadog_synthetics_user_agent(Some("Datadog/Synthetics/1.0")));
-        assert!(is_datadog_synthetics_user_agent(Some("Mozilla/5.0 Datadog/Synthetics/1.0")));
+        assert!(is_datadog_synthetics_user_agent(Some(
+            "Datadog/Synthetics/1.0"
+        )));
+        assert!(is_datadog_synthetics_user_agent(Some(
+            "Mozilla/5.0 Datadog/Synthetics/1.0"
+        )));
         assert!(is_datadog_synthetics_user_agent(Some("datadog/synthetics")));
         assert!(!is_datadog_synthetics_user_agent(Some("Datadog")));
         assert!(!is_datadog_synthetics_user_agent(Some("Mozilla/5.0")));

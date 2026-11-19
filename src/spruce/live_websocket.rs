@@ -764,7 +764,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                 crate::record_ws_message("live", &msg);
                 match msg {
                     Ok(ClientMessage::UpdateMap { params }) => {
-                        catenary::observability::count("spruce.map_requests", &[("mode", "legacy")]);
+                        catenary::observability::count(
+                            "spruce.map_requests",
+                            &[("mode", "legacy")],
+                        );
                         for chateau in params
                             .chateaus
                             .iter()

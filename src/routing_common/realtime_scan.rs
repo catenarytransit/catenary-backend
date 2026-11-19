@@ -34,8 +34,12 @@ pub fn scan_realtime_round(
     emit: impl FnMut(RtScanCandidate),
 ) {
     scan_realtime_round_with(
-        tt, snapshot, marked, reverse,
-        |stop| previous.get(stop).copied(), emit,
+        tt,
+        snapshot,
+        marked,
+        reverse,
+        |stop| previous.get(stop).copied(),
+        emit,
     );
 }
 
@@ -50,20 +54,30 @@ pub fn scan_realtime_round_with(
     ready_at: impl Fn(usize) -> Option<i64>,
     mut emit: impl FnMut(RtScanCandidate),
 ) {
-    if marked.is_empty() || !snapshot.is_published() { return; }
+    if marked.is_empty() || !snapshot.is_published() {
+        return;
+    }
     let marked_set = marked.iter().copied().collect::<HashSet<_>>();
     let mut patterns = BTreeSet::<RegionRtPattern>::new();
     for &stop in marked {
-        let Some(ready) = ready_at(stop) else { continue };
-        if ready == if reverse { i64::MIN } else { i64::MAX } { continue; }
+        let Some(ready) = ready_at(stop) else {
+            continue;
+        };
+        if ready == if reverse { i64::MIN } else { i64::MAX } {
+            continue;
+        }
         for &pattern in snapshot.patterns_at(LocationIdx(stop as u32)) {
             patterns.insert(pattern);
         }
     }
 
     for pattern in patterns {
-        let Some(stops) = snapshot.stops(tt, pattern) else { continue };
-        if stops.len() < 2 { continue; }
+        let Some(stops) = snapshot.stops(tt, pattern) else {
+            continue;
+        };
+        if stops.len() < 2 {
+            continue;
+        }
         for handle in snapshot.run_handles_for(pattern) {
             let mut carried: Option<(usize, u32, i64)> = None;
             if reverse {
@@ -77,8 +91,12 @@ pub fn scan_realtime_round_with(
                             if let Some(departure) = snapshot.run_event_time(handle, pos * 2) {
                                 if departure <= arrival {
                                     emit(RtScanCandidate {
-                                        run: handle, pattern, from_stop: loc as u32, to_stop,
-                                        board_index: pos as u32, alight_index: alight as u32,
+                                        run: handle,
+                                        pattern,
+                                        from_stop: loc as u32,
+                                        to_stop,
+                                        board_index: pos as u32,
+                                        alight_index: alight as u32,
                                         departure_unix_seconds: departure,
                                         arrival_unix_seconds: arrival,
                                     });
@@ -86,7 +104,9 @@ pub fn scan_realtime_round_with(
                             }
                         }
                     }
-                    if pos > 0 && stop.inbound() && marked_set.contains(&loc)
+                    if pos > 0
+                        && stop.inbound()
+                        && marked_set.contains(&loc)
                         && let Some(ready) = ready_at(loc)
                         && ready != i64::MIN
                         && let Some(arrival) = snapshot.run_event_time(handle, pos * 2 - 1)
@@ -104,8 +124,12 @@ pub fn scan_realtime_round_with(
                             if let Some(arrival) = snapshot.run_event_time(handle, pos * 2 - 1) {
                                 if arrival >= departure {
                                     emit(RtScanCandidate {
-                                        run: handle, pattern, from_stop, to_stop: loc as u32,
-                                        board_index: board as u32, alight_index: pos as u32,
+                                        run: handle,
+                                        pattern,
+                                        from_stop,
+                                        to_stop: loc as u32,
+                                        board_index: board as u32,
+                                        alight_index: pos as u32,
                                         departure_unix_seconds: departure,
                                         arrival_unix_seconds: arrival,
                                     });
@@ -113,7 +137,9 @@ pub fn scan_realtime_round_with(
                             }
                         }
                     }
-                    if pos + 1 < stops.len() && stop.outbound() && carried.is_none()
+                    if pos + 1 < stops.len()
+                        && stop.outbound()
+                        && carried.is_none()
                         && marked_set.contains(&loc)
                         && let Some(ready) = ready_at(loc)
                         && ready != i64::MAX
@@ -160,51 +186,73 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let epoch = 20_000_i64 * 86_400;
         let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [3; 32], 11);
-        builder.add_run(RtRunInput {
-            source,
-            original: None,
-            service_date: 20_000,
-            external_id: Some("added-trip".into()),
-            pattern: RtPatternInput::Stops(vec![
-                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
-                PackedStop::new(LocationIdx(1), false, false, false, false).unwrap(),
-                PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
-                PackedStop::new(LocationIdx(3), true, true, true, true).unwrap(),
-            ]),
-            event_times: vec![epoch+100, epoch+150, epoch+160,
-                epoch+200, epoch+210, epoch+260],
-            metadata: None,
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source,
+                original: None,
+                service_date: 20_000,
+                external_id: Some("added-trip".into()),
+                pattern: RtPatternInput::Stops(vec![
+                    PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                    PackedStop::new(LocationIdx(1), false, false, false, false).unwrap(),
+                    PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
+                    PackedStop::new(LocationIdx(3), true, true, true, true).unwrap(),
+                ]),
+                event_times: vec![
+                    epoch + 100,
+                    epoch + 150,
+                    epoch + 160,
+                    epoch + 200,
+                    epoch + 210,
+                    epoch + 260,
+                ],
+                metadata: None,
+            })
+            .unwrap();
         let mut expected = BTreeSet::new();
         expected.insert("c".to_owned());
         // Missing realtime feeds elsewhere in the region must not disable
         // this source's forward/reverse scans.
         expected.insert("other-chateau-without-snapshot".to_owned());
         let rt = RegionRealtimeSnapshot::compose(
-            &tt, [3; 32], 1, &expected,
+            &tt,
+            [3; 32],
+            1,
+            &expected,
             vec![ChateauRealtimeShard {
                 chateau: "c".to_owned(),
                 overlay: Arc::new(builder.finish().unwrap()),
             }],
-        ).unwrap();
+        )
+        .unwrap();
 
         assert!(rt.is_published());
         assert!(!rt.is_complete());
         let mut prev = vec![i64::MAX; 4];
-        prev[0] = epoch+90;
+        prev[0] = epoch + 90;
         let mut candidates = Vec::new();
         scan_realtime_round(&tt, &rt, &prev, &[0], false, |c| candidates.push(c));
-        assert_eq!(candidates.iter().map(|c| c.to_stop).collect::<Vec<_>>(), vec![2, 3]);
-        assert_eq!(candidates[0].departure_unix_seconds, epoch+100);
-        assert_eq!(candidates[0].arrival_unix_seconds, epoch+200);
+        assert_eq!(
+            candidates.iter().map(|c| c.to_stop).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(candidates[0].departure_unix_seconds, epoch + 100);
+        assert_eq!(candidates[0].arrival_unix_seconds, epoch + 200);
 
         let mut prev = vec![i64::MIN; 4];
-        prev[3] = epoch+270;
+        prev[3] = epoch + 270;
         candidates.clear();
         scan_realtime_round(&tt, &rt, &prev, &[3], true, |c| candidates.push(c));
-        assert_eq!(candidates.iter().map(|c| c.from_stop).collect::<Vec<_>>(), vec![2, 0]);
-        assert_eq!(candidates[1].departure_unix_seconds, epoch+100);
-        assert_eq!(candidates[1].arrival_unix_seconds, epoch+260);
-        assert!(!candidates.iter().any(|c| c.from_stop == 1 || c.to_stop == 1));
+        assert_eq!(
+            candidates.iter().map(|c| c.from_stop).collect::<Vec<_>>(),
+            vec![2, 0]
+        );
+        assert_eq!(candidates[1].departure_unix_seconds, epoch + 100);
+        assert_eq!(candidates[1].arrival_unix_seconds, epoch + 260);
+        assert!(
+            !candidates
+                .iter()
+                .any(|c| c.from_stop == 1 || c.to_stop == 1)
+        );
     }
 }

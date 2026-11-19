@@ -246,9 +246,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                 .into_iter()
                                 .enumerate()
                                 .map(|(idx, (response, is_hydration))| {
-                                    chateaus.extend(
-                                        nearby_departures::spruce_nearby_chateaus(&response)
-                                    );
+                                    chateaus.extend(nearby_departures::spruce_nearby_chateaus(
+                                        &response,
+                                    ));
                                     let msg = ServerMessage::NearbyDeparturesChunk {
                                         request_id: request_id_clone.clone(),
                                         chunk_index: idx,

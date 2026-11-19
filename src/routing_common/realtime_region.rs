@@ -10,10 +10,10 @@
 //! A snapshot with missing chateaux is explicitly incomplete and MUST NOT
 //! be treated as complete realtime coverage.
 
-use crate::routing_common::realtime_status::{RtEventKind, RtRunMetadata, StaticRunStatus};
 use crate::routing_common::realtime_overlay::{
     RealtimeOverlay, RtPatternRef, RtRun, StaticInstance,
 };
+use crate::routing_common::realtime_status::{RtEventKind, RtRunMetadata, StaticRunStatus};
 use crate::routing_common::timetable::{
     DayIdx, LocationIdx, PackedStop, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
@@ -25,38 +25,52 @@ use crate::routing_common::timetable::{
 /// cancellations cannot shorten a path, so the original bounds remain valid.
 fn overlay_may_shortcut(tt: &ZeroCopyTimetable<'_>, overlay: &RealtimeOverlay) -> bool {
     overlay.runs.iter().any(|run| {
-        let Some(original) = run.original else { return true };
+        let Some(original) = run.original else {
+            return true;
+        };
         let Some(route) = tt.transport_route().get(original.transport as usize) else {
             return true;
         };
         let old = tt.stops_on(*route);
-        let Some(new) = overlay.stops(tt, run.pattern) else { return true };
-        if old.len() != new.len() { return true; }
+        let Some(new) = overlay.stops(tt, run.pattern) else {
+            return true;
+        };
+        if old.len() != new.len() {
+            return true;
+        }
         for (prev, next) in old.iter().zip(new) {
-            if prev.location() != next.location() ||
-                (!prev.outbound() && next.outbound()) ||
-                (!prev.inbound() && next.inbound()) ||
-                (!prev.wheelchair_in() && next.wheelchair_in()) ||
-                (!prev.wheelchair_out() && next.wheelchair_out())
+            if prev.location() != next.location()
+                || (!prev.outbound() && next.outbound())
+                || (!prev.inbound() && next.inbound())
+                || (!prev.wheelchair_in() && next.wheelchair_in())
+                || (!prev.wheelchair_out() && next.wheelchair_out())
             {
                 return true;
             }
         }
-        let Some(static_events) = tt.events_for_transport(TransportIdx(original.transport))
-        else { return true };
-        (0..new.len()-1).any(|i| {
-            let Some(rt_dep) = overlay.event_time(run, i*2) else { return true };
-            let Some(rt_arr) = overlay.event_time(run, i*2+1) else { return true };
-            let Some(old_dep) = static_events.get(i*2) else { return true };
-            let Some(old_arr) = static_events.get(i*2+1) else { return true };
-            rt_arr.saturating_sub(rt_dep) <
-                i64::from(old_arr.seconds() - old_dep.seconds())
+        let Some(static_events) = tt.events_for_transport(TransportIdx(original.transport)) else {
+            return true;
+        };
+        (0..new.len() - 1).any(|i| {
+            let Some(rt_dep) = overlay.event_time(run, i * 2) else {
+                return true;
+            };
+            let Some(rt_arr) = overlay.event_time(run, i * 2 + 1) else {
+                return true;
+            };
+            let Some(old_dep) = static_events.get(i * 2) else {
+                return true;
+            };
+            let Some(old_arr) = static_events.get(i * 2 + 1) else {
+                return true;
+            };
+            rt_arr.saturating_sub(rt_dep) < i64::from(old_arr.seconds() - old_dep.seconds())
         })
     })
 }
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use serde::Serialize;
 
 /// Identifies a realtime pattern within *one pinned region snapshot*.
 /// The slot is an index into RegionRealtimeSnapshot::chateaux.
@@ -162,7 +176,8 @@ impl RegionRealtimeSnapshot {
             // overlay builder. Never allow a run to be assigned to the wrong
             // compiled GTFS source merely because stop IDs match elsewhere.
             for run in &shard.overlay.runs {
-                if tt.source(SourceIdx(run.source))
+                if tt
+                    .source(SourceIdx(run.source))
                     .is_none_or(|(chateau, _, _)| chateau != shard.chateau)
                 {
                     return Err(RegionSnapshotError::InvalidSource);
@@ -174,10 +189,18 @@ impl RegionRealtimeSnapshot {
                 u32::try_from(chateaux.len()).map_err(|_| RegionSnapshotError::TooManyChateaux)?;
             for (i, run) in shard.overlay.runs.iter().enumerate() {
                 if let Some(instance) = run.original {
-                    let run_index = u32::try_from(i).map_err(|_| RegionSnapshotError::InvalidPattern)?;
-                    if original_instance_runs.insert(instance, RegionRtRun {
-                        chateau_slot, run_index,
-                    }).is_some() {
+                    let run_index =
+                        u32::try_from(i).map_err(|_| RegionSnapshotError::InvalidPattern)?;
+                    if original_instance_runs
+                        .insert(
+                            instance,
+                            RegionRtRun {
+                                chateau_slot,
+                                run_index,
+                            },
+                        )
+                        .is_some()
+                    {
                         return Err(RegionSnapshotError::SuppressionCollision);
                     }
                 }
@@ -191,11 +214,19 @@ impl RegionRealtimeSnapshot {
                     if !shard.overlay.pattern_runs.contains_key(&pattern) {
                         return Err(RegionSnapshotError::InvalidPattern);
                     }
-                    index.push(RegionRtPattern { chateau_slot, pattern });
+                    index.push(RegionRtPattern {
+                        chateau_slot,
+                        pattern,
+                    });
                 }
             }
             for &instance in &shard.overlay.cancelled_static {
-                if !shard.overlay.suppressed_static.binary_search(&instance).is_ok() {
+                if !shard
+                    .overlay
+                    .suppressed_static
+                    .binary_search(&instance)
+                    .is_ok()
+                {
                     return Err(RegionSnapshotError::SuppressionCollision);
                 }
                 cancelled_static.insert(instance);
@@ -243,9 +274,9 @@ impl RegionRealtimeSnapshot {
     }
 
     pub fn chateau_revisions(&self) -> impl Iterator<Item = (&str, u64)> {
-        self.chateaux.iter().map(|shard| {
-            (shard.chateau.as_str(), shard.overlay.revision)
-        })
+        self.chateaux
+            .iter()
+            .map(|shard| (shard.chateau.as_str(), shard.overlay.revision))
     }
 
     /// Sparse region-level stop -> (chateau shard, pattern) lookup. Returns
@@ -257,10 +288,7 @@ impl RegionRealtimeSnapshot {
             .unwrap_or(&[])
     }
 
-    pub fn runs_for(
-        &self,
-        pattern: RegionRtPattern,
-    ) -> impl Iterator<Item = &RtRun> {
+    pub fn runs_for(&self, pattern: RegionRtPattern) -> impl Iterator<Item = &RtRun> {
         self.chateaux
             .get(pattern.chateau_slot as usize)
             .into_iter()
@@ -271,13 +299,16 @@ impl RegionRealtimeSnapshot {
     /// carrying through RAPTOR round labels and journey reconstruction.
     /// Do not persist these across calls to Router::pin_realtime.
     pub fn run_handles_for(
-        &self, pattern: RegionRtPattern,
+        &self,
+        pattern: RegionRtPattern,
     ) -> impl Iterator<Item = RegionRtRun> + '_ {
         self.chateaux
             .get(pattern.chateau_slot as usize)
             .into_iter()
             .flat_map(move |shard| {
-                shard.overlay.pattern_runs
+                shard
+                    .overlay
+                    .pattern_runs
                     .get(&pattern.pattern)
                     .into_iter()
                     .flat_map(|runs| runs.iter())
@@ -289,14 +320,20 @@ impl RegionRealtimeSnapshot {
     }
 
     pub fn original_run(&self, transport: TransportIdx, day: DayIdx) -> Option<RegionRtRun> {
-        self.original_instance_runs.get(&StaticInstance {
-            transport: transport.0, day: day.0,
-        }).copied()
+        self.original_instance_runs
+            .get(&StaticInstance {
+                transport: transport.0,
+                day: day.0,
+            })
+            .copied()
     }
 
     pub fn run(&self, handle: RegionRtRun) -> Option<&RtRun> {
-        self.chateaux.get(handle.chateau_slot as usize)?
-            .overlay.runs.get(handle.run_index as usize)
+        self.chateaux
+            .get(handle.chateau_slot as usize)?
+            .overlay
+            .runs
+            .get(handle.run_index as usize)
     }
 
     pub fn run_metadata(&self, handle: RegionRtRun) -> Option<&RtRunMetadata> {
@@ -323,8 +360,10 @@ impl RegionRealtimeSnapshot {
     where
         't: 'a,
     {
-        self.chateaux.get(pattern.chateau_slot as usize)?
-            .overlay.stops(tt, pattern.pattern)
+        self.chateaux
+            .get(pattern.chateau_slot as usize)?
+            .overlay
+            .stops(tt, pattern.pattern)
     }
 
     pub fn event_time(&self, pattern: RegionRtPattern, run: &RtRun, slot: usize) -> Option<i64> {
@@ -335,7 +374,10 @@ impl RegionRealtimeSnapshot {
     /// Important for saved/SingleTrip views: a cancelled static instance is
     /// still addressable after it has disappeared from normal RAPTOR scans.
     pub fn static_status(&self, transport: TransportIdx, day: DayIdx) -> StaticRunStatus {
-        let key = StaticInstance { transport: transport.0, day: day.0 };
+        let key = StaticInstance {
+            transport: transport.0,
+            day: day.0,
+        };
         if self.cancelled_static.binary_search(&key).is_ok() {
             StaticRunStatus::Cancelled
         } else if self.suppressed_static.binary_search(&key).is_ok() {
@@ -346,10 +388,12 @@ impl RegionRealtimeSnapshot {
     }
 
     pub fn is_static_suppressed(&self, transport: TransportIdx, day: DayIdx) -> bool {
-        self.suppressed_static.binary_search(&StaticInstance {
-            transport: transport.0,
-            day: day.0,
-        }).is_ok()
+        self.suppressed_static
+            .binary_search(&StaticInstance {
+                transport: transport.0,
+                day: day.0,
+            })
+            .is_ok()
     }
 
     pub fn suppressed_count(&self) -> usize {
@@ -357,7 +401,10 @@ impl RegionRealtimeSnapshot {
     }
 
     pub fn run_count(&self) -> usize {
-        self.chateaux.iter().map(|shard| shard.overlay.runs.len()).sum()
+        self.chateaux
+            .iter()
+            .map(|shard| shard.overlay.runs.len())
+            .sum()
     }
 
     pub fn indexed_stop_count(&self) -> usize {
@@ -369,7 +416,7 @@ impl RegionRealtimeSnapshot {
 mod tests {
     use super::*;
     use crate::routing_common::realtime_overlay::{
-        RealtimeOverlayBuilder, RtPatternInput, RtRunInput, RtPatternRef,
+        RealtimeOverlayBuilder, RtPatternInput, RtPatternRef, RtRunInput,
     };
     use crate::routing_common::timetable::{
         BitfieldIdx, Clasz, Coordinate, PackedStop, Range, StringRef, TimetableOwned,
@@ -391,9 +438,8 @@ mod tests {
             tt.footpaths_out_offsets.push(0);
             tt.footpaths_in_offsets.push(0);
             if i < 2 {
-                tt.route_stops.push(PackedStop::new(
-                    LocationIdx(i as u32), true, true, true, true,
-                ).unwrap());
+                tt.route_stops
+                    .push(PackedStop::new(LocationIdx(i as u32), true, true, true, true).unwrap());
             }
         }
         tt.route_stop_offsets.push(2);
@@ -405,22 +451,30 @@ mod tests {
         tt.encode().unwrap()
     }
 
-    fn shard(tt: &ZeroCopyTimetable<'_>, source: SourceIdx, chateau: &str,
-             generation: [u8; 32], rev: u64, start: i64) -> ChateauRealtimeShard {
+    fn shard(
+        tt: &ZeroCopyTimetable<'_>,
+        source: SourceIdx,
+        chateau: &str,
+        generation: [u8; 32],
+        rev: u64,
+        start: i64,
+    ) -> ChateauRealtimeShard {
         let mut builder = RealtimeOverlayBuilder::new_sparse(tt, generation, rev);
         let first = if source.0 == 0 { 0 } else { 2 };
-        builder.add_run(RtRunInput {
-            source,
-            original: None,
-            service_date: 20_000,
-            external_id: Some(format!("{chateau}-{rev}")),
-            pattern: RtPatternInput::Stops(vec![
-                PackedStop::new(LocationIdx(first), true, true, true, true).unwrap(),
-                PackedStop::new(LocationIdx(first + 1), true, true, true, true).unwrap(),
-            ]),
-            metadata: None,
-            event_times: vec![start, start + 100],
-        }).unwrap();
+        builder
+            .add_run(RtRunInput {
+                source,
+                original: None,
+                service_date: 20_000,
+                external_id: Some(format!("{chateau}-{rev}")),
+                pattern: RtPatternInput::Stops(vec![
+                    PackedStop::new(LocationIdx(first), true, true, true, true).unwrap(),
+                    PackedStop::new(LocationIdx(first + 1), true, true, true, true).unwrap(),
+                ]),
+                metadata: None,
+                event_times: vec![start, start + 100],
+            })
+            .unwrap();
         ChateauRealtimeShard {
             chateau: chateau.into(),
             overlay: Arc::new(builder.finish().unwrap()),
@@ -437,9 +491,9 @@ mod tests {
         let other = shard(&tt, SourceIdx(1), "chateau-b", generation, 1, epoch + 2);
         let keep = Arc::clone(&original.overlay);
         let expected = BTreeSet::from(["chateau-a".to_owned(), "chateau-b".to_owned()]);
-        let region = RegionRealtimeSnapshot::compose(
-            &tt, generation, 1, &expected, vec![original, other],
-        ).unwrap();
+        let region =
+            RegionRealtimeSnapshot::compose(&tt, generation, 1, &expected, vec![original, other])
+                .unwrap();
         assert!(region.is_complete());
         assert_eq!(region.expected_chateaux, 2);
         assert_eq!(region.run_count(), 2);
@@ -447,12 +501,18 @@ mod tests {
         let pat = region.patterns_at(LocationIdx(0))[0];
         assert_eq!(pat.chateau_slot, 0);
         assert_eq!(region.runs_for(pat).count(), 1);
-        assert_eq!(region.event_time(pat, region.runs_for(pat).next().unwrap(), 0), Some(epoch + 1));
+        assert_eq!(
+            region.event_time(pat, region.runs_for(pat).next().unwrap(), 0),
+            Some(epoch + 1)
+        );
         let run = region.run_handles_for(pat).next().unwrap();
         assert_eq!(run.chateau_slot, 0);
         assert_eq!(region.run(run).unwrap().service_date, 20_000);
         assert_eq!(region.run_event_time(run, 0), Some(epoch + 1));
-        assert_eq!(region.stops(&tt, pat).unwrap()[0].location(), LocationIdx(0));
+        assert_eq!(
+            region.stops(&tt, pat).unwrap()[0].location(),
+            LocationIdx(0)
+        );
         let other_pat = region.patterns_at(LocationIdx(2))[0];
         assert_eq!(other_pat.chateau_slot, 1);
         assert_eq!(pat.pattern, RtPatternRef::Dynamic(0));
@@ -467,16 +527,13 @@ mod tests {
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let expected = BTreeSet::from(["chateau-a".to_owned(), "chateau-b".to_owned()]);
         let one = shard(&tt, SourceIdx(0), "chateau-a", [1; 32], 1, epoch + 1);
-        let partial = RegionRealtimeSnapshot::compose(
-            &tt, [1; 32], 1, &expected, vec![one.clone()],
-        ).unwrap();
+        let partial =
+            RegionRealtimeSnapshot::compose(&tt, [1; 32], 1, &expected, vec![one.clone()]).unwrap();
         assert!(!partial.is_complete());
         assert!(partial.is_published());
         assert_eq!(partial.missing_chateaux, ["chateau-b"]);
         assert_eq!(partial.run_count(), 1);
-        let wrong = RegionRealtimeSnapshot::compose(
-            &tt, [2; 32], 2, &expected, vec![one],
-        );
+        let wrong = RegionRealtimeSnapshot::compose(&tt, [2; 32], 2, &expected, vec![one]);
         assert!(matches!(wrong, Err(RegionSnapshotError::WrongGeneration)));
     }
 
@@ -487,9 +544,7 @@ mod tests {
         let epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let expected = BTreeSet::from(["chateau-a".to_owned(), "chateau-b".to_owned()]);
         let wrong = shard(&tt, SourceIdx(0), "chateau-b", [1; 32], 1, epoch + 1);
-        let result = RegionRealtimeSnapshot::compose(
-            &tt, [1; 32], 1, &expected, vec![wrong],
-        );
+        let result = RegionRealtimeSnapshot::compose(&tt, [1; 32], 1, &expected, vec![wrong]);
         assert!(matches!(result, Err(RegionSnapshotError::InvalidSource)));
     }
 }

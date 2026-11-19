@@ -4,9 +4,9 @@
 //! The v5 mmap stays in seconds. This immutable view is constructed once at
 //! timetable load, not once per query/day. Original transport IDs are retained.
 use crate::routing_common::raptor_query::RaptorStats;
+use crate::routing_common::routing_index::IndexArray;
 use crate::routing_common::timetable::{BitfieldIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use std::collections::HashMap;
-use crate::routing_common::routing_index::IndexArray;
 
 const DAY: i64 = 86_400;
 
@@ -51,8 +51,16 @@ impl TransportChain {
         lower_bound: u32,
         stats: &mut RaptorStats,
     ) -> Option<SelectedTransport> {
-        self.select_filtered(tt, slot, ready, reverse,
-            destination_bound, lower_bound, stats, |_, _| true)
+        self.select_filtered(
+            tt,
+            slot,
+            ready,
+            reverse,
+            destination_bound,
+            lower_bound,
+            stats,
+            |_, _| true,
+        )
     }
 
     /// Keep the exact FIFO chain search and calendar tests, but skip a
