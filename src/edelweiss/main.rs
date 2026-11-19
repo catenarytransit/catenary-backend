@@ -68,7 +68,7 @@ struct Args {
     #[arg(long, requires = "realtime_probe_file")]
     realtime_probe_static_feed: Option<String>,
     /// Enforce that at least N complete runs are present (manual live CI).
-    #[arg(long, default_value_t = 0, requires = "realtime_probe_file")]
+    #[arg(long, default_value_t = 0)]
     realtime_probe_min_runs: usize,
     /// Optional machine-readable CI diagnostics.
     #[arg(long, requires = "realtime_probe_file")]
