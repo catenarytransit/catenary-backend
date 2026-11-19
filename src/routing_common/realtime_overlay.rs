@@ -642,6 +642,38 @@ mod tests {
     }
 
     #[test]
+    fn source_provenance_is_sparse_and_cancelled_differs_from_replaced() {
+        use crate::routing_common::realtime_status::{RtEventAnnotation, RtStopChange};
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let epoch = i64::from(tt.header().first_utc_day) * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [1; 32], 2);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: None,
+            service_date: 20_000,
+            external_id: Some("test-added".into()),
+            pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
+            event_times: vec![epoch + 1, epoch + 20, epoch + 30, epoch + 40],
+            metadata: Some(RtRunMetadata {
+                events: vec![RtEventAnnotation { slot: 1, kind: RtEventKind::NoData }],
+                stops: vec![RtStopChange {
+                    position: 1, skipped: true, no_data: false, original_location: None,
+                }],
+            }),
+        }).unwrap();
+        let mut overlay = builder.finish().unwrap();
+        assert_eq!(overlay.event_kind(0, 0), Some(RtEventKind::Estimated));
+        assert_eq!(overlay.event_kind(0, 1), Some(RtEventKind::NoData));
+        assert!(overlay.run_metadata(0).unwrap().stop_change(1).unwrap().skipped);
+        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Scheduled);
+        overlay.suppressed_static.push(StaticInstance { transport: 2, day: 1 });
+        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Replaced);
+        overlay.cancelled_static.push(StaticInstance { transport: 2, day: 1 });
+        assert_eq!(overlay.static_status(TransportIdx(2), DayIdx(1)), StaticRunStatus::Cancelled);
+    }
+
+    #[test]
     fn invalid_time_offset_does_not_truncate() {
         let bytes = fixture();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
