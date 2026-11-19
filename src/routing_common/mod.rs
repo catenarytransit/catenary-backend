@@ -19,6 +19,7 @@ pub mod realtime_prepare;
 pub mod realtime_region;
 pub mod timetable;
 pub mod timetable_mmap;
+pub mod routing_index;
 pub(crate) mod transfer_optimizer;
 pub mod transit_graph;
 pub mod types;
