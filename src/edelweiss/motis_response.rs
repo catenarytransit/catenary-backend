@@ -1029,7 +1029,7 @@ fn transit_leg(
     );
     let start = *departure_unix_seconds;
     let end = *arrival_unix_seconds;
-    json!({
+    Ok(json!({
         "mode":mode, "from":from,"to":to,
         "duration":end.saturating_sub(start),
         "startTime":timestamp(start),"endTime":timestamp(end),
