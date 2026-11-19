@@ -327,6 +327,70 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
         Ok(Self { tt, catalog, stops, trips })
     }
 
+    /// Recover the *local* GTFS service date of a previously resolved run.
+    /// Its timetable traffic-day index is UTC-based, so it cannot be used as
+    /// the OJP operating date without this inverse conversion.
+    pub fn service_date(&self, instance: ResolvedInstance) -> Result<NaiveDate, ResolveIssue> {
+        let row = self.catalog.transports.get(instance.transport.idx()).ok_or(ResolveIssue::BadCatalog)?;
+        let tz: Tz = self.catalog.timezones.get(row.timezone as usize)
+            .ok_or(ResolveIssue::BadCatalog)?.parse().map_err(|_| ResolveIssue::InvalidTimezone)?;
+        let departure = (i64::from(self.tt.header().first_utc_day) + i64::from(instance.service_day_utc.0))
+            .checked_mul(86_400)
+            .and_then(|t| t.checked_add(i64::from(self.tt.transport_first_dep_offset()[instance.transport.idx()].seconds())))
+            .ok_or(ResolveIssue::BadCatalog)?;
+        let local = chrono::DateTime::<Utc>::from_timestamp(departure, 0)
+            .ok_or(ResolveIssue::BadCatalog)?.with_timezone(&tz).date_naive();
+        // Long (>24 h) GTFS trips may start several civil days after their
+        // operating date. Check the exact noon-based compile-time anchor.
+        for back in 0..=7 {
+            let Some(date) = local.checked_sub_signed(chrono::Duration::days(back)) else { continue };
+            if gtfs_utc_anchor(date, tz)
+                .and_then(|t| t.checked_add(i64::from(row.first_departure_gtfs_seconds))) == Some(departure)
+            {
+                return Ok(date);
+            }
+        }
+        Err(ResolveIssue::DepartureOffsetMismatch)
+    }
+
+    /// A date inferred without a TripDescriptor.start_date must agree with
+    /// timestamped stop events, or place a delay-only/cancellation run close
+    /// to its observation time. Never accept a second plausible instance.
+    fn inferred_instance_matches(
+        &self, source: SourceIdx, update: &RoutingTripUpdate,
+        instance: ResolvedInstance, departure: i64,
+    ) -> Result<bool, ResolveIssue> {
+        let route = *self.tt.transport_route().get(instance.transport.idx()).ok_or(ResolveIssue::BadCatalog)?;
+        let mut observed = false;
+        let mut matched = false;
+        for stop in &update.stops {
+            let arrival = stop.arrival.as_ref().and_then(|e| e.unix_seconds);
+            let leaving = stop.departure.as_ref().and_then(|e| e.unix_seconds);
+            if arrival.is_none() && leaving.is_none() { continue; }
+            observed = true;
+            // Some updates have no stop occurrence; do not use the wrong
+            // stop's scheduled time to infer a service day.
+            let Ok((i, _, _)) = self.stop_occurrence(source, instance.transport, stop) else { continue };
+            for (time, departure_event) in [(arrival, false), (leaving, true)] {
+                let Some(actual) = time else { continue };
+                let Some(offset) = self.tt.event_time(route, instance.transport, i, departure_event) else { continue };
+                let Some(expected) = departure.checked_add(i64::from(offset.seconds())) else { continue };
+                // 12h accommodates substantial disruptions while preventing
+                // a neighboring day's same trip from being substituted.
+                if (i128::from(actual) - i128::from(expected)).abs() <= 12 * 3600 {
+                    matched = true;
+                }
+            }
+        }
+        if observed { return Ok(matched); }
+        let last_offset = self.tt.events_for_transport(instance.transport)
+            .and_then(|events| events.last()).map(|x| i64::from(x.seconds()))
+            .unwrap_or(0);
+        let now = Utc::now().timestamp();
+        Ok(now >= departure.saturating_sub(3 * 3600)
+            && now <= departure.saturating_add(last_offset).saturating_add(3 * 3600))
+    }
+
     /// Never look up a raw GTFS stop ID across another feed/attempt.
     pub fn stop(&self, source: SourceIdx, raw: &str) -> Result<LocationIdx, ResolveIssue> {
         let stops = self.stops.get(&(source.0, raw))
@@ -401,7 +465,9 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
         &self, source: SourceIdx, update: &RoutingTripUpdate,
     ) -> Result<ResolvedInstance, ResolveIssue> {
         let raw_trip = update.trip_id.as_deref().ok_or(ResolveIssue::MissingTripId)?;
-        let date = update.service_date.ok_or(ResolveIssue::MissingServiceDate)?;
+        // GTFS-RT permits SCHEDULED trip descriptors without start_date.
+        // Resolve source-scoped static runs first; infer only when the instance
+        // is uniquely supported by its timetable and observed event times.
         let start_time = update.start_time.as_deref()
             .map(parse_gtfs_start_time).transpose()?;
         let trip_candidates = self.trips.get(&(source.0, raw_trip))
@@ -444,6 +510,11 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                 let zone = self.catalog.timezones.get(row.timezone as usize)
                     .ok_or(ResolveIssue::BadCatalog)?;
                 let tz: Tz = zone.parse().map_err(|_| ResolveIssue::InvalidTimezone)?;
+                let candidate_dates = match update.service_date {
+                    Some(explicit) => vec![explicit],
+                    None => candidate_service_dates(update, tz),
+                };
+                for date in candidate_dates {
                 let departure = gtfs_utc_anchor(date, tz)
                     .ok_or(ResolveIssue::InvalidTimezone)?
                     .checked_add(i64::from(row.first_departure_gtfs_seconds))
@@ -470,14 +541,35 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                 }
 
                 let instance = ResolvedInstance { transport, trip, source, service_day_utc: day };
+                if update.service_date.is_none()
+                    && !self.inferred_instance_matches(source, update, instance, departure)?
+                {
+                    continue;
+                }
                 if found.is_some_and(|previous| previous != instance) {
                     return Err(ResolveIssue::AmbiguousTripInstance);
                 }
                 found = Some(instance);
+                } // candidate GTFS service dates
             }
         }
         found.ok_or(last_rejection)
     }
+}
+
+/// Candidate operating days are only a search window, never accepted without
+/// exact active-day and event-proximity validation. The day of a stop event
+/// can differ from the original operating day for overnight GTFS runs.
+fn candidate_service_dates(update: &RoutingTripUpdate, tz: Tz) -> Vec<NaiveDate> {
+    let reference = update.stops.iter().flat_map(|s| [
+        s.arrival.as_ref().and_then(|e| e.unix_seconds),
+        s.departure.as_ref().and_then(|e| e.unix_seconds),
+    ]).flatten().next().unwrap_or_else(|| Utc::now().timestamp());
+    let Some(reference) = chrono::DateTime::<Utc>::from_timestamp(reference, 0) else {
+        return Vec::new();
+    };
+    let local = reference.with_timezone(&tz).date_naive();
+    (-7..=1).filter_map(|shift| local.checked_add_signed(chrono::Duration::days(shift))).collect()
 }
 
 fn gtfs_utc_anchor(date: NaiveDate, tz: Tz) -> Option<i64> {
@@ -623,6 +715,41 @@ mod tests {
         assert_eq!(catalog.service_id(instance.transport), Some("service-2026"));
         assert_eq!(resolver.stop_for_update(SourceIdx(0), &u.stops[0]).unwrap(),
             (LocationIdx(0), Some(LocationIdx(1))));
+    }
+
+    #[test]
+    fn missing_service_date_uses_absolute_stop_event_after_midnight() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let mut u = update();
+        u.service_date = None;
+        let base = (i64::from(tt.header().first_utc_day) + 2) * 86_400 + 9 * 3600;
+        u.stops[0].departure = Some(crate::routing_common::realtime_source::RoutingTimeUpdate {
+            unix_seconds: Some(base + 120), delay_seconds: Some(120),
+        });
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        let instance = resolver.instance(SourceIdx(0), &u).unwrap();
+        assert_eq!(instance.service_day_utc, DayIdx(2));
+        assert_eq!(resolver.service_date(instance).unwrap(), NaiveDate::from_ymd_opt(2026, 11, 1).unwrap());
+        let prepared = crate::routing_common::realtime_prepare::scheduled_action(
+            &tt, &resolver, SourceIdx(0), instance, &u,
+        ).unwrap();
+        assert!(matches!(prepared, crate::routing_common::realtime_prepare::PreparedAction::Run(_)));
+    }
+
+    #[test]
+    fn missing_service_date_rejects_unrelated_event_day() {
+        let (bytes, identities) = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let catalog = identities.finish(&tt).unwrap();
+        let mut u = update();
+        u.service_date = None;
+        u.stops[0].departure = Some(crate::routing_common::realtime_source::RoutingTimeUpdate {
+            unix_seconds: Some(1_800_000_000), delay_seconds: None,
+        });
+        let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
+        assert!(resolver.instance(SourceIdx(0), &u).is_err());
     }
 
     #[test]
