@@ -112,7 +112,7 @@ jobs:
     if: github.event_name != 'push'
     name: SoCal ingest, compile and timed transit queries
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 360
     services:
       postgres:
         image: postgis/postgis:15-3.3
@@ -211,23 +211,25 @@ jobs:
           "$CXX" -std=c++23 /tmp/tbb-link-check.cc -ltbb -o /tmp/tbb-link-check
           /tmp/tbb-link-check
           readelf -d /tmp/tbb-link-check | grep -F 'libtbb.so'
-      - name: Download Geofabrik SoCal boundary and local config
+      - name: Download Geofabrik California boundary and local SoCal config
         run: |
           set -euo pipefail
           mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
-          # Geofabrik may refuse the first connection or take minutes before
-          # answering. Plain curl --retry does NOT retry connection failures.
-          # Retry connection errors and transient HTTP failures explicitly.
+          # The upstream California .poly is published alongside its PBF.
+          # Convert it to GeoJSON for our existing region selector. Limit
+          # transit ingestion to SoCal feeds even though the OSR graph and
+          # polygon cover the whole state.
           curl --fail --location --silent --show-error \
             --retry 10 --retry-all-errors --retry-connrefused \
             --retry-delay 30 --retry-max-time 2400 \
             --connect-timeout 180 --max-time 600 \
-            --output routing_regions/socal.geojson \
-            https://download.geofabrik.de/north-america/us/california/socal.geojson
-          test -s routing_regions/socal.geojson
+            --output routing_regions/california.poly \
+            https://download.geofabrik.de/north-america/us/california.poly
+          test -s routing_regions/california.poly
           python3 src/routing_regions/prepare_socal_test.py \
-            --geojson routing_regions/socal.geojson
-          git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
+            --poly routing_regions/california.poly \
+            --geojson routing_regions/california.geojson
+          git check-ignore routing_regions/california.poly routing_regions/california.geojson routing_regions.toml catenaryconfig.toml
       - name: Build native OSR reader and matching extractor
         shell: bash
         run: |
@@ -275,7 +277,7 @@ jobs:
             # the OSM manager, not only the resumable wget PBF transfer.
             sleep $((attempt * 30))
           done
-          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
+          test -s temp/osr-data/regions/north-america/us/california/routing.bin
       - name: Verify extracted graph opens with the same native OSR reader
         shell: bash
         run: |
@@ -284,7 +286,7 @@ jobs:
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 120); do
-            if grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log; then
+            if grep -q 'Opened native OSR mmap: north-america/us/california' temp/osr-validation.log; then
               break
             fi
             if ! kill -0 "$pid" 2>/dev/null; then
@@ -293,7 +295,7 @@ jobs:
             fi
             sleep 1
           done
-          grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log || {
+          grep -q 'Opened native OSR mmap: north-america/us/california' temp/osr-validation.log || {
             cat temp/osr-validation.log
             exit 1
           }
@@ -327,7 +329,7 @@ jobs:
             --region southern-california \
             --regions-config routing_regions.toml \
             --first-utc-day 20745 --day-count 35 \
-            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
             --max-seconds 900 --candidate-meters 1200 \
             --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
             --build --output compiled/routing/southern-california.bin
@@ -353,7 +355,7 @@ jobs:
         env:
           CATENARY_OSR_TEST_TIMETABLE: compiled/routing/southern-california.bin
           CATENARY_OSR_TEST_CONFIG: catenaryconfig.toml
-          CATENARY_OSR_TEST_REGION: north-america/us/california/socal
+          CATENARY_OSR_TEST_REGION: north-america/us/california
         run: |
           cargo test --release --lib precomputed_matches_equal_fresh_matching_in_both_directions -- --ignored
           cargo test --release --bin edelweiss
@@ -446,7 +448,7 @@ jobs:
             --region southern-california \
             --regions-config routing_regions.toml \
             --first-utc-day "$first_day" --day-count 21 \
-            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
             --max-seconds 900 --candidate-meters 1200 \
             --schedule-memory-mib 16 --scratch-dir temp/gentian-rt-scratch \
             --build --output compiled/routing/southern-california.bin
@@ -543,5 +545,5 @@ jobs:
             temp/socal-live-trip-updates.pb
             temp/socal-realtime-probe.json
             temp/socal-realtime-probe.stdout
-            temp/osr-data/regions/north-america/us/california/socal/manifest.json
+            temp/osr-data/regions/north-america/us/california/manifest.json
           if-no-files-found: ignore
