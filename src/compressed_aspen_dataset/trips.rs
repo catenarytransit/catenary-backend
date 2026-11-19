@@ -13,7 +13,7 @@ const OLD_DATA: u16 = 8;
 const OCCUPANCY_SHIFT: u16 = 4;
 const RELATIONSHIP_SHIFT: u16 = 8;
 
-/// Twelve-byte hot row. Optional enums use zero for None and value + 1 otherwise.
+/// Original twelve-byte flat row. Retained when shared patterns are not cheaper.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 struct StopRow {
@@ -21,6 +21,34 @@ struct StopRow {
     first_event: u32,
     stop_sequence: u16,
     flags: u16,
+}
+
+/// Stop-specific realtime values only. Identity lives in a shared pattern.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+struct TimingStopRow {
+    first_event: u32,
+    flags: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+struct PatternStop {
+    stop_id: u32,
+    stop_sequence: u16,
+    /// A missing sequence and an explicitly provided zero are different.
+    sequence_present: u16,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum StopRows {
+    Flat(Box<[StopRow]>),
+    Shared {
+        rows: Box<[TimingStopRow]>,
+        pattern_offsets: Box<[u32]>,
+        pattern_stops: Box<[PatternStop]>,
+        pattern_ids: Box<[u32]>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -84,7 +112,7 @@ impl StopTimeEventRef {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Stops {
-    rows: Box<[StopRow]>,
+    rows: StopRows,
     events: Events,
     properties: Column<AspenisedStopTimeProperties>,
     platforms: Column<u32>,
@@ -188,7 +216,11 @@ impl From<AHashMap<CompactString, AspenisedTripUpdate>> for CompressedTripUpdate
         let mut direction_ids = Vec::with_capacity(trips.len());
         let mut relationships = Vec::with_capacity(trips.len());
         let mut modified = Vec::with_capacity(trips.len());
-        let mut stop_rows = Vec::new();
+        let mut stop_rows: Vec<StopRow> = Vec::new();
+        let mut pattern_ids = Vec::with_capacity(trips.len());
+        let mut pattern_by_hash: AHashMap<(usize, u64), Vec<u32>> = AHashMap::new();
+        let mut pattern_offsets = vec![0_u32];
+        let mut pattern_stops: Vec<PatternStop> = Vec::new();
         let mut events = EventBuilder::default();
         let mut stop_properties = Vec::new();
         let mut platforms = Vec::new();
@@ -262,6 +294,44 @@ impl From<AHashMap<CompactString, AspenisedTripUpdate>> for CompressedTripUpdate
                 );
                 platform_info.push(stop.platform_info);
             }
+            // Intern the entire ordered sequence, not individual stop IDs.
+            // Compare all entries after hashing: collision-safe and loop-safe.
+            let pattern: Vec<PatternStop> = stop_rows[stop_start as usize..]
+                .iter()
+                .map(|stop| PatternStop {
+                    stop_id: stop.stop_id,
+                    stop_sequence: stop.stop_sequence,
+                    sequence_present: stop.flags & SEQUENCE,
+                })
+                .collect();
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            pattern.hash(&mut hasher);
+            let key = (pattern.len(), hasher.finish());
+            let mut existing = None;
+            if let Some(candidates) = pattern_by_hash.get(&key) {
+                for &id in candidates {
+                    let from = pattern_offsets[id as usize] as usize;
+                    let to = pattern_offsets[id as usize + 1] as usize;
+                    if pattern_stops[from..to] == pattern {
+                        existing = Some(id);
+                        break;
+                    }
+                }
+            }
+            let pattern_id = if let Some(id) = existing {
+                id
+            } else {
+                let id = u32::try_from(pattern_offsets.len() - 1)
+                    .expect("too many Aspen stop patterns");
+                pattern_stops.extend_from_slice(&pattern);
+                pattern_offsets.push(
+                    u32::try_from(pattern_stops.len()).expect("too many Aspen pattern stops"),
+                );
+                pattern_by_hash.entry(key).or_default().push(id);
+                id
+            };
+            pattern_ids.push(pattern_id);
             rows.push(TripRow {
                 stop_start,
                 stop_len,
@@ -275,6 +345,26 @@ impl From<AHashMap<CompactString, AspenisedTripUpdate>> for CompressedTripUpdate
             headsigns.push(strings.insert(update.trip_headsign.as_deref()));
             consists.push(update.consist);
         }
+        // No-reuse feeds retain the original flat rows instead of paying
+        // for a new pattern table. All scratch hash maps die after this build.
+        let flat_bytes = stop_rows.len().saturating_mul(std::mem::size_of::<StopRow>());
+        let shared_bytes = stop_rows.len().saturating_mul(std::mem::size_of::<TimingStopRow>())
+            .saturating_add(pattern_stops.len().saturating_mul(std::mem::size_of::<PatternStop>()))
+            .saturating_add(pattern_offsets.len().saturating_mul(std::mem::size_of::<u32>()))
+            .saturating_add(pattern_ids.len().saturating_mul(std::mem::size_of::<u32>()));
+        let stored_rows = if shared_bytes < flat_bytes {
+            StopRows::Shared {
+                rows: stop_rows.into_iter().map(|stop| TimingStopRow {
+                    first_event: stop.first_event,
+                    flags: stop.flags,
+                }).collect(),
+                pattern_offsets: pattern_offsets.into_boxed_slice(),
+                pattern_stops: pattern_stops.into_boxed_slice(),
+                pattern_ids: pattern_ids.into_boxed_slice(),
+            }
+        } else {
+            StopRows::Flat(stop_rows.into_boxed_slice())
+        };
         Self {
             ids,
             strings: strings.finish(),
@@ -289,7 +379,7 @@ impl From<AHashMap<CompactString, AspenisedTripUpdate>> for CompressedTripUpdate
                 modified: Column::new(modified),
             },
             stops: Stops {
-                rows: stop_rows.into_boxed_slice(),
+                rows: stored_rows,
                 events: events.finish(),
                 properties: Column::new(stop_properties),
                 platforms: Column::new(platforms),
@@ -305,6 +395,17 @@ impl From<AHashMap<CompactString, AspenisedTripUpdate>> for CompressedTripUpdate
 }
 
 impl CompressedTripUpdates {
+    pub fn uses_shared_stop_patterns(&self) -> bool {
+        matches!(self.stops.rows, StopRows::Shared { .. })
+    }
+
+    pub fn stop_pattern_count(&self) -> usize {
+        match &self.stops.rows {
+            StopRows::Flat(_) => 0,
+            StopRows::Shared { pattern_offsets, .. } => pattern_offsets.len() - 1,
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.rows.len()
     }
@@ -390,10 +491,18 @@ impl<'a> TripUpdateRef<'a> {
     ) -> impl ExactSizeIterator<Item = StopTimeUpdateRef<'a>> + DoubleEndedIterator + Clone {
         let row = &self.table.rows[self.row];
         let start = row.stop_start as usize;
-        (start..start + row.stop_len as usize).map(move |row| StopTimeUpdateRef {
-            table: self.table,
-            row,
-        })
+        let pattern_id = match &self.table.stops.rows {
+            StopRows::Flat(_) => 0,
+            StopRows::Shared { pattern_ids, .. } => pattern_ids[self.row],
+        };
+        (start..start + row.stop_len as usize)
+            .enumerate()
+            .map(move |(ordinal, row)| StopTimeUpdateRef {
+                table: self.table,
+                row,
+                pattern_id,
+                ordinal,
+            })
     }
 
     #[inline]
@@ -449,50 +558,88 @@ impl<'a> TripUpdateRef<'a> {
 pub struct StopTimeUpdateRef<'a> {
     table: &'a CompressedTripUpdates,
     row: usize,
+    pattern_id: u32,
+    ordinal: usize,
 }
 
 impl<'a> StopTimeUpdateRef<'a> {
     #[inline]
-    fn core(self) -> &'a StopRow {
-        &self.table.stops.rows[self.row]
+    fn flags(self) -> u16 {
+        match &self.table.stops.rows {
+            StopRows::Flat(rows) => rows[self.row].flags,
+            StopRows::Shared { rows, .. } => rows[self.row].flags,
+        }
     }
+
+    #[inline]
+    fn first_event(self) -> u32 {
+        match &self.table.stops.rows {
+            StopRows::Flat(rows) => rows[self.row].first_event,
+            StopRows::Shared { rows, .. } => rows[self.row].first_event,
+        }
+    }
+
+    #[inline]
+    fn pattern_stop(self) -> Option<&'a PatternStop> {
+        let StopRows::Shared { pattern_offsets, pattern_stops, .. } =
+            &self.table.stops.rows else {
+            return None;
+        };
+        let from = *pattern_offsets.get(self.pattern_id as usize)? as usize;
+        let to = *pattern_offsets.get(self.pattern_id as usize + 1)? as usize;
+        let index = from.checked_add(self.ordinal)?;
+        (index < to).then(|| pattern_stops.get(index)).flatten()
+    }
+
     #[inline]
     pub fn stop_id(self) -> Option<&'a str> {
-        self.table.strings.get(self.core().stop_id)
+        let id = match &self.table.stops.rows {
+            StopRows::Flat(rows) => rows[self.row].stop_id,
+            StopRows::Shared { .. } => self.pattern_stop()?.stop_id,
+        };
+        self.table.strings.get(id)
     }
+
     #[inline]
     pub fn stop_sequence(self) -> Option<u16> {
-        (self.core().flags & SEQUENCE != 0).then_some(self.core().stop_sequence)
+        match &self.table.stops.rows {
+            StopRows::Flat(rows) => (rows[self.row].flags & SEQUENCE != 0)
+                .then_some(rows[self.row].stop_sequence),
+            StopRows::Shared { .. } => {
+                let stop = self.pattern_stop()?;
+                (stop.sequence_present != 0).then_some(stop.stop_sequence)
+            }
+        }
     }
     #[inline]
     pub fn old_rt_data(self) -> bool {
-        self.core().flags & OLD_DATA != 0
+        self.flags() & OLD_DATA != 0
     }
     #[inline]
     pub fn arrival(self) -> Option<StopTimeEventRef> {
-        (self.core().flags & ARRIVAL != 0).then(|| {
+        (self.flags() & ARRIVAL != 0).then(|| {
             self.table
                 .stops
                 .events
-                .get(self.core().first_event as usize)
+                .get(self.first_event() as usize)
         })
     }
     #[inline]
     pub fn departure(self) -> Option<StopTimeEventRef> {
-        (self.core().flags & DEPARTURE != 0).then(|| {
+        (self.flags() & DEPARTURE != 0).then(|| {
             self.table.stops.events.get(
-                self.core().first_event as usize + usize::from(self.core().flags & ARRIVAL != 0),
+                self.first_event() as usize + usize::from(self.flags() & ARRIVAL != 0),
             )
         })
     }
     #[inline]
     pub fn departure_occupancy_status(self) -> Option<AspenisedOccupancyStatus> {
-        let code = ((self.core().flags >> OCCUPANCY_SHIFT) & 15) as u8;
+        let code = ((self.flags() >> OCCUPANCY_SHIFT) & 15) as u8;
         option_u8_to_occupancy_status(&code.checked_sub(1))
     }
     #[inline]
     pub fn schedule_relationship(self) -> Option<AspenisedStopTimeScheduleRelationship> {
-        let code = ((self.core().flags >> RELATIONSHIP_SHIFT) & 7) as u8;
+        let code = ((self.flags() >> RELATIONSHIP_SHIFT) & 7) as u8;
         code.checked_sub(1).map(Into::into)
     }
     #[inline]
@@ -532,5 +679,7 @@ mod tests {
     #[test]
     fn hot_row_is_twelve_bytes() {
         assert_eq!(std::mem::size_of::<StopRow>(), 12);
+        assert_eq!(std::mem::size_of::<TimingStopRow>(), 8);
+        assert_eq!(std::mem::size_of::<PatternStop>(), 8);
     }
 }
