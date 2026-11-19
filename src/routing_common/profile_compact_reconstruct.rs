@@ -183,7 +183,8 @@ pub(super) fn reconstruct_snapshot(
                     alight_stop_index: alight_pos,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
-                });
+                
+                    realtime: None,});
             }
             Parent::Walk { from, to, seconds } => {
                 legs.push(Leg::Transfer {
