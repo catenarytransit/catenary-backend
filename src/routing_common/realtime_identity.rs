@@ -217,9 +217,51 @@ pub enum ResolveIssue {
     StopIdMissing,
     AmbiguousTripInstance,
     NoActiveService,
+    RouteIdMismatch,
+    StartTimeMismatch,
+    ServiceDayOutsideHorizon,
+    DepartureOffsetMismatch,
+    InactiveTrafficDay,
     InvalidStartTime,
     InvalidTimezone,
     BadCatalog,
+}
+
+impl ResolveIssue {
+    /// Stable, bounded diagnostic categories; never log raw GTFS identifiers.
+    pub fn diagnostic_code(&self) -> &'static str {
+        match self {
+            Self::MissingTripId => "missing_trip_id",
+            Self::MissingServiceDate => "missing_service_date",
+            Self::TripIdNotFound => "trip_id_not_found",
+            Self::UnknownStopId(_) => "unknown_stop_id",
+            Self::AmbiguousStopId(_) => "ambiguous_stop_id",
+            Self::StopIdMissing => "stop_id_missing",
+            Self::AmbiguousTripInstance => "ambiguous_trip_instance",
+            Self::NoActiveService => "no_active_service",
+            Self::RouteIdMismatch => "route_id_mismatch",
+            Self::StartTimeMismatch => "start_time_mismatch",
+            Self::ServiceDayOutsideHorizon => "service_day_outside_horizon",
+            Self::DepartureOffsetMismatch => "departure_offset_mismatch",
+            Self::InactiveTrafficDay => "inactive_traffic_day",
+            Self::InvalidStartTime => "invalid_start_time",
+            Self::InvalidTimezone => "invalid_timezone",
+            Self::BadCatalog => "bad_catalog",
+        }
+    }
+
+    /// Prefer the failure that progressed furthest through exact matching.
+    pub fn diagnostic_depth(&self) -> u8 {
+        match self {
+            Self::InactiveTrafficDay => 6,
+            Self::DepartureOffsetMismatch => 5,
+            Self::ServiceDayOutsideHorizon => 4,
+            Self::StartTimeMismatch => 3,
+            Self::RouteIdMismatch => 2,
+            Self::TripIdNotFound => 1,
+            _ => 0,
+        }
+    }
 }
 
 /// Build a compact index only for the GTFS strings present in one Aspen page
@@ -365,6 +407,7 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
         let trip_candidates = self.trips.get(&(source.0, raw_trip))
             .ok_or(ResolveIssue::TripIdNotFound)?;
         let mut found: Option<ResolvedInstance> = None;
+        let mut last_rejection = ResolveIssue::NoActiveService;
         for &trip in trip_candidates {
             // Some GTFS feeds reuse a trip_id for multiple public routes.
             // Never conflate those runs when GTFS-RT provides route_id.
@@ -376,6 +419,9 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                 if record.source != source ||
                     self.tt.get_string(record.id) != Some(route_id)
                 {
+                    if last_rejection.diagnostic_depth() < ResolveIssue::RouteIdMismatch.diagnostic_depth() {
+                        last_rejection = ResolveIssue::RouteIdMismatch;
+                    }
                     continue;
                 }
             }
@@ -390,6 +436,9 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                     .ok_or(ResolveIssue::BadCatalog)?;
                 // The start_time, when present, disambiguates frequency runs.
                 if start_time.is_some_and(|s| s != row.first_departure_gtfs_seconds) {
+                    if last_rejection.diagnostic_depth() < ResolveIssue::StartTimeMismatch.diagnostic_depth() {
+                        last_rejection = ResolveIssue::StartTimeMismatch;
+                    }
                     continue;
                 }
                 let zone = self.catalog.timezones.get(row.timezone as usize)
@@ -401,15 +450,24 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                     .ok_or(ResolveIssue::BadCatalog)?;
                 let day = departure.div_euclid(86_400) - i64::from(self.tt.header().first_utc_day);
                 if !(0..i64::from(self.tt.header().day_count)).contains(&day) {
+                    if last_rejection.diagnostic_depth() < ResolveIssue::ServiceDayOutsideHorizon.diagnostic_depth() {
+                        last_rejection = ResolveIssue::ServiceDayOutsideHorizon;
+                    }
                     continue;
                 }
                 if departure.rem_euclid(86_400)
                     != i64::from(self.tt.transport_first_dep_offset()[transport.idx()].seconds())
                 {
+                    if last_rejection.diagnostic_depth() < ResolveIssue::DepartureOffsetMismatch.diagnostic_depth() {
+                        last_rejection = ResolveIssue::DepartureOffsetMismatch;
+                    }
                     continue;
                 }
                 let day = DayIdx(day as u16);
-                if !self.tt.is_transport_active(transport, day) { continue; }
+                if !self.tt.is_transport_active(transport, day) {
+                    last_rejection = ResolveIssue::InactiveTrafficDay;
+                    continue;
+                }
 
                 let instance = ResolvedInstance { transport, trip, source, service_day_utc: day };
                 if found.is_some_and(|previous| previous != instance) {
@@ -418,7 +476,7 @@ impl<'tt, 'data> RealtimeGtfsResolver<'tt, 'data> {
                 found = Some(instance);
             }
         }
-        found.ok_or(ResolveIssue::NoActiveService)
+        found.ok_or(last_rejection)
     }
 }
 
@@ -750,7 +808,7 @@ mod tests {
         let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
         assert!(matches!(resolver.stop(SourceIdx(1), "start"), Err(ResolveIssue::UnknownStopId(_))));
         u.route_id = Some("wrong-route".into());
-        assert_eq!(resolver.instance(SourceIdx(0), &u),Err(ResolveIssue::NoActiveService));
+        assert_eq!(resolver.instance(SourceIdx(0), &u),Err(ResolveIssue::RouteIdMismatch));
     }
 
     #[test]
@@ -765,7 +823,7 @@ mod tests {
         let mut u = update();
         u.start_time = Some("24:00:00".into());
         let resolver = RealtimeGtfsResolver::new(&tt, &catalog, SourceIdx(0), &[u.clone()]).unwrap();
-        assert_eq!(resolver.instance(SourceIdx(0), &u), Err(ResolveIssue::NoActiveService));
+        assert_eq!(resolver.instance(SourceIdx(0), &u), Err(ResolveIssue::StartTimeMismatch));
     }
 
 }

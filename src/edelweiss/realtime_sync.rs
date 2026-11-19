@@ -22,7 +22,7 @@ use catenary::routing_common::realtime_region::{
     ChateauRealtimeShard, RegionRealtimeSnapshot,
 };
 use catenary::routing_common::realtime_identity::{
-    GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
+    GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance, ResolveIssue,
 };
 use catenary::routing_common::timetable::SourceIdx;
 use catenary::routing_common::routing_regions::RoutingRegionsConfig;
@@ -55,6 +55,8 @@ pub struct ResolvedTrip {
 pub struct ResolutionStats {
     pub matched: usize,
     pub no_match: usize,
+    /// Count the highest-progress resolution failure for each unmatched update.
+    pub no_match_reasons: BTreeMap<&'static str, usize>,
     pub ambiguous: usize,
     pub unresolved_stops: usize,
     pub prepared_runs: usize,
@@ -96,6 +98,14 @@ pub struct RealtimeSources {
     /// Built once by Gentian; only loaded when RAM-only sync is enabled.
     /// These are static metadata and never rewritten during realtime updates.
     pub identity_catalogs: BTreeMap<String, Arc<GtfsIdentityCatalog>>,
+}
+
+fn record_rejection(slot: &mut Option<ResolveIssue>, issue: ResolveIssue) {
+    if slot.as_ref().is_none_or(|previous| {
+        issue.diagnostic_depth() > previous.diagnostic_depth()
+    }) {
+        *slot = Some(issue);
+    }
 }
 
 impl RealtimeSources {
@@ -174,14 +184,22 @@ impl RealtimeSources {
                 (0..snapshot.updates.len()).map(|_| Vec::new()).collect();
             let mut added: Vec<Vec<PreparedAction>> =
                 (0..snapshot.updates.len()).map(|_| Vec::new()).collect();
+            let mut rejections: Vec<Option<ResolveIssue>> =
+                (0..snapshot.updates.len()).map(|_| None).collect();
 
             for &(source, ref assigned_chateau, _, _) in sources {
                 if assigned_chateau != chateau { continue; }
                 let source = SourceIdx(source);
-                let Ok(resolver) = RealtimeGtfsResolver::new(
+                let resolver = match RealtimeGtfsResolver::new(
                     &tt, catalog, source, &snapshot.updates,
-                ) else {
-                    continue;
+                ) {
+                    Ok(resolver) => resolver,
+                    Err(issue) => {
+                        for rejection in &mut rejections {
+                            record_rejection(rejection, issue.clone());
+                        }
+                        continue;
+                    }
                 };
                 for (update_index, update) in snapshot.updates.iter().enumerate() {
                     if matches!(
@@ -202,7 +220,13 @@ impl RealtimeSources {
                         continue;
                     }
 
-                    let Ok(original) = resolver.instance(source, update) else { continue };
+                    let original = match resolver.instance(source, update) {
+                        Ok(original) => original,
+                        Err(issue) => {
+                            record_rejection(&mut rejections[update_index], issue);
+                            continue;
+                        }
+                    };
                     let action = match scheduled_action(
                         &tt, &resolver, source, original, update,
                     ) {
@@ -247,7 +271,12 @@ impl RealtimeSources {
                             stats.matched += 1;
                             actions.push(action);
                         }
-                        0 => stats.no_match += 1,
+                        0 => {
+                            stats.no_match += 1;
+                            let reason = rejections[index].as_ref()
+                                .map_or("no_candidate_source", ResolveIssue::diagnostic_code);
+                            *stats.no_match_reasons.entry(reason).or_default() += 1;
+                        },
                         _ => stats.ambiguous += 1,
                     }
                 }
@@ -635,10 +664,11 @@ pub async fn synchronize(
                             }).await {
                                 Ok((mut snapshot, elapsed)) => {
                                     eprintln!(
-                                        "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} unresolved_stops={} elapsed_ms={:.1}",
+                                        "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} no_match_reasons={:?} unresolved_stops={} elapsed_ms={:.1}",
                                         snapshot.stats.matched,
                                         snapshot.stats.ambiguous,
                                         snapshot.stats.no_match,
+                                        snapshot.stats.no_match_reasons,
                                         snapshot.stats.unresolved_stops,
                                         elapsed.as_secs_f64() * 1000.0,
                                     );
@@ -787,6 +817,7 @@ pub fn probe_raw_gtfs_rt(
         "matched_scheduled_instances": source_snapshot.stats.matched,
         "ambiguous_instances": source_snapshot.stats.ambiguous,
         "unmatched_instances": source_snapshot.stats.no_match,
+        "unmatched_reasons": source_snapshot.stats.no_match_reasons,
         "rejected_updates": source_snapshot.stats.invalid_updates,
         "unresolved_stops": source_snapshot.stats.unresolved_stops,
         "prepared_runs": published.run_count(),
@@ -859,6 +890,17 @@ mod tests {
             overlays: BTreeMap::from([(0, Arc::new(builder.finish().unwrap()))]),
             stats: ResolutionStats::default(),
         }
+    }
+
+    #[test]
+    fn diagnostic_rejection_prefers_later_matching_stage() {
+        let mut rejection = None;
+        record_rejection(&mut rejection, ResolveIssue::TripIdNotFound);
+        record_rejection(&mut rejection, ResolveIssue::RouteIdMismatch);
+        record_rejection(&mut rejection, ResolveIssue::TripIdNotFound);
+        assert_eq!(rejection, Some(ResolveIssue::RouteIdMismatch));
+        record_rejection(&mut rejection, ResolveIssue::InactiveTrafficDay);
+        assert_eq!(rejection.unwrap().diagnostic_code(), "inactive_traffic_day");
     }
 
     #[test]
