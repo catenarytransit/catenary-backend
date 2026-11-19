@@ -98,3 +98,34 @@ RSS ceiling. Queries can fault needed pages back in, increasing first-query
 latency. Compare `/proc/PID/smaps_rollup` RSS, `Pss_File`, and `Pss_Anon` before
 and after startup, plus first-query and warm-query latency and route parity,
 when choosing a mode. Do not apply advice after each request.
+
+## Fast timetable startup validation
+
+Edelweiss now defaults to a bounded-layout check when mmap-opening **trusted**
+Gentian timetables. This verifies the magic, wire version, maximum calendar
+window, bounds and alignment of every typed column, basic column cardinalities
+and CSR endpoint offsets. It avoids the O(number of stops + routes + trips +
+OSR candidates + strings) semantic validation that previously caused lengthy
+startup reads and page faults on large regional timetables.
+
+Gentian continues to use `MappedTimetable::open()` and the complete
+`ZeroCopyTimetable::validate()` semantic scan before atomically publishing a
+timetable. The fast path must only be used on **immutable, compiler-produced
+artifacts**. The per-element semantic checks are **not** performed by
+Edelweiss on its default fast path; an externally edited or corrupted
+binary may pass the layout check and later fail during routing.
+
+To force the previous complete validation on Edelweiss startup:
+
+```sh
+CATENARY_TIMETABLE_VALIDATION=full target/release/edelweiss ...
+```
+
+For a systemd unit, set
+`Environment="CATENARY_TIMETABLE_VALIDATION=full"` and restart.
+Unset the environment variable (or set it to `fast`) to use the fast path.
+
+This reduces **validation** cost, not timetable metadata index construction,
+lower-bound topology construction, OSR loading or page faults incurred by
+actual route queries. Benchmark each of these stages independently. Treat
+timetable files as immutable while mapped; publish replacements atomically.

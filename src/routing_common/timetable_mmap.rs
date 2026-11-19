@@ -30,6 +30,19 @@ impl MappedTimetable {
         })
     }
 
+    /// Fast open for trusted, compiler-published timetable files.
+    /// The strict open() remains the default for all other callers.
+    pub fn open_fast(path: &Path) -> Result<Self> {
+        let file =
+            File::open(path).with_context(|| format!("opening timetable {}", path.display()))?;
+        let bytes = unsafe { MmapOptions::new().map(&file) }
+            .with_context(|| format!("mapping timetable {}", path.display()))?;
+        let validated_header = ZeroCopyTimetable::new_fast(&bytes)
+            .with_context(|| format!("checking timetable layout {}", path.display()))?
+            .validated_header();
+        Ok(Self { bytes, validated_header })
+    }
+
     pub fn view(&self) -> std::result::Result<ZeroCopyTimetable<'_>, FormatError> {
         Ok(ZeroCopyTimetable::from_validated_header(
             &self.bytes,
@@ -144,6 +157,24 @@ mod tests {
         let leftovers: Vec<_> = std::fs::read_dir(&directory).unwrap().collect();
         assert_eq!(leftovers.len(), 1, "scratch files must be removed");
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn fast_open_rejects_invalid_header_and_truncation() {
+        let path = std::env::temp_dir().join(format!("gentian-fast-mmap-{}", uuid::Uuid::new_v4()));
+        let tt = crate::routing_common::timetable::TimetableOwned::empty(20_000, 10);
+        let original = tt.encode().unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let mapped = MappedTimetable::open_fast(&path).unwrap();
+        assert_eq!(mapped.view().unwrap().header().day_count, 10);
+        drop(mapped);
+        let mut bad_magic = original.clone();
+        bad_magic[0] ^= 0xff;
+        std::fs::write(&path, bad_magic).unwrap();
+        assert!(MappedTimetable::open_fast(&path).is_err());
+        std::fs::write(&path, &original[..original.len() / 2]).unwrap();
+        assert!(MappedTimetable::open_fast(&path).is_err());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

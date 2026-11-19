@@ -372,7 +372,13 @@ impl Router {
                 path.display(),
             );
             phase = Instant::now();
-            let timetable = MappedTimetable::open(&path).with_context(|| {
+            let strict_validation = std::env::var("CATENARY_TIMETABLE_VALIDATION")
+                .is_ok_and(|mode| mode.eq_ignore_ascii_case("full"));
+            let timetable = (if strict_validation {
+                MappedTimetable::open(&path)
+            } else {
+                MappedTimetable::open_fast(&path)
+            }).with_context(|| {
                 format!(
                     "mapping transit region {} from {}",
                     region.id,
@@ -380,8 +386,9 @@ impl Router {
                 )
             })?;
             eprintln!(
-                "Edelweiss startup: region {}: timetable mapped and validated in {:.3}s ({} stops, {} transports); checking routing sources",
+                "Edelweiss startup: region {}: timetable mapped and {} checked in {:.3}s ({} stops, {} transports); checking routing sources",
                 region.id,
+                if strict_validation { "fully" } else { "structurally" },
                 phase.elapsed().as_secs_f64(),
                 timetable.view()?.coordinates().len(),
                 timetable.view()?.transport_route().len(),
