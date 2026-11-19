@@ -66,6 +66,8 @@ pub struct ResolutionStats {
 #[derive(Debug)]
 pub struct SourceSnapshot {
     pub revision_ms: u64,
+    /// Number of updates received, retained without the expanded RPC buffer.
+    pub update_count: usize,
     pub updates: Vec<RoutingTripUpdate>,
     /// Fully validated scheduled instances, retained for a future overlay
     /// builder; no route suppression is enabled by these lookups yet.
@@ -445,7 +447,7 @@ impl RealtimeSources {
 
     pub fn stats(&self) -> (usize, usize) {
         let all = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        (all.len(), all.values().map(|v| v.updates.len()).sum())
+        (all.len(), all.values().map(|v| v.update_count).sum())
     }
 }
 
@@ -499,6 +501,7 @@ async fn fetch_source(
                     ensure!(updates.len() == page.total_updates as usize, "Aspen snapshot has missing updates");
                     return Ok(Some(SourceSnapshot {
                         revision_ms: page.revision_ms,
+                        update_count: updates.len(),
                         updates,
                         resolved: Vec::new(),
                         overlays: BTreeMap::new(),
@@ -567,7 +570,7 @@ pub async fn synchronize(
                                 );
                                 (snapshot, started.elapsed())
                             }).await {
-                                Ok((snapshot, elapsed)) => {
+                                Ok((mut snapshot, elapsed)) => {
                                     eprintln!(
                                         "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} unresolved_stops={} elapsed_ms={:.1}",
                                         snapshot.stats.matched,
@@ -576,6 +579,13 @@ pub async fn synchronize(
                                         snapshot.stats.unresolved_stops,
                                         elapsed.as_secs_f64() * 1000.0,
                                     );
+                                    // The full Aspen source page buffer is
+                                    // needed only during preparation. Retain
+                                    // compressed overlay shards and numeric
+                                    // diagnostics instead of storing a second
+                                    // expanded copy of every GTFS-RT entity.
+                                    snapshot.updates = Vec::new();
+                                    snapshot.resolved = Vec::new();
                                     sources.publish(chateau, snapshot);
                                 },
                                 Err(error) => eprintln!(
@@ -602,7 +612,7 @@ pub async fn synchronize(
             Err(error) => eprintln!("Edelweiss RT region snapshot compose failed: {error:#}"),
         }
         let (active, updates) = sources.stats();
-        eprintln!("Edelweiss routing source sync: {active} source snapshots; {updates} routing updates retained in RAM");
+        eprintln!("Edelweiss routing source sync: {active} source snapshots; {updates} routing updates processed into RAM overlays");
         tokio::time::sleep(interval).await;
     }
 }
@@ -614,11 +624,11 @@ mod tests {
     #[test]
     fn publish_is_monotonic_and_old_readers_remain_valid() {
         let snapshots = RealtimeSources::default();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 5, update_count: 0, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         let old = snapshots.get("a").unwrap();
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 4, update_count: 0, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 5);
-        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
+        snapshots.publish("a".to_string(), SourceSnapshot { revision_ms: 6, update_count: 0, updates: vec![], resolved: vec![], overlays: BTreeMap::new(), stats: ResolutionStats::default() });
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 6);
         assert_eq!(old.revision_ms, 5);
     }
