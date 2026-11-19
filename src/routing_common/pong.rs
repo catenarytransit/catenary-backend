@@ -900,7 +900,10 @@ mod tests {
         let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let base = 20_000_i64 * 86_400;
+        let delayed_only = rt_region(&tt, true, false);
+        assert!(!delayed_only.may_shortcut, "pure delay must preserve static lower bounds");
         let snapshot = rt_region(&tt, true, true);
+        assert!(snapshot.may_shortcut, "added run may create a new fastest path");
         for reverse in [false, true] {
             let q = Query {
                 departure_unix_seconds: base + 8*3600 + if reverse { 1900 } else { 240 },
