@@ -758,6 +758,14 @@ fn improve_middle_rides(
 mod tests {
     use super::*;
     use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::realtime_overlay::{
+        RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
+    };
+    use crate::routing_common::realtime_region::{
+        ChateauRealtimeShard, RegionRealtimeSnapshot,
+    };
+    use crate::routing_common::profile_compact_reconstruct::valid_journey_with_realtime;
+    use std::collections::BTreeSet;
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, RouteIdx, SourceIdx, StationTransferRule,
         TimetableOwned, TimingProfileIdx, TrafficDays,
@@ -846,6 +854,126 @@ mod tests {
             ],
             prohibit_change,
         )
+    }
+
+    fn rt_region(
+        tt: &ZeroCopyTimetable<'_>,
+        replace_static: bool,
+        added: bool,
+    ) -> Arc<RegionRealtimeSnapshot> {
+        let mut builder = RealtimeOverlayBuilder::new_sparse(tt, [4; 32], 1);
+        let base = i64::from(tt.header().first_utc_day) * 86_400;
+        if replace_static {
+            builder.add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: Some((crate::routing_common::timetable::TransportIdx(0),
+                    crate::routing_common::timetable::DayIdx(0))),
+                service_date: 20_000,
+                external_id: None,
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                event_times: vec![base+8*3600+300, base+8*3600+900],
+                metadata: None,
+            }).unwrap();
+        }
+        if added {
+            builder.add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("5:extra0::20000".into()),
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                event_times: vec![base+8*3600+1200, base+8*3600+1680],
+                metadata: None,
+            }).unwrap();
+        }
+        Arc::new(RegionRealtimeSnapshot::compose(
+            tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap())
+    }
+
+    #[test]
+    fn pong_reconstructs_modified_and_added_trips_in_both_directions() {
+        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let snapshot = rt_region(&tt, true, true);
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base + 8*3600 + if reverse { 1900 } else { 240 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None,
+                max_boardings: 2,
+                max_duration_seconds: 7200,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1,
+                    search_window_seconds: 1800,
+                    max_journey_duration_seconds: 7200,
+                    ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(!journeys.is_empty(), "reverse={reverse}");
+            for journey in &journeys {
+                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid RT journey reverse={reverse}: {journey:?}");
+                assert!(!journey.legs.iter().any(|leg|
+                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
+                    "suppressed static run reconstructed: {journey:?}");
+            }
+            assert!(journeys.iter().any(|j| j.legs.iter().any(|leg|
+                matches!(leg, Leg::Ride {
+                    realtime: Some(_),
+                    departure_unix_seconds: dep,
+                    arrival_unix_seconds: arr, ..
+                } if *dep == base + 8*3600+1200 && *arr == base + 8*3600+1680))),
+                "missing added RT trip reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
+    fn pong_does_not_return_cancelled_static_run() {
+        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 2);
+        builder.cancel_static(
+            crate::routing_common::timetable::TransportIdx(0),
+            crate::routing_common::timetable::DayIdx(0),
+        ).unwrap();
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        let q = Query {
+            departure_unix_seconds: 20_000_i64*86_400 + 8*3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 2, max_duration_seconds: 3600,
+        };
+        let (journeys, _) = route_pong_observed(
+            &tt, &q,
+            ProfileOptions {
+                min_itineraries: 1, search_window_seconds: 900,
+                max_journey_duration_seconds: 3600, ..Default::default()
+            },
+            false, None,
+            &PongControl { realtime: Some(snapshot), ..Default::default() },
+            &mut |_, _| Ok(()),
+        ).unwrap();
+        assert!(journeys.is_empty(), "cancelled service leaked: {journeys:?}");
     }
 
     #[test]
