@@ -21,7 +21,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
-    branches: [routing-dev]
+    branches: [routing-dev, main, 'feat/region-ram-realtime-snapshot-20261118']
     paths:
       - '.github/workflows/routing-regions-socal.yml'
       - 'src/gentian/**'
@@ -39,6 +39,22 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
+    inputs:
+      live_realtime_probe:
+        description: 'Fetch real GTFS-RT TripUpdates from Birch and test SoCal RAM overlay'
+        type: boolean
+        required: true
+        default: false
+      realtime_feed_id:
+        description: 'Birch realtime feed ID (must correspond to selected static feed)'
+        type: string
+        required: true
+        default: 'f-longbeachtransit~rt'
+      static_feed_id:
+        description: 'Gentian static GTFS feed ID corresponding to the realtime feed'
+        type: string
+        required: true
+        default: 'f-9q5b-longbeachtransit'
 
 concurrency:
   group: socal-routing-${{ github.event.pull_request.number || github.ref }}
@@ -265,6 +281,10 @@ jobs:
           cargo test --release --lib routing_common::routing_regions
           cargo test --release --lib routing_common::raptor_query
           cargo test --release --lib routing_common::timetable
+          cargo test --release --lib routing_common::realtime_source
+          cargo test --release --lib routing_common::realtime_identity
+          cargo test --release --lib routing_common::realtime_prepare
+          cargo test --release --lib routing_common::realtime_region
           cargo test --release --bin gentian
           ./target/release/gentian \
             --region southern-california \
@@ -283,6 +303,7 @@ jobs:
             --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
             --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
           test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
           ./target/release/gentian \
             --regions-config routing_regions.toml \
@@ -381,6 +402,93 @@ jobs:
             echo 'See the gentian-socal-routing-diagnostics artifact for both JSON'
             echo 'responses, route-leg logs and detailed timing metrics.'
           } >> "$GITHUB_STEP_SUMMARY"
+      # Live Birch is a changing external dependency. Keep regular PR checks
+      # deterministic; run this only when requested by workflow_dispatch.
+      - name: Recompile Gentian for the current realtime service horizon
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Preserve the fixed SoCal routing benchmark before refreshing this
+          # horizon. Reuse the already-extracted Geofabrik native OSR graph.
+          first_day=$(( $(date -u +%s) / 86400 - 3 ))
+          echo "Realtime timetable starts UTC day $first_day" | tee temp/realtime-horizon.log
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day "$first_day" --day-count 21 \
+            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-rt-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+
+      - name: Download live Birch GTFS-RT trip protobuf
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          RT_FEED_ID: ${{ inputs.realtime_feed_id }}
+        run: |
+          set -euo pipefail
+          # The actual Birch API is /gtfs_rt (underscore), with feed_type=trip.
+          curl --fail --location --silent --show-error \
+            --retry 4 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 \
+            --get \
+            --data-urlencode "feed_id=${RT_FEED_ID}" \
+            --data-urlencode "feed_type=trip" \
+            --data-urlencode "format=pb" \
+            'https://birch.catenarymaps.org/gtfs_rt' \
+            --output temp/socal-live-trip-updates.pb
+          test -s temp/socal-live-trip-updates.pb
+          test "$(stat -c %s temp/socal-live-trip-updates.pb)" -le 33554432
+          sha256sum temp/socal-live-trip-updates.pb | tee temp/realtime-feed-sha256.txt
+
+      - name: Probe live Aspen-compatible realtime snapshot in Edelweiss
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          STATIC_FEED_ID: ${{ inputs.static_feed_id }}
+        run: |
+          set -euo pipefail
+          # No Aspen worker, etcd connection, or production state writes.
+          # Reuse protobuf projection, identity resolution, run preparation,
+          # regional publication and lossless event-time assertions.
+          ./target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --realtime-probe-file temp/socal-live-trip-updates.pb \
+            --realtime-probe-region southern-california \
+            --realtime-probe-static-feed "$STATIC_FEED_ID" \
+            --realtime-probe-min-runs 1 \
+            --realtime-probe-report temp/socal-realtime-probe.json \
+            | tee temp/socal-realtime-probe.stdout
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads(Path("temp/socal-realtime-probe.json").read_text())
+          assert data["region"] == "southern-california"
+          assert data["decoded_trip_updates"] > 0
+          assert data["prepared_runs"] >= 1
+          assert data["validated_exact_second_events"] >= 2 * data["prepared_runs"]
+          assert data["snapshot_shards"] == 1
+          assert data["snapshot_complete"] is True
+          assert data["snapshot_publication_seq"] == 1
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n## Live SoCal realtime snapshot probe\n\n")
+              out.write(f"- Chateau: {data['chateau']}\n")
+              out.write(f"- Protobuf TripUpdates: {data['decoded_trip_updates']}\n")
+              out.write(f"- Prepared realtime runs: {data['prepared_runs']}\n")
+              out.write(f"- Scheduled instances matched: {data['matched_scheduled_instances']}\n")
+              out.write(f"- Added runs: {data['prepared_added']}\n")
+              out.write(f"- Cancelled instances: {data['suppressed_static_instances']}\n")
+              out.write(f"- Exact-second event slots validated: {data['validated_exact_second_events']}\n")
+              out.write(f"- Ambiguous updates: {data['ambiguous_instances']}\n")
+          PY
+
       - name: Upload build metadata
         if: always()
         uses: actions/upload-artifact@v4
@@ -401,5 +509,10 @@ jobs:
             temp/alhambra-pier-query-stderr.log
             temp/alhambra-pier-journeys.txt
             temp/osr-validation.log
+            temp/realtime-horizon.log
+            temp/realtime-feed-sha256.txt
+            temp/socal-live-trip-updates.pb
+            temp/socal-realtime-probe.json
+            temp/socal-realtime-probe.stdout
             temp/osr-data/regions/north-america/us/california/socal/manifest.json
           if-no-files-found: ignore
