@@ -125,6 +125,7 @@ fn ride(leg: &Leg) -> Option<Ride> {
         to_stop,
         departure_unix_seconds,
         arrival_unix_seconds,
+        realtime: None,
     } = *leg
     {
         Some(Ride {
