@@ -313,6 +313,7 @@ mod tests {
                 PackedStop::new(LocationIdx(first), true, true, true, true).unwrap(),
                 PackedStop::new(LocationIdx(first + 1), true, true, true, true).unwrap(),
             ]),
+            metadata: None,
             event_times: vec![start, start + 100],
         }).unwrap();
         ChateauRealtimeShard {
