@@ -7,13 +7,15 @@
 mod columns;
 #[path = "compressed_aspen_dataset/trips.rs"]
 mod trips;
+#[path = "compressed_aspen_dataset/legacy_trips.rs"]
+mod legacy_trips;
 
 use crate::aspen_dataset::*;
 use ahash::AHashMap;
 use compact_str::CompactString;
 use ecow::EcoString;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 pub use trips::{
     CompressedTripUpdates, RawTripRef, StopTimeEventRef, StopTimeUpdateRef, TripUpdateRef,
 };
@@ -23,10 +25,20 @@ pub use trips::{
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum CompressedAspenisedData {
     V1(Box<AspenSnapshotV1>),
+    V2(Box<AspenSnapshotV2>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AspenSnapshotV1 {
+    metadata: AspenMetadata,
+    trips: legacy_trips::CompressedTripUpdates,
+    // Lazy compatibility conversion; skipped in old V1 bincode layout.
+    #[serde(skip, default)]
+    upgraded: OnceLock<CompressedTripUpdates>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AspenSnapshotV2 {
     metadata: AspenMetadata,
     trips: CompressedTripUpdates,
 }
@@ -93,7 +105,7 @@ impl From<AspenisedData> for CompressedAspenisedData {
             stop_id_to_parent_id,
             parent_id_to_children_ids,
         } = data;
-        Self::V1(Box::new(AspenSnapshotV1 {
+        Self::V2(Box::new(AspenSnapshotV2 {
             trips: trip_updates.into(),
             metadata: AspenMetadata {
                 vehicle_positions,
@@ -186,13 +198,16 @@ impl AspenMetadata {
 impl CompressedAspenisedData {
     pub fn trip_updates(&self) -> &CompressedTripUpdates {
         match self {
-            Self::V1(snapshot) => &snapshot.trips,
+            Self::V1(snapshot) => snapshot.upgraded
+                .get_or_init(|| snapshot.trips.to_expanded().into()),
+            Self::V2(snapshot) => &snapshot.trips,
         }
     }
 
     pub fn metadata(&self) -> &AspenMetadata {
         match self {
             Self::V1(snapshot) => &snapshot.metadata,
+            Self::V2(snapshot) => &snapshot.metadata,
         }
     }
 
@@ -207,6 +222,9 @@ impl CompressedAspenisedData {
     pub fn into_expanded(self) -> AspenisedData {
         match self {
             Self::V1(snapshot) => snapshot
+                .metadata
+                .into_expanded(snapshot.trips.to_expanded()),
+            Self::V2(snapshot) => snapshot
                 .metadata
                 .into_expanded(snapshot.trips.to_expanded()),
         }
