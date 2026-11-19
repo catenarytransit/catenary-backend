@@ -13,6 +13,9 @@ use crate::routing_common::timetable::{
     DayIdx, LocationIdx, PackedStop, RouteIdx, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
 use serde::{Deserialize, Serialize};
+use crate::routing_common::realtime_status::{
+    RtEventKind, RtRunMetadata, StaticRunStatus,
+};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, RwLock};
@@ -53,6 +56,8 @@ pub struct RtRunInput {
     pub pattern: RtPatternInput,
     /// dep(0), arr(1), dep(1), ..., arr(last), in exact seconds.
     pub event_times: Vec<i64>,
+    /// Sparse GTFS-RT event/stop provenance. None preserves legacy callers.
+    pub metadata: Option<RtRunMetadata>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -79,6 +84,11 @@ pub struct RealtimeOverlay {
     pub dynamic_pattern_stops: Vec<u32>,
     pub event_offsets_seconds: Vec<i32>,
     pub suppressed_static: Vec<StaticInstance>,
+    /// Exact scheduled instances explicitly CANCELLED or DELETED by GTFS-RT.
+    /// A modified but running trip is only in suppressed_static.
+    pub cancelled_static: Vec<StaticInstance>,
+    /// Sorted sparse per-run annotations; zero allocation for unmodified runs.
+    pub run_metadata: Vec<(u32, RtRunMetadata)>,
     pub pattern_runs: BTreeMap<RtPatternRef, Vec<u32>>,
     pub location_patterns: BTreeMap<u32, Vec<RtPatternRef>>,
 }
@@ -95,6 +105,8 @@ impl RealtimeOverlay {
             dynamic_pattern_stops: Vec::new(),
             event_offsets_seconds: Vec::new(),
             suppressed_static: Vec::new(),
+            cancelled_static: Vec::new(),
+            run_metadata: Vec::new(),
             pattern_runs: BTreeMap::new(),
             location_patterns: BTreeMap::new(),
         }
@@ -147,6 +159,34 @@ impl RealtimeOverlay {
             .filter_map(|index| self.runs.get(*index as usize))
     }
 
+    pub fn run_metadata(&self, run_index: u32) -> Option<&RtRunMetadata> {
+        self.run_metadata
+            .binary_search_by_key(&run_index, |(index, _)| *index)
+            .ok()
+            .map(|i| &self.run_metadata[i].1)
+    }
+
+    pub fn event_kind(&self, run_index: u32, slot: usize) -> Option<RtEventKind> {
+        let run = self.runs.get(run_index as usize)?;
+        if slot >= (run.event_to - run.event_from) as usize { return None; }
+        Some(self.run_metadata(run_index).map_or(
+            if run.original.is_none() { RtEventKind::Estimated }
+            else { RtEventKind::Timetabled },
+            |meta| meta.event_kind(slot, run.original.is_none()),
+        ))
+    }
+
+    pub fn static_status(&self, transport: TransportIdx, day: DayIdx) -> StaticRunStatus {
+        let key = StaticInstance { transport: transport.0, day: day.0 };
+        if self.cancelled_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Cancelled
+        } else if self.suppressed_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Replaced
+        } else {
+            StaticRunStatus::Scheduled
+        }
+    }
+
     pub fn is_static_suppressed(&self, transport: TransportIdx, day: DayIdx) -> bool {
         self.suppressed_static
             .binary_search(&StaticInstance {
@@ -195,6 +235,7 @@ pub struct RealtimeOverlayBuilder<'tt, 'data> {
     dynamic_patterns: Vec<Vec<PackedStop>>,
     dynamic_by_hash: HashMap<(usize, u64), Vec<u32>>,
     suppressed: BTreeSet<StaticInstance>,
+    cancelled: BTreeSet<StaticInstance>,
 }
 
 impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
@@ -217,6 +258,7 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             dynamic_patterns: Vec::new(),
             dynamic_by_hash: HashMap::new(),
             suppressed: BTreeSet::new(),
+            cancelled: BTreeSet::new(),
         }
     }
 
@@ -244,6 +286,7 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             dynamic_patterns: Vec::new(),
             dynamic_by_hash: HashMap::new(),
             suppressed: BTreeSet::new(),
+            cancelled: BTreeSet::new(),
         }
     }
 
@@ -266,7 +309,10 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         day: DayIdx,
     ) -> Result<(), OverlayError> {
         let instance = self.instance(transport, day)?;
-        self.suppressed.insert(instance);
+        if !self.suppressed.insert(instance) {
+            return Err(OverlayError::DuplicateStaticInstance);
+        }
+        self.cancelled.insert(instance);
         Ok(())
     }
 
@@ -346,6 +392,9 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
         {
             return Err(OverlayError::InvalidEvents);
         }
+        if input.metadata.as_ref().is_some_and(|m| !m.validate(input.event_times.len(), stop_count)) {
+            return Err(OverlayError::InvalidEvents);
+        }
         // Validate the entire time sequence before mutating the builder.
         let offsets = input
             .event_times
@@ -375,6 +424,11 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             event_to: to,
         });
         self.snapshot.pattern_runs.entry(pattern).or_default().push(run_id);
+        if let Some(meta) = input.metadata {
+            if !meta.events.is_empty() || !meta.stops.is_empty() {
+                self.snapshot.run_metadata.push((run_id, meta));
+            }
+        }
         if let Some(key) = original {
             self.suppressed.insert(key);
         }
@@ -392,6 +446,7 @@ impl<'tt, 'data> RealtimeOverlayBuilder<'tt, 'data> {
             self.snapshot.dynamic_pattern_stops.extend(stops.into_iter().map(|s| s.0));
         }
         self.snapshot.suppressed_static = self.suppressed.into_iter().collect();
+        self.snapshot.cancelled_static = self.cancelled.into_iter().collect();
         // A circular route lists a stop once in the inverted index, but its
         // original stop occurrences remain in the canonical pattern.
         for &pattern in self.snapshot.pattern_runs.keys() {
