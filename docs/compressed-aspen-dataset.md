@@ -123,3 +123,33 @@ empty non-trip metadata. Real savings depend on feed density, nested rail data,
 and the fraction of memory in trip updates. The scan benchmark demonstrates a
 read-cost tradeoff, not a speedup claim. Profile representative production
 snapshots to measure steady-state RSS, rebuild peaks, and conversion latency.
+
+## V2: lossless shared stop patterns
+
+New Aspen authoritative and backup snapshots use V2. Historical V1 bincode
+snapshots retain their exact original trip/stop representation and are decoded
+through a frozen V1 module. Borrowed V1 access lazily converts that snapshot
+once; no RPC schema or GTFS-RT source field changes.
+
+V2 interns the entire ordered triple (snapshot dictionary stop ID, u16 GTFS
+stop_sequence, presence bit), not just individual stop strings. A builder-local
+hash table finds candidate patterns, and full equality checks resolve collisions.
+A repeating or circular stop can occur at multiple ordinals with different
+stop_sequence values. The new hot row stores only event offset and flags; all
+per-stop event, platform, relationship and occupancy values remain separate.
+
+The compressor chooses shared patterns only when the estimated row+dictionary
+memory is smaller than original 12-byte flat rows; feeds with entirely unique
+patterns keep the flat representation. Builder dictionaries are discarded after
+snapshot publication. On the 2,000-trip/40-stop identical-pattern bus fixture,
+the expected incremental saving is approximately 312 KB relative to the
+preexisting compressed snapshot (not relative to uncompressed Aspen), before
+allocator overhead. Actual production RSS and compression CPU are unmeasured.
+
+Validation: run
+`cargo test --locked --manifest-path tools/aspen-compression-check/Cargo.toml`
+and
+`cargo run --locked --release --manifest-path tools/aspen-compression-check/Cargo.toml --bin measure`.
+Tests cover shared patterns with distinct event times, unique-pattern fallback,
+circular stops, absent versus Some(0), absent versus empty stop IDs, V2 binary
+round-trip and historical V1 deserialization.
