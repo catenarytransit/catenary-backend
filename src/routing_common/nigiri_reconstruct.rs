@@ -94,7 +94,8 @@ fn find_transport(
                         alight_stop_index: alight,
                         departure_unix_seconds: departure,
                         arrival_unix_seconds: arrival,
-                    });
+                        realtime: None,
+});
                 }
             }
         }
