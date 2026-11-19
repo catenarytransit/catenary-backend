@@ -27,6 +27,13 @@ pub struct RegionRtPattern {
     pub pattern: RtPatternRef,
 }
 
+/// Run handle scoped to one pinned regional realtime snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RegionRtRun {
+    pub chateau_slot: u32,
+    pub run_index: u32,
+}
+
 /// Immutable, independently versioned chateau sub-overlay.
 #[derive(Clone)]
 pub struct ChateauRealtimeShard {
@@ -179,6 +186,38 @@ impl RegionRealtimeSnapshot {
             .flat_map(move |shard| shard.overlay.runs_for(pattern.pattern))
     }
 
+    /// Stable handles into this exact regional revision, suitable for
+    /// carrying through RAPTOR round labels and journey reconstruction.
+    /// Do not persist these across calls to Router::pin_realtime.
+    pub fn run_handles_for(
+        &self, pattern: RegionRtPattern,
+    ) -> impl Iterator<Item = RegionRtRun> + '_ {
+        self.chateaux
+            .get(pattern.chateau_slot as usize)
+            .into_iter()
+            .flat_map(move |shard| {
+                shard.overlay.pattern_runs
+                    .get(&pattern.pattern)
+                    .into_iter()
+                    .flat_map(|runs| runs.iter())
+            })
+            .map(move |&run_index| RegionRtRun {
+                chateau_slot: pattern.chateau_slot,
+                run_index,
+            })
+    }
+
+    pub fn run(&self, handle: RegionRtRun) -> Option<&RtRun> {
+        self.chateaux.get(handle.chateau_slot as usize)?
+            .overlay.runs.get(handle.run_index as usize)
+    }
+
+    pub fn run_event_time(&self, handle: RegionRtRun, slot: usize) -> Option<i64> {
+        let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
+        let run = overlay.runs.get(handle.run_index as usize)?;
+        overlay.event_time(run, slot)
+    }
+
     pub fn stops<'a, 't>(
         &'a self,
         tt: &'t ZeroCopyTimetable<'_>,
@@ -298,6 +337,10 @@ mod tests {
         assert_eq!(pat.chateau_slot, 0);
         assert_eq!(region.runs_for(pat).count(), 1);
         assert_eq!(region.event_time(pat, region.runs_for(pat).next().unwrap(), 0), Some(epoch + 1));
+        let run = region.run_handles_for(pat).next().unwrap();
+        assert_eq!(run.chateau_slot, 0);
+        assert_eq!(region.run(run).unwrap().service_date, 20_000);
+        assert_eq!(region.run_event_time(run, 0), Some(epoch + 1));
         assert_eq!(region.stops(&tt, pat).unwrap()[0].location(), LocationIdx(0));
         let other_pat = region.patterns_at(LocationIdx(2))[0];
         assert_eq!(other_pat.chateau_slot, 1);
