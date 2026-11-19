@@ -221,6 +221,22 @@ mod tests {
         assert_eq!(event(None, Some(time), Some(RtEventKind::NoData)), json!({}));
     }
     #[test]
+    fn call_status_does_not_mark_an_entire_trip_cancelled() {
+        let mut call = json!({"name":"Union Station"});
+        emit_call(&mut call,
+            Some(json!({"TimetabledTime":"2026-11-19T11:00:00Z"})),
+            Some(json!({"EstimatedTime":"2026-11-19T11:01:00Z"})),
+            Some("4"), Some("5"), true, false, true);
+        assert_eq!(call["ServiceArrival"]["TimetabledTime"], "2026-11-19T11:00:00Z");
+        assert_eq!(call["ServiceDeparture"]["EstimatedTime"], "2026-11-19T11:01:00Z");
+        assert_eq!(call["PlannedQuay"], "4");
+        assert_eq!(call["EstimatedQuay"], "5");
+        assert_eq!(call["NotServicedStop"], true);
+        assert_eq!(call["NoBoardingAtStop"], true);
+        assert!(call.get("Cancelled").is_none());
+    }
+
+    #[test]
     fn keeps_planned_and_estimated_quays_distinct() {
         let mut call = json!({});
         quays(&mut call, Some("1"), Some("2"));
