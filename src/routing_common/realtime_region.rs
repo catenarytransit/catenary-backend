@@ -10,6 +10,7 @@
 //! A snapshot with missing chateaux is explicitly incomplete and MUST NOT
 //! be treated as complete realtime coverage.
 
+use crate::routing_common::realtime_status::{RtEventKind, RtRunMetadata, StaticRunStatus};
 use crate::routing_common::realtime_overlay::{
     RealtimeOverlay, RtPatternRef, RtRun, StaticInstance,
 };
@@ -57,6 +58,7 @@ pub struct RegionRealtimeSnapshot {
     // Sorted compact union; a persistent BTreeSet would allocate a node
     // per canceled transport-day instance on every regional revision.
     suppressed_static: Vec<StaticInstance>,
+    cancelled_static: Vec<StaticInstance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +95,7 @@ impl RegionRealtimeSnapshot {
         let event_epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut location_patterns = BTreeMap::<u32, Vec<RegionRtPattern>>::new();
         let mut suppressed_static = BTreeSet::new();
+        let mut cancelled_static = BTreeSet::new();
         let mut chateaux = Vec::with_capacity(shards.len());
         let mut observed = BTreeSet::new();
 
@@ -134,6 +137,12 @@ impl RegionRealtimeSnapshot {
                     index.push(RegionRtPattern { chateau_slot, pattern });
                 }
             }
+            for &instance in &shard.overlay.cancelled_static {
+                if !shard.overlay.suppressed_static.binary_search(&instance).is_ok() {
+                    return Err(RegionSnapshotError::SuppressionCollision);
+                }
+                cancelled_static.insert(instance);
+            }
             for &instance in &shard.overlay.suppressed_static {
                 if !suppressed_static.insert(instance) {
                     // Two independent chateaux must never both suppress the
@@ -156,6 +165,7 @@ impl RegionRealtimeSnapshot {
             missing_chateaux,
             location_patterns,
             suppressed_static: suppressed_static.into_iter().collect(),
+            cancelled_static: cancelled_static.into_iter().collect(),
         })
     }
 
@@ -217,6 +227,16 @@ impl RegionRealtimeSnapshot {
             .overlay.runs.get(handle.run_index as usize)
     }
 
+    pub fn run_metadata(&self, handle: RegionRtRun) -> Option<&RtRunMetadata> {
+        let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
+        overlay.run_metadata(handle.run_index)
+    }
+
+    pub fn run_event_kind(&self, handle: RegionRtRun, slot: usize) -> Option<RtEventKind> {
+        let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
+        overlay.event_kind(handle.run_index, slot)
+    }
+
     pub fn run_event_time(&self, handle: RegionRtRun, slot: usize) -> Option<i64> {
         let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
         let run = overlay.runs.get(handle.run_index as usize)?;
@@ -238,6 +258,19 @@ impl RegionRealtimeSnapshot {
     pub fn event_time(&self, pattern: RegionRtPattern, run: &RtRun, slot: usize) -> Option<i64> {
         let overlay = &self.chateaux.get(pattern.chateau_slot as usize)?.overlay;
         overlay.event_time(run, slot)
+    }
+
+    /// Important for saved/SingleTrip views: a cancelled static instance is
+    /// still addressable after it has disappeared from normal RAPTOR scans.
+    pub fn static_status(&self, transport: TransportIdx, day: DayIdx) -> StaticRunStatus {
+        let key = StaticInstance { transport: transport.0, day: day.0 };
+        if self.cancelled_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Cancelled
+        } else if self.suppressed_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Replaced
+        } else {
+            StaticRunStatus::Scheduled
+        }
     }
 
     pub fn is_static_suppressed(&self, transport: TransportIdx, day: DayIdx) -> bool {
