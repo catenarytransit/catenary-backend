@@ -929,8 +929,10 @@ fn realtime_transit_leg(
         "chateau":meta.chateau,
         "tripStartDate":instance.as_ref().map(|v| &v.0).or(gtfs_date.as_ref()),
         "tripStartTime":instance.as_ref().map(|v| v.1.as_str()).or(realtime_start_time),
-        "fromStopSequence":meta.stop_sequences.get(*board_stop_index),
-        "toStopSequence":meta.stop_sequences.get(*alight_stop_index),
+        // Original GTFS stop_sequence numbers are not position-aligned
+        // when a detour inserts or removes intermediate occurrences.
+        "fromStopSequence":aligned_original.and_then(|_| meta.stop_sequences.get(*board_stop_index)),
+        "toStopSequence":aligned_original.and_then(|_| meta.stop_sequences.get(*alight_stop_index)),
         "routeShortName":meta.short_name,"routeLongName":meta.long_name,
         "tripShortName":meta.trip_short_name,"headsign":meta.headsign,
         "routeColor":meta.route_color,"routeTextColor":meta.route_text_color,
