@@ -401,6 +401,24 @@ macro_rules! columns {
                 tt.validate()?;
                 Ok(tt)
             }
+            /// Fast startup reader for trusted, atomically published Gentian timetables.
+            /// Checks every column's bounds/alignment and essential array shapes, but
+            /// deliberately avoids the full per-element semantic validation scan.
+            /// Do not use for untrusted files; Gentian's publish path uses new().
+            pub fn new_fast(b: &'a [u8]) -> Result<Self, FormatError> {
+                if b.len() < std::mem::size_of::<TimetableHeader>() {
+                    return Err(FormatError::Truncated);
+                }
+                let h: TimetableHeader = bytemuck::pod_read_unaligned(
+                    &b[..std::mem::size_of::<TimetableHeader>()]);
+                if h.magic != MAGIC { return Err(FormatError::Magic); }
+                if h.version != VERSION { return Err(FormatError::Version); }
+                if h.day_count as usize > MAX_DAYS { return Err(FormatError::Layout); }
+                $(view::<$ty>(b, h.$name)?;)*
+                let tt = Self { b, h };
+                tt.validate_fast_shape()?;
+                Ok(tt)
+            }
             pub fn header(&self) -> TimetableHeader { self.h }
 
             pub(crate) fn validated_header(&self) -> ValidatedTimetableHeader {
@@ -721,6 +739,70 @@ impl ZeroCopyTimetable<'_> {
         &self.osr_candidates()
             [offsets[location.idx()] as usize..offsets[location.idx() + 1] as usize]
     }
+}
+
+impl ZeroCopyTimetable<'_> {
+    /// O(1) structural checks for previously validated immutable timetables.
+    /// This does NOT establish deep semantic validity of an arbitrary input.
+    fn validate_fast_shape(&self) -> Result<(), FormatError> {
+        let n = self.coordinates().len();
+        let r = self.route_transport_ranges().len();
+        let t = self.transport_route().len();
+        let src = self.sources().len();
+        let trips = self.trip_transport_offsets().len()
+            .checked_sub(1).ok_or(FormatError::Layout)?;
+        if src >= u16::MAX as usize
+            || self.source_end_days().len() != src
+            || self.bitfields().first() != Some(&TrafficDays::default())
+        { return Err(FormatError::Layout); }
+        for len in [
+            self.location_id().len(), self.location_source().len(),
+            self.location_name().len(), self.location_parent().len(),
+            self.location_type().len(), self.location_transfer_seconds().len(),
+        ] {
+            if len != n { return Err(FormatError::Layout); }
+        }
+        for len in [self.route_clasz().len(), self.route_traffic_days().len()] {
+            if len != r { return Err(FormatError::Layout); }
+        }
+        for len in [
+            self.transport_traffic_days().len(), self.transport_timing_profile().len(),
+            self.transport_first_dep_offset().len(), self.transport_initial_day_offset().len(),
+        ] {
+            if len != t { return Err(FormatError::Layout); }
+        }
+        if self.trip_public_route_ids().len() != trips { return Err(FormatError::Layout); }
+        if !self.osr_match_graphs().is_empty() {
+            if self.osr_match_graphs().len() != 1
+                || self.osr_location_matches().len() != n {
+                return Err(FormatError::Layout);
+            }
+            check_csr_ends(self.osr_candidate_offsets(), self.osr_candidates().len(), n)?;
+        } else if !self.osr_location_matches().is_empty()
+            || !self.osr_candidate_offsets().is_empty()
+            || !self.osr_candidates().is_empty() {
+            return Err(FormatError::Layout);
+        }
+        check_csr_ends(self.location_routes_offsets(), self.location_routes().len(), n)?;
+        check_csr_ends(self.footpaths_out_offsets(), self.footpaths_out().len(), n)?;
+        check_csr_ends(self.footpaths_in_offsets(), self.footpaths_in().len(), n)?;
+        check_csr_ends(self.route_stop_offsets(), self.route_stops().len(), r)?;
+        check_csr_ends(self.route_section_clasz_offsets(), self.route_section_clasz().len(), r)?;
+        check_csr_ends(self.section_flag_offsets(), self.route_section_clasz().len(), r)?;
+        check_csr_ends(self.trip_transport_offsets(), self.trip_transport_ranges().len(), trips)?;
+        check_csr_ends(self.transport_to_trip_section_offsets(), self.transport_to_trip_section().len(), t)?;
+        check_csr_ends(self.merged_trip_offsets(), self.merged_trips().len(),
+            self.merged_trip_offsets().len().checked_sub(1).ok_or(FormatError::Layout)?)?;
+        Ok(())
+    }
+}
+fn check_csr_ends(offsets: &[u32], count: usize, rows: usize) -> Result<(), FormatError> {
+    if offsets.len() != rows.checked_add(1).ok_or(FormatError::Overflow)?
+        || offsets.first() != Some(&0)
+        || offsets.last().copied().map(|x| x as usize) != Some(count) {
+        return Err(FormatError::Layout);
+    }
+    Ok(())
 }
 
 impl ZeroCopyTimetable<'_> {
