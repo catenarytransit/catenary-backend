@@ -20,7 +20,7 @@ use crate::routing_common::realtime_status::{
 };
 use crate::routing_common::route_manager::PlatformStopMeta;
 use crate::routing_common::timetable::{
-    DayIdx, LocationIdx, PackedStop, RouteIdx, SourceIdx, TransportIdx, ZeroCopyTimetable,
+    DayIdx, LocationIdx, PackedStop, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
@@ -29,6 +29,7 @@ use serde::Serialize;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct OjpEventTime {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timetabled_time: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_time: Option<String>,
@@ -341,6 +342,14 @@ mod tests {
         assert_eq!(value["TimetabledTime"], "2026-11-19T16:00:00Z");
         assert_eq!(value["EstimatedTime"], "2026-11-19T16:04:30Z");
         assert!(value.get("RecordedAtTime").is_none());
+        let added = OjpEventTime {
+            timetabled_time: None,
+            estimated_time: Some("2026-11-19T16:05:00Z".into()),
+            recorded_at_time: None,
+        };
+        let added_value = serde_json::to_value(added).unwrap();
+        assert!(added_value.get("TimetabledTime").is_none());
+        assert_eq!(added_value["EstimatedTime"], "2026-11-19T16:05:00Z");
     }
 
     #[test]
