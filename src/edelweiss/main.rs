@@ -1165,7 +1165,8 @@ async fn main() -> Result<()> {
             .route("/", web::get().to(index))
             .route("/health", web::get().to(health))
             .route("/v1/route", web::post().to(route))
-            .route("/v1/route/ws", web::get().to(route_ws));
+            .route("/v1/route/ws", web::get().to(route_ws))
+            .route("/v2/regions/{region}/trips/{chateau}/{trip_id}", web::get().to(trip_v2::handle));
         if enable_footpath_debug {
             app.route(
                 "/v1/debug/footpaths",
