@@ -116,6 +116,50 @@ A later routing integration must merge chateau-local revisions into one
 generation-compatible region snapshot and implement correct RAPTOR/PONG
 scanning and reconstruction.
 
+## Region-wide immutable snapshot (stage 5)
+
+The V6 regional timetable already contains the exact
+\`(chateau, onestop_feed_id, attempt_id)\` tuples compiled by Gentian.
+Its source table defines which chateaux belong to a region, including those
+whose geography falls outside the region's own polygons. There is therefore
+**no new region-membership artifact** and no separate database lookup at
+runtime.
+
+After every complete Aspen RPC synchronization sweep, Edelweiss composes
+one \`RegionRealtimeSnapshot\` per changed region. The snapshot contains:
+
+- The static Gentian timetable fingerprint and UTC epoch.
+- A monotonic local publication sequence, plus a vector of the participating
+  chateaux's independent Aspen revisions (no fictitious global feed timestamp).
+- Shared \`Arc<RealtimeOverlay>\` chateau shards. The original compressed run
+  times and stop patterns remain in their own immutable arrays.
+- One sparse location index mapping stop -> (chateau slot, pattern ID) and one
+  sparse union of suppressed static (transport, UTC service day) instances.
+- Explicit \`expected_chateaux\` and \`missing_chateaux\` metadata. Missing
+  sources are *not* counted as complete realtime coverage.
+
+Publication shares the *same Arc object* between the Aspen synchronization
+cache and \`Router::TransitRegion.realtime\`. Searches can call
+\`router.pin_realtime(region_id)\`, keeping the whole region revision stable
+through RAPTOR round expansion, PONG, and reconstruction. Individual realtime
+run handles include the chateau slot so identical local pattern/run indices
+in different chateaux never collide.
+
+For memory efficiency, complete Aspen RPC pages and temporary GTFS ID
+resolution vectors are discarded once the run overlay has been built. The
+region snapshot adds only the shared-pointer array and sparse cross-chateau
+indices; it does not copy full event-time arrays during each update.
+
+When a chateau is no longer assigned to Aspen for five full synchronization
+passes, Edelweiss withdraws its source cache and publishes a region snapshot
+marked incomplete. The static timetable is unchanged; no stale suppression
+record from the withdrawn chateau survives in the newly published snapshot.
+Pinned older revisions remain immutable until their queries finish.
+
+The overlay remains **observe-only**: no realtime scans execute in production
+until both forward and reverse RAPTOR and reconstruction use these handles,
+and the route lower bounds are reviewed for realtime stop topology changes.
+
 ## Limitations before activating RAPTOR
 
 - RAPTOR, PONG and reconstruction currently ignore these source snapshots.
