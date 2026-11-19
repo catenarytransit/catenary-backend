@@ -13,6 +13,7 @@ pub mod routing_regions;
 pub mod realtime_overlay;
 pub mod realtime_source;
 pub mod realtime_status;
+pub mod realtime_scan;
 pub mod realtime_identity;
 pub mod realtime_prepare;
 pub mod realtime_region;
