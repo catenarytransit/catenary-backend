@@ -802,22 +802,16 @@ fn realtime_transit_leg(
     snapshot: &RegionRealtimeSnapshot,
     ride: &Leg,
     detailed: bool,
-    realtime: Option<&RegionRealtimeSnapshot>,
-) -> Value {
-    if let (Leg::Ride { realtime: Some(rt), .. }, Some(snapshot)) = (ride, realtime) {
-        if snapshot.publication_seq == rt.publication_seq {
-            return realtime_transit_leg(tt, index, info, snapshot, ride, detailed);
-        }
-    }
+) -> Result<Value> {
     let Leg::Ride {
         from_stop, to_stop, route, transport, board_stop_index,
         alight_stop_index, departure_unix_seconds, arrival_unix_seconds,
         realtime: Some(rt), ..
     } = ride else { unreachable!() };
-    let Some(run) = snapshot.run(rt.run) else { return json!({"error":"missing realtime run"}) };
-    let Some(stops) = snapshot.stops(tt, rt.pattern) else {
-        return json!({"error":"missing realtime stop pattern"})
-    };
+    anyhow::ensure!(snapshot.publication_seq == rt.publication_seq,
+        "realtime journey references an obsolete region revision");
+    let run = snapshot.run(rt.run).context("missing realtime run")?;
+    let stops = snapshot.stops(tt, rt.pattern).context("missing realtime stop pattern")?;
     let original = run.original;
     let mut meta = original
         .map(|o| trip_info(tt, index, info, o.transport))
@@ -923,7 +917,7 @@ fn realtime_transit_leg(
         "legGeometry":polyline(&shape),
         "realtimeSnapshotRevision":snapshot.publication_seq,
         "realtimeRun":rt.run,
-    })
+    }))
 }
 
 fn transit_leg(
@@ -932,7 +926,14 @@ fn transit_leg(
     info: &BTreeMap<(String, String, String), TripInfo>,
     ride: &Leg,
     detailed: bool,
-) -> Value {
+    realtime: Option<&RegionRealtimeSnapshot>,
+) -> Result<Value> {
+    if let Leg::Ride { realtime: Some(rt), .. } = ride {
+        let snapshot = realtime.context("RT ride cannot render without its pinned region snapshot")?;
+        anyhow::ensure!(snapshot.publication_seq == rt.publication_seq,
+            "RT ride references an obsolete region revision");
+        return realtime_transit_leg(tt, index, info, snapshot, ride, detailed);
+    }
     let Leg::Ride {
         from_stop,
         to_stop,
@@ -1023,7 +1024,7 @@ fn transit_leg(
         "directionId":meta.direction_id.map(|d|if d {"1"} else {"0"}),
         "intermediateStops":intermediate_stops,
         "legGeometry":polyline(&shape)
-    })
+    }))
 }
 
 pub fn build(
@@ -1107,7 +1108,7 @@ pub fn build(
                     arrival_unix_seconds,
                     ..
                 } => {
-                    legs.push(transit_leg(tt, index, &info, leg, detailed, realtime));
+                    legs.push(transit_leg(tt, index, &info, leg, detailed, realtime)?);
                     cursor = *arrival_unix_seconds;
                     previous = place(tt, *to_stop);
                 }
