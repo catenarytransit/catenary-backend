@@ -635,6 +635,123 @@ pub async fn synchronize(
 mod tests {
     use super::*;
 
+    fn fixture() -> Vec<u8> {
+        use catenary::routing_common::timetable::{
+            Coordinate, LocationIdx, StringRef, TimetableOwned,
+        };
+        let mut tt = TimetableOwned::empty(20_000, 4);
+        let a = tt.add_source("chateau-a", "feed-a", "attempt-a").unwrap();
+        let b = tt.add_source("chateau-b", "feed-b", "attempt-b").unwrap();
+        for source in [a, a, b, b] {
+            tt.coordinates.push(Coordinate::default());
+            tt.location_id.push(StringRef::default());
+            tt.location_name.push(StringRef::default());
+            tt.location_source.push(source);
+            tt.location_parent.push(LocationIdx::INVALID);
+            tt.location_type.push(0);
+            tt.location_transfer_seconds.push(120);
+            tt.location_routes_offsets.push(0);
+            tt.footpaths_out_offsets.push(0);
+            tt.footpaths_in_offsets.push(0);
+        }
+        tt.encode().unwrap()
+    }
+
+    fn source_snapshot(
+        tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+        name: &str, source: u16, revision: u64,
+    ) -> SourceSnapshot {
+        use catenary::routing_common::realtime_overlay::{
+            RealtimeOverlayBuilder, RtPatternInput,
+        };
+        use catenary::routing_common::timetable::{LocationIdx, PackedStop};
+        let mut builder = RealtimeOverlayBuilder::new_sparse(tt, [9; 32], revision);
+        let stop = u32::from(source) * 2;
+        let epoch = i64::from(tt.header().first_utc_day) * 86_400;
+        builder.add_run(RtRunInput {
+            source: SourceIdx(source),
+            original: None,
+            service_date: 20_000,
+            external_id: Some(format!("{name}-{revision}")),
+            pattern: RtPatternInput::Stops(vec![
+                PackedStop::new(LocationIdx(stop), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(stop + 1), true, true, true, true).unwrap(),
+            ]),
+            event_times: vec![epoch + revision as i64, epoch + revision as i64 + 100],
+        }).unwrap();
+        SourceSnapshot {
+            revision_ms: revision,
+            update_count: 1,
+            updates: Vec::new(),
+            resolved: Vec::new(),
+            overlays: BTreeMap::from([(0, Arc::new(builder.finish().unwrap()))]),
+            stats: ResolutionStats::default(),
+        }
+    }
+
+    #[test]
+    fn region_snapshot_is_atomic_across_chateaux_and_withdrawals() {
+        use catenary::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let expected = BTreeSet::from(["chateau-a".into(), "chateau-b".into()]);
+        let mut sources = HashMap::new();
+        sources.insert("chateau-a".into(), Arc::new(source_snapshot(&tt, "chateau-a", 0, 1)));
+        let initial = compose_region(&tt, [9; 32], 0, &expected, &sources, None)
+            .unwrap().unwrap();
+        assert_eq!(initial.publication_seq, 1);
+        assert!(!initial.is_complete());
+        assert_eq!(initial.missing_chateaux, ["chateau-b"]);
+        assert_eq!(initial.run_count(), 1);
+        let pinned = Arc::clone(&initial);
+
+        sources.insert("chateau-b".into(), Arc::new(source_snapshot(&tt, "chateau-b", 1, 1)));
+        let full = compose_region(&tt, [9; 32], 0, &expected, &sources, Some(&initial))
+            .unwrap().unwrap();
+        assert!(full.is_complete());
+        assert_eq!(full.run_count(), 2);
+        assert_eq!(full.publication_seq, 2);
+        assert_eq!(pinned.run_count(), 1);
+        assert!(Arc::ptr_eq(&pinned.chateaux[0].overlay, &full.chateaux[0].overlay));
+        assert_eq!(full.patterns_at(LocationIdx(2)).len(), 1);
+        assert_eq!(full.chateau_revisions().collect::<Vec<_>>(),
+            vec![("chateau-a", 1), ("chateau-b", 1)]);
+        assert!(compose_region(&tt, [9; 32], 0, &expected, &sources, Some(&full))
+            .unwrap().is_none());
+
+        sources.insert("chateau-a".into(), Arc::new(source_snapshot(&tt, "chateau-a", 0, 2)));
+        let replacement = compose_region(&tt, [9; 32], 0, &expected, &sources, Some(&full))
+            .unwrap().unwrap();
+        assert_eq!(replacement.publication_seq, 3);
+        assert!(Arc::ptr_eq(&full.chateaux[1].overlay, &replacement.chateaux[1].overlay));
+        assert!(!Arc::ptr_eq(&full.chateaux[0].overlay, &replacement.chateaux[0].overlay));
+        assert_eq!(full.chateau_revisions().collect::<Vec<_>>(),
+            vec![("chateau-a", 1), ("chateau-b", 1)]);
+        assert_eq!(replacement.chateau_revisions().collect::<Vec<_>>(),
+            vec![("chateau-a", 2), ("chateau-b", 1)]);
+
+        sources.remove("chateau-b");
+        let withdrawn = compose_region(&tt, [9; 32], 0, &expected, &sources, Some(&replacement))
+            .unwrap().unwrap();
+        assert!(!withdrawn.is_complete());
+        assert_eq!(withdrawn.missing_chateaux, ["chateau-b"]);
+        assert!(withdrawn.patterns_at(LocationIdx(2)).is_empty());
+        assert_eq!(full.run_count(), 2);
+    }
+
+    #[test]
+    fn region_builder_rejects_cross_generation_stale_chateau_overlay() {
+        use catenary::routing_common::timetable::ZeroCopyTimetable;
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let expected = BTreeSet::from(["chateau-a".to_owned()]);
+        let sources = HashMap::from([(
+            "chateau-a".to_owned(),
+            Arc::new(source_snapshot(&tt, "chateau-a", 0, 1)),
+        )]);
+        assert!(compose_region(&tt, [3; 32], 0, &expected, &sources, None).is_err());
+    }
+
     #[test]
     fn publish_is_monotonic_and_old_readers_remain_valid() {
         let snapshots = RealtimeSources::default();
