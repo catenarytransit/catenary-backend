@@ -353,6 +353,167 @@ mod tests {
     }
 
     #[test]
+    fn scheduled_trip_preserves_original_times_quays_and_skipped_calls() {
+        use crate::routing_common::realtime_identity::{
+            GtfsIdentityBuilder, ResolvedInstance,
+        };
+        use crate::routing_common::realtime_overlay::{
+            RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
+        };
+        use crate::routing_common::realtime_region::ChateauRealtimeShard;
+        use crate::routing_common::realtime_status::{
+            RtEventAnnotation, RtRunMetadata, RtStopChange,
+        };
+        use crate::routing_common::timetable::{
+            BitfieldIdx, Clasz, Coordinate, Delta, Range, TimingProfileIdx,
+            TimetableOwned, TrafficDays, TripIdx, TripTransportRange,
+        };
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut owned = TimetableOwned::empty(20_000, 4);
+        let src = owned.add_source("test-chateau", "test-feed", "attempt").unwrap();
+        for id in ["A", "B", "C", "A-platform"] {
+            let ref_id = owned.add_string(id).unwrap();
+            owned.coordinates.push(Coordinate::default());
+            owned.location_id.push(ref_id);
+            owned.location_name.push(ref_id);
+            owned.location_source.push(src);
+            owned.location_parent.push(LocationIdx::INVALID);
+            owned.location_type.push(0);
+            owned.location_transfer_seconds.push(90);
+            owned.location_routes_offsets.push(0);
+            owned.footpaths_out_offsets.push(0);
+            owned.footpaths_in_offsets.push(0);
+        }
+        for loc in 0..3 {
+            owned.route_stops.push(
+                PackedStop::new(LocationIdx(loc), true, true, true, true).unwrap()
+            );
+        }
+        owned.route_stop_offsets.push(3);
+        owned.route_transport_ranges.push(Range { from: 0, to: 1 });
+        owned.route_clasz.push(Clasz::Bus as u8);
+        owned.route_section_clasz_offsets.push(0);
+        owned.section_flag_offsets.push(0);
+        let mut days = TrafficDays::default();
+        days.set(0, true).unwrap();
+        owned.bitfields.push(days);
+        owned.route_traffic_days.push(BitfieldIdx(1));
+        owned.transport_traffic_days.push(BitfieldIdx(1));
+        owned.transport_route.push(crate::routing_common::timetable::RouteIdx(0));
+        owned.transport_timing_profile.push(TimingProfileIdx(0));
+        owned.transport_first_dep_offset.push(Delta::from_seconds(3600).unwrap());
+        owned.transport_initial_day_offset.push(0);
+        for sec in [0, 900, 960, 1800] {
+            owned.timing_profile_events.push(Delta::from_seconds(sec).unwrap());
+        }
+        owned.timing_profile_offsets.push(4);
+        let public_route = owned.add_route_id(src, "76").unwrap();
+        owned.trip_public_route_ids.push(public_route);
+        owned.add_trip_id(src, TripIdx(0), "trip-1").unwrap();
+        owned.trip_transport_ranges.push(TripTransportRange {
+            transport: TransportIdx(0), stop_from: 0, stop_to: 3,
+        });
+        owned.trip_transport_offsets.push(1);
+        owned.transport_to_trip_section_offsets.push(0);
+
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut ids = GtfsIdentityBuilder::default();
+        ids.push("UTC", "weekday", 3600, &[17, 26, 44]).unwrap();
+        let catalog = ids.finish(&tt).unwrap();
+        let epoch = i64::from(tt.header().first_utc_day) * 86_400;
+        let mut modified = tt.stops_on(crate::routing_common::timetable::RouteIdx(0)).to_vec();
+        modified[0] = PackedStop::new(LocationIdx(3), true, true, true, true).unwrap();
+        modified[1] = PackedStop::new(LocationIdx(1), false, false, false, false).unwrap();
+        let mut builder = RealtimeOverlayBuilder::new_sparse(
+            &tt, catalog.timetable_fingerprint, 5,
+        );
+        builder.add_run(RtRunInput {
+            source: src,
+            original: Some((TransportIdx(0), DayIdx(0))),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Stops(modified),
+            event_times: vec![epoch+3720, epoch+4620, epoch+4680, epoch+5520],
+            metadata: Some(RtRunMetadata {
+                events: (0..4).map(|slot| RtEventAnnotation {
+                    slot, kind: RtEventKind::Estimated,
+                }).collect(),
+                stops: vec![
+                    RtStopChange {
+                        position: 0, skipped: false, no_data: false,
+                        original_location: Some(0),
+                    },
+                    RtStopChange {
+                        position: 1, skipped: true, no_data: false,
+                        original_location: None,
+                    },
+                ],
+            }),
+        }).unwrap();
+        let expected = BTreeSet::from(["test-chateau".to_owned()]);
+        let region = RegionRealtimeSnapshot::compose(
+            &tt, catalog.timetable_fingerprint, 1, &expected,
+            vec![ChateauRealtimeShard {
+                chateau: "test-chateau".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap();
+        let instance = ResolvedInstance {
+            transport: TransportIdx(0),
+            service_day_utc: DayIdx(0),
+            trip: TripIdx(0),
+            source: src,
+        };
+        let platforms = ["1", "2", "3", "4"].iter().map(|s| PlatformStopMeta {
+            platform_code: (*s).to_owned(), route_names: Vec::new(),
+        }).collect::<Vec<_>>();
+        let service_date = NaiveDate::from_ymd_opt(2024, 10, 4).unwrap();
+        let response = scheduled_trip(
+            &tt, &catalog, &platforms, Some(&region),
+            instance, "trip-1", service_date,
+        ).unwrap();
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(json["Cancelled"], false);
+        assert_eq!(json["Deviation"], true);
+        assert_eq!(json["Calls"][0]["PlannedQuay"], "1");
+        assert_eq!(json["Calls"][0]["EstimatedQuay"], "4");
+        assert_eq!(json["Calls"][0]["OriginalStopPointRef"], "A");
+        assert_eq!(json["Calls"][0]["StopPointRef"], "A-platform");
+        assert_eq!(json["Calls"][0]["GtfsStopSequence"], 17);
+        assert_eq!(json["Calls"][0]["ServiceDeparture"]["TimetabledTime"],
+            instant(epoch + 3600).unwrap());
+        assert_eq!(json["Calls"][0]["ServiceDeparture"]["EstimatedTime"],
+            instant(epoch + 3720).unwrap());
+        assert!(json["Calls"][1]["NotServicedStop"].as_bool().unwrap());
+        assert!(json["Calls"][1]["NoBoardingAtStop"].as_bool().unwrap());
+        assert!(json["Calls"][1]["NoAlightingAtStop"].as_bool().unwrap());
+
+        let mut cancel = RealtimeOverlayBuilder::new_sparse(
+            &tt, catalog.timetable_fingerprint, 6,
+        );
+        cancel.cancel_static(TransportIdx(0), DayIdx(0)).unwrap();
+        let cancelled_region = RegionRealtimeSnapshot::compose(
+            &tt, catalog.timetable_fingerprint, 2, &expected,
+            vec![ChateauRealtimeShard {
+                chateau: "test-chateau".into(),
+                overlay: Arc::new(cancel.finish().unwrap()),
+            }],
+        ).unwrap();
+        let cancelled_trip = scheduled_trip(
+            &tt, &catalog, &platforms, Some(&cancelled_region),
+            instance, "trip-1", service_date,
+        ).unwrap();
+        let cancelled_json = serde_json::to_value(cancelled_trip).unwrap();
+        assert_eq!(cancelled_json["Cancelled"], true);
+        assert_eq!(cancelled_json["Calls"][0]["ServiceDeparture"]["TimetabledTime"],
+            instant(epoch+3600).unwrap());
+        assert!(cancelled_json["Calls"][0]["ServiceDeparture"].get("EstimatedTime").is_none());
+    }
+
+    #[test]
     fn cancellation_is_service_level_and_stop_skip_is_call_level() {
         let trip = OjpTripDetail {
             trip_ref: "T".into(), chateau: "A".into(), feed_id: "f".into(),
