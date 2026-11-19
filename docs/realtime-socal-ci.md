@@ -1,15 +1,30 @@
 # Southern California realtime snapshot integration test
 
 The existing [SoCal GitHub Actions workflow](../.github/workflows/routing-regions-socal.yml)
-already builds a **real** native OSR graph from the Geofabrik Southern
-California extract, imports Maple GTFS feeds, compiles a Gentian regional
-timetable, and runs RAPTOR queries.
+already builds a **real** native OSR graph from Geofabrik's
+[California parent extract](https://download.geofabrik.de/north-america/us/california-latest.osm.pbf),
+imports **only Southern California** Maple GTFS feeds, compiles a Gentian
+regional timetable, and runs RAPTOR queries. The graph and selection boundary
+cover California, but the feed allowlist and trip-planning fixtures remain
+Southern California.
 
 This stage adds tests for the RAM-only Aspen/Gentian/Edelweiss realtime overlay.
 
 ## Ordinary pull requests: deterministic
 
 The regular SoCal job (on matching PRs) now checks:
+
+The workflow obtains the canonical `california.poly` Geofabrik boundary,
+converts it to `routing_regions/california.geojson` using
+`src/routing_regions/prepare_socal_test.py --poly`, and tells the OSM manager
+to download `north-america/us/california-latest.osm.pbf`.
+The native graph is loaded at `temp/osr-data/regions/north-america/us/california`.
+The old `california/socal` PBF and auxiliary `socal.geojson` URLs are no
+longer dependencies. Geofabrik's parent file is larger and builds may use
+more disk space and CPU. Retrying or switching paths cannot solve a
+host-wide connection outage from a GitHub Actions runner.
+
+
 
 1. Gentian publishes its timetable and \`southern-california.rt-identities.bin\`
    companion containing original GTFS-local service identities, timezone
