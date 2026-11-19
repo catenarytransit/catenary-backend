@@ -1,5 +1,7 @@
 //! Geofabrik -> OSR data manager. Independent of the backend's heavyweight dependencies.
 use anyhow::{Context, Result, bail, ensure};
+#[path = "../../routing_common/osr_graph_identity.rs"]
+mod osr_graph_identity;
 use clap::{Parser, Subcommand};
 use geojson::{Feature, FeatureCollection, GeoJson, Geometry, Value};
 use reqwest::blocking::Client;
@@ -30,6 +32,8 @@ struct Args {
 enum Action {
     /// Check for Geofabrik updates, build and publish regions.
     Run,
+    /// Generate fingerprints for existing OSR graphs without compiling them.
+    Fingerprint,
     /// Find the smallest configured region containing a coordinate (offline).
     Locate {
         #[arg(long)]
@@ -115,6 +119,7 @@ fn main() -> Result<()> {
     ensure!(cfg.data_dir != cfg.temp_dir, "data_dir and temp_dir must be different");
 
     match args.command.unwrap_or(Action::Run) {
+        Action::Fingerprint => backfill_fingerprints(&cfg.data_dir),
         Action::Locate { lat, lon } => {
             ensure!(lat.is_finite() && lon.is_finite() && (-90.0..=90.0).contains(&lat)
                 && (-180.0..=180.0).contains(&lon), "invalid latitude or longitude");
@@ -507,6 +512,41 @@ fn publish(staging: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+
+fn publish_graph_identity(dir: &Path) -> Result<()> {
+    let identity = osr_graph_identity::compute(dir)?;
+    let target = dir.join(osr_graph_identity::IDENTITY_FILE);
+    let temporary = dir.join(format!(".graph-identity-{}.tmp", nonce()?));
+    let result = (|| -> Result<()> {
+        write_json(&temporary, &identity)?;
+        fs::rename(&temporary, &target)?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = fs::remove_file(&temporary); }
+    result
+}
+
+/// Offline backfill: no network, no OSR compiler and no timetable rebuild.
+fn backfill_fingerprints(data_dir: &Path) -> Result<()> {
+    let _lock = Lock::acquire(data_dir)?;
+    let registry: serde_json::Value = serde_json::from_slice(
+        &fs::read(data_dir.join("regions.geojson"))?)?;
+    let regions = registry["features"].as_array()
+        .context("OSR registry missing features")?;
+    for region in regions {
+        let id = region["properties"]["id"].as_str()
+            .context("OSR registry missing region ID")?;
+        ensure!(!id.starts_with('/') &&
+            id.split('/').all(|part| !part.is_empty() && part != "." && part != ".."),
+            "invalid OSR region ID");
+        let dir = data_dir.join("regions").join(id);
+        validate_osr_output(&dir)?;
+        publish_graph_identity(&dir)?;
+        println!("OSR fingerprint written: {}", id);
+    }
+    Ok(())
+}
+
 fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
               extractor_md5: &str, force: bool) -> Result<()> {
     let output = cfg.data_dir.join("regions").join(&region.id);
@@ -522,6 +562,9 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
                     && previous.extractor_md5.as_deref() == Some(extractor_md5)
                     && previous.with_platforms
                 {
+                    if !output.join(osr_graph_identity::IDENTITY_FILE).is_file() {
+                        publish_graph_identity(&output)?;
+                    }
                     println!("{}: current ({revision}), skipping extract", region.id);
                     return Ok(());
                 }
@@ -573,6 +616,7 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
             with_platforms: true,
         };
         write_json(&staging.join("manifest.json"), &manifest)?;
+        publish_graph_identity(&staging)?;
         publish(&staging, &output)?;
         Ok(())
     })();
