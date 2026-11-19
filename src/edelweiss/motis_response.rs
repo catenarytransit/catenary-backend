@@ -914,7 +914,7 @@ fn realtime_transit_leg(
     let stop_changes = snapshot.run_metadata(rt.run);
     let deviation = original.is_some() && (!shape_unchanged || stop_changes.is_some_and(|m|
         m.stops.iter().any(|s| s.skipped || s.original_location.is_some())));
-    json!({
+    Ok(json!({
         "mode":transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied()),
         "from":from,"to":to,
         "duration":end.saturating_sub(start),
