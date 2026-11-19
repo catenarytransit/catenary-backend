@@ -135,8 +135,13 @@ one \`RegionRealtimeSnapshot\` per changed region. The snapshot contains:
   times and stop patterns remain in their own immutable arrays.
 - One sparse location index mapping stop -> (chateau slot, pattern ID) and one
   sparse union of suppressed static (transport, UTC service day) instances.
-- Explicit \`expected_chateaux\` and \`missing_chateaux\` metadata. Missing
-  sources are *not* counted as complete realtime coverage.
+- Explicit expected and missing realtime chateau coverage. The expected
+  set contains only chateaux **observed in Aspen assignments**, intersected
+  with the static Gentian region source table. Static GTFS chateaux that have
+  no realtime feeds do not block coverage. A previously observed chateau
+  remains expected if its Aspen assignment disappears and is marked missing
+  until its feed returns. A region is not marked ready until one Aspen
+  synchronization sweep completes.
 
 Publication shares the *same Arc object* between the Aspen synchronization
 cache and \`Router::TransitRegion.realtime\`. Searches can call
