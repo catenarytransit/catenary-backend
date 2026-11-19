@@ -127,10 +127,11 @@ impl RealtimeSources {
                     .with_context(|| format!("validating {}", sidecar_path.display()))?;
                 // An empty baseline is incomplete until every chateau is
                 // fetched, including those with zero realtime changes.
-                let baseline = RegionRealtimeSnapshot::compose(
+                let baseline = Arc::new(RegionRealtimeSnapshot::compose(
                     &tt, catalog.timetable_fingerprint, 0, &expected, Vec::new(),
-                )?;
-                region_snapshots.insert(region.id.clone(), Arc::new(baseline));
+                )?);
+                router.publish_realtime(&region.id, Arc::clone(&baseline))?;
+                region_snapshots.insert(region.id.clone(), baseline);
                 identity_catalogs.insert(region.id.clone(), Arc::new(catalog));
             } else {
                 eprintln!("Edelweiss routing source sync: region {} has no GTFS service-identity sidecar yet; compile Gentian with this PR", region.id);
@@ -374,6 +375,9 @@ impl RealtimeSources {
             .unwrap_or_else(|e| e.into_inner());
         let count = pending.len();
         for (id, snapshot) in pending {
+            // Publish the exact same Arc into the owning TransitRegion.
+            // Queries can pin it directly through Router::pin_realtime.
+            router.publish_realtime(&id, Arc::clone(&snapshot))?;
             regions.insert(id, snapshot);
         }
         Ok(count)
@@ -552,7 +556,25 @@ pub async fn synchronize(
 
     let chateaux: Vec<String> = sources.chateaux().into_iter().collect();
     eprintln!("Edelweiss routing source sync: {} chateaux; RAM-only, observe-only mode", chateaux.len());
+    let mut unassigned_passes = HashMap::<String, u8>::new();
     loop {
+        // Protect against indefinite retention of a cancelled or delayed run
+        // when its Aspen assignment disappears. Transient etcd gaps are
+        // tolerated for five passes; then this chateau becomes explicitly
+        // missing from the next region snapshot (static service is untouched).
+        for chateau in &chateaux {
+            if assignments.get(chateau).is_none() {
+                let missed = unassigned_passes.entry(chateau.clone()).or_default();
+                *missed = missed.saturating_add(1);
+                if *missed == 5 && sources.withdraw_chateau(chateau) {
+                    eprintln!(
+                        "Edelweiss RT source {chateau}: withdrew stale RAM overlay after 5 missing assignment sweeps"
+                    );
+                }
+            } else {
+                unassigned_passes.remove(chateau);
+            }
+        }
         futures::stream::iter(chateaux.iter().cloned())
             .for_each_concurrent(SYNC_CONCURRENCY, |chateau| {
                 let sources = Arc::clone(&sources);
