@@ -237,11 +237,17 @@ impl NativeOsr {
         let started = std::time::Instant::now();
         let eligible = features
             .iter()
-            .filter_map(|feature| {
-                let id = feature["properties"]["id"].as_str()?;
-                (!config.osr_worker.excluded_regions.contains(id)).then_some(feature)
+            .filter(|feature| {
+                feature["properties"]["id"]
+                    .as_str()
+                    .is_some_and(|id| !config.osr_worker.excluded_regions.contains(id))
             })
             .collect::<Vec<_>>();
+        // Malformed registry entries must not become silently invisible.
+        ensure!(
+            features.iter().all(|f| f["properties"]["id"].as_str().is_some()),
+            "OSR region missing id"
+        );
         use rayon::prelude::*;
         let loaded = pool.install(|| {
             eligible.par_iter().map(|feature| -> Result<(String, Graph)> {
