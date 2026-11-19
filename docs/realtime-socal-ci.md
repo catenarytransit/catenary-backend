@@ -19,6 +19,11 @@ converts it to `routing_regions/california.geojson` using
 `src/routing_regions/prepare_socal_test.py --poly`, and tells the OSM manager
 to download `north-america/us/california-latest.osm.pbf`.
 The native graph is loaded at `temp/osr-data/regions/north-america/us/california`.
+The native OSR worker may report that `elevation_data.bin` does not exist;
+that data is optional for this stage. The CI smoke test verifies the actual
+`Opened native OSR Read metadata` (or `Mmap` mode) log and that the worker is
+listening. It does **not** require elevation generation or suppress genuine
+routing-graph startup errors.
 The old `california/socal` PBF and auxiliary `socal.geojson` URLs are no
 longer dependencies. Geofabrik's parent file is larger and builds may use
 more disk space and CPU. Retrying or switching paths cannot solve a
