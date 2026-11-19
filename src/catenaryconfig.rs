@@ -120,6 +120,52 @@ pub struct AlpenroseConfig {
     pub etcd_username: Option<String>,
     pub etcd_password: Option<String>,
     pub only_feed_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub platform_endpoints: PlatformEndpointsConfig,
+    /// Base URL for Darwin formation data; DARWIN_RT_URL still takes precedence.
+    pub darwin_rt_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PlatformEndpointsConfig {
+    /// Complete URL of the Île-de-France platform JSON endpoint.
+    pub ile_de_france: Option<String>,
+    /// Complete URL of the Denmark platform JSON endpoint.
+    pub danmark: Option<String>,
+    /// Complete URL of the Darwin/National Rail platforms-v2 JSON endpoint.
+    pub darwin: Option<String>,
+}
+
+impl PlatformEndpointsConfig {
+    pub fn ile_de_france_url(&self) -> &str {
+        self.ile_de_france
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or("http://localhost:46299/platforms")
+    }
+
+    pub fn danmark_url(&self) -> &str {
+        self.danmark
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or("http://localhost:46372/platforms")
+    }
+
+    pub fn darwin_url(&self) -> &str {
+        self.darwin
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or("http://localhost:26993/platforms-v2")
+    }
+}
+
+impl AlpenroseConfig {
+    pub fn darwin_rt_base_url(&self) -> &str {
+        self.darwin_rt_url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or("http://localhost:3000")
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -469,5 +515,85 @@ impl ElasticsearchConfig {
         } else if let Ok(value) = std::env::var("ELASTICSEARCH_URL") {
             self.urls = Some(parse_comma_separated(&value));
         }
+    }
+}
+
+#[cfg(test)]
+mod platform_endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn platform_endpoint_defaults_are_backwards_compatible() {
+        let config: CatenaryConfig = toml::from_str("").unwrap();
+        let endpoints = &config.alpenrose.platform_endpoints;
+        assert_eq!(
+            endpoints.ile_de_france_url(),
+            "http://localhost:46299/platforms"
+        );
+        assert_eq!(endpoints.danmark_url(), "http://localhost:46372/platforms");
+        assert_eq!(
+            endpoints.darwin_url(),
+            "http://localhost:26993/platforms-v2"
+        );
+        assert_eq!(
+            config.alpenrose.darwin_rt_base_url(),
+            "http://localhost:3000"
+        );
+    }
+
+    #[test]
+    fn platform_endpoints_and_darwin_rt_url_parse_from_toml() {
+        let config: CatenaryConfig = toml::from_str(
+            r#"
+[alpenrose]
+darwin_rt_url = "http://darwin.local:3000/"
+
+[alpenrose.platform_endpoints]
+ile_de_france = "http://idf.local/platforms"
+danmark = "http://dk.local/platforms"
+darwin = "http://darwin.local/platforms-v2"
+"#,
+        )
+        .unwrap();
+        let endpoints = &config.alpenrose.platform_endpoints;
+        assert_eq!(endpoints.ile_de_france_url(), "http://idf.local/platforms");
+        assert_eq!(endpoints.danmark_url(), "http://dk.local/platforms");
+        assert_eq!(endpoints.darwin_url(), "http://darwin.local/platforms-v2");
+        assert_eq!(
+            config.alpenrose.darwin_rt_base_url(),
+            "http://darwin.local:3000/"
+        );
+    }
+
+    #[test]
+    fn empty_platform_urls_fall_back_to_existing_defaults() {
+        let config: CatenaryConfig = toml::from_str(
+            r#"
+[alpenrose]
+darwin_rt_url = "  "
+
+[alpenrose.platform_endpoints]
+ile_de_france = ""
+danmark = "  "
+darwin = ""
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config.alpenrose.platform_endpoints.ile_de_france_url(),
+            "http://localhost:46299/platforms"
+        );
+        assert_eq!(
+            config.alpenrose.platform_endpoints.danmark_url(),
+            "http://localhost:46372/platforms"
+        );
+        assert_eq!(
+            config.alpenrose.platform_endpoints.darwin_url(),
+            "http://localhost:26993/platforms-v2"
+        );
+        assert_eq!(
+            config.alpenrose.darwin_rt_base_url(),
+            "http://localhost:3000"
+        );
     }
 }

@@ -43,6 +43,15 @@ etcd_urls = ["localhost:2379"]
 #only_feed_ids = []
 etcd_username = ""
 etcd_password = ""
+# Darwin formations API base URL (rid-to-trip-id, formations, formations-v1).
+# The DARWIN_RT_URL environment variable takes precedence.
+# darwin_rt_url = "http://localhost:3000"
+
+# Specify full platform endpoint URLs; omitted entries retain the current defaults.
+[alpenrose.platform_endpoints]
+# ile_de_france = "http://localhost:46299/platforms"
+# danmark = "http://localhost:46372/platforms"
+# darwin = "http://localhost:26993/platforms-v2"
 
 [birch]
 worker_amount = 4
