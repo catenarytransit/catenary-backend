@@ -159,6 +159,7 @@ pub struct RamondaWebSocket {
     pub aspen_client_manager: Arc<AspenClientManager>,
     subscriptions: std::collections::HashMap<TripSubscriptionTuple, TripSubscriptionState>,
     next_subscription_generation: u64,
+    next_fetch_sequence: u64,
     pub nearby_generation: u64,
     pub nearby_fetch: Option<SpawnHandle>,
     pub nearby_loaded: bool,
@@ -166,7 +167,7 @@ pub struct RamondaWebSocket {
     pub aspen_endpoint_cache:
         std::collections::HashMap<String, (std::net::SocketAddr, std::time::Instant)>,
     in_progress_trip_fetches:
-        std::collections::HashMap<TripSubscriptionTuple, (std::time::Instant, u64)>,
+        std::collections::HashMap<TripSubscriptionTuple, (std::time::Instant, u64, u64)>,
 }
 
 impl Actor for RamondaWebSocket {
@@ -192,6 +193,7 @@ impl RamondaWebSocket {
             aspen_client_manager,
             subscriptions: std::collections::HashMap::new(),
             next_subscription_generation: 0,
+            next_fetch_sequence: 0,
             nearby_generation: 0,
             nearby_fetch: None,
             nearby_loaded: false,
@@ -218,7 +220,7 @@ impl RamondaWebSocket {
 
             for ((chateau, params), state) in &act.subscriptions {
                 let key = (chateau.clone(), params.clone());
-                if let Some((started, generation)) = act.in_progress_trip_fetches.get(&key) {
+                if let Some((started, generation, _)) = act.in_progress_trip_fetches.get(&key) {
                     if *generation == state.generation
                         && started.elapsed() < std::time::Duration::from_secs(5)
                     {
@@ -229,7 +231,9 @@ impl RamondaWebSocket {
             }
 
             for (key, generation) in keys_to_fetch {
-                act.in_progress_trip_fetches.insert(key.clone(), (now, generation));
+                act.next_fetch_sequence = act.next_fetch_sequence.wrapping_add(1);
+                let sequence = act.next_fetch_sequence;
+                act.in_progress_trip_fetches.insert(key.clone(), (now, generation, sequence));
                 let (chateau_clone, params_clone) = key.clone();
 
                 let cached_socket =
@@ -261,14 +265,14 @@ impl RamondaWebSocket {
                           ctx: &mut ws::WebsocketContext<Self>| {
                         // A late Aspen RPC result must never reach a trip that
                         // has been unsubscribed or subscribed again.
-                        if !subscription_is_current(&act.subscriptions, &key, generation) {
+                        if !subscription_is_current(&act.subscriptions, &key, generation)
+                            || !act.in_progress_trip_fetches.get(&key)
+                                .is_some_and(|(_, active_generation, active_sequence)|
+                                    *active_generation == generation && *active_sequence == sequence)
+                        {
                             return;
                         }
-                        if act.in_progress_trip_fetches.get(&key)
-                            .is_some_and(|(_, current)| *current == generation)
-                        {
-                            act.in_progress_trip_fetches.remove(&key);
-                        }
+                        act.in_progress_trip_fetches.remove(&key);
                         match result {
                             Ok((response, used_socket)) => {
                                 if let Some(socket) = used_socket {
