@@ -912,8 +912,8 @@ fn realtime_transit_leg(
         None => "UNKNOWN",
     };
     let stop_changes = snapshot.run_metadata(rt.run);
-    let deviation = !shape_unchanged || stop_changes.is_some_and(|m| m.stops.iter().any(|s|
-        s.skipped || s.original_location.is_some()));
+    let deviation = original.is_some() && (!shape_unchanged || stop_changes.is_some_and(|m|
+        m.stops.iter().any(|s| s.skipped || s.original_location.is_some())));
     json!({
         "mode":transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied()),
         "from":from,"to":to,
@@ -1280,6 +1280,7 @@ mod tests {
         ).unwrap();
         assert_eq!(value["realTime"], true);
         assert_eq!(value["scheduled"], false);
+        assert_eq!(value["deviation"], false);
         assert_eq!(value["tripId"], "trip:id");
         assert_eq!(value["chateau"], "test");
         assert_eq!(value["tripStartTime"], "25:00:31");
