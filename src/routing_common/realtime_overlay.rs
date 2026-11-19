@@ -565,6 +565,7 @@ mod tests {
                 service_date: 20_000,
                 external_id: Some(format!("added-{id}")),
                 pattern: RtPatternInput::Stops(stops(&seq)),
+                metadata: None,
                 event_times: vec![epoch + 11, epoch + 123, epoch + 125, epoch + 299],
             }).unwrap();
         }
@@ -591,6 +592,7 @@ mod tests {
             service_date: 20_000,
             external_id: Some("added-exact".into()),
             pattern: RtPatternInput::Stops(stops(&[0, 1, 2])),
+            metadata: None,
             event_times: vec![epoch + 2, epoch + 50, epoch + 70, epoch + 200],
         }).unwrap();
         let rt = builder.finish().unwrap();
@@ -612,6 +614,7 @@ mod tests {
             service_date: 20_000,
             external_id: Some("restricted".to_string()),
             pattern: RtPatternInput::Stops(changed),
+            metadata: None,
             event_times: vec![epoch + 1, epoch + 2, epoch + 3, epoch + 4],
         }).unwrap();
         let snap = builder.finish().unwrap();
@@ -650,6 +653,7 @@ mod tests {
             service_date: 20_000,
             external_id: Some("far-future".into()),
             pattern: RtPatternInput::Static(RouteIdx(0)),
+            metadata: None,
             event_times: vec![epoch + i64::from(i32::MAX) + 1; 4],
         }).unwrap_err();
         assert_eq!(err, OverlayError::TimeOutOfRange);
