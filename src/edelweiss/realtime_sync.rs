@@ -893,6 +893,17 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_rejection_prefers_later_matching_stage() {
+        let mut rejection = None;
+        record_rejection(&mut rejection, ResolveIssue::TripIdNotFound);
+        record_rejection(&mut rejection, ResolveIssue::RouteIdMismatch);
+        record_rejection(&mut rejection, ResolveIssue::TripIdNotFound);
+        assert_eq!(rejection, Some(ResolveIssue::RouteIdMismatch));
+        record_rejection(&mut rejection, ResolveIssue::InactiveTrafficDay);
+        assert_eq!(rejection.unwrap().diagnostic_code(), "inactive_traffic_day");
+    }
+
+    #[test]
     fn static_chateaux_without_aspen_assignments_do_not_block_rt_coverage() {
         use catenary::routing_common::timetable::ZeroCopyTimetable;
         let bytes = fixture();
