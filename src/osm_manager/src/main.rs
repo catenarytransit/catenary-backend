@@ -383,9 +383,28 @@ fn parse_poly(text: &str) -> Result<Geometry> {
 }
 
 fn fetch_boundary(client: &Client, region: &Region) -> Result<(Geometry, String)> {
-    let response = client.get(&region.boundary_geojson_url).send()?;
-    if response.status().is_success() {
-        return Ok((extract_geometry(&response.text()?)?, region.boundary_geojson_url.clone()));
+    // Geofabrik publishes .poly for California; its auxiliary .geojson
+    // endpoint may be absent or refuse individual connections. Retry via
+    // the canonical .poly instead of aborting on the first network error.
+    match client.get(&region.boundary_geojson_url).send() {
+        Ok(response) if response.status().is_success() => {
+            let text = response.text()?;
+            match extract_geometry(&text) {
+                Ok(geometry) => return Ok((geometry, region.boundary_geojson_url.clone())),
+                Err(error) => eprintln!(
+                    "Geofabrik GeoJSON for {} is unusable ({error}); trying .poly",
+                    region.id,
+                ),
+            }
+        }
+        Ok(response) => eprintln!(
+            "Geofabrik GeoJSON for {} returned {}; trying .poly",
+            region.id, response.status(),
+        ),
+        Err(error) => eprintln!(
+            "Geofabrik GeoJSON for {} failed ({error}); trying .poly",
+            region.id,
+        ),
     }
     let response = client.get(&region.boundary_poly_url).send()?.error_for_status()
         .with_context(|| format!("downloading fallback .poly for {}", region.id))?;
