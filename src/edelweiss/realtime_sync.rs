@@ -30,11 +30,86 @@ use catenary::routing_common::timetable::SourceIdx;
 use futures::StreamExt;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tarpc::context;
 
 const SYNC_CONCURRENCY: usize = 4;
+/// MOTIS-style clean rebuild: request the complete authoritative source again,
+/// even when Aspen's source revision has not changed.
+const FULL_REBUILD_INTERVAL: Duration = Duration::from_secs(10 * 60);
+/// Retain past RT for saved-trip/detail lookup and searches near midnight.
+/// Older events remain available through the static timetable, not RT history.
+const RT_PAST_RETENTION: Duration = Duration::from_secs(72 * 60 * 60);
+/// Successful conditional (NotModified) polls prove the source is reachable;
+/// uninterrupted RPC/prepare failures eventually withdraw stale suppression.
+const STALE_SOURCE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn past_rt_cutoff(now: SystemTime) -> Option<i64> {
+    i64::try_from(
+        now.checked_sub(RT_PAST_RETENTION)?
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+    .ok()
+}
+
+fn scheduled_last_event(
+    tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+    transport: catenary::routing_common::timetable::TransportIdx,
+    day: catenary::routing_common::timetable::DayIdx,
+) -> Option<i64> {
+    let first = tt.transport_first_dep_offset().get(transport.idx())?;
+    let last = tt.events_for_transport(transport)?.last()?;
+    i64::from(tt.header().first_utc_day)
+        .checked_add(i64::from(day.0))?
+        .checked_mul(86_400)?
+        .checked_add(i64::from(first.seconds()))?
+        .checked_add(i64::from(last.seconds()))
+}
+
+/// Evaluate the full scheduled and predicted lifetime of an RT instance.
+/// Unknown static event bounds are retained, never optimistically pruned.
+fn keep_realtime_action(
+    tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+    action: &PreparedAction,
+    cutoff: i64,
+) -> bool {
+    match action {
+        PreparedAction::NoChange => true,
+        PreparedAction::Cancel(transport, day) => {
+            scheduled_last_event(tt, *transport, *day).is_none_or(|end| end >= cutoff)
+        }
+        PreparedAction::Run(run) => {
+            let scheduled_end = match run.original {
+                Some((transport, day)) => match scheduled_last_event(tt, transport, day) {
+                    Some(end) => Some(end),
+                    None => return true,
+                },
+                None => None,
+            };
+            run.event_times
+                .last()
+                .copied()
+                .into_iter()
+                .chain(scheduled_end)
+                .max()
+                .is_none_or(|end| end >= cutoff)
+        }
+    }
+}
+
+/// A failed refresh must not allow obsolete suppressions to live forever.
+fn mark_source_failure(
+    sources: &RealtimeSources,
+    failures: &Mutex<HashMap<String, Instant>>,
+    chateau: &str,
+) -> bool {
+    let mut failures = failures.lock().unwrap_or_else(|e| e.into_inner());
+    let since = failures.entry(chateau.to_owned()).or_insert_with(Instant::now);
+    since.elapsed() >= STALE_SOURCE_TIMEOUT && sources.withdraw_chateau(chateau)
+}
 
 #[derive(Debug, Clone)]
 pub struct ResolvedTrip {
@@ -57,11 +132,15 @@ pub struct ResolutionStats {
     pub prepared_cancellations: usize,
     pub prepared_added: usize,
     pub invalid_updates: usize,
+    pub expired_runs: usize,
+    pub expired_cancellations: usize,
 }
 
 #[derive(Debug)]
 pub struct SourceSnapshot {
     pub revision_ms: u64,
+    /// Last complete authoritative download; conditional polls do not reset it.
+    pub refreshed_at: Instant,
     /// Number of updates received, retained without the expanded RPC buffer.
     pub update_count: usize,
     pub updates: Vec<RoutingTripUpdate>,
@@ -183,6 +262,7 @@ impl RealtimeSources {
         router: &Router,
         chateau: &str,
         snapshot: &mut SourceSnapshot,
+        retention_cutoff: Option<i64>,
     ) {
         let mut stats = ResolutionStats::default();
         for (region_index, region) in router.transit.iter().enumerate() {
@@ -343,6 +423,14 @@ impl RealtimeSources {
             let mut scheduled_actions = BTreeMap::<StaticInstance, Vec<PreparedAction>>::new();
             let mut unscheduled_actions = Vec::new();
             for action in actions {
+                if retention_cutoff.is_some_and(|cutoff| !keep_realtime_action(&tt, &action, cutoff)) {
+                    match action {
+                        PreparedAction::Cancel(_, _) => stats.expired_cancellations += 1,
+                        PreparedAction::Run(_) => stats.expired_runs += 1,
+                        PreparedAction::NoChange => {},
+                    }
+                    continue;
+                }
                 let key = match &action {
                     PreparedAction::Cancel(transport, day) => Some(StaticInstance {
                         transport: transport.0,
@@ -566,7 +654,7 @@ impl RealtimeSources {
         let mut all = self.inner.write().unwrap_or_else(|e| e.into_inner());
         if all
             .get(&chateau)
-            .is_some_and(|current| current.revision_ms >= snapshot.revision_ms)
+            .is_some_and(|current| current.revision_ms > snapshot.revision_ms)
         {
             return;
         }
@@ -700,6 +788,7 @@ async fn fetch_source(
                     );
                     return Ok(Some(SourceSnapshot {
                         revision_ms: page.revision_ms,
+                        refreshed_at: Instant::now(),
                         update_count: updates.len(),
                         updates,
                         resolved: Vec::new(),
@@ -747,6 +836,7 @@ pub async fn synchronize(
         chateaux.len()
     );
     let mut unassigned_passes = HashMap::<String, u8>::new();
+    let failed_since = Arc::new(Mutex::new(HashMap::<String, Instant>::new()));
     loop {
         let mut observed_assignments = Vec::new();
         // Protect against indefinite retention of a cancelled or delayed run
@@ -755,6 +845,10 @@ pub async fn synchronize(
         // missing from the next region snapshot (static service is untouched).
         for chateau in &chateaux {
             if assignments.get(chateau).is_none() {
+                failed_since
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(chateau);
                 let missed = unassigned_passes.entry(chateau.clone()).or_default();
                 *missed = missed.saturating_add(1);
                 if *missed == 5 && sources.withdraw_chateau(chateau) {
@@ -772,6 +866,7 @@ pub async fn synchronize(
             .for_each_concurrent(SYNC_CONCURRENCY, |chateau| {
                 let sources = Arc::clone(&sources);
                 let router = Arc::clone(&router);
+                let failed_since = Arc::clone(&failed_since);
                 let assigned = assignments.get(&chateau);
                 async move {
                     let Some(assigned) = assigned else {
@@ -779,10 +874,16 @@ pub async fn synchronize(
                         return;
                     };
                     let current = sources.get(&chateau);
+                    // An unchanged source still receives a MOTIS-style clean
+                    // rebuild periodically; no old per-run state is carried over.
+                    let conditional_revision = current.as_ref().and_then(|snapshot| {
+                        (snapshot.refreshed_at.elapsed() < FULL_REBUILD_INTERVAL)
+                            .then_some(snapshot.revision_ms)
+                    });
                     match fetch_source(
                         assigned.socket,
                         &chateau,
-                        current.as_ref().map(|s| s.revision_ms),
+                        conditional_revision,
                     ).await {
                         Ok(Some(snapshot)) => {
                             // Region-scale source and trip-ID scans can take
@@ -795,18 +896,23 @@ pub async fn synchronize(
                                 let mut snapshot = snapshot;
                                 let started = std::time::Instant::now();
                                 resolving_sources.resolve_for_chateau(
-                                    &resolving_router, &resolving_chateau, &mut snapshot,
+                                    &resolving_router,
+                                    &resolving_chateau,
+                                    &mut snapshot,
+                                    past_rt_cutoff(SystemTime::now()),
                                 );
                                 (snapshot, started.elapsed())
                             }).await {
                                 Ok((mut snapshot, elapsed)) => {
                                     eprintln!(
-                                        "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} no_match_reasons={:?} unresolved_stops={} elapsed_ms={:.1}",
+                                        "Edelweiss routing resolver {chateau}: matched={} ambiguous={} no_match={} no_match_reasons={:?} unresolved_stops={} expired_runs={} expired_cancellations={} elapsed_ms={:.1}",
                                         snapshot.stats.matched,
                                         snapshot.stats.ambiguous,
                                         snapshot.stats.no_match,
                                         snapshot.stats.no_match_reasons,
                                         snapshot.stats.unresolved_stops,
+                                        snapshot.stats.expired_runs,
+                                        snapshot.stats.expired_cancellations,
                                         elapsed.as_secs_f64() * 1000.0,
                                     );
                                     // The full Aspen source page buffer is
@@ -816,15 +922,28 @@ pub async fn synchronize(
                                     // expanded copy of every GTFS-RT entity.
                                     snapshot.updates = Vec::new();
                                     snapshot.resolved = Vec::new();
-                                    sources.publish(chateau, snapshot);
+                                    sources.publish(chateau.clone(), snapshot);
+                                    failed_since.lock().unwrap_or_else(|e| e.into_inner())
+                                        .remove(&chateau);
                                 },
-                                Err(error) => eprintln!(
-                                    "Edelweiss routing resolver {chateau}: task failed: {error}",
-                                ),
+                                Err(error) => {
+                                    eprintln!("Edelweiss routing resolver {chateau}: task failed: {error}");
+                                    if mark_source_failure(&sources, &failed_since, &chateau) {
+                                        eprintln!("Edelweiss RT source {chateau}: withdrew stale overlay after repeated preparation failures");
+                                    }
+                                },
                             }
                         },
-                        Ok(None) => {},
-                        Err(error) => eprintln!("Edelweiss routing source sync: {chateau}: {error:#}"),
+                        Ok(None) => {
+                            failed_since.lock().unwrap_or_else(|e| e.into_inner())
+                                .remove(&chateau);
+                        },
+                        Err(error) => {
+                            eprintln!("Edelweiss routing source sync: {chateau}: {error:#}");
+                            if mark_source_failure(&sources, &failed_since, &chateau) {
+                                eprintln!("Edelweiss RT source {chateau}: withdrew stale overlay after repeated Aspen RPC failures");
+                            }
+                        },
                     }
                 }
             })
@@ -900,13 +1019,15 @@ pub fn probe_raw_gtfs_rt(
     let sources = RealtimeSources::from_router(router, routing_config)?;
     let mut source_snapshot = SourceSnapshot {
         revision_ms: 1,
+        refreshed_at: Instant::now(),
         update_count: received_count,
         updates,
         resolved: Vec::new(),
         overlays: BTreeMap::new(),
         stats: ResolutionStats::default(),
     };
-    sources.resolve_for_chateau(router, &chateau, &mut source_snapshot);
+    // Offline fixture probes must remain deterministic regardless of wall clock.
+    sources.resolve_for_chateau(router, &chateau, &mut source_snapshot, None);
     let rt = source_snapshot
         .overlays
         .get(&(index as u16))
@@ -1047,6 +1168,7 @@ mod tests {
             .unwrap();
         SourceSnapshot {
             revision_ms: revision,
+            refreshed_at: Instant::now(),
             update_count: 1,
             updates: Vec::new(),
             resolved: Vec::new(),
@@ -1272,6 +1394,7 @@ mod tests {
             "a".to_string(),
             SourceSnapshot {
                 revision_ms: 5,
+                refreshed_at: Instant::now(),
                 update_count: 0,
                 updates: vec![],
                 resolved: vec![],
@@ -1284,6 +1407,7 @@ mod tests {
             "a".to_string(),
             SourceSnapshot {
                 revision_ms: 4,
+                refreshed_at: Instant::now(),
                 update_count: 0,
                 updates: vec![],
                 resolved: vec![],
@@ -1296,6 +1420,7 @@ mod tests {
             "a".to_string(),
             SourceSnapshot {
                 revision_ms: 6,
+                refreshed_at: Instant::now(),
                 update_count: 0,
                 updates: vec![],
                 resolved: vec![],
@@ -1305,5 +1430,62 @@ mod tests {
         );
         assert_eq!(snapshots.get("a").unwrap().revision_ms, 6);
         assert_eq!(old.revision_ms, 5);
+        // A new clean build of unchanged upstream data has its own Arc and
+        // may retire expired transports without changing Aspen revision_ms.
+        snapshots.publish(
+            "a".to_string(),
+            SourceSnapshot {
+                revision_ms: 6,
+                refreshed_at: Instant::now(),
+                update_count: 0,
+                updates: vec![],
+                resolved: vec![],
+                overlays: BTreeMap::new(),
+                stats: ResolutionStats::default(),
+            },
+        );
+        assert_eq!(snapshots.get("a").unwrap().revision_ms, 6);
+    }
+
+    #[test]
+    fn expired_added_runs_are_pruned_but_delayed_runs_survive() {
+        use catenary::routing_common::timetable::{
+            LocationIdx, PackedStop, SourceIdx, ZeroCopyTimetable,
+        };
+        let bytes = fixture();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let create = |end: i64| PreparedAction::Run(RtRunInput {
+            source: SourceIdx(0),
+            original: None,
+            service_date: 20_000,
+            external_id: Some("added".to_string()),
+            pattern: catenary::routing_common::realtime_overlay::RtPatternInput::Stops(vec![
+                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+            ]),
+            metadata: None,
+            event_times: vec![end - 60, end],
+        });
+        assert!(!keep_realtime_action(&tt, &create(900), 1_000));
+        assert!(keep_realtime_action(&tt, &create(1_100), 1_000));
+        // Never delete a scheduled replacement when its static bound cannot
+        // be validated: the safe behavior is to retain it.
+        let mut unknown_static = create(900);
+        if let PreparedAction::Run(run) = &mut unknown_static {
+            run.original = Some((
+                catenary::routing_common::timetable::TransportIdx(77),
+                catenary::routing_common::timetable::DayIdx(0),
+            ));
+        }
+        assert!(keep_realtime_action(&tt, &unknown_static, 1_000));
+    }
+
+    #[test]
+    fn retention_cutoff_is_explicit_and_stable() {
+        let now = UNIX_EPOCH + Duration::from_secs(10 * 24 * 60 * 60);
+        assert_eq!(
+            past_rt_cutoff(now),
+            Some((10 * 24 * 60 * 60 - 72 * 60 * 60) as i64)
+        );
     }
 }
