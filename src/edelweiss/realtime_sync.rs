@@ -680,6 +680,128 @@ pub async fn synchronize(
     }
 }
 
+/// Isolated SoCal Actions fixture-import mode. The same decoder/projection
+/// contracts are used as Aspen's routing-only RPC, but the test does not need
+/// etcd, a running Aspen instance, or write access to production state.
+///
+/// The input is a saved protobuf from Birch's /gtfs_rt?feed_type=trip endpoint;
+/// the static feed selects an unambiguous source/chateau in the compiled
+/// Gentian timetable. This checks the complete source -> prepared overlay ->
+/// regional publication path, including the Router's pinned Arc snapshot.
+pub fn probe_raw_gtfs_rt(
+    router: &Router,
+    routing_config: &Path,
+    region_id: &str,
+    static_feed_id: &str,
+    protobuf: &[u8],
+    minimum_runs: usize,
+) -> Result<serde_json::Value> {
+    let index = router.transit.iter().position(|r| r.id == region_id)
+        .with_context(|| format!("unknown probe region {region_id}"))?;
+    let region = &router.transit[index];
+    let tt = region.timetable.view()?;
+    let source_candidates = (0..tt.sources().len())
+        .filter_map(|i| {
+            let idx = u16::try_from(i).ok()?;
+            let (chateau, feed, _) = tt.source(SourceIdx(idx))?;
+            (feed == static_feed_id).then_some((chateau.to_owned(), idx))
+        })
+        .collect::<Vec<_>>();
+    ensure!(
+        source_candidates.len() == 1,
+        "static feed {} matched {} Gentian sources (expected exactly one)",
+        static_feed_id, source_candidates.len(),
+    );
+    let chateau = source_candidates[0].0.clone();
+    let source_idx = source_candidates[0].1;
+
+    let updates = catenary::routing_common::realtime_source::
+        project_raw_gtfs_rt_trip_feed(protobuf)?;
+    ensure!(!updates.is_empty(), "Birch trip feed has no decodable TripUpdates");
+    ensure!(updates.len() <= MAX_UPDATES_PER_SOURCE, "GTFS-RT fixture exceeds source update cap");
+    ensure!(
+        updates.iter().map(|x| x.stops.len()).sum::<usize>() <= MAX_STOPS_PER_SOURCE,
+        "GTFS-RT fixture exceeds source stop cap",
+    );
+    let received_count = updates.len();
+    let sources = RealtimeSources::from_router(router, routing_config)?;
+    let mut source_snapshot = SourceSnapshot {
+        revision_ms: 1,
+        update_count: received_count,
+        updates,
+        resolved: Vec::new(),
+        overlays: BTreeMap::new(),
+        stats: ResolutionStats::default(),
+    };
+    sources.resolve_for_chateau(router, &chateau, &mut source_snapshot);
+    let rt = source_snapshot.overlays.get(&(index as u16))
+        .context("GTFS-RT fixture failed to prepare the selected region")?;
+    let catalog = sources.identity_catalogs.get(region_id)
+        .context("Gentian identity sidecar is unavailable for the probe region")?;
+    ensure!(
+        rt.timetable_generation == catalog.timetable_fingerprint,
+        "probe's prepared overlay has a stale timetable generation"
+    );
+    let expected = BTreeSet::from([chateau.clone()]);
+    let pinned = Arc::new(RegionRealtimeSnapshot::compose(
+        &tt,
+        catalog.timetable_fingerprint,
+        1,
+        &expected,
+        vec![ChateauRealtimeShard {
+            chateau: chateau.clone(),
+            overlay: Arc::clone(rt),
+        }],
+    )?);
+    router.publish_realtime(region_id, Arc::clone(&pinned))?;
+    let published = router.pin_realtime(region_id)
+        .context("Router failed to publish a pinned regional snapshot")?;
+    ensure!(Arc::ptr_eq(&pinned, &published), "Router published a different snapshot");
+    ensure!(published.is_complete(), "single-source realtime fixture is incomplete");
+    ensure!(published.run_count() >= minimum_runs,
+        "only {} realtime runs were prepared (required {})",
+        published.run_count(), minimum_runs);
+
+    let mut validated_events = 0usize;
+    for shard in &published.chateaux {
+        for run in &shard.overlay.runs {
+            let start = run.event_from as usize;
+            let end = run.event_to as usize;
+            ensure!(end > start, "realtime run has no valid event interval");
+            let slots = (start..end).map(|i| {
+                let offset = shard.overlay.event_offsets_seconds[i];
+                shard.overlay.event_epoch + i64::from(offset)
+            }).collect::<Vec<_>>();
+            ensure!(slots.windows(2).all(|x| x[0] <= x[1]),
+                "realtime run has non-monotonic Unix event times");
+            validated_events += slots.len();
+        }
+    }
+
+    Ok(serde_json::json!({
+        "region": region_id,
+        "chateau": chateau,
+        "static_feed": static_feed_id,
+        "source_index": source_idx,
+        "decoded_trip_updates": received_count,
+        "matched_scheduled_instances": source_snapshot.stats.matched,
+        "ambiguous_instances": source_snapshot.stats.ambiguous,
+        "unmatched_instances": source_snapshot.stats.no_match,
+        "rejected_updates": source_snapshot.stats.invalid_updates,
+        "unresolved_stops": source_snapshot.stats.unresolved_stops,
+        "prepared_runs": published.run_count(),
+        "prepared_added": source_snapshot.stats.prepared_added,
+        "prepared_cancellations": source_snapshot.stats.prepared_cancellations,
+        "suppressed_static_instances": published.suppressed_count(),
+        "indexed_stops": published.indexed_stop_count(),
+        "validated_exact_second_events": validated_events,
+        "snapshot_publication_seq": published.publication_seq,
+        "snapshot_complete": published.is_complete(),
+        "timing_epoch": published.event_epoch,
+        "snapshot_shards": published.chateaux.len(),
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
