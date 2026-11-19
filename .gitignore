@@ -121,6 +121,7 @@ catenaryconfig.toml
 # Local routing-region configuration and downloaded geography
 /routing_regions/*.toml
 /routing_regions/*.geojson
+/routing_regions/*.poly
 /routing_regions/*.json
 /routing_regions/*.gpkg
 /routing_regions/*.zip
