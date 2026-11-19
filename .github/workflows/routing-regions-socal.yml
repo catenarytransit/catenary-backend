@@ -211,6 +211,8 @@ jobs:
           "$CXX" -std=c++23 /tmp/tbb-link-check.cc -ltbb -o /tmp/tbb-link-check
           /tmp/tbb-link-check
           readelf -d /tmp/tbb-link-check | grep -F 'libtbb.so'
+      - name: Verify Geofabrik boundary converter
+        run: python3 -m unittest discover -s src/routing_regions -p test_prepare_socal_test.py -v
       - name: Download Geofabrik California boundary and local SoCal config
         run: |
           set -euo pipefail
