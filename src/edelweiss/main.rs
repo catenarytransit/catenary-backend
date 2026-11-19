@@ -297,6 +297,7 @@ fn run_query(
         false,
         &AtomicBool::new(false),
         &mut |_| Ok(()),
+        false,
     )
 }
 
@@ -335,6 +336,7 @@ fn run_query_observed(
     emit_chateau_metrics: bool,
     cancelled: &AtomicBool,
     observer: &mut dyn FnMut(serde_json::Value) -> Result<()>,
+    v2: bool,
 ) -> Result<(serde_json::Value, QueryTimings)> {
     let query_start = Instant::now();
     request.page.validate()?;
@@ -631,6 +633,13 @@ fn run_query_observed(
                 cycling_speed,
             )?;
             metadata_total += metadata_ms;
+            let mut response = response;
+            if v2 {
+                route_v2::enrich(
+                    &mut response, &missing, &timetable, platform,
+                    realtime_snapshot.as_deref(),
+                );
+            }
             for (is_direct, field) in [(false, "itineraries"), (true, "direct")] {
                 for (journey, value) in missing
                     .iter()
@@ -853,6 +862,23 @@ async fn route_ws(
     request: HttpRequest,
     payload: web::Payload,
 ) -> Result<HttpResponse, actix_web::Error> {
+    route_ws_version(state, request, payload, false).await
+}
+
+async fn route_v2_ws(
+    state: web::Data<State>,
+    request: HttpRequest,
+    payload: web::Payload,
+) -> Result<HttpResponse, actix_web::Error> {
+    route_ws_version(state, request, payload, true).await
+}
+
+async fn route_ws_version(
+    state: web::Data<State>,
+    request: HttpRequest,
+    payload: web::Payload,
+    v2: bool,
+) -> Result<HttpResponse, actix_web::Error> {
     let state = state.into_inner();
     let is_synthetics = catenary::observability::is_synthetics_request(request.headers());
     let runner: Arc<websocket::Runner> = Arc::new(move |query, request_id, cancelled, observer| {
@@ -875,6 +901,7 @@ async fn route_ws(
             !is_synthetics,
             &cancelled,
             observer,
+            v2,
         )?;
         Ok(answer)
     });
@@ -911,6 +938,23 @@ async fn route(
     http_request: HttpRequest,
     payload: web::Json<Request>,
 ) -> HttpResponse {
+    route_version(state, http_request, payload, false).await
+}
+
+async fn route_v2(
+    state: web::Data<State>,
+    http_request: HttpRequest,
+    payload: web::Json<Request>,
+) -> HttpResponse {
+    route_version(state, http_request, payload, true).await
+}
+
+async fn route_version(
+    state: web::Data<State>,
+    http_request: HttpRequest,
+    payload: web::Json<Request>,
+    v2: bool,
+) -> HttpResponse {
     let emit_chateau_metrics =
         !catenary::observability::is_synthetics_request(http_request.headers());
     let state = state.into_inner();
@@ -933,6 +977,7 @@ async fn route(
             emit_chateau_metrics,
             &AtomicBool::new(false),
             &mut |_| Ok(()),
+            v2,
         )
     })
     .await;
