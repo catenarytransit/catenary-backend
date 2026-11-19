@@ -98,6 +98,11 @@ struct Args {
     #[arg(long, conflicts_with_all = ["region", "sources", "build", "list_chateaux"])]
     list_timetable_sizes: bool,
 
+    /// Build/rebuild immutable routing indexes for an existing Gentian timetable.
+    /// No database access or OSR graph is required.
+    #[arg(long, value_name = "TIMETABLE_PATH", conflicts_with_all = ["region", "sources", "build", "list_chateaux", "list_timetable_sizes", "inspect_timetable", "output"])]
+    precompute_routing_index: Option<PathBuf>,
+
     /// Override the configured timetable directory when listing file sizes.
     #[arg(long, requires = "list_timetable_sizes")]
     data_dir: Option<PathBuf>,
@@ -204,6 +209,11 @@ fn main() -> Result<()> {
         }
     }
 
+    if let Some(path) = args.precompute_routing_index.as_deref() {
+        let output = catenary::routing_common::routing_index::build_for_timetable(path)?;
+        println!("Published precomputed routing index {}", output.display());
+        return Ok(());
+    }
     if let Some(path) = args.inspect_timetable.as_deref() {
         return inspect_timetable(path);
     }

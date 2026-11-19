@@ -221,60 +221,96 @@ impl NativeOsr {
         let features = registry["features"]
             .as_array()
             .context("OSR registry missing features")?;
-        let mut graphs = BTreeMap::new();
-        for feature in features {
-            let id = feature["properties"]["id"]
-                .as_str()
-                .context("OSR region missing id")?;
-            ensure!(
-                !id.starts_with('/')
-                    && !id.split('/').any(|s| s.is_empty() || s == "." || s == ".."),
-                "invalid OSR region id"
-            );
-            if config.osr_worker.excluded_regions.contains(id) {
-                continue;
-            }
-            let dir = config.osm_manager.data_dir.join("regions").join(id);
-            let (fingerprint, legacy_fingerprint) =
-                match super::osr_graph_identity::published_fingerprints(&dir)? {
-                    Some((fast, legacy)) => (fast, Some(legacy)),
-                    None => {
-                        eprintln!("Warning: OSR {id} missing graph-identity.json; precomputed matches disabled");
-                        ([0; 32], None)
-                    }
-                };
-            eprintln!("Edelweiss startup: opening native OSR graph {id} without hashing");
-            let metadata_load_mode = match config
-                .osr_worker
-                .region_load_modes
-                .get(id)
-                .unwrap_or(&LoadMode::Read)
-            {
-                LoadMode::Read => ffi::MetadataLoadMode::ReadIntoMemory,
-                LoadMode::Mmap => ffi::MetadataLoadMode::MmapPrivate,
-            };
-            let router = ffi::open_shared_router_with_options(
-                dir.to_str().context("non-UTF8 OSR path")?,
-                &ffi::RouterOpenOptions { metadata_load_mode },
-            )
-            .with_context(|| format!("opening native OSR graph {id}"))?;
-            ensure!(!router.is_null(), "OSR returned null graph for {id}");
-            ensure!(
-                graphs
-                    .insert(
-                        id.to_owned(),
-                        Graph {
-                            node_count: router.node_count(),
-                            way_count: router.way_count(),
-                            router,
-                            fingerprint,
-                            legacy_fingerprint,
+        // Open independent OSR regions concurrently. Native graph loading is
+        // typically I/O and allocation heavy, so cap startup concurrency
+        // separately from the number of request-serving OSR workers.
+        let load_workers = std::env::var("EDELWEISS_OSR_LOAD_WORKERS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(3)
+            .clamp(1, 8);
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(load_workers)
+            .thread_name(|i| format!("edelweiss-osr-load-{i}"))
+            .build()
+            .context("creating OSR graph-loading pool")?;
+        let started = std::time::Instant::now();
+        let eligible = features
+            .iter()
+            .filter(|feature| {
+                feature["properties"]["id"]
+                    .as_str()
+                    .is_some_and(|id| !config.osr_worker.excluded_regions.contains(id))
+            })
+            .collect::<Vec<_>>();
+        // Malformed registry entries must not become silently invisible.
+        ensure!(
+            features.iter().all(|f| f["properties"]["id"].as_str().is_some()),
+            "OSR region missing id"
+        );
+        use rayon::prelude::*;
+        let loaded = pool.install(|| {
+            eligible.par_iter().map(|feature| -> Result<(String, Graph)> {
+                let id = feature["properties"]["id"]
+                    .as_str()
+                    .context("OSR region missing id")?;
+                ensure!(
+                    !id.starts_with('/')
+                        && !id.split('/').any(|s| s.is_empty() || s == "." || s == ".."),
+                    "invalid OSR region id"
+                );
+                let dir = config.osm_manager.data_dir.join("regions").join(id);
+                let (fingerprint, legacy_fingerprint) =
+                    match super::osr_graph_identity::published_fingerprints(&dir)? {
+                        Some((fast, legacy)) => (fast, Some(legacy)),
+                        None => {
+                            eprintln!(
+                                "Warning: OSR {id} missing graph-identity.json; precomputed matches disabled"
+                            );
+                            ([0; 32], None)
                         }
-                    )
-                    .is_none(),
-                "duplicate OSR region {id}"
-            );
+                    };
+                let metadata_load_mode = match config
+                    .osr_worker
+                    .region_load_modes
+                    .get(id)
+                    .unwrap_or(&LoadMode::Read)
+                {
+                    LoadMode::Read => ffi::MetadataLoadMode::ReadIntoMemory,
+                    LoadMode::Mmap => ffi::MetadataLoadMode::MmapPrivate,
+                };
+                let opening = std::time::Instant::now();
+                eprintln!("Edelweiss startup: opening native OSR graph {id} without hashing");
+                let router = ffi::open_shared_router_with_options(
+                    dir.to_str().context("non-UTF8 OSR path")?,
+                    &ffi::RouterOpenOptions { metadata_load_mode },
+                )
+                .with_context(|| format!("opening native OSR graph {id}"))?;
+                ensure!(!router.is_null(), "OSR returned null graph for {id}");
+                let graph = Graph {
+                    node_count: router.node_count(),
+                    way_count: router.way_count(),
+                    router,
+                    fingerprint,
+                    legacy_fingerprint,
+                };
+                eprintln!(
+                    "Edelweiss startup: native OSR graph {id} opened in {:.3}s",
+                    opening.elapsed().as_secs_f64()
+                );
+                Ok((id.to_owned(), graph))
+            }).collect::<Result<Vec<_>>>()
+        })?;
+        let mut graphs = BTreeMap::new();
+        for (id, graph) in loaded {
+            ensure!(graphs.insert(id.clone(), graph).is_none(), "duplicate OSR region {id}");
         }
+        eprintln!(
+            "Edelweiss startup: {} OSR graphs loaded with {} workers in {:.3}s",
+            graphs.len(),
+            load_workers,
+            started.elapsed().as_secs_f64()
+        );
         ensure!(!graphs.is_empty(), "no native OSR graphs enabled");
         Ok(Self {
             graphs,

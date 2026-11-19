@@ -281,16 +281,16 @@ impl Onboard<'_> {
 /// Edges are deliberately optimistic: an intermediate stop need not permit
 /// boarding when a passenger is already on the same vehicle.
 pub(crate) struct LowerBoundTopology {
-    transports: Arc<TransportIndex>,
-    forward: CsrGraph,
-    reverse: CsrGraph,
-    stations: Vec<usize>,
-    transfer_sensitive: Arc<Vec<bool>>,
-    importance: Arc<crate::routing_common::transfer_optimizer::StationImportance>,
+    pub(crate) transports: Arc<TransportIndex>,
+    pub(crate) forward: CsrGraph,
+    pub(crate) reverse: CsrGraph,
+    pub(crate) stations: Vec<usize>,
+    pub(crate) transfer_sensitive: Arc<Vec<bool>>,
+    pub(crate) importance: Arc<crate::routing_common::transfer_optimizer::StationImportance>,
 }
-struct CsrGraph {
-    offsets: Vec<usize>,
-    edges: Vec<(u32, u32)>,
+pub(crate) struct CsrGraph {
+    pub(crate) offsets: Vec<usize>,
+    pub(crate) edges: Vec<(u32, u32)>,
 }
 impl CsrGraph {
     fn from_edges(n: usize, edge_iter: impl IntoIterator<Item = (u32, u32, u32)>) -> Self {

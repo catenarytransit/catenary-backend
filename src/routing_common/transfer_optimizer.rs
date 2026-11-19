@@ -17,9 +17,9 @@ use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, Zero
 /// Keep this outside the wire format so existing Gentian files remain usable.
 #[derive(Debug)]
 pub(crate) struct StationImportance {
-    roots: Vec<usize>,
-    values: Vec<u64>,
-    maximum: u64,
+    pub(crate) roots: Vec<usize>,
+    pub(crate) values: Vec<u64>,
+    pub(crate) maximum: u64,
 }
 
 impl StationImportance {
