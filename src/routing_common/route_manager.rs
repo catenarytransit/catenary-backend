@@ -415,17 +415,41 @@ impl Router {
                 phase.elapsed().as_secs_f64(),
             );
             phase = Instant::now();
-            // Compiled transit segment minima are invariant across queries.
-            // Build the optimistic topology once at timetable load time.
-            let lower_bound_topology =
-                crate::routing_common::profile_compact::LowerBoundTopology::build(
-                    &timetable.view()?,
-                );
-            eprintln!(
-                "Edelweiss startup: region {}: lower-bound topology built in {:.3}s",
-                region.id,
-                phase.elapsed().as_secs_f64(),
-            );
+            // The immutable, verified companion carries the precomputed FIFO
+            // transport index, directed lower-bound graphs and station metadata.
+            // Explicit fallback allows old deployments to migrate region-by-region.
+            let lower_bound_topology = match crate::routing_common::routing_index::load(
+                &path,
+                &timetable.view()?,
+            ) {
+                Ok(topology) => {
+                    eprintln!(
+                        "Edelweiss startup: region {}: precompiled routing index mapped in {:.3}s",
+                        region.id,
+                        phase.elapsed().as_secs_f64(),
+                    );
+                    topology
+                }
+                Err(error) => {
+                    if std::env::var("EDELWEISS_ALLOW_ROUTING_INDEX_REBUILD")
+                        .is_ok_and(|value| value == "1")
+                    {
+                        eprintln!(
+                            "Warning: region {}: routing index unavailable ({error:#}); rebuilding in memory",
+                            region.id,
+                        );
+                        crate::routing_common::profile_compact::LowerBoundTopology::build(
+                            &timetable.view()?,
+                        )
+                    } else {
+                        return Err(error).with_context(|| format!(
+                            "region {} requires a matching precompiled routing index; run gentian --precompute-routing-index {} or set EDELWEISS_ALLOW_ROUTING_INDEX_REBUILD=1 during migration",
+                            region.id,
+                            path.display(),
+                        ));
+                    }
+                }
+            };
             phase = Instant::now();
             let sidecar = path.with_extension("platforms.json");
             eprintln!(
