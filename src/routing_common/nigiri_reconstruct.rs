@@ -4,7 +4,7 @@
 use crate::routing_common::nigiri_raptor::{
     NigiriRaptor, PointJourney, better, shift, sorted_offsets, transfer_duration,
 };
-use crate::routing_common::profile_compact_reconstruct::valid_journey;
+use crate::routing_common::profile_compact_reconstruct::valid_journey_with_realtime;
 use crate::routing_common::raptor_query::{Journey, Leg, Query, RtRideRef, transport_event_second};
 use crate::routing_common::realtime_overlay::RtPatternRef;
 use crate::routing_common::timetable::{DayIdx, LocationIdx, TransportIdx, ZeroCopyTimetable};
@@ -342,20 +342,26 @@ pub(crate) fn reconstruct(
         legs,
     };
     ensure!(
-        valid_journey(tt, q, &journey),
-        "deferred Nigiri journey violates timetable or GTFS transfer rules"
+        valid_journey_with_realtime(tt, q, &journey, state.realtime.as_deref()),
+        "deferred Nigiri journey violates pinned realtime timetable or GTFS transfer rules"
     );
     // reconstruct.cc calls optimize_footpaths after legs are in passenger
     // order for either search direction. Internal transfers leave PONG's
     // departure/arrival keys untouched and retain both scheduled vehicles.
-    crate::routing_common::transfer_optimizer::optimize_internal_transfers_with_importance(
-        tt,
-        &state.importance,
-        &mut journey,
-    );
+    // The existing transfer optimizer retimes static timing-profile events
+    // only. Do not modify an RT ride using the static transport profile.
+    if !journey.legs.iter().any(|leg|
+        matches!(leg, Leg::Ride { realtime: Some(_), .. }))
+    {
+        crate::routing_common::transfer_optimizer::optimize_internal_transfers_with_importance(
+            tt,
+            &state.importance,
+            &mut journey,
+        );
+    }
     ensure!(
-        valid_journey(tt, q, &journey),
-        "optimized Nigiri journey violates timetable or GTFS transfer rules"
+        valid_journey_with_realtime(tt, q, &journey, state.realtime.as_deref()),
+        "optimized Nigiri journey violates realtime or GTFS transfer rules"
     );
     Ok(journey)
 }
