@@ -51,15 +51,54 @@ pub enum ClientMessage {
     Ping,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TripSubscriptionIdentity {
+    pub chateau: String,
+    #[serde(flatten)]
+    pub params: QueryTripInformationParams,
+}
+
+impl TripSubscriptionIdentity {
+    fn new(chateau: String, params: QueryTripInformationParams) -> Self {
+        Self { chateau, params }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TripSubscriptionState {
+    generation: u64,
+    last_hash: Option<u64>,
+}
+
+type TripSubscriptionTuple = (String, QueryTripInformationParams);
+
+fn subscription_is_current(
+    subscriptions: &std::collections::HashMap<TripSubscriptionTuple, TripSubscriptionState>,
+    key: &TripSubscriptionTuple,
+    generation: u64,
+) -> bool {
+    subscriptions.get(key).is_some_and(|state| state.generation == generation)
+}
+
 #[derive(Serialize)]
 #[serde(tag = "type")]
 pub enum ServerMessage {
     #[serde(rename = "initial_trip")]
-    InitialTrip { data: TripIntroductionInformation },
+    InitialTrip {
+        subscription: TripSubscriptionIdentity,
+        data: TripIntroductionInformation,
+    },
     #[serde(rename = "update_trip")]
-    UpdateTrip { data: GtfsRtRefreshData },
+    UpdateTrip {
+        subscription: TripSubscriptionIdentity,
+        data: GtfsRtRefreshData,
+    },
     #[serde(rename = "error")]
-    Error { message: String },
+    Error {
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subscription: Option<TripSubscriptionIdentity>,
+    },
     #[serde(rename = "pong")]
     Pong,
 }
@@ -73,15 +112,16 @@ pub struct RamondaWebSocket {
     pub aspen_chateau_cache:
         std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
     pub aspen_client_manager: Arc<AspenClientManager>,
-    pub subscriptions: std::collections::HashMap<(String, QueryTripInformationParams), Option<u64>>,
+    subscriptions: std::collections::HashMap<TripSubscriptionTuple, TripSubscriptionState>,
+    next_subscription_generation: u64,
     pub nearby_generation: u64,
     pub nearby_fetch: Option<SpawnHandle>,
     pub nearby_loaded: bool,
     pub hb: std::time::Instant,
     pub aspen_endpoint_cache:
         std::collections::HashMap<String, (std::net::SocketAddr, std::time::Instant)>,
-    pub in_progress_trip_fetches:
-        std::collections::HashMap<(String, QueryTripInformationParams), std::time::Instant>,
+    in_progress_trip_fetches:
+        std::collections::HashMap<TripSubscriptionTuple, (std::time::Instant, u64)>,
 }
 
 impl Actor for RamondaWebSocket {
@@ -106,6 +146,7 @@ impl RamondaWebSocket {
             aspen_chateau_cache,
             aspen_client_manager,
             subscriptions: std::collections::HashMap::new(),
+            next_subscription_generation: 0,
             nearby_generation: 0,
             nearby_fetch: None,
             nearby_loaded: false,
@@ -130,18 +171,20 @@ impl RamondaWebSocket {
             let now = std::time::Instant::now();
             let mut keys_to_fetch = Vec::new();
 
-            for ((chateau, params), _) in act.subscriptions.iter() {
+            for ((chateau, params), state) in &act.subscriptions {
                 let key = (chateau.clone(), params.clone());
-                if let Some(started) = act.in_progress_trip_fetches.get(&key) {
-                    if started.elapsed() < std::time::Duration::from_secs(5) {
+                if let Some((started, generation)) = act.in_progress_trip_fetches.get(&key) {
+                    if *generation == state.generation
+                        && started.elapsed() < std::time::Duration::from_secs(5)
+                    {
                         continue;
                     }
                 }
-                keys_to_fetch.push(key);
+                keys_to_fetch.push((key, state.generation));
             }
 
-            for key in keys_to_fetch {
-                act.in_progress_trip_fetches.insert(key.clone(), now);
+            for (key, generation) in keys_to_fetch {
+                act.in_progress_trip_fetches.insert(key.clone(), (now, generation));
                 let (chateau_clone, params_clone) = key.clone();
 
                 let cached_socket =
@@ -171,7 +214,16 @@ impl RamondaWebSocket {
                     move |result,
                           act: &mut RamondaWebSocket,
                           ctx: &mut ws::WebsocketContext<Self>| {
-                        act.in_progress_trip_fetches.remove(&key);
+                        // A late Aspen RPC result must never reach a trip that
+                        // has been unsubscribed or subscribed again.
+                        if !subscription_is_current(&act.subscriptions, &key, generation) {
+                            return;
+                        }
+                        if act.in_progress_trip_fetches.get(&key)
+                            .is_some_and(|(_, current)| *current == generation)
+                        {
+                            act.in_progress_trip_fetches.remove(&key);
+                        }
                         match result {
                             Ok((response, used_socket)) => {
                                 if let Some(socket) = used_socket {
@@ -193,19 +245,23 @@ impl RamondaWebSocket {
                                         stoptimes_json.hash(&mut hasher);
                                         let hash = hasher.finish();
 
-                                        let key = (chateau_clone.clone(), params_clone.clone());
-                                        if let Some(current_last_update) =
-                                            act.subscriptions.get_mut(&key)
-                                        {
-                                            if let Some(last) = current_last_update {
-                                                if *last == hash {
-                                                    return;
-                                                }
-                                            }
-                                            *current_last_update = Some(hash);
+                                        let Some(state) = act.subscriptions.get_mut(&key) else {
+                                            return;
+                                        };
+                                        if state.generation != generation {
+                                            return;
                                         }
+                                        if state.last_hash == Some(hash) {
+                                            return;
+                                        }
+                                        state.last_hash = Some(hash);
 
-                                        let msg = ServerMessage::UpdateTrip { data };
+                                        let msg = ServerMessage::UpdateTrip {
+                                            subscription: TripSubscriptionIdentity::new(
+                                                chateau_clone.clone(), params_clone.clone()
+                                            ),
+                                            data,
+                                        };
                                         let text = serde_json::to_string(&msg).unwrap();
                                         ctx.text(text);
                                     }
@@ -251,15 +307,25 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                     }
                     Ok(ClientMessage::CancelNearbyDepartures) => self.cancel_nearby(ctx),
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
-                        self.subscriptions.remove(&(chateau, params));
+                        let key = (chateau, params);
+                        self.subscriptions.remove(&key);
+                        self.in_progress_trip_fetches.remove(&key);
                     }
                     Ok(ClientMessage::UnsubscribeAllTrips) => {
                         self.subscriptions.clear();
+                        self.in_progress_trip_fetches.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
                         catenary::observability::count("trip.views", &[("chateau", &chateau)]);
-                        self.subscriptions
-                            .insert((chateau.clone(), params.clone()), None);
+                        self.next_subscription_generation =
+                            self.next_subscription_generation.wrapping_add(1);
+                        let generation = self.next_subscription_generation;
+                        let key = (chateau.clone(), params.clone());
+                        self.subscriptions.insert(key.clone(), TripSubscriptionState {
+                            generation,
+                            last_hash: None,
+                        });
+                        self.in_progress_trip_fetches.remove(&key);
 
                         let fs = fetch_trip_information(
                             chateau,
@@ -273,15 +339,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                         let fut = async move { fs.await };
 
                         let fut = actix::fut::wrap_future(fut).map(
-                            |result, _, ctx: &mut ws::WebsocketContext<Self>| match result {
-                                Ok(data) => {
-                                    let msg = ServerMessage::InitialTrip { data };
-                                    let text = serde_json::to_string(&msg).unwrap();
-                                    ctx.text(text);
+                            move |result, act: &mut RamondaWebSocket, ctx: &mut ws::WebsocketContext<Self>| {
+                                if !subscription_is_current(&act.subscriptions, &key, generation) {
+                                    return;
                                 }
-                                Err(e) => {
-                                    let msg = ServerMessage::Error { message: e };
-                                    let text = serde_json::to_string(&msg).unwrap();
+                                let subscription =
+                                    TripSubscriptionIdentity::new(key.0.clone(), key.1.clone());
+                                let msg = match result {
+                                    Ok(data) => ServerMessage::InitialTrip { subscription, data },
+                                    Err(message) => ServerMessage::Error {
+                                        message,
+                                        subscription: Some(subscription),
+                                    },
+                                };
+                                if let Ok(text) = serde_json::to_string(&msg) {
                                     ctx.text(text);
                                 }
                             },
@@ -297,6 +368,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                     Err(e) => {
                         let msg = ServerMessage::Error {
                             message: format!("Invalid message structure: {}", e),
+                            subscription: None,
                         };
                         if let Ok(text) = serde_json::to_string(&msg) {
                             ctx.text(text);
