@@ -14,6 +14,7 @@ use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
 use crate::routing_common::profile_compact::LowerBoundTopology;
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
 use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::raptor_query::{
     Journey, Leg, Query, RaptorStats, transport_event_second,
 };
@@ -23,6 +24,7 @@ use anyhow::{Result, ensure};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DAY: u32 = 86_400;
@@ -156,6 +158,9 @@ pub struct PongControl<'a> {
     pub emit_updates: bool,
     /// Count-based HTTP pages must not count unreconstructed side products.
     pub require_reconstructed_count: bool,
+    /// Pin one completed region revision throughout PING, PONG and deferred
+    /// journey reconstruction. None retains the unmodified static behavior.
+    pub realtime: Option<Arc<RegionRealtimeSnapshot>>,
 }
 impl PongControl<'_> {
     pub fn is_cancelled(&self) -> bool {
@@ -289,6 +294,9 @@ pub(crate) fn route_pong_observed(
     // waiting. Apply duration/direct filtering only to validated pong keys.
     kernel_query.direct_walk_seconds = None;
     let mut state = NigiriRaptor::new(tt, &kernel_query, arrive_by, topology)?;
+    if let Some(snapshot) = control.realtime.as_ref() {
+        state.enable_realtime(Arc::clone(snapshot))?;
+    }
     let transports = state.transport_index();
     // kPruneWithPingBounds: reverse lower bounds start at zero. Swap vectors
     // when changing direction instead of allocating a second RAPTOR state.
@@ -532,7 +540,7 @@ pub(crate) fn route_pong_observed(
     // Nigiri's final forward-only refinement replaces the middle vehicle in
     // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
     // There are no vias or realtime/TD footpaths in Edelweiss's Query type.
-    if !arrive_by {
+    if !arrive_by && state.realtime.is_none() {
         for journey in &mut journeys {
             improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
         }
