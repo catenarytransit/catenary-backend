@@ -360,39 +360,13 @@ impl RealtimeSources {
             let Some(expected) = self.region_chateaux.get(&region.id) else { continue };
             let region_index = u16::try_from(region_index)
                 .context("region index exceeds realtime source index width")?;
-            let mut shards = Vec::new();
-            for chateau in expected {
-                let Some(snapshot) = sources.get(chateau) else { continue };
-                let Some(overlay) = snapshot.overlays.get(&region_index) else {
-                    continue;
-                };
-                if overlay.revision != snapshot.revision_ms {
-                    // Prevent a stale generation of the chateau's own
-                    // preparation from contaminating a region snapshot.
-                    continue;
-                }
-                shards.push(ChateauRealtimeShard {
-                    chateau: chateau.clone(),
-                    overlay: Arc::clone(overlay),
-                });
-            }
-
-            if previous.get(&region.id).is_some_and(|current| {
-                current.chateaux.len() == shards.len()
-                    && current.chateaux.iter().zip(&shards).all(|(a, b)|
-                        a.chateau == b.chateau && Arc::ptr_eq(&a.overlay, &b.overlay)
-                    )
-            }) {
-                continue;
-            }
-
-            let next_seq = previous.get(&region.id)
-                .map_or(1, |current| current.publication_seq.saturating_add(1));
             let tt = region.timetable.view()?;
-            let composed = RegionRealtimeSnapshot::compose(
-                &tt, catalog.timetable_fingerprint, next_seq, expected, shards,
+            let next = compose_region(
+                &tt, catalog.timetable_fingerprint, region_index, expected,
+                &sources, previous.get(&region.id),
             ).with_context(|| format!("composing region realtime snapshot {}", region.id))?;
-            pending.push((region.id.clone(), Arc::new(composed)));
+            let Some(snapshot) = next else { continue };
+            pending.push((region.id.clone(), snapshot));
         }
         drop(previous);
         drop(sources);
@@ -449,6 +423,46 @@ impl RealtimeSources {
         let all = self.inner.read().unwrap_or_else(|e| e.into_inner());
         (all.len(), all.values().map(|v| v.update_count).sum())
     }
+}
+
+/// Recompose one region from chateau-local immutable shards. This function
+/// also serves as a deterministic test seam for coverage/revisions and avoids
+/// duplicating entire stop/time arrays whenever a single source changes.
+fn compose_region(
+    tt: &catenary::routing_common::timetable::ZeroCopyTimetable<'_>,
+    generation: [u8; 32],
+    region_index: u16,
+    expected: &BTreeSet<String>,
+    source_snapshots: &HashMap<String, Arc<SourceSnapshot>>,
+    previous: Option<&Arc<RegionRealtimeSnapshot>>,
+) -> Result<Option<Arc<RegionRealtimeSnapshot>>> {
+    let mut shards = Vec::new();
+    for chateau in expected {
+        let Some(source) = source_snapshots.get(chateau) else { continue };
+        let Some(overlay) = source.overlays.get(&region_index) else { continue };
+        if overlay.revision != source.revision_ms {
+            continue;
+        }
+        shards.push(ChateauRealtimeShard {
+            chateau: chateau.clone(),
+            overlay: Arc::clone(overlay),
+        });
+    }
+    if previous.is_some_and(|current| {
+        current.chateaux.len() == shards.len()
+            && current.chateaux.iter().zip(&shards).all(|(a, b)|
+                a.chateau == b.chateau && Arc::ptr_eq(&a.overlay, &b.overlay)
+            )
+    }) {
+        return Ok(None);
+    }
+
+    let next_seq = previous
+        .map_or(Some(1), |current| current.publication_seq.checked_add(1))
+        .context("realtime region publication sequence overflow")?;
+    Ok(Some(Arc::new(RegionRealtimeSnapshot::compose(
+        tt, generation, next_seq, expected, shards,
+    )?)))
 }
 
 /// Fetch with an explicit page transaction. A single changed generation,
