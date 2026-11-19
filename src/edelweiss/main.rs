@@ -6,6 +6,7 @@ mod footpath_debug;
 mod motis_response;
 mod pagination;
 mod realtime_sync;
+mod trip_v2;
 mod startup;
 mod websocket;
 
