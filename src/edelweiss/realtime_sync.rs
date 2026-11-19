@@ -18,6 +18,9 @@ use catenary::routing_common::realtime_prepare::{
 use catenary::routing_common::realtime_overlay::{
     RealtimeOverlay, RealtimeOverlayBuilder, RtRunInput, StaticInstance,
 };
+use catenary::routing_common::realtime_region::{
+    ChateauRealtimeShard, RegionRealtimeSnapshot,
+};
 use catenary::routing_common::realtime_identity::{
     GtfsIdentityCatalog, RealtimeGtfsResolver, ResolvedInstance,
 };
@@ -76,6 +79,11 @@ pub struct SourceSnapshot {
 #[derive(Default)]
 pub struct RealtimeSources {
     inner: RwLock<HashMap<String, Arc<SourceSnapshot>>>,
+    /// A region pin is one immutable revision vector across all loaded
+    /// chateaux. Replaced after each completed Aspen synchronization sweep.
+    region_snapshots: RwLock<BTreeMap<String, Arc<RegionRealtimeSnapshot>>>,
+    /// The compiled Gentian source table, not geography, defines membership.
+    region_chateaux: BTreeMap<String, BTreeSet<String>>,
     /// Regional source identity, including the source's attempt ID.
     /// GTFS stop IDs must never be joined across these identities.
     pub region_sources: BTreeMap<String, Vec<(u16, String, String, String)>>,
@@ -87,6 +95,8 @@ pub struct RealtimeSources {
 impl RealtimeSources {
     pub fn from_router(router: &Router, routing_config: &Path) -> Result<Self> {
         let mut region_sources = BTreeMap::new();
+        let mut region_chateaux = BTreeMap::new();
+        let mut region_snapshots = BTreeMap::new();
         let mut identity_catalogs = BTreeMap::new();
         let config = RoutingRegionsConfig::load(routing_config)?;
         for region in &router.transit {
@@ -98,6 +108,10 @@ impl RealtimeSources {
                     .context("unreadable timetable source")?;
                 sources.push((idx, chateau.to_owned(), feed.to_owned(), attempt.to_owned()));
             }
+            let expected: BTreeSet<String> = sources.iter()
+                .map(|(_, chateau, _, _)| chateau.clone())
+                .collect();
+            region_chateaux.insert(region.id.clone(), expected.clone());
             region_sources.insert(region.id.clone(), sources);
             let timetable_path = config.timetable_path(routing_config, &region.id, None)?;
             let sidecar_path = timetable_path.with_extension("rt-identities.bin");
@@ -109,12 +123,24 @@ impl RealtimeSources {
                     .with_context(|| format!("decoding {}", sidecar_path.display()))?;
                 catalog.validate(&tt)
                     .with_context(|| format!("validating {}", sidecar_path.display()))?;
+                // An empty baseline is incomplete until every chateau is
+                // fetched, including those with zero realtime changes.
+                let baseline = RegionRealtimeSnapshot::compose(
+                    &tt, catalog.timetable_fingerprint, 0, &expected, Vec::new(),
+                )?;
+                region_snapshots.insert(region.id.clone(), Arc::new(baseline));
                 identity_catalogs.insert(region.id.clone(), Arc::new(catalog));
             } else {
                 eprintln!("Edelweiss routing source sync: region {} has no GTFS service-identity sidecar yet; compile Gentian with this PR", region.id);
             }
         }
-        Ok(Self { inner: RwLock::new(HashMap::new()), region_sources, identity_catalogs })
+        Ok(Self {
+            inner: RwLock::new(HashMap::new()),
+            region_snapshots: RwLock::new(region_snapshots),
+            region_chateaux,
+            region_sources,
+            identity_catalogs,
+        })
     }
 
     /// Resolve a complete Chateau snapshot against each source-scoped Gentian
@@ -307,6 +333,97 @@ impl RealtimeSources {
         snapshot.stats = stats;
     }
 
+    /// Pin one atomic snapshot covering all available chateaux in a region.
+    /// The returned Arc is stable throughout RAPTOR/PONG and reconstruction,
+    /// even if Aspen publishes a newer source revision simultaneously.
+    pub fn pin_region(&self, region: &str) -> Option<Arc<RegionRealtimeSnapshot>> {
+        self.region_snapshots
+            .read().unwrap_or_else(|e| e.into_inner())
+            .get(region)
+            .cloned()
+    }
+
+    /// Recompose each changed region exactly once after a complete round of
+    /// parallel Aspen RPC downloads. Overlays and their time/stop arrays are
+    /// kept in Arc shards; only sparse regional lookup indexes are rebuilt.
+    /// This avoids O(chateaux x region) reassembly on every source download.
+    pub fn publish_regions(&self, router: &Router) -> Result<usize> {
+        let sources = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let previous = self.region_snapshots.read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut pending = Vec::new();
+
+        for (region_index, region) in router.transit.iter().enumerate() {
+            let Some(catalog) = self.identity_catalogs.get(&region.id) else { continue };
+            let Some(expected) = self.region_chateaux.get(&region.id) else { continue };
+            let region_index = u16::try_from(region_index)
+                .context("region index exceeds realtime source index width")?;
+            let mut shards = Vec::new();
+            for chateau in expected {
+                let Some(snapshot) = sources.get(chateau) else { continue };
+                let Some(overlay) = snapshot.overlays.get(&region_index) else {
+                    continue;
+                };
+                if overlay.revision != snapshot.revision_ms {
+                    // Prevent a stale generation of the chateau's own
+                    // preparation from contaminating a region snapshot.
+                    continue;
+                }
+                shards.push(ChateauRealtimeShard {
+                    chateau: chateau.clone(),
+                    overlay: Arc::clone(overlay),
+                });
+            }
+
+            if previous.get(&region.id).is_some_and(|current| {
+                current.chateaux.len() == shards.len()
+                    && current.chateaux.iter().zip(&shards).all(|(a, b)|
+                        a.chateau == b.chateau && Arc::ptr_eq(&a.overlay, &b.overlay)
+                    )
+            }) {
+                continue;
+            }
+
+            let next_seq = previous.get(&region.id)
+                .map_or(1, |current| current.publication_seq.saturating_add(1));
+            let tt = region.timetable.view()?;
+            let composed = RegionRealtimeSnapshot::compose(
+                &tt, catalog.timetable_fingerprint, next_seq, expected, shards,
+            ).with_context(|| format!("composing region realtime snapshot {}", region.id))?;
+            pending.push((region.id.clone(), Arc::new(composed)));
+        }
+        drop(previous);
+        drop(sources);
+        let mut regions = self.region_snapshots.write()
+            .unwrap_or_else(|e| e.into_inner());
+        let count = pending.len();
+        for (id, snapshot) in pending {
+            regions.insert(id, snapshot);
+        }
+        Ok(count)
+    }
+
+    /// A Chateau can disappear from Aspen assignments or be invalidated by
+    /// operations. Explicit withdrawal removes its RT shard on the next
+    /// composition; other chateaux remain usable in the same pinned region.
+    pub fn withdraw_chateau(&self, chateau: &str) -> bool {
+        self.inner.write().unwrap_or_else(|e| e.into_inner())
+            .remove(chateau).is_some()
+    }
+
+    pub fn region_status(&self) -> Vec<(String, u64, usize, usize, usize, usize)> {
+        let snapshots = self.region_snapshots.read()
+            .unwrap_or_else(|e| e.into_inner());
+        snapshots.iter().map(|(region, snapshot)| (
+            region.clone(),
+            snapshot.publication_seq,
+            snapshot.chateaux.len(),
+            snapshot.expected_chateaux,
+            snapshot.run_count(),
+            snapshot.suppressed_count(),
+        )).collect()
+    }
+
     pub fn chateaux(&self) -> BTreeSet<String> {
         self.region_sources.values()
             .flat_map(|sources| sources.iter().map(|(_, c, _, _)| c.clone()))
@@ -472,6 +589,18 @@ pub async fn synchronize(
                 }
             })
             .await;
+        match sources.publish_regions(&router) {
+            Ok(changed) if changed > 0 => {
+                for (region, revision, covered, expected, runs, suppressed) in sources.region_status() {
+                    eprintln!(
+                        "Edelweiss RT region {region}: revision={revision} sources={covered}/{expected} runs={runs} suppressed={suppressed} complete={}",
+                        covered == expected,
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(error) => eprintln!("Edelweiss RT region snapshot compose failed: {error:#}"),
+        }
         let (active, updates) = sources.stats();
         eprintln!("Edelweiss routing source sync: {active} source snapshots; {updates} routing updates retained in RAM");
         tokio::time::sleep(interval).await;
