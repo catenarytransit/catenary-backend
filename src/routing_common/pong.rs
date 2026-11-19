@@ -932,6 +932,18 @@ mod tests {
                 assert!(!journey.legs.iter().any(|leg|
                     matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
                     "suppressed static run reconstructed: {journey:?}");
+                if journey.legs.iter().any(|leg| matches!(leg, Leg::Ride { realtime: Some(_), .. })) {
+                    let mut stale = journey.clone();
+                    for leg in &mut stale.legs {
+                        if let Leg::Ride { realtime: Some(rt), .. } = leg {
+                            rt.publication_seq = rt.publication_seq.saturating_add(1);
+                        }
+                    }
+                    assert!(!valid_journey_with_realtime(&tt, &q, &stale, Some(&snapshot)),
+                        "a stale RT handle must never pass journey validation");
+                    assert!(!valid_journey_with_realtime(&tt, &q, journey, None),
+                        "RT journey cannot validate against a static-only timetable");
+                }
             }
             assert!(journeys.iter().any(|j| j.legs.iter().any(|leg|
                 matches!(leg, Leg::Ride {
