@@ -223,7 +223,7 @@ pub fn scheduled_action(
     Ok(PreparedAction::Run(RtRunInput {
         source,
         original: Some((transport, original.service_day_utc)),
-        service_date: civil_day(update.service_date.ok_or(PrepareError::MissingServiceDate)?)?,
+        service_date: civil_day(resolver.service_date(original)?)?,
         external_id: None,
         pattern: match dynamic_stops {
             Some(stops) => RtPatternInput::Stops(stops),
