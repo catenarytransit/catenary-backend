@@ -130,24 +130,6 @@ pub fn enrich(
                 let board = *board_stop_index;
                 let alight = *alight_stop_index;
                 let metadata = pinned.and_then(|(snap, handle)| snap.run_metadata(handle.run));
-                let scheduled = |pos: usize, arrival: bool| -> Option<String> {
-                    let (before, after) = aligned?;
-                    let old = before.get(pos)?;
-                    let now = after.get(pos)?;
-                    let explicitly_changed = metadata
-                        .and_then(|m| m.stop_change(pos))
-                        .and_then(|c| c.original_location)
-                        .is_some_and(|loc| loc == old.location().0);
-                    if old.location() != now.location() && !explicitly_changed {
-                        return None;
-                    }
-                    let stop = match (pos, arrival) {
-                        (p, true) if p == board => leg["scheduledStartTime"].as_str(),
-                        (p, false) if p == alight => leg["scheduledEndTime"].as_str(),
-                        _ => None,
-                    };
-                    stop.map(str::to_owned)
-                };
                 // The v1 renderer supplies the original GTFS event time.
                 // These copies must be made before mutating the JSON object.
                 let departure_scheduled = leg["scheduledStartTime"].as_str().map(str::to_owned);
@@ -175,15 +157,11 @@ pub fn enrich(
                     } else { None };
                     (planned_quay.map(str::to_owned), estimated_quay.map(str::to_owned),
                         changed.is_some_and(|c| c.skipped),
-                        current.is_some_and(PackedStop::outbound),
-                        current.is_some_and(PackedStop::inbound))
+                        current.is_some_and(|stop| stop.outbound()),
+                        current.is_some_and(|stop| stop.inbound()))
                 };
-                let dep_scheduled = if aligned.is_some() {
-                    scheduled(board, true).or(departure_scheduled)
-                } else { None };
-                let arr_scheduled = if aligned.is_some() {
-                    scheduled(alight, false).or(arrival_scheduled)
-                } else { None };
+                let dep_scheduled = departure_scheduled.filter(|_| aligned.is_some());
+                let arr_scheduled = arrival_scheduled.filter(|_| aligned.is_some());
                 let service_departure = event(dep_scheduled.as_deref(),
                     departure_current.as_deref(), kind(board, false));
                 let service_arrival = event(arr_scheduled.as_deref(),
