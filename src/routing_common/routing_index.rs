@@ -218,7 +218,15 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
     fs::create_dir_all(parent)?;
     let temp = parent.join(format!(".routing-index.{}.building", uuid::Uuid::new_v4()));
     let result = (|| -> Result<()> {
-        let file = OpenOptions::new().create_new(true).write(true).open(&temp)?;
+        // The publisher validates the completed index with a read-only mmap.
+        // Open the temporary file for reading as well as writing so Linux does
+        // not reject the validation mapping with EACCES.
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(&temp)
+            .with_context(|| format!("creating temporary routing index {}", temp.display()))?;
         let mut out = BufWriter::new(file);
         out.write_all(&vec![0u8; std::mem::size_of::<Header>()])?;
         let mut route_offsets = Vec::with_capacity(index.transports.routes.len() + 1);
@@ -264,7 +272,8 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
         let file = out.into_inner().map_err(|e| e.into_error())?;
         file.sync_all()?;
         // Always inspect the published representation before installation.
-        let checked = unsafe { MmapOptions::new().map(&file)? };
+        let checked = unsafe { MmapOptions::new().map(&file) }
+            .with_context(|| format!("mapping temporary routing index {} for validation", temp.display()))?;
         validate(&checked, &tt, identity)?;
         drop(checked);
         fs::rename(&temp, index_path)?;
