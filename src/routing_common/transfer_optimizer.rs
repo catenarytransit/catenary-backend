@@ -125,6 +125,7 @@ fn ride(leg: &Leg) -> Option<Ride> {
         to_stop,
         departure_unix_seconds,
         arrival_unix_seconds,
+        realtime: None,
     } = *leg
     {
         Some(Ride {
@@ -511,7 +512,8 @@ mod tests {
                     alight_stop_index: 1,
                     departure_unix_seconds: midnight + 8 * 3600,
                     arrival_unix_seconds: midnight + 8 * 3600 + 300,
-                },
+                    realtime: None,
+},
                 Leg::Transfer {
                     from_stop: 1,
                     to_stop: 4,
@@ -527,7 +529,8 @@ mod tests {
                     alight_stop_index: 2,
                     departure_unix_seconds: midnight + 8 * 3600 + 20 * 60,
                     arrival_unix_seconds: midnight + 8 * 3600 + 35 * 60,
-                },
+                    realtime: None,
+},
                 Leg::Egress {
                     from_stop: 6,
                     seconds: 0,

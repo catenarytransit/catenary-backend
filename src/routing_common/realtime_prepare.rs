@@ -12,6 +12,7 @@ use crate::routing_common::realtime_identity::{
     RealtimeGtfsResolver, ResolveIssue, ResolvedInstance,
 };
 use crate::routing_common::realtime_overlay::{RtPatternInput, RtRunInput};
+use crate::routing_common::realtime_status::{RtEventAnnotation, RtEventKind, RtRunMetadata, RtStopChange};
 use crate::routing_common::realtime_source::{RoutingStopUpdate, RoutingTimeUpdate, RoutingTripUpdate};
 use crate::routing_common::timetable::{
     DayIdx, PackedStop, SourceIdx, TransportIdx, ZeroCopyTimetable,
@@ -125,6 +126,7 @@ pub fn scheduled_action(
 
     let mut by_occurrence: Vec<Option<&RoutingStopUpdate>> = vec![None; n];
     let mut dynamic_stops: Option<Vec<PackedStop>> = None;
+    let mut metadata = RtRunMetadata::default();
     for stop in &update.stops {
         let (index, _old, assigned) = resolver.stop_occurrence(source, transport, stop)?;
         if by_occurrence[index].replace(stop).is_some() {
@@ -142,8 +144,19 @@ pub fn scheduled_action(
         if replacement != base {
             dynamic_stops.get_or_insert_with(|| static_stops.to_vec())[index] = replacement;
         }
+        let no_data = matches!(stop.schedule_relationship, Some(StopRelationship::NoData));
+        if skipped || no_data || assigned.is_some_and(|loc| loc != base.location()) {
+            metadata.stops.push(RtStopChange {
+                position: index as u32,
+                skipped,
+                no_data,
+                original_location: assigned.filter(|loc| *loc != base.location())
+                    .map(|_| base.location().0),
+            });
+        }
     }
 
+    metadata.stops.sort_by_key(|s| s.position);
     let affects_timing = update.delay_seconds.is_some() || update.stops.iter().any(|stop| {
         stop.arrival.is_some() || stop.departure.is_some()
             || matches!(stop.schedule_relationship, Some(StopRelationship::NoData))
@@ -152,24 +165,39 @@ pub fn scheduled_action(
         return Ok(PreparedAction::NoChange);
     }
     let mut inherited_delay = i64::from(update.delay_seconds.unwrap_or(0));
+    let mut estimated = update.delay_seconds.is_some();
     let mut events = Vec::with_capacity(scheduled.len());
     for (index, stop) in by_occurrence.iter().enumerate() {
-        if stop.is_some_and(|stop| matches!(stop.schedule_relationship, Some(StopRelationship::NoData))) {
+        let no_data = stop.is_some_and(|stop| matches!(
+            stop.schedule_relationship, Some(StopRelationship::NoData)
+        ));
+        if no_data {
             inherited_delay = 0;
+            estimated = false;
         }
+        let mut push_event = |slot: usize, event: Option<&RoutingTimeUpdate>| -> Result<(), PrepareError> {
+            let time = updated_time(scheduled[slot], event, &mut inherited_delay)?;
+            if event.is_some_and(|e| e.unix_seconds.is_some() || e.delay_seconds.is_some()) {
+                estimated = true;
+            }
+            let kind = if no_data && !estimated {
+                RtEventKind::NoData
+            } else if estimated {
+                RtEventKind::Estimated
+            } else {
+                RtEventKind::Timetabled
+            };
+            if kind != RtEventKind::Timetabled {
+                metadata.events.push(RtEventAnnotation { slot: slot as u32, kind });
+            }
+            events.push(time);
+            Ok(())
+        };
         if index != 0 {
-            let slot = index * 2 - 1;
-            events.push(updated_time(
-                scheduled[slot], stop.and_then(|stop| stop.arrival.as_ref()),
-                &mut inherited_delay,
-            )?);
+            push_event(index * 2 - 1, stop.and_then(|stop| stop.arrival.as_ref()))?;
         }
         if index + 1 != n {
-            let slot = index * 2;
-            events.push(updated_time(
-                scheduled[slot], stop.and_then(|stop| stop.departure.as_ref()),
-                &mut inherited_delay,
-            )?);
+            push_event(index * 2, stop.and_then(|stop| stop.departure.as_ref()))?;
         }
     }
     validate_events(&events)?;
@@ -183,6 +211,7 @@ pub fn scheduled_action(
             None => RtPatternInput::Static(route),
         },
         event_times: events,
+        metadata: Some(metadata),
     }))
 }
 
@@ -208,6 +237,7 @@ pub fn added_action(
         return Err(PrepareError::MissingStop);
     }
     let mut previous_sequence: Option<u16> = None;
+    let mut metadata = RtRunMetadata::default();
     let mut stops = Vec::with_capacity(update.stops.len());
     let mut events = Vec::with_capacity((update.stops.len() - 1) * 2);
     for (i, stop) in update.stops.iter().enumerate() {
@@ -225,6 +255,14 @@ pub fn added_action(
         let assigned = stop.assigned_stop_id.as_deref()
             .map(|s| resolver.stop(source, s)).transpose()?;
         let boardable = !matches!(stop.schedule_relationship, Some(StopRelationship::Skipped));
+        if !boardable || assigned.is_some_and(|loc| loc != location) {
+            metadata.stops.push(RtStopChange {
+                position: i as u32,
+                skipped: !boardable,
+                no_data: false,
+                original_location: assigned.filter(|loc| *loc != location).map(|_| location.0),
+            });
+        }
         stops.push(PackedStop::new(
             assigned.unwrap_or(location),
             boardable, boardable, boardable, boardable,
@@ -254,5 +292,6 @@ pub fn added_action(
         )),
         pattern: RtPatternInput::Stops(stops),
         event_times: events,
+        metadata: Some(metadata),
     }))
 }

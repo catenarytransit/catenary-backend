@@ -10,25 +10,64 @@
 //! A snapshot with missing chateaux is explicitly incomplete and MUST NOT
 //! be treated as complete realtime coverage.
 
+use crate::routing_common::realtime_status::{RtEventKind, RtRunMetadata, StaticRunStatus};
 use crate::routing_common::realtime_overlay::{
     RealtimeOverlay, RtPatternRef, RtRun, StaticInstance,
 };
 use crate::routing_common::timetable::{
     DayIdx, LocationIdx, PackedStop, SourceIdx, TransportIdx, ZeroCopyTimetable,
 };
+
+/// Nigiri updates its per-profile lower-bound graph when a realtime segment
+/// becomes a shortcut. In this RAM-constrained adapter we conservatively
+/// invalidate static lower bounds only when some RT run may introduce a
+/// faster or newly boardable connection. Pure delays, skip-only changes and
+/// cancellations cannot shorten a path, so the original bounds remain valid.
+fn overlay_may_shortcut(tt: &ZeroCopyTimetable<'_>, overlay: &RealtimeOverlay) -> bool {
+    overlay.runs.iter().any(|run| {
+        let Some(original) = run.original else { return true };
+        let Some(route) = tt.transport_route().get(original.transport as usize) else {
+            return true;
+        };
+        let old = tt.stops_on(*route);
+        let Some(new) = overlay.stops(tt, run.pattern) else { return true };
+        if old.len() != new.len() { return true; }
+        for (prev, next) in old.iter().zip(new) {
+            if prev.location() != next.location() ||
+                (!prev.outbound() && next.outbound()) ||
+                (!prev.inbound() && next.inbound()) ||
+                (!prev.wheelchair_in() && next.wheelchair_in()) ||
+                (!prev.wheelchair_out() && next.wheelchair_out())
+            {
+                return true;
+            }
+        }
+        let Some(static_events) = tt.events_for_transport(TransportIdx(original.transport))
+        else { return true };
+        (0..new.len()-1).any(|i| {
+            let Some(rt_dep) = overlay.event_time(run, i*2) else { return true };
+            let Some(rt_arr) = overlay.event_time(run, i*2+1) else { return true };
+            let Some(old_dep) = static_events.get(i*2) else { return true };
+            let Some(old_arr) = static_events.get(i*2+1) else { return true };
+            rt_arr.saturating_sub(rt_dep) <
+                i64::from(old_arr.seconds() - old_dep.seconds())
+        })
+    })
+}
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use serde::Serialize;
 
 /// Identifies a realtime pattern within *one pinned region snapshot*.
 /// The slot is an index into RegionRealtimeSnapshot::chateaux.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RegionRtPattern {
     pub chateau_slot: u32,
     pub pattern: RtPatternRef,
 }
 
 /// Run handle scoped to one pinned regional realtime snapshot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct RegionRtRun {
     pub chateau_slot: u32,
     pub run_index: u32,
@@ -53,10 +92,17 @@ pub struct RegionRealtimeSnapshot {
     pub chateaux: Vec<ChateauRealtimeShard>,
     pub expected_chateaux: usize,
     pub missing_chateaux: Vec<String>,
+    /// True when a new or faster RT edge can invalidate static-only bounds.
+    /// Computed once at publication, never by every PONG query.
+    pub may_shortcut: bool,
     location_patterns: BTreeMap<u32, Vec<RegionRtPattern>>,
     // Sorted compact union; a persistent BTreeSet would allocate a node
     // per canceled transport-day instance on every regional revision.
     suppressed_static: Vec<StaticInstance>,
+    cancelled_static: Vec<StaticInstance>,
+    /// Sparse O(log RT instances) lookup for saved-trip and OJP detail.
+    /// Never build a dense table for every static timetable transport.
+    original_instance_runs: BTreeMap<StaticInstance, RegionRtRun>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,8 +139,11 @@ impl RegionRealtimeSnapshot {
         let event_epoch = i64::from(tt.header().first_utc_day) * 86_400;
         let mut location_patterns = BTreeMap::<u32, Vec<RegionRtPattern>>::new();
         let mut suppressed_static = BTreeSet::new();
+        let mut cancelled_static = BTreeSet::new();
+        let mut original_instance_runs = BTreeMap::new();
         let mut chateaux = Vec::with_capacity(shards.len());
         let mut observed = BTreeSet::new();
+        let mut may_shortcut = false;
 
         for shard in shards {
             if !expected_chateaux.contains(&shard.chateau) {
@@ -120,8 +169,19 @@ impl RegionRealtimeSnapshot {
                 }
             }
 
+            may_shortcut |= overlay_may_shortcut(tt, &shard.overlay);
             let chateau_slot =
                 u32::try_from(chateaux.len()).map_err(|_| RegionSnapshotError::TooManyChateaux)?;
+            for (i, run) in shard.overlay.runs.iter().enumerate() {
+                if let Some(instance) = run.original {
+                    let run_index = u32::try_from(i).map_err(|_| RegionSnapshotError::InvalidPattern)?;
+                    if original_instance_runs.insert(instance, RegionRtRun {
+                        chateau_slot, run_index,
+                    }).is_some() {
+                        return Err(RegionSnapshotError::SuppressionCollision);
+                    }
+                }
+            }
             for (&location, patterns) in &shard.overlay.location_patterns {
                 if location as usize >= tt.coordinates().len() {
                     return Err(RegionSnapshotError::InvalidPattern);
@@ -133,6 +193,12 @@ impl RegionRealtimeSnapshot {
                     }
                     index.push(RegionRtPattern { chateau_slot, pattern });
                 }
+            }
+            for &instance in &shard.overlay.cancelled_static {
+                if !shard.overlay.suppressed_static.binary_search(&instance).is_ok() {
+                    return Err(RegionSnapshotError::SuppressionCollision);
+                }
+                cancelled_static.insert(instance);
             }
             for &instance in &shard.overlay.suppressed_static {
                 if !suppressed_static.insert(instance) {
@@ -154,8 +220,11 @@ impl RegionRealtimeSnapshot {
             chateaux,
             expected_chateaux: expected_chateaux.len(),
             missing_chateaux,
+            may_shortcut,
             location_patterns,
             suppressed_static: suppressed_static.into_iter().collect(),
+            cancelled_static: cancelled_static.into_iter().collect(),
+            original_instance_runs,
         })
     }
 
@@ -212,9 +281,25 @@ impl RegionRealtimeSnapshot {
             })
     }
 
+    pub fn original_run(&self, transport: TransportIdx, day: DayIdx) -> Option<RegionRtRun> {
+        self.original_instance_runs.get(&StaticInstance {
+            transport: transport.0, day: day.0,
+        }).copied()
+    }
+
     pub fn run(&self, handle: RegionRtRun) -> Option<&RtRun> {
         self.chateaux.get(handle.chateau_slot as usize)?
             .overlay.runs.get(handle.run_index as usize)
+    }
+
+    pub fn run_metadata(&self, handle: RegionRtRun) -> Option<&RtRunMetadata> {
+        let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
+        overlay.run_metadata(handle.run_index)
+    }
+
+    pub fn run_event_kind(&self, handle: RegionRtRun, slot: usize) -> Option<RtEventKind> {
+        let overlay = &self.chateaux.get(handle.chateau_slot as usize)?.overlay;
+        overlay.event_kind(handle.run_index, slot)
     }
 
     pub fn run_event_time(&self, handle: RegionRtRun, slot: usize) -> Option<i64> {
@@ -238,6 +323,19 @@ impl RegionRealtimeSnapshot {
     pub fn event_time(&self, pattern: RegionRtPattern, run: &RtRun, slot: usize) -> Option<i64> {
         let overlay = &self.chateaux.get(pattern.chateau_slot as usize)?.overlay;
         overlay.event_time(run, slot)
+    }
+
+    /// Important for saved/SingleTrip views: a cancelled static instance is
+    /// still addressable after it has disappeared from normal RAPTOR scans.
+    pub fn static_status(&self, transport: TransportIdx, day: DayIdx) -> StaticRunStatus {
+        let key = StaticInstance { transport: transport.0, day: day.0 };
+        if self.cancelled_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Cancelled
+        } else if self.suppressed_static.binary_search(&key).is_ok() {
+            StaticRunStatus::Replaced
+        } else {
+            StaticRunStatus::Scheduled
+        }
     }
 
     pub fn is_static_suppressed(&self, transport: TransportIdx, day: DayIdx) -> bool {
@@ -313,6 +411,7 @@ mod tests {
                 PackedStop::new(LocationIdx(first), true, true, true, true).unwrap(),
                 PackedStop::new(LocationIdx(first + 1), true, true, true, true).unwrap(),
             ]),
+            metadata: None,
             event_times: vec![start, start + 100],
         }).unwrap();
         ChateauRealtimeShard {

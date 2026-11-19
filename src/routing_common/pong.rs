@@ -1,4 +1,4 @@
-//! Static, no-via port of Nigiri's CPU PONG search.
+//! No-via port of Nigiri's CPU PONG search, including snapshot-pinned RT.
 //!
 //! Upstream: motis-project/nigiri@82e55cedfc184ea3a33082619ba937d172e9c575,
 //! src/routing/raptor/pong.cc. MIT license: third_party/nigiri-LICENSE.
@@ -7,13 +7,14 @@
 //! checked between complete sweeps, never inside a point search.
 //! Gentian's adapter uses seconds and boardings (upstream uses minutes and
 //! transfers). Intermodal start footpaths are disabled in both directions.
-//! The static scan uses Nigiri's best_/tmp_/round_times_ label model.
+//! Static and realtime scans share Nigiri's best_/tmp_/round_times_ label model.
 //! Only selected PONG matches are reconstructed, from round times and events.
 
 use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
 use crate::routing_common::profile_compact::LowerBoundTopology;
 use crate::routing_common::profile_compact_reconstruct::valid_journey;
 use crate::routing_common::profile_search::{ProfileOptions, sort_journeys_for_response};
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::raptor_query::{
     Journey, Leg, Query, RaptorStats, transport_event_second,
 };
@@ -23,6 +24,7 @@ use anyhow::{Result, ensure};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DAY: u32 = 86_400;
@@ -156,6 +158,9 @@ pub struct PongControl<'a> {
     pub emit_updates: bool,
     /// Count-based HTTP pages must not count unreconstructed side products.
     pub require_reconstructed_count: bool,
+    /// Pin one completed region revision throughout PING, PONG and deferred
+    /// journey reconstruction. None retains the unmodified static behavior.
+    pub realtime: Option<Arc<RegionRealtimeSnapshot>>,
 }
 impl PongControl<'_> {
     pub fn is_cancelled(&self) -> bool {
@@ -289,6 +294,9 @@ pub(crate) fn route_pong_observed(
     // waiting. Apply duration/direct filtering only to validated pong keys.
     kernel_query.direct_walk_seconds = None;
     let mut state = NigiriRaptor::new(tt, &kernel_query, arrive_by, topology)?;
+    if let Some(snapshot) = control.realtime.as_ref() {
+        state.enable_realtime(Arc::clone(snapshot))?;
+    }
     let transports = state.transport_index();
     // kPruneWithPingBounds: reverse lower bounds start at zero. Swap vectors
     // when changing direction instead of allocating a second RAPTOR state.
@@ -532,7 +540,7 @@ pub(crate) fn route_pong_observed(
     // Nigiri's final forward-only refinement replaces the middle vehicle in
     // ride/walk/ride/walk/ride windows with the earliest feasible direct one.
     // There are no vias or realtime/TD footpaths in Edelweiss's Query type.
-    if !arrive_by {
+    if !arrive_by && state.realtime.is_none() {
         for journey in &mut journeys {
             improve_middle_rides(tt, &transports, request, journey, &mut stats, deadline);
         }
@@ -676,7 +684,8 @@ fn earliest_alternative(
                             alight_stop_index: pos,
                             departure_unix_seconds: selected.event,
                             arrival_unix_seconds: arrival,
-                        },
+                            realtime: None,
+},
                         Leg::Transfer {
                             from_stop: stop.location().0,
                             to_stop: to,
@@ -749,6 +758,14 @@ fn improve_middle_rides(
 mod tests {
     use super::*;
     use crate::routing_common::raptor_query::WalkingEndpoint;
+    use crate::routing_common::realtime_overlay::{
+        RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
+    };
+    use crate::routing_common::realtime_region::{
+        ChateauRealtimeShard, RegionRealtimeSnapshot,
+    };
+    use crate::routing_common::profile_compact_reconstruct::valid_journey_with_realtime;
+    use std::collections::BTreeSet;
     use crate::routing_common::timetable::{
         BitfieldIdx, Delta, PackedStop, Range, RouteIdx, SourceIdx, StationTransferRule,
         TimetableOwned, TimingProfileIdx, TrafficDays,
@@ -837,6 +854,272 @@ mod tests {
             ],
             prohibit_change,
         )
+    }
+
+    fn rt_region(
+        tt: &ZeroCopyTimetable<'_>,
+        replace_static: bool,
+        added: bool,
+    ) -> Arc<RegionRealtimeSnapshot> {
+        let mut builder = RealtimeOverlayBuilder::new_sparse(tt, [4; 32], 1);
+        let base = i64::from(tt.header().first_utc_day) * 86_400;
+        if replace_static {
+            builder.add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: Some((crate::routing_common::timetable::TransportIdx(0),
+                    crate::routing_common::timetable::DayIdx(0))),
+                service_date: 20_000,
+                external_id: None,
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                event_times: vec![base+8*3600+300, base+8*3600+900],
+                metadata: None,
+            }).unwrap();
+        }
+        if added {
+            builder.add_run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("5:extra0::20000".into()),
+                pattern: RtPatternInput::Static(RouteIdx(0)),
+                event_times: vec![base+8*3600+1200, base+8*3600+1680],
+                metadata: None,
+            }).unwrap();
+        }
+        Arc::new(RegionRealtimeSnapshot::compose(
+            tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap())
+    }
+
+    #[test]
+    fn pong_reconstructs_modified_and_added_trips_in_both_directions() {
+        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let delayed_only = rt_region(&tt, true, false);
+        assert!(!delayed_only.may_shortcut, "pure delay must preserve static lower bounds");
+        let snapshot = rt_region(&tt, true, true);
+        assert!(snapshot.may_shortcut, "added run may create a new fastest path");
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base + 8*3600 + if reverse { 1900 } else { 240 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None,
+                max_boardings: 2,
+                max_duration_seconds: 7200,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1,
+                    search_window_seconds: 1800,
+                    max_journey_duration_seconds: 7200,
+                    ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(!journeys.is_empty(), "reverse={reverse}");
+            for journey in &journeys {
+                assert!(valid_journey_with_realtime(&tt, &q, journey, Some(&snapshot)),
+                    "invalid RT journey reverse={reverse}: {journey:?}");
+                assert!(!journey.legs.iter().any(|leg|
+                    matches!(leg, Leg::Ride { realtime: None, transport: 0, service_day: 0, .. })),
+                    "suppressed static run reconstructed: {journey:?}");
+                if journey.legs.iter().any(|leg| matches!(leg, Leg::Ride { realtime: Some(_), .. })) {
+                    let mut stale = journey.clone();
+                    for leg in &mut stale.legs {
+                        if let Leg::Ride { realtime: Some(rt), .. } = leg {
+                            rt.publication_seq = rt.publication_seq.saturating_add(1);
+                        }
+                    }
+                    assert!(!valid_journey_with_realtime(&tt, &q, &stale, Some(&snapshot)),
+                        "a stale RT handle must never pass journey validation");
+                    assert!(!valid_journey_with_realtime(&tt, &q, journey, None),
+                        "RT journey cannot validate against a static-only timetable");
+                }
+            }
+            assert!(journeys.iter().any(|j| j.legs.iter().any(|leg|
+                matches!(leg, Leg::Ride {
+                    realtime: Some(_),
+                    departure_unix_seconds: dep,
+                    arrival_unix_seconds: arr, ..
+                } if *dep == base + 8*3600+1200 && *arr == base + 8*3600+1680))),
+                "missing added RT trip reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
+    fn pong_dynamic_detour_preserves_stop_occurrence_and_never_boards_skipped_stop() {
+        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4;32], 1);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: Some((
+                crate::routing_common::timetable::TransportIdx(0),
+                crate::routing_common::timetable::DayIdx(0),
+            )),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Stops(vec![
+                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(1), false, false, false, false).unwrap(),
+                PackedStop::new(LocationIdx(2), true, true, true, true).unwrap(),
+            ]),
+            event_times: vec![
+                base+8*3600+300, base+8*3600+480,
+                base+8*3600+481, base+8*3600+900,
+            ],
+            metadata: None,
+        }).unwrap();
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4;32], 1, &BTreeSet::from(["test".into()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base+8*3600+if reverse { 930 } else { 240 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None, max_boardings: 2, max_duration_seconds: 3600,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions { min_itineraries: 1, search_window_seconds: 600,
+                    max_journey_duration_seconds: 3600, ..Default::default() },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(journeys.iter().any(|j|
+                valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
+                && j.legs.iter().any(|leg| matches!(leg, Leg::Ride {
+                    from_stop: 0, to_stop: 2,
+                    board_stop_index: 0, alight_stop_index: 2,
+                    realtime: Some(_), .. })),
+            ), "dynamic skipped-stop RT ride lost reverse={reverse}: {journeys:?}");
+        }
+        let q = Query {
+            departure_unix_seconds: base+8*3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(1), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None, max_boardings: 1, max_duration_seconds: 3600,
+        };
+        let (journeys, _) = route_pong_observed(
+            &tt, &q, ProfileOptions {
+                min_itineraries: 1, search_window_seconds: 900,
+                max_journey_duration_seconds: 3600, ..Default::default()
+            }, false, None,
+            &PongControl { realtime: Some(snapshot), ..Default::default() },
+            &mut |_, _| Ok(()),
+        ).unwrap();
+        assert!(journeys.is_empty(), "boarded a skipped stop: {journeys:?}");
+    }
+
+    #[test]
+    fn pong_two_ride_transfer_reconstructs_mixed_static_and_rt_in_both_directions() {
+        let bytes = timetable(&[
+            (0, 1, 8*3600, 600),
+            (1, 2, 8*3600+900, 600),
+        ], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let base = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4;32], 1);
+        builder.add_run(RtRunInput {
+            source: SourceIdx(0),
+            original: Some((
+                crate::routing_common::timetable::TransportIdx(1),
+                crate::routing_common::timetable::DayIdx(0),
+            )),
+            service_date: 20_000,
+            external_id: None,
+            pattern: RtPatternInput::Static(RouteIdx(1)),
+            event_times: vec![base+8*3600+1200, base+8*3600+1800],
+            metadata: None,
+        }).unwrap();
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4;32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".to_owned(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        for reverse in [false, true] {
+            let q = Query {
+                departure_unix_seconds: base+8*3600+if reverse { 2100 } else { -120 },
+                access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+                egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+                direct_walk_seconds: None, max_boardings: 3, max_duration_seconds: 3600,
+            };
+            let (journeys, _) = route_pong_observed(
+                &tt, &q,
+                ProfileOptions {
+                    min_itineraries: 1, search_window_seconds: 600,
+                    max_journey_duration_seconds: 3600, ..Default::default()
+                },
+                reverse, None,
+                &PongControl { realtime: Some(Arc::clone(&snapshot)), ..Default::default() },
+                &mut |_, _| Ok(()),
+            ).unwrap();
+            assert!(journeys.iter().any(|j| {
+                j.boardings == 2
+                    && valid_journey_with_realtime(&tt, &q, j, Some(&snapshot))
+                    && j.legs.iter().any(|leg| matches!(leg,
+                        Leg::Ride { transport: 0, realtime: None, .. }))
+                    && j.legs.iter().any(|leg| matches!(leg,
+                        Leg::Ride { transport: 1, realtime: Some(_),
+                            departure_unix_seconds: d, arrival_unix_seconds: a, .. }
+                        if *d == base+8*3600+1200 && *a == base+8*3600+1800
+                    ))
+            }), "no valid mixed transfer for reverse={reverse}: {journeys:?}");
+        }
+    }
+
+    #[test]
+    fn pong_does_not_return_cancelled_static_run() {
+        let bytes = timetable(&[(0, 2, 8*3600, 600)], false).encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [4; 32], 2);
+        builder.cancel_static(
+            crate::routing_common::timetable::TransportIdx(0),
+            crate::routing_common::timetable::DayIdx(0),
+        ).unwrap();
+        let snapshot = Arc::new(RegionRealtimeSnapshot::compose(
+            &tt, [4; 32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(),
+                overlay: Arc::new(builder.finish().unwrap()),
+            }],
+        ).unwrap());
+        let q = Query {
+            departure_unix_seconds: 20_000_i64*86_400 + 8*3600,
+            access: vec![WalkingEndpoint { stop: LocationIdx(0), seconds: 0 }],
+            egress: vec![WalkingEndpoint { stop: LocationIdx(2), seconds: 0 }],
+            direct_walk_seconds: None,
+            max_boardings: 2, max_duration_seconds: 3600,
+        };
+        let (journeys, _) = route_pong_observed(
+            &tt, &q,
+            ProfileOptions {
+                min_itineraries: 1, search_window_seconds: 900,
+                max_journey_duration_seconds: 3600, ..Default::default()
+            },
+            false, None,
+            &PongControl { realtime: Some(snapshot), ..Default::default() },
+            &mut |_, _| Ok(()),
+        ).unwrap();
+        assert!(journeys.is_empty(), "cancelled service leaked: {journeys:?}");
     }
 
     #[test]

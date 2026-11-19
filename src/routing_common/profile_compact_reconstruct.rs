@@ -6,7 +6,8 @@ use crate::routing_common::profile_compact::{Parent, PathLink, Round, Stage};
 use crate::routing_common::raptor_query::{
     Journey, Leg, Query, RaptorStats, optimize_same_trip_endpoint_walks, transport_event_second,
 };
-use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
+use crate::routing_common::timetable::{DayIdx, LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 
 pub(super) fn reconstruct(
     rounds: &[Round],
@@ -183,7 +184,8 @@ pub(super) fn reconstruct_snapshot(
                     alight_stop_index: alight_pos,
                     departure_unix_seconds: departure,
                     arrival_unix_seconds: arrival,
-                });
+                
+                    realtime: None,});
             }
             Parent::Walk { from, to, seconds } => {
                 legs.push(Leg::Transfer {
@@ -212,6 +214,18 @@ fn parent_root_stop(legs: &[Leg], arrive_by: bool) -> Option<u32> {
 }
 
 pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) -> bool {
+    valid_journey_with_realtime(tt, q, j, None)
+}
+
+/// Validate the actual run, events and boarding permissions in the exact
+/// pinned snapshot used by PONG. Static legs from cancelled or replaced
+/// transport-days are rejected, even if their original calendar is active.
+pub(super) fn valid_journey_with_realtime(
+    tt: &ZeroCopyTimetable<'_>,
+    q: &Query,
+    j: &Journey,
+    realtime_snapshot: Option<&RegionRealtimeSnapshot>,
+) -> bool {
     let elapsed = j
         .arrival_unix_seconds
         .saturating_sub(j.departure_unix_seconds);
@@ -272,6 +286,7 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
                 alight_stop_index,
                 departure_unix_seconds,
                 arrival_unix_seconds,
+                realtime,
             } => {
                 if stop != Some(from_stop)
                     || time > departure_unix_seconds
@@ -279,36 +294,72 @@ pub(super) fn valid_journey(tt: &ZeroCopyTimetable<'_>, q: &Query, j: &Journey) 
                 {
                     return false;
                 }
-                let r = RouteIdx(route);
-                let t = TransportIdx(transport);
-                let Some(range) = tt.route_transport_ranges().get(r.idx()) else {
-                    return false;
-                };
-                let stops = tt.stops_on(r);
-                if t.0 < range.from
-                    || t.0 >= range.to
-                    || stops
-                        .get(board_stop_index)
-                        .is_none_or(|s| s.location().0 != from_stop || !s.outbound())
-                    || stops
-                        .get(alight_stop_index)
-                        .is_none_or(|s| s.location().0 != to_stop || !s.inbound())
-                    || !tt
-                        .transport_traffic_days()
-                        .get(t.idx())
-                        .and_then(|b| tt.bitfields().get(b.idx()))
-                        .is_some_and(|bits| bits.test(service_day as usize))
-                {
-                    return false;
-                }
-                let midnight =
-                    (i64::from(tt.header().first_utc_day) + i64::from(service_day)) * 86_400;
-                if transport_event_second(tt, r, t, board_stop_index, false, midnight)
-                    != Some(departure_unix_seconds)
-                    || transport_event_second(tt, r, t, alight_stop_index, true, midnight)
-                        != Some(arrival_unix_seconds)
-                {
-                    return false;
+                if let Some(rt) = realtime {
+                    let Some(snapshot) = realtime_snapshot else { return false; };
+                    if snapshot.publication_seq != rt.publication_seq ||
+                        !snapshot.is_complete() {
+                        return false;
+                    }
+                    let Some(run) = snapshot.run(rt.run) else { return false };
+                    if run.pattern != rt.pattern.pattern ||
+                        rt.pattern.chateau_slot != rt.run.chateau_slot {
+                        return false;
+                    }
+                    let Some(stops) = snapshot.stops(tt, rt.pattern) else { return false };
+                    if stops.get(board_stop_index).is_none_or(|s|
+                        s.location().0 != from_stop || !s.outbound()) ||
+                       stops.get(alight_stop_index).is_none_or(|s|
+                        s.location().0 != to_stop || !s.inbound()) ||
+                       snapshot.run_event_time(rt.run, board_stop_index * 2)
+                           != Some(departure_unix_seconds) ||
+                       snapshot.run_event_time(rt.run, alight_stop_index * 2 - 1)
+                           != Some(arrival_unix_seconds) {
+                        return false;
+                    }
+                    if let Some(original) = run.original {
+                        if transport != original.transport || service_day != original.day ||
+                            !snapshot.is_static_suppressed(
+                                TransportIdx(original.transport), DayIdx(original.day))
+                        {
+                            return false;
+                        }
+                    } else if transport != u32::MAX {
+                        return false;
+                    }
+                } else {
+                    let r = RouteIdx(route);
+                    let t = TransportIdx(transport);
+                    let Some(range) = tt.route_transport_ranges().get(r.idx()) else {
+                        return false;
+                    };
+                    let stops = tt.stops_on(r);
+                    if t.0 < range.from
+                        || t.0 >= range.to
+                        || stops
+                            .get(board_stop_index)
+                            .is_none_or(|s| s.location().0 != from_stop || !s.outbound())
+                        || stops
+                            .get(alight_stop_index)
+                            .is_none_or(|s| s.location().0 != to_stop || !s.inbound())
+                        || !tt
+                            .transport_traffic_days()
+                            .get(t.idx())
+                            .and_then(|b| tt.bitfields().get(b.idx()))
+                            .is_some_and(|bits| bits.test(service_day as usize))
+                        || realtime_snapshot.is_some_and(|snapshot|
+                            snapshot.is_static_suppressed(t, DayIdx(service_day)))
+                    {
+                        return false;
+                    }
+                    let midnight = (i64::from(tt.header().first_utc_day)
+                        + i64::from(service_day)) * 86_400;
+                    if transport_event_second(tt, r, t, board_stop_index, false, midnight)
+                        != Some(departure_unix_seconds)
+                        || transport_event_second(tt, r, t, alight_stop_index, true, midnight)
+                            != Some(arrival_unix_seconds)
+                    {
+                        return false;
+                    }
                 }
                 if let Some((last, last_time)) = previous_alight {
                     let to = from_stop as usize;

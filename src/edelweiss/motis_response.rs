@@ -3,6 +3,9 @@
 use anyhow::{Context, Result};
 use catenary::routing_common::native_osr::{Endpoint as StreetEndpoint, NativeOsr, path_geometry};
 use catenary::routing_common::route_manager::Coordinates;
+use catenary::routing_common::realtime_region::RegionRealtimeSnapshot;
+use catenary::routing_common::realtime_status::{RtEventKind, scheduled_event_unix};
+use catenary::routing_common::timetable::DayIdx;
 use catenary::routing_common::timetable::LocationIdx;
 use catenary::routing_common::{
     metadata_index::MetadataIndex,
@@ -193,11 +196,17 @@ pub fn journey_chateaus(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
     journeys: &[Journey],
+    realtime: Option<&RegionRealtimeSnapshot>,
 ) -> std::collections::HashSet<String> {
     journeys
         .iter()
         .flat_map(|journey| journey.legs.iter())
         .filter_map(|leg| match leg {
+            Leg::Ride { transport, realtime: Some(rt), .. } => realtime
+                .filter(|snapshot| snapshot.publication_seq == rt.publication_seq)
+                .and_then(|snapshot| snapshot.chateaux.get(rt.run.chateau_slot as usize))
+                .map(|shard| shard.chateau.clone())
+                .or_else(|| ride_identity(tt, index, *transport).map(|key| key.chateau)),
             Leg::Ride { transport, .. } => ride_identity(tt, index, *transport)
                 .map(|key| key.chateau),
             _ => None,
@@ -776,13 +785,180 @@ fn trip_instance(meta: &TripInfo, first_departure: i64) -> Option<(String, Strin
     None
 }
 
+fn gtfs_trip_id_from_external(external: &str) -> Option<&str> {
+    let (length, rest) = external.split_once(':')?;
+    let n = length.parse::<usize>().ok()?;
+    rest.get(..n)
+}
+
+/// Catenary's added-trip instance key length-prefixes GTFS trip_id and
+/// start_time, avoiding ambiguous colons or reused trip IDs across instances.
+fn gtfs_start_time_from_external(external: &str) -> Option<&str> {
+    let (length, rest) = external.split_once(':')?;
+    let trip_len = length.parse::<usize>().ok()?;
+    let after_trip = rest.get(trip_len..)?;
+    let (time_length, after_length) = after_trip.split_once(':')?;
+    let time_len = time_length.parse::<usize>().ok()?;
+    (time_len != 0).then(|| after_length.get(..time_len)).flatten()
+}
+
+/// Serialize realtime legs without indexing static arrays at sentinel values.
+/// All stop and event lookups go through exactly the Arc pinned by PONG.
+/// For a dynamic detour pattern, never draw the old GTFS shape as though the
+/// vehicle still followed the original geometry.
+fn realtime_transit_leg(
+    tt: &ZeroCopyTimetable<'_>,
+    index: &MetadataIndex,
+    info: &BTreeMap<(String, String, String), TripInfo>,
+    snapshot: &RegionRealtimeSnapshot,
+    ride: &Leg,
+    detailed: bool,
+) -> Result<Value> {
+    let Leg::Ride {
+        from_stop, to_stop, route, transport, board_stop_index,
+        alight_stop_index, departure_unix_seconds, arrival_unix_seconds,
+        realtime: Some(rt), ..
+    } = ride else { unreachable!() };
+    anyhow::ensure!(snapshot.publication_seq == rt.publication_seq,
+        "realtime journey references an obsolete region revision");
+    let run = snapshot.run(rt.run).context("missing realtime run")?;
+    let stops = snapshot.stops(tt, rt.pattern).context("missing realtime stop pattern")?;
+    let original = run.original;
+    // Event occurrence index is shared with static GTFS only when no stops
+    // were inserted/deleted. Until a full occurrence mapping is available,
+    // withhold TimetabledTime for changed-length patterns rather than pairing
+    // it with a different physical stop.
+    let aligned_original = original.filter(|o| {
+        tt.transport_route().get(o.transport as usize)
+            .is_some_and(|r| tt.stops_on(*r).len() == stops.len())
+    });
+    let mut meta = original
+        .map(|o| trip_info(tt, index, info, o.transport))
+        .unwrap_or_default();
+    if meta.route_id.is_empty() && original.is_some() {
+        meta.route_id = timetable_route_id(tt, index, *transport)
+            .unwrap_or_default().to_owned();
+    }
+    let chateau = snapshot.chateaux.get(rt.run.chateau_slot as usize)
+        .map(|shard| shard.chateau.as_str()).unwrap_or_default();
+    if meta.id.is_empty() {
+        meta.id = run.external_id.as_deref()
+            .and_then(gtfs_trip_id_from_external)
+            .unwrap_or_default().to_owned();
+    }
+    meta.chateau = Some(chateau.to_owned());
+    let from = place(tt, *from_stop);
+    let to = place(tt, *to_stop);
+    let events = |pos: usize, arrival: bool| {
+        if arrival && pos == 0 { return None; }
+        if !arrival && pos + 1 >= stops.len() { return None; }
+        let slot = if arrival { pos * 2 - 1 } else { pos * 2 };
+        snapshot.run_event_time(rt.run, slot)
+    };
+    let scheduled = |pos: usize, arrival: bool| {
+        if arrival && pos == 0 { return None; }
+        if !arrival && pos + 1 >= stops.len() { return None; }
+        let slot = if arrival { pos * 2 - 1 } else { pos * 2 };
+        aligned_original.and_then(|o| scheduled_event_unix(
+            tt, TransportIdx(o.transport), DayIdx(o.day), slot,
+        ))
+    };
+    let intermediates = if board_stop_index < alight_stop_index {
+        ((*board_stop_index+1)..*alight_stop_index).filter_map(|pos| {
+            let stop = stops.get(pos)?;
+            let mut item = place(tt, stop.location().0);
+            if let Some(time) = events(pos, true) { item["arrival"] = json!(timestamp(time)); }
+            if let Some(time) = events(pos, false) { item["departure"] = json!(timestamp(time)); }
+            if let Some(time) = scheduled(pos, true) {
+                item["scheduledArrival"] = json!(timestamp(time));
+            }
+            if let Some(time) = scheduled(pos, false) {
+                item["scheduledDeparture"] = json!(timestamp(time));
+            }
+            item["skipped"] = json!(snapshot.run_metadata(rt.run).is_some_and(|m|
+                m.stop_change(pos).is_some_and(|c| c.skipped)));
+            item["boardingAllowed"] = json!(stop.outbound());
+            item["alightingAllowed"] = json!(stop.inbound());
+            Some(item)
+        }).collect::<Vec<_>>()
+    } else { Vec::new() };
+    let static_pattern = original.and_then(|o| tt.transport_route().get(o.transport as usize))
+        .map(|r| tt.stops_on(*r));
+    let shape_unchanged = static_pattern.is_some_and(|static_stops|
+        static_stops.len() == stops.len()
+            && static_stops.iter().zip(stops).all(|(a,b)| a.location() == b.location())
+    );
+    let shape = if detailed && shape_unchanged {
+        match (location(tt, *from_stop), location(tt, *to_stop)) {
+            (Some(a), Some(b)) => clipped_shape(&meta.shape, a, b),
+            _ => Vec::new(),
+        }
+    } else { Vec::new() };
+    let start = *departure_unix_seconds;
+    let end = *arrival_unix_seconds;
+    let first_scheduled = original.and_then(|o|
+        scheduled_event_unix(tt, TransportIdx(o.transport), DayIdx(o.day), 0));
+    let instance = first_scheduled.and_then(|first| trip_instance(&meta, first));
+    let realtime_start_time = run.external_id.as_deref()
+        .and_then(gtfs_start_time_from_external);
+    let gtfs_date = chrono::NaiveDate::from_ymd_opt(1970,1,1)
+        .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(i64::from(run.service_date))))
+        .map(|day| day.format("%Y%m%d").to_string());
+    let event_status = |slot: usize| match snapshot.run_event_kind(rt.run, slot) {
+        Some(RtEventKind::Timetabled) => "TIMETABLED",
+        Some(RtEventKind::Estimated) => "ESTIMATED",
+        Some(RtEventKind::Recorded) => "RECORDED",
+        Some(RtEventKind::NoData) => "NO_DATA",
+        None => "UNKNOWN",
+    };
+    let stop_changes = snapshot.run_metadata(rt.run);
+    let deviation = original.is_some() && (!shape_unchanged || stop_changes.is_some_and(|m|
+        m.stops.iter().any(|s| s.skipped || s.original_location.is_some())));
+    Ok(json!({
+        "mode":transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied()),
+        "from":from,"to":to,
+        "duration":end.saturating_sub(start),
+        "startTime":timestamp(start),"endTime":timestamp(end),
+        "scheduledStartTime":scheduled(*board_stop_index,false).map(timestamp),
+        "scheduledEndTime":scheduled(*alight_stop_index,true).map(timestamp),
+        "departureStatus":event_status(board_stop_index*2),
+        "arrivalStatus":event_status(alight_stop_index*2-1),
+        "realTime":true,"scheduled":original.is_some(),"cancelled":false,
+        "deviation":deviation,
+        "routeId":meta.route_id,"tripId":meta.id,
+        "chateau":meta.chateau,
+        "tripStartDate":instance.as_ref().map(|v| &v.0).or(gtfs_date.as_ref()),
+        "tripStartTime":instance.as_ref().map(|v| v.1.as_str()).or(realtime_start_time),
+        // Original GTFS stop_sequence numbers are not position-aligned
+        // when a detour inserts or removes intermediate occurrences.
+        "fromStopSequence":aligned_original.and_then(|_| meta.stop_sequences.get(*board_stop_index)),
+        "toStopSequence":aligned_original.and_then(|_| meta.stop_sequences.get(*alight_stop_index)),
+        "routeShortName":meta.short_name,"routeLongName":meta.long_name,
+        "tripShortName":meta.trip_short_name,"headsign":meta.headsign,
+        "routeColor":meta.route_color,"routeTextColor":meta.route_text_color,
+        "routeType":meta.route_type,"agencyId":meta.agency_id,
+        "agencyName":meta.agency_name,"agencyUrl":meta.agency_url,
+        "directionId":meta.direction_id.map(|d|if d {"1"} else {"0"}),
+        "intermediateStops":intermediates,
+        "legGeometry":polyline(&shape),
+        "realtimeSnapshotRevision":snapshot.publication_seq,
+    }))
+}
+
 fn transit_leg(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
     info: &BTreeMap<(String, String, String), TripInfo>,
     ride: &Leg,
     detailed: bool,
-) -> Value {
+    realtime: Option<&RegionRealtimeSnapshot>,
+) -> Result<Value> {
+    if let Leg::Ride { realtime: Some(rt), .. } = ride {
+        let snapshot = realtime.context("RT ride cannot render without its pinned region snapshot")?;
+        anyhow::ensure!(snapshot.publication_seq == rt.publication_seq,
+            "RT ride references an obsolete region revision");
+        return realtime_transit_leg(tt, index, info, snapshot, ride, detailed);
+    }
     let Leg::Ride {
         from_stop,
         to_stop,
@@ -873,13 +1049,14 @@ fn transit_leg(
         "directionId":meta.direction_id.map(|d|if d {"1"} else {"0"}),
         "intermediateStops":intermediate_stops,
         "legGeometry":polyline(&shape)
-    })
+    }))
 }
 
 pub fn build(
     tt: &ZeroCopyTimetable<'_>,
     index: &MetadataIndex,
     platform_stops: &[catenary::routing_common::route_manager::PlatformStopMeta],
+    realtime: Option<&RegionRealtimeSnapshot>,
     journeys: &[Journey],
     from: Coordinates,
     to: Coordinates,
@@ -956,7 +1133,7 @@ pub fn build(
                     arrival_unix_seconds,
                     ..
                 } => {
-                    legs.push(transit_leg(tt, index, &info, leg, detailed));
+                    legs.push(transit_leg(tt, index, &info, leg, detailed, realtime)?);
                     cursor = *arrival_unix_seconds;
                     previous = place(tt, *to_stop);
                 }
@@ -1031,6 +1208,95 @@ pub fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn added_realtime_leg_renders_without_any_static_transport() {
+        use catenary::routing_common::raptor_query::RtRideRef;
+        use catenary::routing_common::realtime_overlay::{
+            RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
+        };
+        use catenary::routing_common::realtime_region::{
+            ChateauRealtimeShard, RegionRealtimeSnapshot, RegionRtPattern, RegionRtRun,
+        };
+        use catenary::routing_common::timetable::{
+            Coordinate, PackedStop, TimetableOwned,
+        };
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut owned = TimetableOwned::empty(20_000, 4);
+        let source = owned.add_source("test", "feed", "attempt").unwrap();
+        for id in ["Origin", "Destination"] {
+            let name = owned.add_string(id).unwrap();
+            owned.coordinates.push(Coordinate::default());
+            owned.location_id.push(name);
+            owned.location_name.push(name);
+            owned.location_source.push(source);
+            owned.location_parent.push(LocationIdx::INVALID);
+            owned.location_type.push(1);
+            owned.location_transfer_seconds.push(0);
+            owned.location_routes_offsets.push(0);
+            owned.footpaths_out_offsets.push(0);
+            owned.footpaths_in_offsets.push(0);
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let index = MetadataIndex::build(&tt).unwrap();
+        let epoch = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [1;32], 1);
+        builder.add_run(RtRunInput {
+            source,
+            original: None,
+            service_date: 20_000,
+            external_id: Some("7:trip:id8:25:00:31:20000".into()),
+            pattern: RtPatternInput::Stops(vec![
+                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+            ]),
+            event_times: vec![epoch+301, epoch+602],
+            metadata: None,
+        }).unwrap();
+        let pattern = builder.finish().unwrap();
+        let kind = pattern.runs[0].pattern;
+        let snapshot = RegionRealtimeSnapshot::compose(
+            &tt, [1;32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(), overlay: Arc::new(pattern),
+            }],
+        ).unwrap();
+        let rt = RtRideRef {
+            publication_seq: snapshot.publication_seq,
+            run: RegionRtRun { chateau_slot: 0, run_index: 0 },
+            pattern: RegionRtPattern { chateau_slot: 0, pattern: kind },
+        };
+        let ride = Leg::Ride {
+            from_stop: 0, to_stop: 1,
+            route: u32::MAX, transport: u32::MAX, service_day: 0,
+            board_stop_index: 0, alight_stop_index: 1,
+            departure_unix_seconds: epoch+301,
+            arrival_unix_seconds: epoch+602,
+            realtime: Some(rt),
+        };
+        let value = realtime_transit_leg(
+            &tt, &index, &BTreeMap::new(), &snapshot, &ride, false,
+        ).unwrap();
+        assert_eq!(value["realTime"], true);
+        assert_eq!(value["scheduled"], false);
+        assert_eq!(value["deviation"], false);
+        assert_eq!(value["tripId"], "trip:id");
+        assert_eq!(value["chateau"], "test");
+        assert_eq!(value["tripStartTime"], "25:00:31");
+        assert!(value["scheduledStartTime"].is_null());
+        assert_eq!(value["startTime"], timestamp(epoch+301));
+    }
+
+    #[test]
+    fn added_gtfs_trip_identity_keeps_colons_and_long_start_times() {
+        let encoded = format!("{}:{}{}:{}:{}", 7, "trip:id", 8, "25:00:31", 20_000);
+        assert_eq!(gtfs_trip_id_from_external(&encoded), Some("trip:id"));
+        assert_eq!(gtfs_start_time_from_external(&encoded), Some("25:00:31"));
+        assert_eq!(gtfs_start_time_from_external("not-a-trip"), None);
+    }
 
     fn instance_meta(start: i64, timezone: &str) -> TripInfo {
         TripInfo {

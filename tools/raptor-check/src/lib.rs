@@ -13,6 +13,14 @@ pub mod interval_estimate;
 pub mod pong;
 #[path = "../../../src/routing_common/nigiri_raptor.rs"]
 pub mod nigiri_raptor;
+#[path = "../../../src/routing_common/realtime_overlay.rs"]
+pub mod realtime_overlay;
+#[path = "../../../src/routing_common/realtime_status.rs"]
+pub mod realtime_status;
+#[path = "../../../src/routing_common/realtime_region.rs"]
+pub mod realtime_region;
+#[path = "../../../src/routing_common/realtime_scan.rs"]
+pub mod realtime_scan;
 #[path = "../../../src/routing_common/nigiri_reconstruct.rs"]
 pub mod nigiri_reconstruct;
 #[path = "../../../src/routing_common/profile_compact.rs"]
@@ -41,6 +49,10 @@ pub mod routing_common {
     pub use crate::interval_estimate;
     pub use crate::pong;
     pub use crate::nigiri_raptor;
+    pub use crate::realtime_overlay;
+    pub use crate::realtime_status;
+    pub use crate::realtime_region;
+    pub use crate::realtime_scan;
     pub use crate::nigiri_reconstruct;
     pub use crate::profile_compact;
     pub use crate::profile_compact_reconstruct;

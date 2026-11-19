@@ -1,11 +1,13 @@
-//! Static, no-via CPU RAPTOR translated from Nigiri 82e55ced's
+//! Static and realtime no-via CPU RAPTOR translated from Nigiri 82e55ced's
 //! include/nigiri/routing/raptor/{raptor.h,raptor_state.h}.
 //! MIT license: third_party/nigiri-LICENSE. The wire adapter uses seconds.
 //! Search labels are best_, tmp_, and round_times_; no predecessor labels
 //! or journey reconstruction participate in route/transfer relaxation.
 use crate::routing_common::profile_compact::{LowerBoundTopology, point_lower_bounds};
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
+use crate::routing_common::realtime_scan::scan_realtime_round_with;
 use crate::routing_common::raptor_query::{Query, RaptorStats, WalkingEndpoint};
-use crate::routing_common::timetable::{Delta, LocationIdx, RouteIdx, ZeroCopyTimetable};
+use crate::routing_common::timetable::{DayIdx, Delta, LocationIdx, RouteIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
@@ -103,6 +105,9 @@ pub(crate) struct NigiriRaptor {
     route_buffers: Vec<RouteBuffer>,
     /// Footpath early pruning (see `update_footpaths`); only disabled by tests/benchmarks.
     early_prune: bool,
+    /// Set only in opt-in tests until realtime journey reconstruction carries
+    /// shard-qualified RegionRtRun predecessor identities end-to-end.
+    pub(crate) realtime: Option<Arc<RegionRealtimeSnapshot>>,
 }
 
 impl NigiriRaptor {
@@ -179,8 +184,28 @@ impl NigiriRaptor {
             route_workers,
             early_prune: true,
             route_buffers: Vec::new(),
+            realtime: None,
         })
     }
+    /// Enable both forward and reverse RT scans on a single pinned snapshot.
+    /// This is a kernel API, NOT a production routing toggle yet: PONG must
+    /// also retain realtime run handles in deferred reconstruction.
+    pub(crate) fn enable_realtime(&mut self, region: Arc<RegionRealtimeSnapshot>) -> Result<()> {
+        ensure!(region.is_complete(), "realtime region coverage is incomplete");
+        ensure!(region.event_epoch == self.base_, "realtime timetable epoch mismatch");
+        // Nigiri rt_timetable::update_lbs updates the shortest-path graph
+        // for new/faster RT edges. Until that compact overlay is implemented,
+        // zero static bounds ONLY if the source snapshot can add a shortcut.
+        // Pure delays/cancellations cannot shorten a path and keep the
+        // existing destination-directed lower bounds admissible.
+        if region.may_shortcut {
+            self.lb_.fill(0);
+        }
+        self.bounds_ = None;
+        self.realtime = Some(region);
+        Ok(())
+    }
+
     pub(crate) fn invalid(&self) -> DeltaTime {
         if self.reverse { NEG_INF } else { INF }
     }
@@ -222,6 +247,10 @@ impl NigiriRaptor {
         PingBounds { rows }
     }
     pub(crate) fn set_ping_bounds(&mut self, bounds: PingBounds) {
+        // Like Nigiri, PING and PONG share the same pinned RT snapshot, so
+        // these PING-derived arrival bounds are valid in either direction.
+        // Only time-dependent footpaths require selectively disabling bounds;
+        // the current Gentian graph contains none.
         self.bounds_ = Some(bounds);
     }
     pub(crate) fn to_delta(&self, time: i64) -> DeltaTime {
@@ -331,7 +360,10 @@ impl NigiriRaptor {
                     self.route_mark_.set(route.idx());
                 }
             }
-            if !any_marked {
+            if !any_marked && self.realtime.as_ref().is_none_or(|rt| {
+                !marked.iter().any(|&stop| stop < self.target
+                    && !rt.patterns_at(LocationIdx(stop as u32)).is_empty())
+            }) {
                 break;
             }
             self.stats_.rounds += 1;
@@ -340,6 +372,7 @@ impl NigiriRaptor {
             self.station_mark_.clear();
             let scan = Instant::now();
             self.scan_routes(tt, k);
+            self.scan_realtime(tt, k);
             self.stats_.route_scan_ms += scan.elapsed().as_secs_f64() * 1000.0;
             self.route_mark_.clear();
             std::mem::swap(&mut self.prev_station_mark_, &mut self.station_mark_);
@@ -374,6 +407,41 @@ impl NigiriRaptor {
         Ok(result)
     }
 
+    fn scan_realtime(&mut self, tt: &ZeroCopyTimetable<'_>, k: usize) {
+        let Some(snapshot) = self.realtime.as_ref() else { return };
+        let marked = self.prev_station_mark_.indices();
+        let previous = &self.round_times_[k - 1];
+        let base = self.base_;
+        let reverse = self.reverse;
+        let tmp = &mut self.tmp_;
+        let station_mark = &mut self.station_mark_;
+        let stats = &mut self.stats_;
+        scan_realtime_round_with(
+            tt, snapshot, &marked, reverse,
+            |loc| {
+                let t = *previous.get(loc)?;
+                (t != if reverse { NEG_INF } else { INF })
+                    .then_some(base + i64::from(t))
+            },
+            |candidate| {
+                stats.realtime_ride_candidates += 1;
+                let (loc, event) = if reverse {
+                    (candidate.from_stop as usize, candidate.departure_unix_seconds)
+                } else {
+                    (candidate.to_stop as usize, candidate.arrival_unix_seconds)
+                };
+                let Ok(time) = i32::try_from(event - base) else { return };
+                if better(time, tmp[loc], reverse) {
+                    tmp[loc] = time;
+                    station_mark.set(loc);
+                    stats.labels_improved += 1;
+                    stats.realtime_label_improvements += 1;
+                }
+                stats.stop_events_scanned += 1;
+            },
+        );
+    }
+
     fn scan_routes(&mut self, tt: &ZeroCopyTimetable<'_>, k: usize) {
         let routes = self.route_mark_.indices();
         // Limit memory and scheduling overhead. Each worker keeps one i32 per
@@ -405,6 +473,7 @@ impl NigiriRaptor {
                 .map(|b| &b.rows[self.bounds_last_k_ - k][..]),
             transports: &self.transports,
             transfer_sensitive: &self.transfer_sensitive,
+            realtime: self.realtime.as_deref(),
         };
         if !parallel {
             let tmp = &mut self.tmp_;
@@ -613,6 +682,7 @@ struct RouteScan<'a> {
     ping_bounds: Option<&'a [DeltaTime]>,
     transports: &'a TransportIndex,
     transfer_sensitive: &'a [bool],
+    realtime: Option<&'a RegionRealtimeSnapshot>,
 }
 impl RouteScan<'_> {
     fn update_route(
@@ -690,7 +760,7 @@ impl RouteScan<'_> {
                     stats.transport_lookup_skipped_onboard += 1;
                     continue;
                 }
-                let Some(selected) = chain.select(
+                let Some(selected) = chain.select_filtered(
                     tt,
                     slot,
                     self.base + i64::from(ready),
@@ -698,6 +768,10 @@ impl RouteScan<'_> {
                     self.base + i64::from(self.destination_bound),
                     self.lower_bounds[loc],
                     stats,
+                    |transport, day| self.realtime.is_none_or(|rt| {
+                        u16::try_from(day).ok().is_some_and(|d|
+                            !rt.is_static_suppressed(transport, DayIdx(d)))
+                    }),
                 ) else {
                     continue;
                 };
