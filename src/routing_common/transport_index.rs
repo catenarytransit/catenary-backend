@@ -50,6 +50,25 @@ impl TransportChain {
         lower_bound: u32,
         stats: &mut RaptorStats,
     ) -> Option<SelectedTransport> {
+        self.select_filtered(tt, slot, ready, reverse,
+            destination_bound, lower_bound, stats, |_, _| true)
+    }
+
+    /// Keep the exact FIFO chain search and calendar tests, but skip a
+    /// specific static transport/service-day instance when realtime replaced
+    /// or cancelled it. Continue searching the chain for the next eligible
+    /// service instead of discarding the entire route.
+    pub(crate) fn select_filtered(
+        &self,
+        tt: &ZeroCopyTimetable<'_>,
+        slot: usize,
+        ready: i64,
+        reverse: bool,
+        destination_bound: i64,
+        lower_bound: u32,
+        stats: &mut RaptorStats,
+        allow: impl Fn(TransportIdx, usize) -> bool,
+    ) -> Option<SelectedTransport> {
         stats.transport_lookup_calls += 1;
         let base = i64::from(tt.header().first_utc_day) * DAY;
         let first_day = (ready - base).div_euclid(DAY);
@@ -119,7 +138,9 @@ impl TransportChain {
                     if start_day < 0 || start_day >= i64::from(tt.header().day_count) {
                         continue;
                     }
-                    if !tt.bitfields()[self.calendars[col].idx()].test(start_day as usize) {
+                    if !tt.bitfields()[self.calendars[col].idx()].test(start_day as usize)
+                        || !allow(self.transports[col], start_day as usize)
+                    {
                         continue;
                     }
                     return Some(SelectedTransport {
