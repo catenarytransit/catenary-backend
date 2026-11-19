@@ -174,14 +174,17 @@ pub fn project_raw_gtfs_rt_trip_feed(
         ) {
             continue;
         }
+        let service_date = trip.effective_start_date();
+        let start_time = trip.effective_start_time().map(str::to_owned);
+        let trip_id = trip.trip_id.clone().or_else(|| {
+            trip.modified_trip.as_ref().and_then(|m| m.affected_trip_id.clone())
+        });
         output.push(RoutingTripUpdate {
             update_id: entity.id.clone(),
-            trip_id: trip.trip_id.or_else(|| {
-                trip.modified_trip.as_ref().and_then(|m| m.affected_trip_id.clone())
-            }),
+            trip_id,
             route_id: trip.route_id,
-            service_date: trip.effective_start_date(),
-            start_time: trip.effective_start_time().map(str::to_owned),
+            service_date,
+            start_time,
             schedule_relationship: trip.schedule_relationship,
             delay_seconds: update.delay,
             stops: update.stop_time_update.iter().map(|stop| RoutingStopUpdate {
