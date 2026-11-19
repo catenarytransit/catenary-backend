@@ -824,6 +824,14 @@ fn realtime_transit_leg(
     let run = snapshot.run(rt.run).context("missing realtime run")?;
     let stops = snapshot.stops(tt, rt.pattern).context("missing realtime stop pattern")?;
     let original = run.original;
+    // Event occurrence index is shared with static GTFS only when no stops
+    // were inserted/deleted. Until a full occurrence mapping is available,
+    // withhold TimetabledTime for changed-length patterns rather than pairing
+    // it with a different physical stop.
+    let aligned_original = original.filter(|o| {
+        tt.transport_route().get(o.transport as usize)
+            .is_some_and(|r| tt.stops_on(*r).len() == stops.len())
+    });
     let mut meta = original
         .map(|o| trip_info(tt, index, info, o.transport))
         .unwrap_or_default();
@@ -851,7 +859,7 @@ fn realtime_transit_leg(
         if arrival && pos == 0 { return None; }
         if !arrival && pos + 1 >= stops.len() { return None; }
         let slot = if arrival { pos * 2 - 1 } else { pos * 2 };
-        original.and_then(|o| scheduled_event_unix(
+        aligned_original.and_then(|o| scheduled_event_unix(
             tt, TransportIdx(o.transport), DayIdx(o.day), slot,
         ))
     };
@@ -876,7 +884,10 @@ fn realtime_transit_leg(
     } else { Vec::new() };
     let static_pattern = original.and_then(|o| tt.transport_route().get(o.transport as usize))
         .map(|r| tt.stops_on(*r));
-    let shape_unchanged = static_pattern.is_some_and(|static_stops| static_stops == stops);
+    let shape_unchanged = static_pattern.is_some_and(|static_stops|
+        static_stops.len() == stops.len()
+            && static_stops.iter().zip(stops).all(|(a,b)| a.location() == b.location())
+    );
     let shape = if detailed && shape_unchanged {
         match (location(tt, *from_stop), location(tt, *to_stop)) {
             (Some(a), Some(b)) => clipped_shape(&meta.shape, a, b),
@@ -901,7 +912,7 @@ fn realtime_transit_leg(
         None => "UNKNOWN",
     };
     let stop_changes = snapshot.run_metadata(rt.run);
-    let deviation = stop_changes.is_some_and(|m| m.stops.iter().any(|s|
+    let deviation = !shape_unchanged || stop_changes.is_some_and(|m| m.stops.iter().any(|s|
         s.skipped || s.original_location.is_some()));
     json!({
         "mode":transit_mode(meta.route_type, tt.route_clasz().get(*route as usize).copied()),
