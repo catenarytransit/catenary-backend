@@ -86,6 +86,10 @@ pub struct RealtimeSources {
     region_snapshots: RwLock<BTreeMap<String, Arc<RegionRealtimeSnapshot>>>,
     /// The compiled Gentian source table, not geography, defines membership.
     region_chateaux: BTreeMap<String, BTreeSet<String>>,
+    /// Only a subset of compiled static chateaux participate in Aspen RT.
+    /// Once an assignment is observed, retain it in the expected set even if
+    /// the worker disappears; coverage must then explicitly show it missing.
+    known_rt_chateaux: RwLock<BTreeSet<String>>,
     /// Regional source identity, including the source's attempt ID.
     /// GTFS stop IDs must never be joined across these identities.
     pub region_sources: BTreeMap<String, Vec<(u16, String, String, String)>>,
@@ -128,7 +132,7 @@ impl RealtimeSources {
                 // An empty baseline is incomplete until every chateau is
                 // fetched, including those with zero realtime changes.
                 let baseline = Arc::new(RegionRealtimeSnapshot::compose(
-                    &tt, catalog.timetable_fingerprint, 0, &expected, Vec::new(),
+                    &tt, catalog.timetable_fingerprint, 0, &BTreeSet::new(), Vec::new(),
                 )?);
                 router.publish_realtime(&region.id, Arc::clone(&baseline))?;
                 region_snapshots.insert(region.id.clone(), baseline);
@@ -141,6 +145,7 @@ impl RealtimeSources {
             inner: RwLock::new(HashMap::new()),
             region_snapshots: RwLock::new(region_snapshots),
             region_chateaux,
+            known_rt_chateaux: RwLock::new(BTreeSet::new()),
             region_sources,
             identity_catalogs,
         })
@@ -352,24 +357,27 @@ impl RealtimeSources {
     /// This avoids O(chateaux x region) reassembly on every source download.
     pub fn publish_regions(&self, router: &Router) -> Result<usize> {
         let sources = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let known_rt = self.known_rt_chateaux.read().unwrap_or_else(|e| e.into_inner());
         let previous = self.region_snapshots.read()
             .unwrap_or_else(|e| e.into_inner());
         let mut pending = Vec::new();
 
         for (region_index, region) in router.transit.iter().enumerate() {
             let Some(catalog) = self.identity_catalogs.get(&region.id) else { continue };
-            let Some(expected) = self.region_chateaux.get(&region.id) else { continue };
+            let Some(compiled) = self.region_chateaux.get(&region.id) else { continue };
+            let expected: BTreeSet<String> = compiled.intersection(&known_rt).cloned().collect();
             let region_index = u16::try_from(region_index)
                 .context("region index exceeds realtime source index width")?;
             let tt = region.timetable.view()?;
             let next = compose_region(
-                &tt, catalog.timetable_fingerprint, region_index, expected,
+                &tt, catalog.timetable_fingerprint, region_index, &expected,
                 &sources, previous.get(&region.id),
             ).with_context(|| format!("composing region realtime snapshot {}", region.id))?;
             let Some(snapshot) = next else { continue };
             pending.push((region.id.clone(), snapshot));
         }
         drop(previous);
+        drop(known_rt);
         drop(sources);
         let mut regions = self.region_snapshots.write()
             .unwrap_or_else(|e| e.into_inner());
@@ -391,7 +399,18 @@ impl RealtimeSources {
             .remove(chateau).is_some()
     }
 
-    pub fn region_status(&self) -> Vec<(String, u64, usize, usize, usize, usize)> {
+    /// Mark Aspen chateaux seen in at least one valid etcd assignment sweep.
+    /// Never add a chateau solely because it is present in static Gentian.
+    pub fn note_realtime_assignments(
+        &self, assigned: impl IntoIterator<Item = String>,
+    ) {
+        let compiled = self.chateaux();
+        let mut known = self.known_rt_chateaux.write()
+            .unwrap_or_else(|e| e.into_inner());
+        known.extend(assigned.into_iter().filter(|chateau| compiled.contains(chateau)));
+    }
+
+    pub fn region_status(&self) -> Vec<(String, u64, usize, usize, usize, usize, bool)> {
         let snapshots = self.region_snapshots.read()
             .unwrap_or_else(|e| e.into_inner());
         snapshots.iter().map(|(region, snapshot)| (
@@ -401,6 +420,7 @@ impl RealtimeSources {
             snapshot.expected_chateaux,
             snapshot.run_count(),
             snapshot.suppressed_count(),
+            snapshot.is_complete(),
         )).collect()
     }
 
@@ -453,7 +473,11 @@ fn compose_region(
         });
     }
     if previous.is_some_and(|current| {
-        current.chateaux.len() == shards.len()
+        current.publication_seq > 0
+            && current.chateaux.len() + current.missing_chateaux.len() == expected.len()
+            && current.chateaux.iter().all(|shard| expected.contains(&shard.chateau))
+            && current.missing_chateaux.iter().all(|id| expected.contains(id))
+            && current.chateaux.len() == shards.len()
             && current.chateaux.iter().zip(&shards).all(|(a, b)|
                 a.chateau == b.chateau && Arc::ptr_eq(&a.overlay, &b.overlay)
             )
@@ -558,6 +582,7 @@ pub async fn synchronize(
     eprintln!("Edelweiss routing source sync: {} chateaux; RAM-only, observe-only mode", chateaux.len());
     let mut unassigned_passes = HashMap::<String, u8>::new();
     loop {
+        let mut observed_assignments = Vec::new();
         // Protect against indefinite retention of a cancelled or delayed run
         // when its Aspen assignment disappears. Transient etcd gaps are
         // tolerated for five passes; then this chateau becomes explicitly
@@ -573,8 +598,10 @@ pub async fn synchronize(
                 }
             } else {
                 unassigned_passes.remove(chateau);
+                observed_assignments.push(chateau.clone());
             }
         }
+        sources.note_realtime_assignments(observed_assignments);
         futures::stream::iter(chateaux.iter().cloned())
             .for_each_concurrent(SYNC_CONCURRENCY, |chateau| {
                 let sources = Arc::clone(&sources);
@@ -637,10 +664,10 @@ pub async fn synchronize(
             .await;
         match sources.publish_regions(&router) {
             Ok(changed) if changed > 0 => {
-                for (region, revision, covered, expected, runs, suppressed) in sources.region_status() {
+                for (region, revision, covered, expected, runs, suppressed, complete) in sources.region_status() {
                     eprintln!(
                         "Edelweiss RT region {region}: revision={revision} sources={covered}/{expected} runs={runs} suppressed={suppressed} complete={}",
-                        covered == expected,
+                        complete,
                     );
                 }
             }
