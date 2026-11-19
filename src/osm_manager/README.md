@@ -67,6 +67,15 @@ manifests without that field are rebuilt automatically. The checksum is a
 local cache key, not an authentication mechanism.
 It uses GNU `wget` to transfer large PBFs with retries and HTTP Range resume.
 Install it on the host (for example, `sudo apt-get install wget`).
+The default first-connection timeout is 30 seconds and the PBF idle-read
+timeout is 120 seconds. For slow Geofabrik servers (particularly GitHub
+Actions runners), set `CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS=180` and
+`CATENARY_GEOFABRIK_READ_TIMEOUT_SECONDS=600` before running
+`osm_manager`. These also extend the initial DNS/HTTPS connection deadline
+for the resumable PBF transfer; the connection override applies to the
+Rust metadata and boundary requests as well. Values must be 1–3600 seconds.
+The SoCal workflow sets these overrides and retries a failed manager run,
+keeping partial PBF downloads for the next attempt.
 Interrupted PBFs remain under `temp_dir/osm-downloads/` across manager runs,
 and resume only when the upstream checksum or HTTP revision is unchanged.
 A changed revision discards the stale partial download.
