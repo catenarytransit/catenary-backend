@@ -2,6 +2,7 @@ use super::external_assembly::ScheduleRuns;
 use anyhow::{Context, Result, ensure};
 use catenary::gtfs_schedule_protobuf::GtfsFrequenciesProto;
 use catenary::routing_common::routing_regions::ChateauSource;
+use catenary::routing_common::realtime_identity::GtfsIdentityBuilder;
 use catenary::routing_common::timetable::{
     BitfieldIdx, Clasz, Coordinate, Delta, LocationIdx, PackedFootpath, PackedStop, Range,
     RouteIdx, TimetableOwned, TimingProfileIdx, TrafficDays, TransportIdx, TripIdx,
@@ -38,6 +39,8 @@ struct Pattern {
     route_type: i16,
     timezone: Tz,
     stops: Vec<(String, i32, i32)>,
+    /// Original GTFS stop_sequence, which need not be 1-based or contiguous.
+    stop_sequences: Vec<u32>,
 }
 
 /// A negative value in any stored GTFS offset invalidates the entire pattern.
@@ -73,7 +76,11 @@ pub(super) struct Schedule {
     pub(super) source: u16,
     pub(super) route_id: String,
     pub(super) route_type: i16,
+    pub(super) service_id: String,
+    pub(super) timezone_name: String,
+    pub(super) gtfs_first_departure_seconds: u32,
     pub(super) locations: Vec<LocationIdx>,
+    pub(super) stop_sequences: Vec<u32>,
     pub(super) events: Vec<Event>,
     pub(super) first_second: u32,
     pub(super) days: TrafficDays,
@@ -364,6 +371,7 @@ fn make_schedules(
 ) -> Result<Vec<Schedule>> {
     let anchors = service_utc_anchors(calendar, pattern.timezone, first_utc_day, day_count)?;
     make_schedules_from_anchors(
+        "test-service",
         trip_id,
         source_idx,
         pattern,
@@ -401,6 +409,7 @@ fn invalid_itinerary_patterns(
 }
 
 fn make_schedules_from_anchors(
+    service_id: &str,
     trip_id: &str,
     source_idx: u16,
     pattern: &Pattern,
@@ -414,8 +423,8 @@ fn make_schedules_from_anchors(
     // Normalize its events to the first departure so a frequency window's
     // start_time always refers to the departure from the first stop.
     ensure!(
-        pattern.stops.len() >= 2,
-        "trip {trip_id} needs at least two stops"
+        pattern.stops.len() >= 2 && pattern.stop_sequences.len() == pattern.stops.len(),
+        "trip {trip_id} has invalid stop sequence metadata"
     );
     ensure!(
         pattern_stops_monotonic(pattern, stop_lookup),
@@ -453,7 +462,11 @@ fn make_schedules_from_anchors(
             source: source_idx,
             route_id: pattern.route_id.clone(),
             route_type: pattern.route_type,
+            service_id: service_id.to_owned(),
+            timezone_name: pattern.timezone.name().to_owned(),
+            gtfs_first_departure_seconds: first_departure_secs,
             locations: locations.clone(),
+            stop_sequences: pattern.stop_sequences.clone(),
             events: events.clone(),
             first_second,
             days,
@@ -505,6 +518,7 @@ fn assemble_batch(
     days_index: &mut HashMap<TrafficDays, BitfieldIdx>,
     route_id_index: &mut HashMap<(u16, String), catenary::routing_common::timetable::RouteIdIdx>,
     profile_index: &mut HashMap<Vec<u32>, TimingProfileIdx>,
+    identities: &mut GtfsIdentityBuilder,
 ) -> Result<()> {
     ensure!(!schedules.is_empty(), "empty schedule batch");
     let source = schedules[0].source;
@@ -599,6 +613,8 @@ fn assemble_batch(
                 tt.transport_first_dep_offset
                     .push(Delta::from_seconds(schedule.first_second)?);
                 tt.transport_initial_day_offset.push(0);
+                identities.push(&schedule.timezone_name, &schedule.service_id,
+                    schedule.gtfs_first_departure_seconds, &schedule.stop_sequences)?;
                 let trip_idx = TripIdx(as_u32(tt.trip_public_route_ids.len())?);
                 tt.trip_public_route_ids.push(public_route_id);
                 tt.add_trip_id(
@@ -696,11 +712,12 @@ fn build_stop_routes_index(tt: &mut TimetableOwned) -> Result<()> {
     Ok(())
 }
 
-fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<()> {
+fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<GtfsIdentityBuilder> {
     let mut days_index = HashMap::new();
     days_index.insert(TrafficDays::default(), BitfieldIdx(0));
     let mut route_id_index = HashMap::new();
     let mut profile_index = HashMap::new();
+    let mut identities = GtfsIdentityBuilder::default();
     schedules.consume(|batch| {
         assemble_batch(
             tt,
@@ -708,9 +725,11 @@ fn assemble_routes(tt: &mut TimetableOwned, schedules: ScheduleRuns) -> Result<(
             &mut days_index,
             &mut route_id_index,
             &mut profile_index,
+            &mut identities,
         )
     })?;
-    build_stop_routes_index(tt)
+    build_stop_routes_index(tt)?;
+    Ok(identities)
 }
 
 enum TripDepartures {
@@ -831,6 +850,7 @@ fn compile_source(
                     route_id,
                     timezone,
                     stops: Vec::new(),
+                    stop_sequences: Vec::new(),
                 },
             );
             Ok(())
@@ -842,7 +862,7 @@ fn compile_source(
         "
         SELECT itinerary_pattern_id, stop_id,
             arrival_time_since_start, departure_time_since_start,
-            interpolated_time_since_start
+            interpolated_time_since_start, gtfs_stop_sequence::bigint
         FROM gtfs.itinerary_pattern
         WHERE onestop_feed_id = $1 AND attempt_id = $2
         ORDER BY itinerary_pattern_id, stop_sequence
@@ -857,8 +877,18 @@ fn compile_source(
                 invalid_metadata_patterns.insert(id);
                 return Ok(());
             };
+            let raw_sequence: i64 = r.get(5);
+            let Ok(raw_sequence) = u32::try_from(raw_sequence) else {
+                negative_patterns.insert(id);
+                pattern.stops.clear();
+                pattern.stop_sequences.clear();
+                return Ok(());
+            };
             if !append_pattern_stop(pattern, r.get(1), r.get(2), r.get(3), r.get(4))? {
                 negative_patterns.insert(id);
+                pattern.stop_sequences.clear();
+            } else {
+                pattern.stop_sequences.push(raw_sequence);
             }
             Ok(())
         },
@@ -930,6 +960,7 @@ fn compile_source(
             };
             let mut add_departure = |first_departure: u32| -> Result<()> {
                 for schedule in make_schedules_from_anchors(
+                    &service,
                     &trip_id,
                     source_idx,
                     pattern,
@@ -1146,7 +1177,7 @@ pub fn build(
             "Gentian warning: no scheduled trips in selected timetable horizon; publishing a timetable with zero transports"
         );
     }
-    assemble_routes(&mut tt, schedules)?;
+    let identities = assemble_routes(&mut tt, schedules)?;
     let platform_metadata = load_platform_metadata(client, sources, &tt)?;
     let transfers = super::footpaths::compute(
         osr_dir,
@@ -1162,6 +1193,14 @@ pub fn build(
     add_footpaths(&mut tt, transfers)?;
     transfer_rules.finish(&mut tt);
     let bytes = catenary::routing_common::timetable_mmap::publish(&tt, output)?;
+    // Static-build-only sidecar. Realtime updates never write it; Edelweiss
+    // validates the timetable fingerprint before using it to resolve trips.
+    let mapped = catenary::routing_common::timetable_mmap::MappedTimetable::open(output)?;
+    let catalog = identities.finish(&mapped.view()?)?;
+    let identity_path = output.with_extension("rt-identities.bin");
+    let identity_staging = output.with_extension("rt-identities.bin.tmp");
+    std::fs::write(&identity_staging, catenary::bincode_serialize(&catalog)?)?;
+    std::fs::rename(&identity_staging, &identity_path)?;
     let sidecar = output.with_extension("platforms.json");
     let staging = sidecar.with_extension("platforms.json.tmp");
     std::fs::write(&staging, serde_json::to_vec(&platform_metadata)?)?;
@@ -1275,6 +1314,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Toronto".parse().unwrap(),
             stops: vec![("first".into(), 0, 0)],
+            stop_sequences: vec![11],
         };
         for (arrival, departure, interpolated) in [
             (Some(-5520), Some(-5520), None),
@@ -1298,6 +1338,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Toronto".parse().unwrap(),
             stops: Vec::new(),
+            stop_sequences: Vec::new(),
         };
         assert!(append_pattern_stop(&mut pattern, "a".into(), Some(0), Some(30), None,).unwrap());
         assert!(append_pattern_stop(&mut pattern, "b".into(), None, None, Some(90),).unwrap());
@@ -1477,6 +1518,7 @@ mod tests {
             panic!("expected scheduled trip");
         };
         let schedules = make_schedules_from_anchors(
+            "weekday",
             "valid-trip",
             0,
             pattern,
@@ -1501,6 +1543,7 @@ mod tests {
             route_type: 3,
             timezone: "America/Los_Angeles".parse().unwrap(),
             stops: vec![("a".into(), 0, 0), ("b".into(), 20, 80)],
+            stop_sequences: vec![2, 9],
         };
         let mut stop_lookup = HashMap::new();
         stop_lookup.insert("a".into(), LocationIdx(0));
@@ -1574,7 +1617,11 @@ mod tests {
             source: 0,
             route_id: "R".into(),
             route_type: 3,
+            service_id: "fixture".into(),
+            timezone_name: "UTC".into(),
+            gtfs_first_departure_seconds: first,
             locations: vec![LocationIdx(0), LocationIdx(1), LocationIdx(0)],
+            stop_sequences: vec![10, 18, 31],
             events: vec![
                 Event {
                     stop: LocationIdx(0),
@@ -1651,7 +1698,11 @@ mod tests {
                 source: 0,
                 route_id: "R".into(),
                 route_type: 3,
+                service_id: "fixture".into(),
+                timezone_name: "UTC".into(),
+                gtfs_first_departure_seconds: i * 25,
                 locations: vec![LocationIdx(0), LocationIdx(1)],
+                stop_sequences: vec![2, 4],
                 events: vec![
                     Event {
                         stop: LocationIdx(0),
@@ -1690,6 +1741,7 @@ mod tests {
             route_id: "R".into(),
             route_type: 3,
             timezone: timezone.parse().unwrap(),
+            stop_sequences: vec![7, 12],
             stops: vec![
                 ("a".into(), 0, first_stop_dwell),
                 ("b".into(), 1800 + first_stop_dwell, 1800 + first_stop_dwell),
@@ -1940,7 +1992,11 @@ mod tests {
             source: 0,
             route_id: "r".into(),
             route_type: 3,
+            service_id: "fixture".into(),
+            timezone_name: "UTC".into(),
+            gtfs_first_departure_seconds: 60,
             locations: vec![LocationIdx(0), LocationIdx(1)],
+            stop_sequences: vec![1, 2],
             events: vec![event(0), event(20)],
             first_second: 60,
             days: TrafficDays::default(),

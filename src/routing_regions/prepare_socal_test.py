@@ -39,6 +39,61 @@ def validate_geojson(path: Path) -> None:
         raise ValueError("Geofabrik boundary must contain nonempty polygonal geometries")
 
 
+def geojson_from_poly(poly_path: Path, output_path: Path) -> None:
+    """Convert Geofabrik's published .poly boundary into standard GeoJSON.
+
+    Geofabrik reliably publishes california.poly even when the auxiliary
+    california.geojson URL is unavailable. Preserve polygon holes and close
+    every ring rather than approximating the state with a bounding box.
+    """
+    lines = [line.strip() for line in poly_path.read_text(encoding="utf-8").splitlines()]
+    if not lines:
+        raise ValueError("empty Geofabrik .poly boundary")
+
+    polygons: list[list[list[list[float]]]] = []
+    ring: list[list[float]] = []
+    inside_ring = False
+    hole = False
+
+    for line in lines[1:]:
+        if not line:
+            continue
+        if line == "END":
+            if inside_ring:
+                if len(ring) < 3:
+                    raise ValueError("Geofabrik .poly ring has fewer than three points")
+                if ring[0] != ring[-1]:
+                    ring.append(ring[0].copy())
+                if hole:
+                    if not polygons:
+                        raise ValueError("Geofabrik .poly hole has no exterior")
+                    polygons[-1].append(ring)
+                else:
+                    polygons.append([ring])
+                inside_ring = False
+                ring = []
+            else:
+                break
+        elif not inside_ring:
+            hole = line.startswith("!")
+            inside_ring = True
+        else:
+            columns = line.split()
+            if len(columns) != 2:
+                raise ValueError(f"invalid .poly coordinate: {line!r}")
+            ring.append([float(columns[0]), float(columns[1])])
+
+    if inside_ring or not polygons:
+        raise ValueError("incomplete or empty Geofabrik .poly boundary")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps({"type": "MultiPolygon", "coordinates": polygons}),
+        encoding="utf-8",
+    )
+    validate_geojson(output_path)
+
+
 def prepare(geojson: Path, region_file: Path, database_url: str, transitland: str) -> None:
     if not database_url:
         raise ValueError("database URL is required")
@@ -76,7 +131,7 @@ def prepare(geojson: Path, region_file: Path, database_url: str, transitland: st
         'data_dir = "temp/osr-data"\n'
         'temp_dir = "temp/osr-working"\n'
         'osr_extract = "./osr-extract"\n'
-        'regions = ["north-america/us/california/socal"]\n',
+        'regions = ["north-america/us/california"]\n',
         encoding="utf-8",
     )
     with region_file.open("rb") as file:
@@ -95,8 +150,12 @@ def prepare(geojson: Path, region_file: Path, database_url: str, transitland: st
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--geojson", type=Path, required=True)
+    parser.add_argument("--poly", type=Path,
+                        help="convert a downloaded Geofabrik .poly boundary to --geojson")
     parser.add_argument("--region-config", type=Path, default=Path("routing_regions.toml"))
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL"))
     parser.add_argument("--transitland", default="./transitland-atlas")
     args = parser.parse_args()
+    if args.poly is not None:
+        geojson_from_poly(args.poly, args.geojson)
     prepare(args.geojson, args.region_config, args.database_url, args.transitland)

@@ -5,6 +5,7 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 mod footpath_debug;
 mod motis_response;
 mod pagination;
+mod realtime_sync;
 mod startup;
 mod websocket;
 
@@ -50,6 +51,28 @@ struct Args {
     /// Opt-in, read-only transfer-closure inspection. Disabled in production by default.
     #[arg(long, env = "EDELWEISS_ENABLE_FOOTPATH_DEBUG")]
     enable_footpath_debug: bool,
+    /// Opt-in Aspen source RPC sync (observe-only; routing results unchanged).
+    #[arg(long, env = "EDELWEISS_ENABLE_REALTIME_SOURCE_SYNC")]
+    enable_realtime_source_sync: bool,
+    /// Minimum delay between finished synchronization passes.
+    #[arg(long, default_value_t = 60, env = "EDELWEISS_REALTIME_SOURCE_SYNC_SECONDS")]
+    realtime_source_sync_seconds: u64,
+    /// Offline Birch TripUpdates protobuf fixture (no Aspen worker or etcd).
+    /// Only used by SoCal CI; does not enable live realtime journey scanning.
+    #[arg(long, requires_all = ["realtime_probe_region", "realtime_probe_static_feed"])]
+    realtime_probe_file: Option<PathBuf>,
+    /// Gentian region whose static timetable and identity sidecar are checked.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_region: Option<String>,
+    /// Unique static GTFS feed ID; resolves the exact Chateau from Gentian.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_static_feed: Option<String>,
+    /// Enforce that at least N complete runs are present (manual live CI).
+    #[arg(long, default_value_t = 0)]
+    realtime_probe_min_runs: usize,
+    /// Optional machine-readable CI diagnostics.
+    #[arg(long, requires = "realtime_probe_file")]
+    realtime_probe_report: Option<PathBuf>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -172,6 +195,7 @@ struct State {
     router: Arc<Router>,
     database_url: Option<String>,
     osr: Arc<NativeOsr>,
+    realtime_sources: Option<Arc<realtime_sync::RealtimeSources>>,
 }
 
 fn osr_access(
@@ -1041,6 +1065,24 @@ async fn main() -> Result<()> {
     // Every startup scan/check is complete. Advise once before CLI queries or
     // HTTP traffic can fault the useful working set back in.
     advise_startup_mappings(&router, &osr, mmap_advice);
+    if let Some(path) = args.realtime_probe_file.as_ref() {
+        let region = args.realtime_probe_region.as_deref()
+            .context("--realtime-probe-region is required")?;
+        let feed = args.realtime_probe_static_feed.as_deref()
+            .context("--realtime-probe-static-feed is required")?;
+        let protobuf = fs::read(path)
+            .with_context(|| format!("reading raw Birch GTFS-RT fixture {}", path.display()))?;
+        let result = realtime_sync::probe_raw_gtfs_rt(
+            &router, &args.regions_config, region, feed,
+            &protobuf, args.realtime_probe_min_runs,
+        )?;
+        if let Some(path) = &args.realtime_probe_report {
+            fs::write(path, serde_json::to_vec_pretty(&result)?)
+                .with_context(|| format!("writing realtime probe report {}", path.display()))?;
+        }
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     if let Some(path) = args.query {
         let timing_output = args.query_timings.clone();
         let request: Request = serde_json::from_slice(
@@ -1071,10 +1113,39 @@ async fn main() -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&response)?);
         return Ok(());
     }
+    // Observe-only staging: get source-scoped updates from Aspen without
+    // allocating expanded GTFS datasets or writing overlay files to NVMe.
+    // RAPTOR does not read these snapshots yet, so incomplete matching cannot
+    // create false journeys or incorrectly suppress scheduled departures.
+    let realtime_sources = if args.enable_realtime_source_sync {
+        let sources = Arc::new(realtime_sync::RealtimeSources::from_router(&router, &args.regions_config)?);
+        let settings: catenary::catenaryconfig::CatenaryConfig =
+            toml::from_str(&fs::read_to_string(&args.catenary_config)?)?;
+        let urls = std::env::var("ETCD_URLS").ok()
+            .map(|s| s.split(',').map(str::to_owned).collect::<Vec<_>>())
+            .or(settings.aspen.etcd_urls)
+            .unwrap_or_else(|| vec!["localhost:2379".to_owned()]);
+        let username = std::env::var("ETCD_USERNAME").ok().or(settings.aspen.etcd_username);
+        let password = std::env::var("ETCD_PASSWORD").ok().or(settings.aspen.etcd_password);
+        let sync_sources = Arc::clone(&sources);
+        let sync_router = Arc::clone(&router);
+        let sync_interval = Duration::from_secs(args.realtime_source_sync_seconds.max(5));
+        tokio::spawn(async move {
+            if let Err(error) = realtime_sync::synchronize(
+                sync_sources, sync_router, urls, username, password, sync_interval,
+            ).await {
+                eprintln!("Edelweiss realtime source sync disabled after error: {error:#}");
+            }
+        });
+        Some(sources)
+    } else {
+        None
+    };
     let state = web::Data::new(State {
         router,
         database_url,
         osr,
+        realtime_sources,
     });
     let enable_footpath_debug = args.enable_footpath_debug;
     eprintln!("Edelweiss startup: binding HTTP server to {}", args.listen);

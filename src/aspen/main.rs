@@ -230,6 +230,25 @@ impl AspenRpc for AspenServer {
         guard.get(&key).cloned().flatten()
     }
 
+    async fn get_routing_source_page(
+        self,
+        _context: context::Context,
+        request: catenary::routing_common::realtime_source::RoutingSourcePageRequest,
+    ) -> Option<catenary::routing_common::realtime_source::RoutingSourcePage> {
+        let snapshot = {
+            let guard = self.authoritative_data_store
+                .get_async(&request.chateau_id).await?;
+            Arc::clone(guard.get())
+        };
+        // The authoritative snapshot is already compressed. Only the selected
+        // page is projected into routing-related fields, never the full feed.
+        tokio::task::spawn_blocking(move || {
+            catenary::routing_common::realtime_source::project_routing_source_page(
+                &snapshot, &request,
+            )
+        }).await.ok()
+    }
+
     async fn full_trip_updates_dataset_dump(
         self,
         _context: tarpc::context::Context,

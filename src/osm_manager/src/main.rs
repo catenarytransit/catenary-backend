@@ -156,9 +156,27 @@ fn region_from_spec(spec: &str) -> Result<Region> {
     })
 }
 
+/// Keep normal host defaults unchanged, but allow CI to tolerate Geofabrik
+/// taking several minutes to establish its first TLS connection. These
+/// settings affect metadata/boundary fetches and the independent wget PBF
+/// download; GNU wget still resumes partial files and checks their MD5.
+fn timeout_seconds(name: &str, default_seconds: u64) -> Result<u64> {
+    let raw = std::env::var(name).unwrap_or_else(|_| default_seconds.to_string());
+    parse_timeout_seconds(&raw)
+        .with_context(|| format!("invalid Geofabrik timeout setting {name}={raw:?}"))
+}
+
+fn parse_timeout_seconds(raw: &str) -> Result<u64> {
+    let seconds: u64 = raw.parse().context("timeout must be an integer number of seconds")?;
+    ensure!((1..=3600).contains(&seconds),
+        "Geofabrik timeout must be between 1 and 3600 seconds");
+    Ok(seconds)
+}
+
 fn client() -> Result<Client> {
+    let connect = timeout_seconds("CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS", 30)?;
     Ok(Client::builder().user_agent("catenary-osm-manager/1.0")
-        .timeout(None).connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(None).connect_timeout(std::time::Duration::from_secs(connect))
         .build()?)
 }
 
@@ -259,14 +277,20 @@ fn verify_pbf(path: &Path, expected_md5: Option<&str>, expected_len: Option<u64>
 /// via Range requests. Failed transfers remain available for the next run.
 fn download_pbf(url: &str, destination: &Path,
                 expected_md5: Option<&str>, expected_len: Option<u64>) -> Result<()> {
-    println!("Downloading PBF with resumable wget into {}", destination.display());
+    let connect = timeout_seconds("CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS", 30)?;
+    let read = timeout_seconds("CATENARY_GEOFABRIK_READ_TIMEOUT_SECONDS", 120)?;
+    println!(
+        "Downloading PBF with resumable wget into {} (DNS/connect={}s, read={}s)",
+        destination.display(), connect, read
+    );
     let status = Command::new("wget")
         .arg("--https-only")
         .arg("--continue")
         .arg("--tries=20")
         .arg("--waitretry=10")
-        .arg("--connect-timeout=30")
-        .arg("--read-timeout=120")
+        .arg(format!("--dns-timeout={connect}"))
+        .arg(format!("--connect-timeout={connect}"))
+        .arg(format!("--read-timeout={read}"))
         .arg("--retry-connrefused")
         .arg("--retry-on-http-error=429,500,502,503,504")
         .arg("--no-verbose")
@@ -359,9 +383,28 @@ fn parse_poly(text: &str) -> Result<Geometry> {
 }
 
 fn fetch_boundary(client: &Client, region: &Region) -> Result<(Geometry, String)> {
-    let response = client.get(&region.boundary_geojson_url).send()?;
-    if response.status().is_success() {
-        return Ok((extract_geometry(&response.text()?)?, region.boundary_geojson_url.clone()));
+    // Geofabrik publishes .poly for California; its auxiliary .geojson
+    // endpoint may be absent or refuse individual connections. Retry via
+    // the canonical .poly instead of aborting on the first network error.
+    match client.get(&region.boundary_geojson_url).send() {
+        Ok(response) if response.status().is_success() => {
+            let text = response.text()?;
+            match extract_geometry(&text) {
+                Ok(geometry) => return Ok((geometry, region.boundary_geojson_url.clone())),
+                Err(error) => eprintln!(
+                    "Geofabrik GeoJSON for {} is unusable ({error}); trying .poly",
+                    region.id,
+                ),
+            }
+        }
+        Ok(response) => eprintln!(
+            "Geofabrik GeoJSON for {} returned {}; trying .poly",
+            region.id, response.status(),
+        ),
+        Err(error) => eprintln!(
+            "Geofabrik GeoJSON for {} failed ({error}); trying .poly",
+            region.id,
+        ),
     }
     let response = client.get(&region.boundary_poly_url).send()?.error_for_status()
         .with_context(|| format!("downloading fallback .poly for {}", region.id))?;
@@ -500,8 +543,12 @@ fn run_region(client: &Client, cfg: &ManagerConfig, region: &Region,
         ensure!(revision == after_revision,
             "Geofabrik revision changed during download for {}; retry the manager", region.id);
         let (geometry, boundary_url) = fetch_boundary(client, region)?;
+        // MOTIS OSR's conf::options_parser declares with_platforms as a
+        // bool parameter that REQUIRES a value, not as a zero-argument flag.
+        // Passing bare -p aborts the extractor after a successful PBF download.
         let status = Command::new(&cfg.osr_extract)
-            .arg("-p").arg("-i").arg(&download).arg("-o").arg(&staging)
+            .arg("--with_platforms=true")
+            .arg("-i").arg(&download).arg("-o").arg(&staging)
             .status().with_context(|| format!("launching OSR extractor {}", cfg.osr_extract.display()))?;
         ensure!(status.success(), "OSR extractor failed for {}: {status}", region.id);
         // Verify expected files. Actual serializer compatibility is checked
@@ -666,6 +713,17 @@ fn run(cfg: ManagerConfig, force: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geofabrik_network_timeout_overrides_are_validated() {
+        assert_eq!(parse_timeout_seconds("30").unwrap(), 30);
+        assert_eq!(parse_timeout_seconds("180").unwrap(), 180);
+        assert_eq!(parse_timeout_seconds("600").unwrap(), 600);
+        assert_eq!(parse_timeout_seconds("3600").unwrap(), 3600);
+        assert!(parse_timeout_seconds("0").is_err());
+        assert!(parse_timeout_seconds("3601").is_err());
+        assert!(parse_timeout_seconds("bad").is_err());
+    }
 
     #[test]
     fn geofabrik_urls_and_paths() {

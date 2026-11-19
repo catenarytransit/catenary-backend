@@ -5,6 +5,7 @@ use crate::routing_common::profile_search::ProfileOptions;
 use crate::routing_common::raptor_arrive_by;
 use crate::routing_common::raptor_query::{self, Journey, Query, WalkingEndpoint};
 use crate::routing_common::routing_regions::RoutingRegionsConfig;
+use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
 use crate::routing_common::timetable::{LocationIdx, ZeroCopyTimetable};
 use crate::routing_common::timetable_mmap::MappedTimetable;
 use anyhow::{Context, Result, bail, ensure};
@@ -12,6 +13,7 @@ use geo::{Intersects, Point};
 use geojson::{GeoJson, Value};
 use serde::{Deserialize, Serialize};
 use std::{
+    sync::{Arc, RwLock},
     fs,
     path::{Path, PathBuf},
     str::FromStr,
@@ -65,6 +67,9 @@ pub struct TransitRegion {
     geometry: Vec<geo::Geometry<f64>>,
     countries: Vec<String>,
     pub timetable: MappedTimetable,
+    /// Immutable, region-wide RAM realtime snapshot. A query pins one Arc
+    /// before RAPTOR/PONG scanning; replacement cannot change its view.
+    pub realtime: RwLock<Option<Arc<RegionRealtimeSnapshot>>>,
     pub metadata: MetadataIndex,
     pub(crate) lower_bound_topology: crate::routing_common::profile_compact::LowerBoundTopology,
 }
@@ -447,6 +452,7 @@ impl Router {
                 geometry: geometries,
                 countries: region.countries.clone(),
                 timetable,
+                realtime: RwLock::new(None),
                 metadata,
                 lower_bound_topology,
             });
@@ -532,6 +538,40 @@ impl Router {
             &self.country_boundaries,
             point,
         )
+    }
+
+    /// Return one consistent realtime revision for a region. Pattern/run
+    /// indices from this snapshot remain valid until the Arc is released.
+    pub fn pin_realtime(&self, name: &str) -> Option<Arc<RegionRealtimeSnapshot>> {
+        let region = self.transit.iter().find(|region| region.id == name)?;
+        region.realtime.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Publish a fully constructed generation-compatible snapshot, without
+    /// modifying the static mmap timetable or writing the overlay to disk.
+    pub fn publish_realtime(
+        &self, name: &str, next: Arc<RegionRealtimeSnapshot>,
+    ) -> Result<()> {
+        let region = self.transit.iter().find(|region| region.id == name)
+            .with_context(|| format!("unknown realtime transit region {name}"))?;
+        let tt = region.timetable.view()?;
+        ensure!(
+            next.event_epoch == i64::from(tt.header().first_utc_day) * 86_400,
+            "realtime snapshot epoch does not match region {name}"
+        );
+        let mut current = region.realtime.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(previous) = current.as_ref() {
+            ensure!(
+                previous.timetable_generation == next.timetable_generation,
+                "realtime snapshot generation changed without a static region reload"
+            );
+            ensure!(
+                previous.publication_seq < next.publication_seq,
+                "stale realtime publication for {name}"
+            );
+        }
+        *current = Some(next);
+        Ok(())
     }
 
     pub fn timetable_for(&self, name: &str) -> Result<ZeroCopyTimetable<'_>> {

@@ -21,7 +21,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   pull_request:
-    branches: [routing-dev]
+    branches: [routing-dev, main, 'feat/region-ram-realtime-snapshot-20261118']
     paths:
       - '.github/workflows/routing-regions-socal.yml'
       - 'src/gentian/**'
@@ -39,6 +39,22 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
   workflow_dispatch:
+    inputs:
+      live_realtime_probe:
+        description: 'Fetch real GTFS-RT TripUpdates from Birch and test SoCal RAM overlay'
+        type: boolean
+        required: true
+        default: false
+      realtime_feed_id:
+        description: 'Birch realtime feed ID (must correspond to selected static feed)'
+        type: string
+        required: true
+        default: 'f-longbeachtransit~rt'
+      static_feed_id:
+        description: 'Gentian static GTFS feed ID corresponding to the realtime feed'
+        type: string
+        required: true
+        default: 'f-9q5b-longbeachtransit'
 
 concurrency:
   group: socal-routing-${{ github.event.pull_request.number || github.ref }}
@@ -96,7 +112,7 @@ jobs:
     if: github.event_name != 'push'
     name: SoCal ingest, compile and timed transit queries
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: 360
     services:
       postgres:
         image: postgis/postgis:15-3.3
@@ -195,13 +211,27 @@ jobs:
           "$CXX" -std=c++23 /tmp/tbb-link-check.cc -ltbb -o /tmp/tbb-link-check
           /tmp/tbb-link-check
           readelf -d /tmp/tbb-link-check | grep -F 'libtbb.so'
-      - name: Download Geofabrik SoCal boundary and local config
+      - name: Verify Geofabrik boundary converter
+        run: python3 -m unittest discover -s src/routing_regions -p test_prepare_socal_test.py -v
+      - name: Download Geofabrik California boundary and local SoCal config
         run: |
           set -euo pipefail
           mkdir -p routing_regions temp/gtfs_zip temp/gtfs_uncompressed
-          curl -fL --retry 4 https://download.geofabrik.de/north-america/us/california/socal.geojson             -o routing_regions/socal.geojson
-          python3 src/routing_regions/prepare_socal_test.py             --geojson routing_regions/socal.geojson
-          git check-ignore routing_regions/socal.geojson routing_regions.toml catenaryconfig.toml
+          # The upstream California .poly is published alongside its PBF.
+          # Convert it to GeoJSON for our existing region selector. Limit
+          # transit ingestion to SoCal feeds even though the OSR graph and
+          # polygon cover the whole state.
+          curl --fail --location --silent --show-error \
+            --retry 10 --retry-all-errors --retry-connrefused \
+            --retry-delay 30 --retry-max-time 2400 \
+            --connect-timeout 180 --max-time 600 \
+            --output routing_regions/california.poly \
+            https://download.geofabrik.de/north-america/us/california.poly
+          test -s routing_regions/california.poly
+          python3 src/routing_regions/prepare_socal_test.py \
+            --poly routing_regions/california.poly \
+            --geojson routing_regions/california.geojson
+          git check-ignore routing_regions/california.poly routing_regions/california.geojson routing_regions.toml catenaryconfig.toml
       - name: Build native OSR reader and matching extractor
         shell: bash
         run: |
@@ -226,32 +256,44 @@ jobs:
           bash src/osm_manager/build_matched_extractor.sh
           test -x ./osr-extract
       - name: Download and extract Southern California OSR graph
+        # Large Geofabrik PBFs sometimes take minutes before the first byte.
+        # The manager uses these overrides for both reqwest metadata/TLS
+        # connections and GNU wget's resumable PBF download. A failed manager
+        # attempt leaves a partial PBF that the next attempt can resume.
+        env:
+          CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS: "180"
+          CATENARY_GEOFABRIK_READ_TIMEOUT_SECONDS: "600"
         run: |
           set -euo pipefail
-          ./src/osm_manager/target/release/osm_manager \
-            --config catenaryconfig.toml run
-          test -s temp/osr-data/regions/north-america/us/california/socal/routing.bin
-      - name: Verify extracted graph opens with the same native OSR reader
+          for attempt in 1 2 3 4; do
+            echo "Geofabrik SoCal download/extract attempt ${attempt}/4"
+            if ./src/osm_manager/target/release/osm_manager \
+              --config catenaryconfig.toml run; then
+              break
+            fi
+            if [ "${attempt}" -eq 4 ]; then
+              echo "Geofabrik SoCal download/extraction failed after four attempts" >&2
+              exit 1
+            fi
+            # Retries also cover slow checksum/HEAD and GeoJSON requests from
+            # the OSM manager, not only the resumable wget PBF transfer.
+            sleep $((attempt * 30))
+          done
+          test -s temp/osr-data/regions/north-america/us/california/routing.bin
+      - name: Verify California OSR graph opens without requiring elevation data
         shell: bash
         run: |
           set -euo pipefail
           ./target/release/osr_worker --config catenaryconfig.toml > temp/osr-validation.log 2>&1 &
           pid=$!
           trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
+          # The worker defaults to Read, but can also use Mmap if configured.
+          # OSR logs "Opened native OSR {Read|Mmap} metadata: <region>",
+          # not the old "Opened native OSR mmap: <region>" wording.
+          # Missing elevation_data.bin is optional and does not prevent the
+          # native routing graph from being loaded or queries from executing.
           for attempt in $(seq 1 120); do
-            if grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log; then
-              break
-            fi
-            if ! kill -0 "$pid" 2>/dev/null; then
-              cat temp/osr-validation.log
-              exit 1
-            fi
-            sleep 1
-          done
-          grep -q 'Opened native OSR mmap: north-america/us/california/socal' temp/osr-validation.log || {
-            cat temp/osr-validation.log
-            exit 1
-          }
+            if grep -Eq 'Opened native OSR (Read|Mmap) metadata: north-america/us/california
       - name: Ingest restricted Maple feeds
         run: |
           set -euo pipefail
@@ -265,6 +307,10 @@ jobs:
           cargo test --release --lib routing_common::routing_regions
           cargo test --release --lib routing_common::raptor_query
           cargo test --release --lib routing_common::timetable
+          cargo test --release --lib routing_common::realtime_source
+          cargo test --release --lib routing_common::realtime_identity
+          cargo test --release --lib routing_common::realtime_prepare
+          cargo test --release --lib routing_common::realtime_region
           cargo test --release --bin gentian
           ./target/release/gentian \
             --region southern-california \
@@ -278,11 +324,12 @@ jobs:
             --region southern-california \
             --regions-config routing_regions.toml \
             --first-utc-day 20745 --day-count 35 \
-            --osr-dir temp/osr-data/regions/north-america/us/california/socal \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
             --max-seconds 900 --candidate-meters 1200 \
             --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
             --build --output compiled/routing/southern-california.bin
           test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
           test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
           ./target/release/gentian \
             --regions-config routing_regions.toml \
@@ -303,7 +350,7 @@ jobs:
         env:
           CATENARY_OSR_TEST_TIMETABLE: compiled/routing/southern-california.bin
           CATENARY_OSR_TEST_CONFIG: catenaryconfig.toml
-          CATENARY_OSR_TEST_REGION: north-america/us/california/socal
+          CATENARY_OSR_TEST_REGION: north-america/us/california
         run: |
           cargo test --release --lib precomputed_matches_equal_fresh_matching_in_both_directions -- --ignored
           cargo test --release --bin edelweiss
@@ -381,6 +428,93 @@ jobs:
             echo 'See the gentian-socal-routing-diagnostics artifact for both JSON'
             echo 'responses, route-leg logs and detailed timing metrics.'
           } >> "$GITHUB_STEP_SUMMARY"
+      # Live Birch is a changing external dependency. Keep regular PR checks
+      # deterministic; run this only when requested by workflow_dispatch.
+      - name: Recompile Gentian for the current realtime service horizon
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Preserve the fixed SoCal routing benchmark before refreshing this
+          # horizon. Reuse the already-extracted Geofabrik native OSR graph.
+          first_day=$(( $(date -u +%s) / 86400 - 3 ))
+          echo "Realtime timetable starts UTC day $first_day" | tee temp/realtime-horizon.log
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day "$first_day" --day-count 21 \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-rt-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+
+      - name: Download live Birch GTFS-RT trip protobuf
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          RT_FEED_ID: ${{ inputs.realtime_feed_id }}
+        run: |
+          set -euo pipefail
+          # The actual Birch API is /gtfs_rt (underscore), with feed_type=trip.
+          curl --fail --location --silent --show-error \
+            --retry 4 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 \
+            --get \
+            --data-urlencode "feed_id=${RT_FEED_ID}" \
+            --data-urlencode "feed_type=trip" \
+            --data-urlencode "format=pb" \
+            'https://birch.catenarymaps.org/gtfs_rt' \
+            --output temp/socal-live-trip-updates.pb
+          test -s temp/socal-live-trip-updates.pb
+          test "$(stat -c %s temp/socal-live-trip-updates.pb)" -le 33554432
+          sha256sum temp/socal-live-trip-updates.pb | tee temp/realtime-feed-sha256.txt
+
+      - name: Probe live Aspen-compatible realtime snapshot in Edelweiss
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          STATIC_FEED_ID: ${{ inputs.static_feed_id }}
+        run: |
+          set -euo pipefail
+          # No Aspen worker, etcd connection, or production state writes.
+          # Reuse protobuf projection, identity resolution, run preparation,
+          # regional publication and lossless event-time assertions.
+          ./target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --realtime-probe-file temp/socal-live-trip-updates.pb \
+            --realtime-probe-region southern-california \
+            --realtime-probe-static-feed "$STATIC_FEED_ID" \
+            --realtime-probe-min-runs 1 \
+            --realtime-probe-report temp/socal-realtime-probe.json \
+            | tee temp/socal-realtime-probe.stdout
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads(Path("temp/socal-realtime-probe.json").read_text())
+          assert data["region"] == "southern-california"
+          assert data["decoded_trip_updates"] > 0
+          assert data["prepared_runs"] >= 1
+          assert data["validated_exact_second_events"] >= 2 * data["prepared_runs"]
+          assert data["snapshot_shards"] == 1
+          assert data["snapshot_complete"] is True
+          assert data["snapshot_publication_seq"] == 1
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n## Live SoCal realtime snapshot probe\n\n")
+              out.write(f"- Chateau: {data['chateau']}\n")
+              out.write(f"- Protobuf TripUpdates: {data['decoded_trip_updates']}\n")
+              out.write(f"- Prepared realtime runs: {data['prepared_runs']}\n")
+              out.write(f"- Scheduled instances matched: {data['matched_scheduled_instances']}\n")
+              out.write(f"- Added runs: {data['prepared_added']}\n")
+              out.write(f"- Cancelled instances: {data['suppressed_static_instances']}\n")
+              out.write(f"- Exact-second event slots validated: {data['validated_exact_second_events']}\n")
+              out.write(f"- Ambiguous updates: {data['ambiguous_instances']}\n")
+          PY
+
       - name: Upload build metadata
         if: always()
         uses: actions/upload-artifact@v4
@@ -401,5 +535,530 @@ jobs:
             temp/alhambra-pier-query-stderr.log
             temp/alhambra-pier-journeys.txt
             temp/osr-validation.log
-            temp/osr-data/regions/north-america/us/california/socal/manifest.json
+            temp/realtime-horizon.log
+            temp/realtime-feed-sha256.txt
+            temp/socal-live-trip-updates.pb
+            temp/socal-realtime-probe.json
+            temp/socal-realtime-probe.stdout
+            temp/osr-data/regions/north-america/us/california/manifest.json
+          if-no-files-found: ignore
+ temp/osr-validation.log \
+              && grep -Fq 'OSR worker listening at 127.0.0.1:40501' temp/osr-validation.log; then
+              break
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "OSR worker exited before loading the California graph:" >&2
+              cat temp/osr-validation.log >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          grep -Eq 'Opened native OSR (Read|Mmap) metadata: north-america/us/california
+      - name: Ingest restricted Maple feeds
+        run: |
+          set -euo pipefail
+          diesel migration run
+          ./target/release/maple
+      - name: Verify routing-region and source selection
+        run: |
+          set -euo pipefail
+          # Cargo builds debug and release dependencies separately.
+          # Use the same release profile as native OSR and Gentian binaries.
+          cargo test --release --lib routing_common::routing_regions
+          cargo test --release --lib routing_common::raptor_query
+          cargo test --release --lib routing_common::timetable
+          cargo test --release --lib routing_common::realtime_source
+          cargo test --release --lib routing_common::realtime_identity
+          cargo test --release --lib routing_common::realtime_prepare
+          cargo test --release --lib routing_common::realtime_region
+          cargo test --release --bin gentian
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --list-chateaux > temp/selection.json
+          python3 src/routing_regions/verify_selection.py temp/selection.json --live
+      - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
+        run: |
+          set -euo pipefail
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day 20745 --day-count 35 \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+          test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
+          ./target/release/gentian \
+            --regions-config routing_regions.toml \
+            --data-dir compiled/routing \
+            --list-timetable-sizes | tee temp/timetable-file-sizes.log
+          grep -F 'southern-california:' temp/timetable-file-sizes.log
+          grep -F 'Total published timetables:' temp/timetable-file-sizes.log
+      - name: Verify Edelweiss runs without the OSR worker
+        run: |
+          set -euo pipefail
+          # The earlier worker smoke test terminates its process. Every route
+          # below must use the native embedded backend, with no TCP service.
+          if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then
+            echo "Unexpected OSR worker still listening" >&2
+            exit 1
+          fi
+      - name: Compare persisted OSR candidates with fresh native matching
+        env:
+          CATENARY_OSR_TEST_TIMETABLE: compiled/routing/southern-california.bin
+          CATENARY_OSR_TEST_CONFIG: catenaryconfig.toml
+          CATENARY_OSR_TEST_REGION: north-america/us/california
+        run: |
+          cargo test --release --lib precomputed_matches_equal_fresh_matching_in_both_directions -- --ignored
+          cargo test --release --bin edelweiss
+      - name: Prepare reproducible Monday and Saturday routing queries
+        run: |
+          set -euo pipefail
+          python3 src/routing_regions/prepare_uci_cityhall_query.py \
+            --output temp/uci-cityhall-request.json
+          python3 src/routing_regions/prepare_alhambra_pier_query.py \
+            --output temp/alhambra-pier-request.json
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          monday = json.loads(Path("temp/uci-cityhall-request.json").read_text())
+          saturday = json.loads(Path("temp/alhambra-pier-request.json").read_text())
+          assert datetime.fromtimestamp(monday["departure_unix_seconds"], timezone.utc).date().isoformat() == "2026-10-26"
+          assert saturday["departure_unix_seconds"] == 1792864800
+          assert saturday["from"] == {"lat": 34.0931745, "lon": -118.1312313}
+          assert saturday["to"] == {"lat": 34.01023, "lon": -118.49635}
+          # The timetable horizon starts on 2026-10-19 (UTC day 20745),
+          # and both query departure days must be within its 35-day span.
+          for request in (monday, saturday):
+              day = request["departure_unix_seconds"] // 86400
+              assert 20745 <= day < 20745 + 35, day
+          PY
+      - name: Run Edelweiss queries and publish timings
+        run: |
+          set -euo pipefail
+          # Executable already built in the initial release compilation.
+          # Keep cargo out of timed query execution.
+          {
+            echo '## Southern California RAPTOR query benchmarks'
+            echo ''
+            echo 'All durations are **milliseconds**. RAPTOR excludes OSR, GTFS metadata hydration,'
+            echo 'and startup. OSR branch timings overlap; OSR parallel wall is the'
+            echo 'actual elapsed interval enclosing all three searches. Query total'
+            echo 'measures end-to-end inside Edelweiss; CLI wall'
+            echo 'also includes cold process startup and mmap initialization.'
+            echo ''
+            echo '| Query | Journeys | RAPTOR | OSR access | OSR egress | OSR direct | OSR parallel wall | Metadata | Query total | CLI wall |'
+            echo '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'UCI to City Hall (Mon Oct 26 08:00 PDT)' \
+            --max-raptor-ms 500 \
+            --binary target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --query temp/uci-cityhall-request.json \
+            --result temp/uci-cityhall-results.json \
+            --timings temp/uci-cityhall-timings.json \
+            --stderr temp/uci-cityhall-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/uci-cityhall-results.json | tee temp/uci-cityhall-journeys.txt
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'Alhambra to Santa Monica Pier (Sat Oct 24 11:00 PDT)' \
+            --max-raptor-ms 500 \
+            --binary target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --query temp/alhambra-pier-request.json \
+            --result temp/alhambra-pier-results.json \
+            --timings temp/alhambra-pier-timings.json \
+            --stderr temp/alhambra-pier-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/alhambra-pier-results.json | tee temp/alhambra-pier-journeys.txt
+          {
+            echo ''
+            echo 'The Monday fixture departs October 26, 2026 at 08:00 PDT.'
+            echo 'The Saturday fixture departs October 24, 2026 at 11:00 PDT,'
+            echo 'from Main Street in Alhambra to the Santa Monica Pier entrance.'
+            echo 'See the gentian-socal-routing-diagnostics artifact for both JSON'
+            echo 'responses, route-leg logs and detailed timing metrics.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Live Birch is a changing external dependency. Keep regular PR checks
+      # deterministic; run this only when requested by workflow_dispatch.
+      - name: Recompile Gentian for the current realtime service horizon
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Preserve the fixed SoCal routing benchmark before refreshing this
+          # horizon. Reuse the already-extracted Geofabrik native OSR graph.
+          first_day=$(( $(date -u +%s) / 86400 - 3 ))
+          echo "Realtime timetable starts UTC day $first_day" | tee temp/realtime-horizon.log
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day "$first_day" --day-count 21 \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-rt-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+
+      - name: Download live Birch GTFS-RT trip protobuf
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          RT_FEED_ID: ${{ inputs.realtime_feed_id }}
+        run: |
+          set -euo pipefail
+          # The actual Birch API is /gtfs_rt (underscore), with feed_type=trip.
+          curl --fail --location --silent --show-error \
+            --retry 4 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 \
+            --get \
+            --data-urlencode "feed_id=${RT_FEED_ID}" \
+            --data-urlencode "feed_type=trip" \
+            --data-urlencode "format=pb" \
+            'https://birch.catenarymaps.org/gtfs_rt' \
+            --output temp/socal-live-trip-updates.pb
+          test -s temp/socal-live-trip-updates.pb
+          test "$(stat -c %s temp/socal-live-trip-updates.pb)" -le 33554432
+          sha256sum temp/socal-live-trip-updates.pb | tee temp/realtime-feed-sha256.txt
+
+      - name: Probe live Aspen-compatible realtime snapshot in Edelweiss
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          STATIC_FEED_ID: ${{ inputs.static_feed_id }}
+        run: |
+          set -euo pipefail
+          # No Aspen worker, etcd connection, or production state writes.
+          # Reuse protobuf projection, identity resolution, run preparation,
+          # regional publication and lossless event-time assertions.
+          ./target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --realtime-probe-file temp/socal-live-trip-updates.pb \
+            --realtime-probe-region southern-california \
+            --realtime-probe-static-feed "$STATIC_FEED_ID" \
+            --realtime-probe-min-runs 1 \
+            --realtime-probe-report temp/socal-realtime-probe.json \
+            | tee temp/socal-realtime-probe.stdout
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads(Path("temp/socal-realtime-probe.json").read_text())
+          assert data["region"] == "southern-california"
+          assert data["decoded_trip_updates"] > 0
+          assert data["prepared_runs"] >= 1
+          assert data["validated_exact_second_events"] >= 2 * data["prepared_runs"]
+          assert data["snapshot_shards"] == 1
+          assert data["snapshot_complete"] is True
+          assert data["snapshot_publication_seq"] == 1
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n## Live SoCal realtime snapshot probe\n\n")
+              out.write(f"- Chateau: {data['chateau']}\n")
+              out.write(f"- Protobuf TripUpdates: {data['decoded_trip_updates']}\n")
+              out.write(f"- Prepared realtime runs: {data['prepared_runs']}\n")
+              out.write(f"- Scheduled instances matched: {data['matched_scheduled_instances']}\n")
+              out.write(f"- Added runs: {data['prepared_added']}\n")
+              out.write(f"- Cancelled instances: {data['suppressed_static_instances']}\n")
+              out.write(f"- Exact-second event slots validated: {data['validated_exact_second_events']}\n")
+              out.write(f"- Ambiguous updates: {data['ambiguous_instances']}\n")
+          PY
+
+      - name: Upload build metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gentian-socal-routing-diagnostics
+          path: |
+            temp/selection.json
+            temp/timetable-file-sizes.log
+            temp/stops.tsv
+            temp/uci-cityhall-request.json
+            temp/uci-cityhall-results.json
+            temp/uci-cityhall-timings.json
+            temp/uci-cityhall-query-stderr.log
+            temp/uci-cityhall-journeys.txt
+            temp/alhambra-pier-request.json
+            temp/alhambra-pier-results.json
+            temp/alhambra-pier-timings.json
+            temp/alhambra-pier-query-stderr.log
+            temp/alhambra-pier-journeys.txt
+            temp/osr-validation.log
+            temp/realtime-horizon.log
+            temp/realtime-feed-sha256.txt
+            temp/socal-live-trip-updates.pb
+            temp/socal-realtime-probe.json
+            temp/socal-realtime-probe.stdout
+            temp/osr-data/regions/north-america/us/california/manifest.json
+          if-no-files-found: ignore
+ temp/osr-validation.log || {
+            cat temp/osr-validation.log
+            echo "Native California OSR graph was not opened" >&2
+            exit 1
+          }
+          grep -Fq 'OSR worker listening at 127.0.0.1:40501' temp/osr-validation.log || {
+            cat temp/osr-validation.log
+            echo "OSR worker did not start listening" >&2
+            exit 1
+          }
+          kill -0 "$pid"
+          echo "California native OSR graph loaded; elevation data is optional."
+      - name: Ingest restricted Maple feeds
+        run: |
+          set -euo pipefail
+          diesel migration run
+          ./target/release/maple
+      - name: Verify routing-region and source selection
+        run: |
+          set -euo pipefail
+          # Cargo builds debug and release dependencies separately.
+          # Use the same release profile as native OSR and Gentian binaries.
+          cargo test --release --lib routing_common::routing_regions
+          cargo test --release --lib routing_common::raptor_query
+          cargo test --release --lib routing_common::timetable
+          cargo test --release --lib routing_common::realtime_source
+          cargo test --release --lib routing_common::realtime_identity
+          cargo test --release --lib routing_common::realtime_prepare
+          cargo test --release --lib routing_common::realtime_region
+          cargo test --release --bin gentian
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --list-chateaux > temp/selection.json
+          python3 src/routing_regions/verify_selection.py temp/selection.json --live
+      - name: Compile mmap RAPTOR timetable and OSR footpaths in Gentian
+        run: |
+          set -euo pipefail
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day 20745 --day-count 35 \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+          test -z "$(find temp/gentian-scratch -mindepth 1 -maxdepth 1 -print -quit)"
+          ./target/release/gentian \
+            --regions-config routing_regions.toml \
+            --data-dir compiled/routing \
+            --list-timetable-sizes | tee temp/timetable-file-sizes.log
+          grep -F 'southern-california:' temp/timetable-file-sizes.log
+          grep -F 'Total published timetables:' temp/timetable-file-sizes.log
+      - name: Verify Edelweiss runs without the OSR worker
+        run: |
+          set -euo pipefail
+          # The earlier worker smoke test terminates its process. Every route
+          # below must use the native embedded backend, with no TCP service.
+          if (echo >/dev/tcp/127.0.0.1/40501) 2>/dev/null; then
+            echo "Unexpected OSR worker still listening" >&2
+            exit 1
+          fi
+      - name: Compare persisted OSR candidates with fresh native matching
+        env:
+          CATENARY_OSR_TEST_TIMETABLE: compiled/routing/southern-california.bin
+          CATENARY_OSR_TEST_CONFIG: catenaryconfig.toml
+          CATENARY_OSR_TEST_REGION: north-america/us/california
+        run: |
+          cargo test --release --lib precomputed_matches_equal_fresh_matching_in_both_directions -- --ignored
+          cargo test --release --bin edelweiss
+      - name: Prepare reproducible Monday and Saturday routing queries
+        run: |
+          set -euo pipefail
+          python3 src/routing_regions/prepare_uci_cityhall_query.py \
+            --output temp/uci-cityhall-request.json
+          python3 src/routing_regions/prepare_alhambra_pier_query.py \
+            --output temp/alhambra-pier-request.json
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+          monday = json.loads(Path("temp/uci-cityhall-request.json").read_text())
+          saturday = json.loads(Path("temp/alhambra-pier-request.json").read_text())
+          assert datetime.fromtimestamp(monday["departure_unix_seconds"], timezone.utc).date().isoformat() == "2026-10-26"
+          assert saturday["departure_unix_seconds"] == 1792864800
+          assert saturday["from"] == {"lat": 34.0931745, "lon": -118.1312313}
+          assert saturday["to"] == {"lat": 34.01023, "lon": -118.49635}
+          # The timetable horizon starts on 2026-10-19 (UTC day 20745),
+          # and both query departure days must be within its 35-day span.
+          for request in (monday, saturday):
+              day = request["departure_unix_seconds"] // 86400
+              assert 20745 <= day < 20745 + 35, day
+          PY
+      - name: Run Edelweiss queries and publish timings
+        run: |
+          set -euo pipefail
+          # Executable already built in the initial release compilation.
+          # Keep cargo out of timed query execution.
+          {
+            echo '## Southern California RAPTOR query benchmarks'
+            echo ''
+            echo 'All durations are **milliseconds**. RAPTOR excludes OSR, GTFS metadata hydration,'
+            echo 'and startup. OSR branch timings overlap; OSR parallel wall is the'
+            echo 'actual elapsed interval enclosing all three searches. Query total'
+            echo 'measures end-to-end inside Edelweiss; CLI wall'
+            echo 'also includes cold process startup and mmap initialization.'
+            echo ''
+            echo '| Query | Journeys | RAPTOR | OSR access | OSR egress | OSR direct | OSR parallel wall | Metadata | Query total | CLI wall |'
+            echo '| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |'
+          } >> "$GITHUB_STEP_SUMMARY"
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'UCI to City Hall (Mon Oct 26 08:00 PDT)' \
+            --max-raptor-ms 500 \
+            --binary target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --query temp/uci-cityhall-request.json \
+            --result temp/uci-cityhall-results.json \
+            --timings temp/uci-cityhall-timings.json \
+            --stderr temp/uci-cityhall-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/uci-cityhall-results.json | tee temp/uci-cityhall-journeys.txt
+          python3 src/routing_regions/run_timed_query.py \
+            --label 'Alhambra to Santa Monica Pier (Sat Oct 24 11:00 PDT)' \
+            --max-raptor-ms 500 \
+            --binary target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --query temp/alhambra-pier-request.json \
+            --result temp/alhambra-pier-results.json \
+            --timings temp/alhambra-pier-timings.json \
+            --stderr temp/alhambra-pier-query-stderr.log
+          python3 src/routing_regions/print_uci_cityhall_results.py \
+            temp/alhambra-pier-results.json | tee temp/alhambra-pier-journeys.txt
+          {
+            echo ''
+            echo 'The Monday fixture departs October 26, 2026 at 08:00 PDT.'
+            echo 'The Saturday fixture departs October 24, 2026 at 11:00 PDT,'
+            echo 'from Main Street in Alhambra to the Santa Monica Pier entrance.'
+            echo 'See the gentian-socal-routing-diagnostics artifact for both JSON'
+            echo 'responses, route-leg logs and detailed timing metrics.'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Live Birch is a changing external dependency. Keep regular PR checks
+      # deterministic; run this only when requested by workflow_dispatch.
+      - name: Recompile Gentian for the current realtime service horizon
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Preserve the fixed SoCal routing benchmark before refreshing this
+          # horizon. Reuse the already-extracted Geofabrik native OSR graph.
+          first_day=$(( $(date -u +%s) / 86400 - 3 ))
+          echo "Realtime timetable starts UTC day $first_day" | tee temp/realtime-horizon.log
+          ./target/release/gentian \
+            --region southern-california \
+            --regions-config routing_regions.toml \
+            --first-utc-day "$first_day" --day-count 21 \
+            --osr-dir temp/osr-data/regions/north-america/us/california \
+            --max-seconds 900 --candidate-meters 1200 \
+            --schedule-memory-mib 16 --scratch-dir temp/gentian-rt-scratch \
+            --build --output compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.bin
+          test -s compiled/routing/southern-california.rt-identities.bin
+
+      - name: Download live Birch GTFS-RT trip protobuf
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          RT_FEED_ID: ${{ inputs.realtime_feed_id }}
+        run: |
+          set -euo pipefail
+          # The actual Birch API is /gtfs_rt (underscore), with feed_type=trip.
+          curl --fail --location --silent --show-error \
+            --retry 4 --retry-delay 3 --retry-all-errors \
+            --connect-timeout 15 --max-time 90 \
+            --get \
+            --data-urlencode "feed_id=${RT_FEED_ID}" \
+            --data-urlencode "feed_type=trip" \
+            --data-urlencode "format=pb" \
+            'https://birch.catenarymaps.org/gtfs_rt' \
+            --output temp/socal-live-trip-updates.pb
+          test -s temp/socal-live-trip-updates.pb
+          test "$(stat -c %s temp/socal-live-trip-updates.pb)" -le 33554432
+          sha256sum temp/socal-live-trip-updates.pb | tee temp/realtime-feed-sha256.txt
+
+      - name: Probe live Aspen-compatible realtime snapshot in Edelweiss
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.live_realtime_probe }}
+        shell: bash
+        env:
+          STATIC_FEED_ID: ${{ inputs.static_feed_id }}
+        run: |
+          set -euo pipefail
+          # No Aspen worker, etcd connection, or production state writes.
+          # Reuse protobuf projection, identity resolution, run preparation,
+          # regional publication and lossless event-time assertions.
+          ./target/release/edelweiss \
+            --regions-config routing_regions.toml \
+            --catenary-config catenaryconfig.toml \
+            --database-url "$DATABASE_URL" \
+            --realtime-probe-file temp/socal-live-trip-updates.pb \
+            --realtime-probe-region southern-california \
+            --realtime-probe-static-feed "$STATIC_FEED_ID" \
+            --realtime-probe-min-runs 1 \
+            --realtime-probe-report temp/socal-realtime-probe.json \
+            | tee temp/socal-realtime-probe.stdout
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          data = json.loads(Path("temp/socal-realtime-probe.json").read_text())
+          assert data["region"] == "southern-california"
+          assert data["decoded_trip_updates"] > 0
+          assert data["prepared_runs"] >= 1
+          assert data["validated_exact_second_events"] >= 2 * data["prepared_runs"]
+          assert data["snapshot_shards"] == 1
+          assert data["snapshot_complete"] is True
+          assert data["snapshot_publication_seq"] == 1
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write("\n## Live SoCal realtime snapshot probe\n\n")
+              out.write(f"- Chateau: {data['chateau']}\n")
+              out.write(f"- Protobuf TripUpdates: {data['decoded_trip_updates']}\n")
+              out.write(f"- Prepared realtime runs: {data['prepared_runs']}\n")
+              out.write(f"- Scheduled instances matched: {data['matched_scheduled_instances']}\n")
+              out.write(f"- Added runs: {data['prepared_added']}\n")
+              out.write(f"- Cancelled instances: {data['suppressed_static_instances']}\n")
+              out.write(f"- Exact-second event slots validated: {data['validated_exact_second_events']}\n")
+              out.write(f"- Ambiguous updates: {data['ambiguous_instances']}\n")
+          PY
+
+      - name: Upload build metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gentian-socal-routing-diagnostics
+          path: |
+            temp/selection.json
+            temp/timetable-file-sizes.log
+            temp/stops.tsv
+            temp/uci-cityhall-request.json
+            temp/uci-cityhall-results.json
+            temp/uci-cityhall-timings.json
+            temp/uci-cityhall-query-stderr.log
+            temp/uci-cityhall-journeys.txt
+            temp/alhambra-pier-request.json
+            temp/alhambra-pier-results.json
+            temp/alhambra-pier-timings.json
+            temp/alhambra-pier-query-stderr.log
+            temp/alhambra-pier-journeys.txt
+            temp/osr-validation.log
+            temp/realtime-horizon.log
+            temp/realtime-feed-sha256.txt
+            temp/socal-live-trip-updates.pb
+            temp/socal-realtime-probe.json
+            temp/socal-realtime-probe.stdout
+            temp/osr-data/regions/north-america/us/california/manifest.json
           if-no-files-found: ignore
