@@ -107,7 +107,7 @@ pub(crate) struct NigiriRaptor {
     early_prune: bool,
     /// Set only in opt-in tests until realtime journey reconstruction carries
     /// shard-qualified RegionRtRun predecessor identities end-to-end.
-    realtime: Option<Arc<RegionRealtimeSnapshot>>,
+    pub(crate) realtime: Option<Arc<RegionRealtimeSnapshot>>,
 }
 
 impl NigiriRaptor {
