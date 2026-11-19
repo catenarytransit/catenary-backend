@@ -1,4 +1,4 @@
-//! Static, no-via CPU RAPTOR translated from Nigiri 82e55ced's
+//! Static and realtime no-via CPU RAPTOR translated from Nigiri 82e55ced's
 //! include/nigiri/routing/raptor/{raptor.h,raptor_state.h}.
 //! MIT license: third_party/nigiri-LICENSE. The wire adapter uses seconds.
 //! Search labels are best_, tmp_, and round_times_; no predecessor labels
