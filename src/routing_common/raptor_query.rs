@@ -1,6 +1,8 @@
 use crate::routing_common::timetable::{LocationIdx, RouteIdx, TransportIdx, ZeroCopyTimetable};
 use anyhow::{Result, ensure};
 use serde::Serialize;
+use crate::routing_common::realtime_region::{RegionRtPattern, RegionRtRun};
+
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::time::Instant;
@@ -93,6 +95,15 @@ pub struct Query {
     pub max_duration_seconds: u32,
 }
 
+/// A realtime run handle is valid ONLY within one pinned regional snapshot.
+/// Do not serialize or reuse it after the publication sequence changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RtRideRef {
+    pub publication_seq: u64,
+    pub run: RegionRtRun,
+    pub pattern: RegionRtPattern,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Leg {
@@ -115,6 +126,8 @@ pub enum Leg {
         alight_stop_index: usize,
         departure_unix_seconds: i64,
         arrival_unix_seconds: i64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        realtime: Option<RtRideRef>,
     },
     Egress {
         from_stop: u32,
