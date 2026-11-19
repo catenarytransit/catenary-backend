@@ -74,7 +74,7 @@ pub fn compute(dir: &Path) -> Result<GraphIdentity> {
             "OSR graph changed while fingerprinting {}", path.display());
     }
     Ok(GraphIdentity { schema_version: 1, blake3: fast.finalize().to_hex().to_string(),
-        legacy_sha256: format!("{:x}", legacy.finalize()) })
+        legacy_sha256: hex::encode(legacy.finalize()) })
 }
 
 /// Used by Gentian. No graph scan when a published identity is present.
@@ -86,6 +86,23 @@ pub fn fingerprint(dir: &Path) -> Result<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_digest_matches_original_sha256_encoding() {
+        let root = std::env::temp_dir().join(format!("osr-legacy-id-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("routing.bin"), b"abcd").unwrap();
+        let identity = compute(&root).unwrap();
+        let mut hash = Sha256::new();
+        hash.update(PREFIX);
+        hash.update((11u64).to_le_bytes());
+        hash.update(b"routing.bin");
+        hash.update((4u64).to_le_bytes());
+        hash.update(b"abcd");
+        assert_eq!(identity.legacy_sha256, hex::encode(hash.finalize()));
+        assert_eq!(identity.legacy_sha256.len(), 64);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn published_identity_is_read_without_scanning_binaries() {
         let root = std::env::temp_dir().join(format!("osr-id-{}", std::process::id()));
