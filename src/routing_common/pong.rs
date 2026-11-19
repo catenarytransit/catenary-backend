@@ -43,6 +43,8 @@ struct Candidate {
     dest_time: i64,
     boardings: usize,
     journey: Option<Journey>,
+    /// An invalid reconstructed candidate cannot dominate valid alternatives.
+    rejected: bool,
 }
 
 impl Candidate {
@@ -52,6 +54,7 @@ impl Candidate {
             dest_time: point.dest_time,
             boardings: point.boardings,
             journey: None,
+            rejected: false,
         }
     }
 
@@ -71,10 +74,10 @@ impl Candidate {
 }
 
 fn pareto_add(results: &mut Vec<Candidate>, candidate: Candidate) {
-    if results.iter().any(|old| old.dominates(&candidate)) {
+    if results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
         return;
     }
-    results.retain(|old| !candidate.dominates(old));
+    results.retain(|old| old.rejected || !candidate.dominates(old));
     results.push(candidate);
 }
 
@@ -313,7 +316,8 @@ pub(crate) fn route_pong_observed(
             results
                 .iter()
                 .filter(|j| {
-                    better(j.dest_time, cursor, arrive_by)
+                    !j.rejected
+                        && better(j.dest_time, cursor, arrive_by)
                         && (include_too_slow
                             || (j.travel_time() < fastest_direct
                                 && j.travel_time() <= u64::from(max_travel_time)))
@@ -326,7 +330,7 @@ pub(crate) fn route_pong_observed(
             results
                 .iter()
                 .filter(|j| {
-                    j.journey.is_some()
+                    !j.rejected && j.journey.is_some()
                         && better(j.dest_time, cursor, arrive_by)
                         && better(j.dest_time, lookahead_end, arrive_by)
                         && j.travel_time() < fastest_direct
@@ -380,7 +384,7 @@ pub(crate) fn route_pong_observed(
         let mut ping_results = Vec::<Candidate>::new();
         for journey in ping {
             let candidate = Candidate::point(journey);
-            if !results.iter().any(|old| old.dominates(&candidate)) {
+            if !results.iter().any(|old| !old.rejected && old.dominates(&candidate)) {
                 pareto_add(&mut ping_results, candidate);
             }
         }
@@ -401,7 +405,7 @@ pub(crate) fn route_pong_observed(
             // established the latest departure for this arrival/boarding
             // pair. Reuse its oriented key instead of searching again.
             if let Some(known) = results.iter().find(|pong_j| {
-                pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
             }) {
                 ping_j.start_time = known.dest_time;
                 known_result_hits += 1;
@@ -425,7 +429,7 @@ pub(crate) fn route_pong_observed(
             let matched = results
                 .iter_mut()
                 .find(|pong_j| {
-                    pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
+                    !pong_j.rejected && pong_j.boardings == ping_j.boardings && pong_j.start_time == ping_j.dest_time
                 })
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -447,10 +451,20 @@ pub(crate) fn route_pong_observed(
                     &kernel_query,
                     point,
                 );
-                if journey.is_err() {
-                    state.stats_.profile_journeys_rejected += 1;
+                match journey {
+                    Ok(valid) => matched.journey = Some(valid),
+                    Err(error) => {
+                        state.stats_.profile_journeys_rejected += 1;
+                        matched.rejected = true;
+                        tracing::warn!(
+                            error = %error,
+                            boardings = point.boardings,
+                            start_time = point.start_time,
+                            dest_time = point.dest_time,
+                            "discarding invalid Nigiri PONG candidate"
+                        );
+                    }
                 }
-                matched.journey = Some(journey?);
             }
             ping_j.start_time = matched.dest_time;
         }
