@@ -1201,6 +1201,8 @@ pub fn build(
     let identity_staging = output.with_extension("rt-identities.bin.tmp");
     std::fs::write(&identity_staging, catenary::bincode_serialize(&catalog)?)?;
     std::fs::rename(&identity_staging, &identity_path)?;
+    // Generate a zero-copy routing companion once, not at every Edelweiss boot.
+    catenary::routing_common::routing_index::build_for_timetable(output)?;
     let sidecar = output.with_extension("platforms.json");
     let staging = sidecar.with_extension("platforms.json.tmp");
     std::fs::write(&staging, serde_json::to_vec(&platform_metadata)?)?;
