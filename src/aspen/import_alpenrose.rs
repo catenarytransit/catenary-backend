@@ -727,8 +727,17 @@ pub async fn new_rt_data(
     }
 
     if chateau_id == "nationalrailuk" {
-        let darwin_url =
-            std::env::var("DARWIN_RT_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+        // An environment override remains highest priority for existing deployments.
+        let configured_darwin_url = catenary::catenaryconfig::config()
+            .alpenrose
+            .darwin_rt_base_url();
+        let darwin_url_override = std::env::var("DARWIN_RT_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty());
+        let darwin_url = darwin_url_override
+            .as_deref()
+            .unwrap_or(configured_darwin_url)
+            .trim_end_matches('/');
         let client = reqwest::Client::new();
 
         let rid_res = client

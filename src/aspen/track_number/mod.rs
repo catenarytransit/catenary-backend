@@ -326,7 +326,10 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             TrackData::Amtrak(multisource)
         }
         "nationalrailuk" => {
-            let url = "http://localhost:26993/platforms-v2";
+            let url = catenary::catenaryconfig::config()
+                .alpenrose
+                .platform_endpoints
+                .darwin_url();
             match reqwest::get(url).await {
                 Ok(r) => match r.json::<HashMap<String, Vec<PlatformInfo>>>().await {
                     Ok(response) => TrackData::NationalRail(response),
@@ -342,7 +345,10 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             }
         }
         "île~de~france~mobilités" => {
-            let url = "http://localhost:46299/platforms";
+            let url = catenary::catenaryconfig::config()
+                .alpenrose
+                .platform_endpoints
+                .ile_de_france_url();
 
             match reqwest::get(url).await {
                 Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
@@ -359,7 +365,10 @@ pub async fn fetch_track_data(chateau_id: &str, pool: &CatenaryPostgresPool) -> 
             }
         }
         "danmark" => {
-            let url = "http://localhost:46372/platforms";
+            let url = catenary::catenaryconfig::config()
+                .alpenrose
+                .platform_endpoints
+                .danmark_url();
 
             match reqwest::get(url).await {
                 Ok(r) => match r.json::<HashMap<String, Vec<CommonPlatformInfo>>>().await {
