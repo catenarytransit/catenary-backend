@@ -970,6 +970,22 @@ mod tests {
     }
 
     #[test]
+    fn rejected_pong_candidate_does_not_dominate_valid_alternative() {
+        let rejected_point = PointJourney {
+            start_time: 100, dest_time: 400, boardings: 2,
+        };
+        let mut rejected = Candidate::point(rejected_point);
+        rejected.rejected = true;
+        let valid = Candidate::point(PointJourney {
+            start_time: 90, dest_time: 410, boardings: 2,
+        });
+        let mut results = vec![rejected];
+        pareto_add(&mut results, valid);
+        assert!(results.iter().any(|candidate| !candidate.rejected
+            && candidate.start_time == 90 && candidate.dest_time == 410));
+    }
+
+    #[test]
     fn realtime_delay_invalidates_transfer_but_preserves_earlier_alternative() {
         // Train 0 used to arrive at 08:20 in time for train 1's 08:25
         // departure. Realtime moves its arrival to 08:28. A different train
