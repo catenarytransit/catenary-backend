@@ -301,7 +301,8 @@ mod tests {
         assert_eq!(region.stops(&tt, pat).unwrap()[0].location(), LocationIdx(0));
         let other_pat = region.patterns_at(LocationIdx(2))[0];
         assert_eq!(other_pat.chateau_slot, 1);
-        assert_eq!(other_pat.pattern, RtPatternRef::Dynamic(1).min(other_pat.pattern));
+        assert_eq!(pat.pattern, RtPatternRef::Dynamic(0));
+        assert_eq!(other_pat.pattern, RtPatternRef::Dynamic(0));
         assert_eq!(region.runs_for(other_pat).count(), 1);
     }
 
