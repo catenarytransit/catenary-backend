@@ -791,6 +791,17 @@ fn gtfs_trip_id_from_external(external: &str) -> Option<&str> {
     rest.get(..n)
 }
 
+/// Catenary's added-trip instance key length-prefixes GTFS trip_id and
+/// start_time, avoiding ambiguous colons or reused trip IDs across instances.
+fn gtfs_start_time_from_external(external: &str) -> Option<&str> {
+    let (length, rest) = external.split_once(':')?;
+    let trip_len = length.parse::<usize>().ok()?;
+    let after_trip = rest.get(trip_len..)?;
+    let (time_length, after_length) = after_trip.split_once(':')?;
+    let time_len = time_length.parse::<usize>().ok()?;
+    (time_len != 0).then(|| after_length.get(..time_len)).flatten()
+}
+
 /// Serialize realtime legs without indexing static arrays at sentinel values.
 /// All stop and event lookups go through exactly the Arc pinned by PONG.
 /// For a dynamic detour pattern, never draw the old GTFS shape as though the
@@ -877,6 +888,8 @@ fn realtime_transit_leg(
     let first_scheduled = original.and_then(|o|
         scheduled_event_unix(tt, TransportIdx(o.transport), DayIdx(o.day), 0));
     let instance = first_scheduled.and_then(|first| trip_instance(&meta, first));
+    let realtime_start_time = run.external_id.as_deref()
+        .and_then(gtfs_start_time_from_external);
     let gtfs_date = chrono::NaiveDate::from_ymd_opt(1970,1,1)
         .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(i64::from(run.service_date))))
         .map(|day| day.format("%Y%m%d").to_string());
@@ -904,7 +917,7 @@ fn realtime_transit_leg(
         "routeId":meta.route_id,"tripId":meta.id,
         "chateau":meta.chateau,
         "tripStartDate":instance.as_ref().map(|v| &v.0).or(gtfs_date.as_ref()),
-        "tripStartTime":instance.as_ref().map(|v| &v.1),
+        "tripStartTime":instance.as_ref().map(|v| v.1.as_str()).or(realtime_start_time),
         "fromStopSequence":meta.stop_sequences.get(*board_stop_index),
         "toStopSequence":meta.stop_sequences.get(*alight_stop_index),
         "routeShortName":meta.short_name,"routeLongName":meta.long_name,
@@ -916,7 +929,6 @@ fn realtime_transit_leg(
         "intermediateStops":intermediates,
         "legGeometry":polyline(&shape),
         "realtimeSnapshotRevision":snapshot.publication_seq,
-        "realtimeRun":rt.run,
     }))
 }
 
