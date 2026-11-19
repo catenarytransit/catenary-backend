@@ -1208,6 +1208,86 @@ mod tests {
     use super::*;
 
     #[test]
+    fn added_realtime_leg_renders_without_any_static_transport() {
+        use catenary::routing_common::raptor_query::RtRideRef;
+        use catenary::routing_common::realtime_overlay::{
+            RealtimeOverlayBuilder, RtPatternInput, RtRunInput,
+        };
+        use catenary::routing_common::realtime_region::{
+            ChateauRealtimeShard, RegionRealtimeSnapshot, RegionRtPattern, RegionRtRun,
+        };
+        use catenary::routing_common::timetable::{
+            Coordinate, PackedStop, SourceIdx, StringRef, TimetableOwned,
+        };
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut owned = TimetableOwned::empty(20_000, 4);
+        let source = owned.add_source("test", "feed", "attempt").unwrap();
+        for id in ["Origin", "Destination"] {
+            let name = owned.add_string(id).unwrap();
+            owned.coordinates.push(Coordinate::default());
+            owned.location_id.push(name);
+            owned.location_name.push(name);
+            owned.location_source.push(source);
+            owned.location_parent.push(LocationIdx::INVALID);
+            owned.location_type.push(1);
+            owned.location_transfer_seconds.push(0);
+            owned.location_routes_offsets.push(0);
+            owned.footpaths_out_offsets.push(0);
+            owned.footpaths_in_offsets.push(0);
+        }
+        let bytes = owned.encode().unwrap();
+        let tt = ZeroCopyTimetable::new(&bytes).unwrap();
+        let index = MetadataIndex::build(&tt).unwrap();
+        let epoch = 20_000_i64 * 86_400;
+        let mut builder = RealtimeOverlayBuilder::new_sparse(&tt, [1;32], 1);
+        builder.add_run(RtRunInput {
+            source,
+            original: None,
+            service_date: 20_000,
+            external_id: Some("7:trip:id8:25:00:31:20000".into()),
+            pattern: RtPatternInput::Stops(vec![
+                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+            ]),
+            event_times: vec![epoch+301, epoch+602],
+            metadata: None,
+        }).unwrap();
+        let pattern = builder.finish().unwrap();
+        let kind = pattern.runs[0].pattern;
+        let snapshot = RegionRealtimeSnapshot::compose(
+            &tt, [1;32], 1, &BTreeSet::from(["test".to_owned()]),
+            vec![ChateauRealtimeShard {
+                chateau: "test".into(), overlay: Arc::new(pattern),
+            }],
+        ).unwrap();
+        let rt = RtRideRef {
+            publication_seq: snapshot.publication_seq,
+            run: RegionRtRun { chateau_slot: 0, run_index: 0 },
+            pattern: RegionRtPattern { chateau_slot: 0, pattern: kind },
+        };
+        let ride = Leg::Ride {
+            from_stop: 0, to_stop: 1,
+            route: u32::MAX, transport: u32::MAX, service_day: 0,
+            board_stop_index: 0, alight_stop_index: 1,
+            departure_unix_seconds: epoch+301,
+            arrival_unix_seconds: epoch+602,
+            realtime: Some(rt),
+        };
+        let value = realtime_transit_leg(
+            &tt, &index, &BTreeMap::new(), &snapshot, &ride, false,
+        ).unwrap();
+        assert_eq!(value["realTime"], true);
+        assert_eq!(value["scheduled"], false);
+        assert_eq!(value["tripId"], "trip:id");
+        assert_eq!(value["chateau"], "test");
+        assert_eq!(value["tripStartTime"], "25:00:31");
+        assert!(value["scheduledStartTime"].is_null());
+        assert_eq!(value["startTime"], timestamp(epoch+301));
+    }
+
+    #[test]
     fn added_gtfs_trip_identity_keeps_colons_and_long_start_times() {
         let encoded = format!("{}:{}{}:{}:{}", 7, "trip:id", 8, "25:00:31", 20_000);
         assert_eq!(gtfs_trip_id_from_external(&encoded), Some("trip:id"));
