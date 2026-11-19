@@ -194,20 +194,15 @@ fn realtime_run_for(
     source: SourceIdx,
     instance: (TransportIdx, DayIdx),
 ) -> Result<Option<(RegionRtRun, RegionRtPattern)>> {
-    let mut found = None;
-    for (slot, shard) in snapshot.chateaux.iter().enumerate() {
-        for (run_idx, run) in shard.overlay.runs.iter().enumerate() {
-            if run.source != source.0 || run.original.is_none_or(|original| {
-                original.transport != instance.0.0 || original.day != instance.1.0
-            }) { continue }
-            ensure!(found.is_none(), "multiple RT runs for one static service instance");
-            found = Some((
-                RegionRtRun { chateau_slot: u32::try_from(slot)?, run_index: u32::try_from(run_idx)? },
-                RegionRtPattern { chateau_slot: u32::try_from(slot)?, pattern: run.pattern },
-            ));
-        }
-    }
-    Ok(found)
+    let Some(handle) = snapshot.original_run(instance.0, instance.1) else {
+        return Ok(None);
+    };
+    let run = snapshot.run(handle).context("invalid realtime instance handle")?;
+    ensure!(run.source == source.0, "realtime instance has wrong GTFS source");
+    Ok(Some((
+        handle,
+        RegionRtPattern { chateau_slot: handle.chateau_slot, pattern: run.pattern },
+    )))
 }
 
 /// Render a scheduled GTFS trip including cancelled status even when the
