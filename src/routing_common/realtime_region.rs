@@ -59,6 +59,9 @@ pub struct RegionRealtimeSnapshot {
     // per canceled transport-day instance on every regional revision.
     suppressed_static: Vec<StaticInstance>,
     cancelled_static: Vec<StaticInstance>,
+    /// Sparse O(log RT instances) lookup for saved-trip and OJP detail.
+    /// Never build a dense table for every static timetable transport.
+    original_instance_runs: BTreeMap<StaticInstance, RegionRtRun>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +99,7 @@ impl RegionRealtimeSnapshot {
         let mut location_patterns = BTreeMap::<u32, Vec<RegionRtPattern>>::new();
         let mut suppressed_static = BTreeSet::new();
         let mut cancelled_static = BTreeSet::new();
+        let mut original_instance_runs = BTreeMap::new();
         let mut chateaux = Vec::with_capacity(shards.len());
         let mut observed = BTreeSet::new();
 
@@ -125,6 +129,16 @@ impl RegionRealtimeSnapshot {
 
             let chateau_slot =
                 u32::try_from(chateaux.len()).map_err(|_| RegionSnapshotError::TooManyChateaux)?;
+            for (i, run) in shard.overlay.runs.iter().enumerate() {
+                if let Some(instance) = run.original {
+                    let run_index = u32::try_from(i).map_err(|_| RegionSnapshotError::InvalidPattern)?;
+                    if original_instance_runs.insert(instance, RegionRtRun {
+                        chateau_slot, run_index,
+                    }).is_some() {
+                        return Err(RegionSnapshotError::SuppressionCollision);
+                    }
+                }
+            }
             for (&location, patterns) in &shard.overlay.location_patterns {
                 if location as usize >= tt.coordinates().len() {
                     return Err(RegionSnapshotError::InvalidPattern);
@@ -166,6 +180,7 @@ impl RegionRealtimeSnapshot {
             location_patterns,
             suppressed_static: suppressed_static.into_iter().collect(),
             cancelled_static: cancelled_static.into_iter().collect(),
+            original_instance_runs,
         })
     }
 
@@ -220,6 +235,12 @@ impl RegionRealtimeSnapshot {
                 chateau_slot: pattern.chateau_slot,
                 run_index,
             })
+    }
+
+    pub fn original_run(&self, transport: TransportIdx, day: DayIdx) -> Option<RegionRtRun> {
+        self.original_instance_runs.get(&StaticInstance {
+            transport: transport.0, day: day.0,
+        }).copied()
     }
 
     pub fn run(&self, handle: RegionRtRun) -> Option<&RtRun> {
