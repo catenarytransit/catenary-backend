@@ -424,6 +424,7 @@ impl NigiriRaptor {
                     .then_some(base + i64::from(t))
             },
             |candidate| {
+                stats.realtime_ride_candidates += 1;
                 let (loc, event) = if reverse {
                     (candidate.from_stop as usize, candidate.departure_unix_seconds)
                 } else {
@@ -434,6 +435,7 @@ impl NigiriRaptor {
                     tmp[loc] = time;
                     station_mark.set(loc);
                     stats.labels_improved += 1;
+                    stats.realtime_label_improvements += 1;
                 }
                 stats.stop_events_scanned += 1;
             },
