@@ -193,9 +193,14 @@ impl NigiriRaptor {
     pub(crate) fn enable_realtime(&mut self, region: Arc<RegionRealtimeSnapshot>) -> Result<()> {
         ensure!(region.is_complete(), "realtime region coverage is incomplete");
         ensure!(region.event_epoch == self.base_, "realtime timetable epoch mismatch");
-        // Static graph lower bounds may overestimate when dynamic stops add
-        // a new connection. Disable them rather than prune correct journeys.
-        self.lb_.fill(0);
+        // Nigiri rt_timetable::update_lbs updates the shortest-path graph
+        // for new/faster RT edges. Until that compact overlay is implemented,
+        // zero static bounds ONLY if the source snapshot can add a shortcut.
+        // Pure delays/cancellations cannot shorten a path and keep the
+        // existing destination-directed lower bounds admissible.
+        if region.may_shortcut {
+            self.lb_.fill(0);
+        }
         self.bounds_ = None;
         self.realtime = Some(region);
         Ok(())
@@ -242,11 +247,11 @@ impl NigiriRaptor {
         PingBounds { rows }
     }
     pub(crate) fn set_ping_bounds(&mut self, bounds: PingBounds) {
-        // The existing opposite-direction PING bound is static-only. It is
-        // not admissible across newly introduced realtime stop sequences.
-        if self.realtime.is_none() {
-            self.bounds_ = Some(bounds);
-        }
+        // Like Nigiri, PING and PONG share the same pinned RT snapshot, so
+        // these PING-derived arrival bounds are valid in either direction.
+        // Only time-dependent footpaths require selectively disabling bounds;
+        // the current Gentian graph contains none.
+        self.bounds_ = Some(bounds);
     }
     pub(crate) fn to_delta(&self, time: i64) -> DeltaTime {
         (time - self.base_).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as DeltaTime
