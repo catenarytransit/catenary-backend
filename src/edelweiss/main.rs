@@ -441,6 +441,18 @@ fn run_query_observed(
     let selection = router.select(request.from, request.to)?;
     timings.selection_ms = milliseconds(phase);
     catenary::observability::count("routing.queries", &[("region", &selection.transit_region)]);
+    // Feature-gated until the full snapshot-aware PONG reconstruction and
+    // response adapter are validated for each region. The same Arc is held
+    // across PING/PONG, progressive rendering and the final response.
+    let realtime_snapshot = if request.timetable_view
+        && std::env::var("EDELWEISS_ENABLE_REALTIME_ROUTING").ok()
+            .is_some_and(|v| matches!(v.as_str(), "1" | "true" | "yes"))
+    {
+        router.pin_realtime(&selection.transit_region)
+            .filter(|snapshot| snapshot.is_complete())
+    } else {
+        None
+    };
 
     // Access, egress and direct walking have no data dependencies.
     // Use Rayon's existing bounded pool, rather than spawning up to three
@@ -603,6 +615,7 @@ fn run_query_observed(
                 &timetable,
                 index,
                 platform,
+                realtime_snapshot.as_deref(),
                 &missing,
                 origin,
                 destination,
@@ -651,7 +664,9 @@ fn run_query_observed(
         response["nextPageCursor"] = serde_json::json!(after);
         response["debugOutput"] = serde_json::json!({
             "raptor":stats, "timetableView":request.timetable_view, "arriveBy":arrive_by,
-            "routingEngine":if request.timetable_view { "nigiri-raptor-labels-pong-v5" } else { "point-raptor" },
+            "routingEngine":if realtime_snapshot.is_some() { "nigiri-raptor-pong-realtime-v1" }
+                else if request.timetable_view { "nigiri-raptor-labels-pong-v5" } else { "point-raptor" },
+            "realtimeSnapshotRevision":realtime_snapshot.as_ref().map(|rt| rt.publication_seq),
         });
         if emit_chateau_metrics {
             for chateau in motis_response::journey_chateaus(&timetable, index, journeys) {
@@ -730,6 +745,7 @@ fn run_query_observed(
                 continue_until_budget: streaming,
                 emit_updates: streaming,
                 require_reconstructed_count: paged,
+                realtime: realtime_snapshot.clone(),
             };
             let side_options = ProfileOptions {
                 min_itineraries: count,
