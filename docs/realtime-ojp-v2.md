@@ -1,4 +1,4 @@
-# Realtime routing and OJP-style v2 trip API
+# Realtime routing and OJP-style v2 journey API
 
 Stacked implementation: PR #225 (event provenance), PR #226 (bidirectional RT scan),
 PR #227 (v2 response), PR #228 (snapshot-pinned realtime PONG and reconstruction).
@@ -26,29 +26,46 @@ Nigiri references:
 
 Nigiri updates its static lower-bound graph for RT shortcuts. Catenary conservatively disables the static lower bounds only when a region revision adds a run, changes stop connectivity, gains boarding permissions, or makes a segment faster. Pure cancellations, delays and skipped stops do not introduce shortcuts and retain the static bounds. PING-derived opposite-direction bounds are shared when both searches use the same pinned RT revision. Building compressed supplementary RT lower-bound edges, rather than disabling them for new shortcuts, remains a performance improvement opportunity.
 
-## Trip detail API
+## V2 journey planning API
 
-GET /v2/regions/{region}/trips/{chateau}/{trip_id}
+- POST `/v2/route`
+- GET (WebSocket) `/v2/route/ws`
 
-Query parameters: feed_id and service_date (YYYY-MM-DD) required; optional start_time (supports 25:00:00), route_id and attempt_id. Multiple GTFS attempts or trip instances are not guessed.
+The query JSON, pagination, `requestId`, `snapshot`, `complete`, `error` and
+`cancelled` WebSocket envelopes are the same as v1. The same realtime
+snapshot is pinned throughout forward/reverse RAPTOR, PONG reconstruction and
+response serialization. Existing `/v1/route` and `/v1/route/ws` remain
+unchanged during client migration.
 
-Returned OJP-inspired JSON properties:
+The v2 response keeps the route/leg shape, geometry, trip identity and stable
+journey IDs for Catenary clients, but adds OJP 2-style event and quay fields
+on transit legs, their boarding and alighting locations, and intermediate
+calls:
 
-- TimetabledTime: scheduled original published time from Gentian.
-- EstimatedTime: latest prediction where explicitly supported by GTFS-RT status.
-- RecordedAtTime: only with verified observation provenance, not an arbitrary GTFS-RT timestamp.
-- PlannedQuay and EstimatedQuay: original and new GTFS platform metadata.
-- Cancelled: applies to the entire trip; cancelled trips remain addressable by original identity.
-- NotServicedStop: applies to one skipped stop and disables boarding/alighting.
-- UnplannedStop, Deviation, NoBoardingAtStop and NoAlightingAtStop.
-- OriginalStopPointRef and GtfsStopSequence: useful Catenary extensions.
+- `ServiceDeparture` / `ServiceArrival`, each holding `TimetabledTime`,
+  `EstimatedTime` and/or `RecordedAtTime` as appropriate.
+- `PlannedQuay`: the compiled scheduled platform.
+- `EstimatedQuay`: the *changed* effective platform, when known.
+- `NotServicedStop`, `NoBoardingAtStop`, `NoAlightingAtStop` on calls
+  when applicable.
 
-Added realtime trips omit TimetabledTime; they must not inherit an unrelated scheduled baseline. The output is OJP-inspired JSON, not an implementation of OJP XML.
+Only explicit measured-event provenance may populate `RecordedAtTime`.
+Ordinary GTFS-RT StopTimeEvent timestamps and delay predictions are
+`EstimatedTime`. `TimetabledTime` is omitted for added unscheduled runs and
+for event occurrences with no verified static correspondence. No v2 trip
+lookup is offered: the previously introduced
+`GET /v2/regions/{region}/trips/{chateau}/{trip_id}` is removed entirely.
+Clients should use Ramonda trip subscriptions for live trip updates and
+Birch for trip information, as in SingleTripScreen.
 
-Schema references:
+The v2 response is OJP-inspired JSON, not OJP XML. The generic
+`startTime`/`endTime` itinerary timeline fields remain for existing UI
+and map playback. The ambiguous v1 leg-level
+`scheduledStartTime`/`scheduledEndTime` and
+`departureStatus`/`arrivalStatus` are superseded by the event objects.
+
+OJP schema reference:
 https://github.com/VDVde/OJP/blob/master/OJP/OJP_JourneySupport.xsd
-https://github.com/VDVde/OJP/blob/master/OJP/OJP_PlaceSupport.xsd
-https://github.com/VDVde/OJP/blob/master/OJP/OJP_TripInfo.xsd
 
 ## Validation and next steps
 
@@ -67,7 +84,7 @@ Before broad production rollout:
    compact RT lower-bound shortcut edges where a region has substantial
    added service.
 4. Define a complete scheduled-to-effective occurrence mapping for
-   inserted/deleted stops in TripModifications; the v1 response withholds
+   inserted/deleted stops in TripModifications; the journey response withholds
    unmatched scheduled times instead of inventing original event identities.
 5. Verify client rendering of no scheduled baseline for truly added trips,
    cancellation in saved-trip details, and separately flagged skipped calls.
