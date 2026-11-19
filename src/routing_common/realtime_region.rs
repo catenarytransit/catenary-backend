@@ -54,7 +54,9 @@ pub struct RegionRealtimeSnapshot {
     pub expected_chateaux: usize,
     pub missing_chateaux: Vec<String>,
     location_patterns: BTreeMap<u32, Vec<RegionRtPattern>>,
-    suppressed_static: BTreeSet<StaticInstance>,
+    // Sorted compact union; a persistent BTreeSet would allocate a node
+    // per canceled transport-day instance on every regional revision.
+    suppressed_static: Vec<StaticInstance>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,7 +155,7 @@ impl RegionRealtimeSnapshot {
             expected_chateaux: expected_chateaux.len(),
             missing_chateaux,
             location_patterns,
-            suppressed_static,
+            suppressed_static: suppressed_static.into_iter().collect(),
         })
     }
 
@@ -236,10 +238,10 @@ impl RegionRealtimeSnapshot {
     }
 
     pub fn is_static_suppressed(&self, transport: TransportIdx, day: DayIdx) -> bool {
-        self.suppressed_static.contains(&StaticInstance {
+        self.suppressed_static.binary_search(&StaticInstance {
             transport: transport.0,
             day: day.0,
-        })
+        }).is_ok()
     }
 
     pub fn suppressed_count(&self) -> usize {
