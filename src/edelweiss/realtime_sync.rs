@@ -910,6 +910,27 @@ mod tests {
     }
 
     #[test]
+    fn preparation_errors_have_specific_stable_log_categories() {
+        assert_eq!(
+            PrepareError::Identity(ResolveIssue::UnknownStopId("stop".into()))
+                .diagnostic_code(),
+            "unknown_stop_id",
+        );
+        assert_eq!(
+            PrepareError::MissingEventTime.diagnostic_code(),
+            "prepare_missing_event_time",
+        );
+        assert_eq!(
+            PrepareError::InvalidEventTimes.diagnostic_code(),
+            "prepare_invalid_event_times",
+        );
+        assert_eq!(
+            PrepareError::InvalidStopOrder.diagnostic_code(),
+            "prepare_invalid_stop_order",
+        );
+    }
+
+    #[test]
     fn realtime_resolution_scopes_chateau_to_compiled_regions() {
         let region_chateaux = BTreeMap::from([
             ("europe".to_owned(), BTreeSet::from(["schweiz".to_owned()])),
