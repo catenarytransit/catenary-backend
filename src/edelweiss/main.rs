@@ -6,7 +6,7 @@ mod footpath_debug;
 mod motis_response;
 mod pagination;
 mod realtime_sync;
-mod trip_v2;
+mod route_v2;
 mod startup;
 mod websocket;
 
@@ -889,8 +889,10 @@ async fn index() -> HttpResponse {
         "version": env!("CARGO_PKG_VERSION"),
         "endpoints": {
             "health": "/health",
-            "route": "/v1/route",
-            "routeWebSocket": "/v1/route/ws"
+            "route": "/v2/route",
+            "routeWebSocket": "/v2/route/ws",
+            "legacyRoute": "/v1/route",
+            "legacyRouteWebSocket": "/v1/route/ws"
         }
     }))
 }
@@ -1180,9 +1182,10 @@ async fn main() -> Result<()> {
             .app_data(state.clone())
             .route("/", web::get().to(index))
             .route("/health", web::get().to(health))
+            .route("/v2/route", web::post().to(route_v2))
+            .route("/v2/route/ws", web::get().to(route_v2_ws))
             .route("/v1/route", web::post().to(route))
-            .route("/v1/route/ws", web::get().to(route_ws))
-            .route("/v2/regions/{region}/trips/{chateau}/{trip_id}", web::get().to(trip_v2::handle));
+            .route("/v1/route/ws", web::get().to(route_ws));
         if enable_footpath_debug {
             app.route(
                 "/v1/debug/footpaths",
