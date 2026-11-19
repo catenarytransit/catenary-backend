@@ -223,4 +223,93 @@ mod tests {
         };
         assert_eq!(usize::from(req.limit).clamp(1, MAX_ROUTING_PAGE_SIZE), 1);
     }
+    #[test]
+    fn raw_protobuf_fixture_decodes_exact_times_and_local_service_date() {
+        use gtfs_realtime::trip_update::{StopTimeEvent, StopTimeUpdate};
+        use gtfs_realtime::{FeedEntity, FeedHeader, FeedMessage, TripDescriptor, TripUpdate};
+        use prost::Message;
+        let message = FeedMessage {
+            header: FeedHeader {
+                gtfs_realtime_version: "2.0".into(),
+                ..Default::default()
+            },
+            entity: vec![
+                FeedEntity {
+                    id: "rt-trip-1".into(),
+                    trip_update: Some(TripUpdate {
+                        trip: TripDescriptor {
+                            trip_id: Some("scheduled-123".into()),
+                            route_id: Some("76".into()),
+                            start_date: Some("20261101".into()),
+                            start_time: Some("25:00:00".into()),
+                            schedule_relationship: Some(0),
+                            ..Default::default()
+                        },
+                        stop_time_update: vec![StopTimeUpdate {
+                            stop_id: Some("A".into()),
+                            stop_sequence: Some(17),
+                            arrival: Some(StopTimeEvent {
+                                time: Some(1_794_050_001),
+                                delay: Some(61),
+                                ..Default::default()
+                            }),
+                            departure: Some(StopTimeEvent {
+                                time: Some(1_794_050_101),
+                                ..Default::default()
+                            }),
+                            schedule_relationship: Some(1),
+                            ..Default::default()
+                        }],
+                        delay: Some(41),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                FeedEntity { id: "vehicle-only".into(), ..Default::default() },
+            ],
+        };
+        let updates = project_raw_gtfs_rt_trip_feed(&message.encode_to_vec()).unwrap();
+        assert_eq!(updates.len(), 1);
+        let trip = &updates[0];
+        assert_eq!(trip.update_id, "rt-trip-1");
+        assert_eq!(trip.trip_id.as_deref(), Some("scheduled-123"));
+        assert_eq!(trip.service_date, chrono::NaiveDate::from_ymd_opt(2026, 11, 1));
+        assert_eq!(trip.start_time.as_deref(), Some("25:00:00"));
+        assert_eq!(trip.delay_seconds, Some(41));
+        assert_eq!(trip.stops[0].sequence, Some(17));
+        assert_eq!(trip.stops[0].arrival.as_ref().unwrap().unix_seconds, Some(1_794_050_001));
+        assert_eq!(trip.stops[0].departure.as_ref().unwrap().unix_seconds, Some(1_794_050_101));
+        assert!(matches!(
+            trip.stops[0].schedule_relationship,
+            Some(AspenisedStopTimeScheduleRelationship::Skipped)
+        ));
+    }
+
+    #[test]
+    fn raw_protobuf_fixture_rejects_differential_and_oversize_stop_sequences() {
+        use gtfs_realtime::trip_update::StopTimeUpdate;
+        use gtfs_realtime::{FeedEntity, FeedHeader, FeedMessage, TripUpdate};
+        use prost::Message;
+        let mut message = FeedMessage {
+            header: FeedHeader {
+                gtfs_realtime_version: "2.0".into(),
+                ..Default::default()
+            },
+            entity: vec![FeedEntity {
+                id: "large-sequence".into(),
+                trip_update: Some(TripUpdate {
+                    stop_time_update: vec![StopTimeUpdate {
+                        stop_sequence: Some(70_000),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        assert!(project_raw_gtfs_rt_trip_feed(&message.encode_to_vec()).unwrap().is_empty());
+        message.header.incrementality = Some(1);
+        assert!(project_raw_gtfs_rt_trip_feed(&message.encode_to_vec()).is_err());
+    }
+
 }
