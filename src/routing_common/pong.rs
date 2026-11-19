@@ -1,4 +1,4 @@
-//! Static, no-via port of Nigiri's CPU PONG search.
+//! No-via port of Nigiri's CPU PONG search, including snapshot-pinned RT.
 //!
 //! Upstream: motis-project/nigiri@82e55cedfc184ea3a33082619ba937d172e9c575,
 //! src/routing/raptor/pong.cc. MIT license: third_party/nigiri-LICENSE.
@@ -7,7 +7,7 @@
 //! checked between complete sweeps, never inside a point search.
 //! Gentian's adapter uses seconds and boardings (upstream uses minutes and
 //! transfers). Intermodal start footpaths are disabled in both directions.
-//! The static scan uses Nigiri's best_/tmp_/round_times_ label model.
+//! Static and realtime scans share Nigiri's best_/tmp_/round_times_ label model.
 //! Only selected PONG matches are reconstructed, from round times and events.
 
 use crate::routing_common::nigiri_raptor::{NigiriRaptor, PointJourney};
