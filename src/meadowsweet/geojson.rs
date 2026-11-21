@@ -396,11 +396,12 @@ mod tests {
 
     fn graph(dir: &Path) -> Result<()> {
         let mut writer = BufWriter::new(File::create(dir.join("edges.bin"))?);
-        // Three connected atomic edges in a physical branch.
+        // Two physically connected alternatives between the same stations.
         for (id, from, to, a, b) in [
             (10u64, 1i64, 2i64, (8.0f64, 47.0f64), (8.01f64, 47.0f64)),
             (20, 2, 3, (8.01, 47.0), (8.02, 47.01)),
             (30, 2, 4, (8.01, 47.0), (8.02, 46.99)),
+            (40, 4, 3, (8.02, 46.99), (8.02, 47.01)),
         ] {
             writer.write_all(&id.to_be_bytes())?;
             writer.write_all(&from.to_be_bytes())?;
@@ -427,7 +428,8 @@ mod tests {
         ])?;
         writer.append(station(1), [
             TraversedEdge { edge_id: 10, forward: true, arrival_station: None },
-            TraversedEdge { edge_id: 30, forward: true, arrival_station: Some(station(3)) },
+            TraversedEdge { edge_id: 30, forward: true, arrival_station: None },
+            TraversedEdge { edge_id: 40, forward: true, arrival_station: Some(station(3)) },
         ])?;
         writer.finish()?;
         reduce(
