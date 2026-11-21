@@ -229,7 +229,9 @@ impl Colors {
 fn write_point(out: &mut impl Write, point: (f64, f64), first: &mut bool) -> Result<()> {
     if !*first { out.write_all(b",")?; }
     *first = false;
-    write!(out, "[{},{}]", point.0, point.1)?;
+    // Debug f64 retains a decimal marker for integer-valued coordinates,
+    // preserving numeric float semantics through serde_json roundtrips.
+    write!(out, "[{:?},{:?}]", point.0, point.1)?;
     Ok(())
 }
 
