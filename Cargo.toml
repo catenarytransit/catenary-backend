@@ -325,6 +325,10 @@ path = "src/edelweiss/main.rs"
 #path = "src/test_edelweiss_client/main.rs"
 
 [[bin]]
+name = "meadowsweet"
+path = "src/meadowsweet/main.rs"
+
+[[bin]]
 name = "globeflower"
 path = "src/globeflower/main.rs"
 
