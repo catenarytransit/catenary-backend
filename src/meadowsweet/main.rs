@@ -5,6 +5,7 @@
 //! There is intentionally no dependency on Globeflower or local LOOM.
 mod corridors;
 mod external_sort;
+mod graph_validation;
 mod osm_graph;
 mod segments;
 mod station_anchors;
@@ -26,6 +27,16 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Validate that every directed physical-edge path is connected in the
+    /// disk-backed OSM graph. Does not yet validate station endpoint anchors.
+    ValidateTopology {
+        #[arg(long)]
+        graph_dir: PathBuf,
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        path_file: PathBuf,
+    },
     /// Group exactly equal station-to-station physical edge paths, including
     /// opposite directions. This is conservative; parallel-track conflation
     /// requires topology matching and is not attempted by this command.
@@ -102,6 +113,9 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::ValidateTopology { graph_dir, index, path_file } => {
+            graph_validation::validate(&index, &path_file, &graph_dir)?;
+        }
         Command::ReduceExactCorridors { index, path_file, output, scratch_dir, memory_mib } => {
             let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
             corridors::reduce(&index, &path_file, &output, &scratch_dir, memory)?;
