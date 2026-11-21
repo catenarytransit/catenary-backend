@@ -122,7 +122,7 @@ async fn sync_journeys(req: HttpRequest, body: web::Json<SyncBody>, state: web::
     let mut ids = Vec::with_capacity(body.journeys.len());
     for journey in &body.journeys {
         if journey.journey_id.is_empty() || journey.journey_id.len() > 256 || journey.legs.is_empty() || journey.legs.len() > 20
-            || journey.scheduled_end < now - 86400 || journey.scheduled_end > now + 30 * 86400
+            || journey.scheduled_end < now - 30 * 86400 || journey.scheduled_end > now + 30 * 86400
             || ids.contains(&journey.journey_id)
             || journey.legs.iter().any(|leg| leg.chateau.is_empty() || leg.chateau.len() > 256
                 || leg.trip_id.is_empty() || leg.trip_id.len() > 512
@@ -134,6 +134,13 @@ async fn sync_journeys(req: HttpRequest, body: web::Json<SyncBody>, state: web::
     }
     let mut tx = match state.db.begin().await { Ok(t) => t, Err(_) => return HttpResponse::InternalServerError().finish() };
     for journey in &body.journeys {
+        // A completed subscription must not be resurrected by periodic full-sync.
+        let tombstone: Option<i64> = match sqlx::query_scalar(
+            "SELECT expires_at FROM journey_notifier_expired WHERE device_id=$1 AND journey_id=$2 AND expires_at > $3"
+        ).bind(&device).bind(&journey.journey_id).bind(now).fetch_optional(&mut *tx).await {
+            Ok(row) => row, Err(_) => return HttpResponse::InternalServerError().finish()
+        };
+        if tombstone.is_some() { continue; }
         let new_legs = match serde_json::to_value(&journey.legs) { Ok(v) => v, Err(_) => return HttpResponse::BadRequest().finish() };
         let existing: Option<String> = match sqlx::query_scalar("SELECT legs::text FROM journey_notifier_journeys WHERE device_id=$1 AND journey_id=$2 FOR UPDATE")
             .bind(&device).bind(&journey.journey_id).fetch_optional(&mut *tx).await {
