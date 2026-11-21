@@ -55,6 +55,8 @@ tokio-postgres = { version = "0.7.16", features = [
 ] }
 rust_decimal = "1.32.0"
 serde_json = "1.0"
+jsonwebtoken = "9.3"
+chrono-tz = "0.10"
 actix-web = "4.18"
 regress = "0.10"
 color-eyre = { version = "0.6.5", features = ["url", "issue-url"] }
@@ -117,7 +119,7 @@ geo-repair-polygon = "0.1.2"
 gtfs-translations = "0.1.0"
 geojson = { version = "0.24", features = ["geo-types"] }
 rstar = "0.12"
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio", "macros", "json"] }
 tilejson = "0.4.4"
 tile-grid = "0.6"
 zstd-safe = "8.2"
@@ -343,3 +345,7 @@ path = "src/osm_station_rank_and_clean/main.rs"
 #[[bin]]
 #name = "gingko"
 #path = "src/gingko/main.rs"
+
+[[bin]]
+name = "journey-notifier"
+path = "src/journey_notifier/main.rs"
