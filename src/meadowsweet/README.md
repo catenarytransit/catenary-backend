@@ -228,6 +228,38 @@ and allocator overhead add to the process footprint. Measure actual
 RSS, page cache, memory.peak, Pss_File/Pss_Anon and elapsed time on
 representative European rail extracts.
 
+## Validate physical topology of matched station segments
+
+The segment writer accepts matched traversal files supplied by a future
+GTFS-to-OSM matcher. It cannot assume they describe connected railway paths.
+Run a disk-backed graph check before corridor deduplication:
+
+```bash
+cargo run --release --bin meadowsweet -- validate-topology \
+  --graph-dir /data/meadowsweet/osm \
+  --index /data/meadowsweet/segments/segments.bin \
+  --path-file /data/meadowsweet/segments/paths.bin
+```
+
+This checks that every physical-edge ID exists in the 64-byte OSM graph
+store and that each consecutive edge joins at the same OSM node in the
+declared direction. It uses a 4096-slot direct-mapped edge lookup cache
+and 64-byte-record binary search against the disk-backed edge store,
+so it does not need the railway network in memory. Failure reports the
+first missing edge or disconnected jump, with its station segment.
+
+The validator does **not** establish that a segment's claimed start/end
+station is correctly anchored, nor does it assert there were no skipped
+intermediate station anchors; the accepted station-to-track resolution
+stage must implement those checks. Since edge lookups use binary search,
+the initial validation mode favors correctness and bounded RSS over
+sequential disk I/O efficiency. A later pass can sort path-edge references
+by edge ID for a scalable merge-join validation on country-scale data.
+
+Station candidate output is also externally sorted by
+`(station_osm_id, station_osm_type, physical_edge_id, ...)`, making
+downstream grouping independent of spatial tile order.
+
 ## Not yet implemented
 
 - GTFS stop/platform evidence for anchor acceptance, and proper
