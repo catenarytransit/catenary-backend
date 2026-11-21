@@ -6,6 +6,7 @@
 mod corridors;
 mod external_sort;
 mod graph_validation;
+mod geojson;
 mod osm_graph;
 mod rail_policy;
 mod segments;
@@ -28,6 +29,28 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Export a GeoJSON FeatureCollection containing one connected LineString
+    /// for each unique station-to-station physical corridor. Color is optional.
+    ExportGeojson {
+        /// Directory containing the 64-byte OSM edges.bin graph store.
+        #[arg(long)]
+        graph_dir: PathBuf,
+        /// Output from reduce-exact-corridors.
+        #[arg(long)]
+        corridors: PathBuf,
+        /// Source paths.bin used by the corridor reducer.
+        #[arg(long)]
+        path_file: PathBuf,
+        /// Destination .geojson file. Geometry is written incrementally.
+        #[arg(long)]
+        output: PathBuf,
+        /// Optional fallback CSS hex color for every corridor (#RRGGBB).
+        #[arg(long)]
+        color: Option<String>,
+        /// Optional sorted TSV of corridor_id<TAB>#RRGGBB overrides.
+        #[arg(long)]
+        colors_file: Option<PathBuf>,
+    },
     /// Validate that every directed physical-edge path is connected in the
     /// disk-backed OSM graph. Does not yet validate station endpoint anchors.
     ValidateTopology {
@@ -115,6 +138,13 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::ExportGeojson { graph_dir, corridors, path_file, output, color, colors_file } => {
+            let count = geojson::export(
+                &graph_dir, &corridors, &path_file, &output,
+                color.as_deref(), colors_file.as_deref(),
+            )?;
+            println!("exported {count} unique railway corridor geometries to {}", output.display());
+        }
         Command::ValidateTopology { graph_dir, index, path_file } => {
             graph_validation::validate(&index, &path_file, &graph_dir)?;
         }
