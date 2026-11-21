@@ -18,11 +18,33 @@ fn read_i64(bytes: &[u8]) -> i64 {
 fn read_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes.try_into().expect("validated record field"))
 }
-fn is_rail_way(way: &osmpbfreader::Way) -> bool {
-    matches!(
-        way.tags.get("railway").map(|value| value.as_str()),
-        Some("rail" | "narrow_gauge" | "subway" | "light_rail" | "tram")
-    ) && !matches!(way.tags.get("service").map(|s| s.as_str()), Some("yard"))
+/// Mainline and urban railway modes are kept separate for later corridor rules.
+fn rail_metadata(way: &osmpbfreader::Way) -> Option<[u8; 8]> {
+    if matches!(way.tags.get("service").map(|s| s.as_str()), Some("yard")) {
+        return None;
+    }
+    let mode = match way.tags.get("railway")?.as_str() {
+        "rail" => 1,
+        "narrow_gauge" => 2,
+        "subway" => 3,
+        "light_rail" => 4,
+        "tram" => 5,
+        _ => return None,
+    };
+    let grade = way
+        .tags
+        .get("layer")
+        .and_then(|v| v.parse::<i8>().ok())
+        .unwrap_or_else(|| {
+            if matches!(way.tags.get("bridge").map(|v| v.as_str()), Some("yes" | "viaduct")) {
+                1
+            } else if matches!(way.tags.get("tunnel").map(|v| v.as_str()), Some("yes")) {
+                -1
+            } else {
+                0
+            }
+        });
+    Some([mode, grade as u8, 0, 0, 0, 0, 0, 0])
 }
 
 pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
@@ -35,7 +57,7 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
     }
     fs::create_dir_all(&work)?;
 
-    // Edge: edge_id / source node / target node (24 bytes).
+    // Edge: edge ID / source / target / mode-grade metadata (32 bytes).
     // Endpoint ref: node_id / edge_id / endpoint(0/1) (24 bytes).
     let mut edges = BufWriter::new(File::create(work.join("edges.raw"))?);
     let mut refs = BufWriter::new(File::create(work.join("refs.raw"))?);
@@ -44,7 +66,7 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
         let mut pbf_reader = OsmPbfReader::new(BufReader::new(File::open(pbf)?));
         for obj in pbf_reader.iter() {
             if let OsmObj::Way(way) = obj? {
-                if !is_rail_way(&way) { continue; }
+                let Some(metadata) = rail_metadata(&way) else { continue; };
                 if way.nodes.len().saturating_sub(1) > u16::MAX as usize {
                     bail!("OSM way {} contains more than 65535 segments", way.id.0);
                 }
@@ -59,6 +81,7 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
                     edges.write_all(&id.to_be_bytes())?;
                     edges.write_all(&a.to_be_bytes())?;
                     edges.write_all(&b.to_be_bytes())?;
+                    edges.write_all(&metadata)?;
                     for (node, side) in [(a, 0u64), (b, 1u64)] {
                         refs.write_all(&node.to_be_bytes())?;
                         refs.write_all(&id.to_be_bytes())?;
@@ -91,9 +114,7 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
     coords.flush()?;
     drop(coords);
 
-    for (name, width) in [("nodes",24usize),("refs",24),("edges",24)] {
-        // Record lengths are fixed at 24 bytes in these three streams.
-        assert_eq!(width, 24);
+    for name in ["nodes", "refs"] {
         sort_fixed::<24>(
             &work.join(format!("{name}.raw")),
             &work.join(format!("{name}.sorted")),
@@ -102,6 +123,14 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
             16,
         )?;
     }
+
+    sort_fixed::<32>(
+        &work.join("edges.raw"),
+        &work.join("edges.sorted"),
+        &work.join("runs_edges"),
+        memory_bytes,
+        16,
+    )?;
 
     // Sorted merge join: nodes -> references -> keyed endpoint geometry.
     let mut nodes = BufReader::new(File::open(work.join("nodes.sorted"))?);
@@ -137,14 +166,14 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
     )?;
 
     // Merge keyed edge endpoints to a compact edge file and adjacency list.
-    // Physical edge record is exactly 56 bytes:
-    // id, from OSM node, to OSM node, from lon/lat, to lon/lat.
+    // Physical edge record is exactly 64 bytes:
+    // id, from node, to node, mode-grade metadata, from lon/lat, to lon/lat.
     let mut endpoint_reader = BufReader::new(File::open(work.join("endpoints.sorted"))?);
     let mut edge_reader = BufReader::new(File::open(work.join("edges.sorted"))?);
     let mut output = BufWriter::new(File::create(out.join("edges.bin"))?);
     let mut adjacency = BufWriter::new(File::create(work.join("adjacency.raw"))?);
     let mut written = 0u64;
-    while let Some(edge) = read_record::<24>(&mut edge_reader)? {
+    while let Some(edge) = read_record::<32>(&mut edge_reader)? {
         let a = read_record::<32>(&mut endpoint_reader)?.context("missing first edge endpoint")?;
         let b = read_record::<32>(&mut endpoint_reader)?.context("missing second edge endpoint")?;
         let id = read_u64(&edge[0..8]);
@@ -179,7 +208,7 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
     // Keep complete topology and source identity; no station-pair shortcuts.
     std::fs::write(
         out.join("manifest.txt"),
-        format!("format=meadowsweet-osm-v1\nedge_count={written}\nedge_record_bytes=56\nadjacency_record_bytes=24\n"),
+        format!("format=meadowsweet-osm-v2\nedge_count={written}\nedge_record_bytes=64\nadjacency_record_bytes=24\n"),
     )?;
     fs::remove_dir_all(&work).context("remove successful graph-build scratch data")?;
     eprintln!("Meadowsweet: wrote {written} railway edges and {} adjacency records", written * 2);
