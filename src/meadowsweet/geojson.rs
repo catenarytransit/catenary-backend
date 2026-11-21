@@ -10,7 +10,7 @@
 use anyhow::{Context, Result, bail, ensure};
 use crate::external_sort::read_record;
 use crate::segments::StationId;
-use std::fs::File;
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
@@ -315,7 +315,15 @@ pub fn export(
     let mut graph = GraphLookup::open(&graph_dir.join("edges.bin"))?;
     let mut paths = File::open(path_file)?;
     let mut corridors = BufReader::new(File::open(corridor_file)?);
-    let mut out = BufWriter::new(File::create(destination)?);
+    // Write to a sibling temporary file so a failed path validation does not
+    // replace a previously valid GeoJSON export with an incomplete document.
+    let mut tmp_name = destination.as_os_str().to_os_string();
+    tmp_name.push(format!(".meadowsweet-{}.partial", std::process::id()));
+    let temporary = std::path::PathBuf::from(tmp_name);
+    let mut out = BufWriter::new(
+        OpenOptions::new().write(true).create_new(true).open(&temporary)
+            .with_context(|| format!("creating export staging file {}", temporary.display()))?
+    );
     let mut count = 0u64;
     let mut previous_key = None::<String>;
 
@@ -356,6 +364,10 @@ pub fn export(
     }
     out.write_all(b"]}")?;
     out.flush()?;
+    drop(out);
+    fs::rename(&temporary, destination).with_context(|| {
+        format!("publishing staged GeoJSON {} to {}", temporary.display(), destination.display())
+    })?;
     Ok(count)
 }
 
