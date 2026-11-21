@@ -1,104 +1,137 @@
-# Meadowsweet — OSM station-to-station railway corridors
+# Meadowsweet — external-memory OSM railway corridor compiler
 
-Meadowsweet is a **separate** rail-network compiler. Globeflower and Harebell
-remain dedicated to their existing LOOM line-graph workflows. Meadowsweet does
-not import Globeflower modules or modify the existing rail tile endpoint.
+**Meadowsweet is independent of Globeflower.** Its scope is the mainline
+railway network and one logical corridor between consecutive OSM stations
+on a matched railway traversal. A logical station segment can contain an
+arbitrarily long physical path: it is not limited by spatial tile size.
 
-## Why a separate compiler?
+This draft builds a **partial pipeline**. It does not yet produce MapLibre
+rail tiles or claim complete GTFS-to-OSM map matching.
 
-A logical railway corridor connects consecutive **OSM stations on a matched
-railway traversal**, even when those stations are very far apart or the train
-does not stop at an intermediate station. Geographic grid boundaries must
-never become logical station boundaries.
+## Implemented stages
 
-The physical graph stores OSM railway node-to-node edges. A station segment
-is an ordered path through this graph, represented on disk by physical edge
-IDs rather than a fully materialized geometry vector.
-
-This PR introduces the *first usable foundations*: out-of-core OSM graph
-extraction, external sorting, binary traversal-to-station segmentation, and
-tests for extremely long segments. **It is not yet an end-to-end rail map
-compiler.** The OSM station anchor extractor, GTFS-to-OSM matcher, physical
-corridor conflation, global segment deduplication, and tile generation remain
-to be implemented. Input traversal files must therefore come from a trusted
-upstream matcher; Meadowsweet does not invent paths from GTFS endpoints.
-
-## Build the disk-backed physical OSM rail graph
+### 1. Build the physical railway graph
 
 ```bash
 cargo run --release --bin meadowsweet -- build-osm-graph \
-  --pbf /data/railway.osm.pbf \
+  --pbf /data/rail.osm.pbf \
   --output-dir /data/meadowsweet/osm \
   --memory-mib 64
 ```
 
-The reader makes two sequential PBF scans. In the first scan it emits
-railway-way endpoint references, then scans node coordinates to disk.
-External fixed-record sort plus a merge join produces:
+A two-pass OSM PBF scan and bounded external sorting create:
+- `edges.bin`: 64 bytes/edge; big-endian edge ID (u64), from and to OSM
+  node IDs (i64), 8 metadata bytes (rail mode u8, signed grade class i8,
+  reserved 6 bytes), then endpoint longitude/latitude f64 bit patterns.
+- `adjacency.bin`: 24 bytes per directed adjacency record; node i64,
+  edge ID u64, neighbor node i64.
+- `manifest.txt`: graph format and record counts.
 
-- `edges.bin`: 56-byte records `edge_id:u64, from:i64, to:i64,
-  from_lon:f64_bits, from_lat:f64_bits, to_lon:f64_bits, to_lat:f64_bits`,
-  all big-endian. Physical geometry is the line from one OSM way node to
-  its next node.
-- `adjacency.bin`: 24-byte records `node:i64, edge_id:u64,
-  other_node:i64`, sorted by node and then edge ID.
-- `manifest.txt`: format version and record counts.
+Physical edge IDs encode the OSM way ID and segment index; node IDs are
+kept unchanged. Rail modes and bridge/tunnel grade classes are stored
+separately, so a future corridor conflation stage can reject incompatible
+track pairs. No geography-based line splitting or global railway hash
+table is required.
 
-Edge IDs encode 48-bit OSM way ID and 16-bit segment index, with explicit
-range checks. The same railway way always yields the same physical edge IDs
-provided its OSM node ordering and segmentation are unchanged. Versions
-must still be regenerated after infrastructure edits.
+**Limits:** OSM ways with more than 65,535 edge segments, way IDs outside
+48 bits, or missing referenced nodes fail clearly. The entire unfiltered
+PBF's node coordinates are sorted on disk in v2; this is more I/O than
+filtering to referenced nodes but avoids retaining all referenced IDs in
+memory. The temporary scratch directory must not preexist. No guarantee
+is made that the PBF and the station database represent the same OSM
+snapshot; operators must coordinate the source versions.
 
-The graph stage uses **external sorting** and does not retain a global
-`HashMap` of rail nodes or ways. `--memory-mib` limits the *per-sort record
-batch*, not total process RSS: PBF parsing buffers, merge readers, Rust
-allocator state, kernel caches and concurrent processes still contribute.
-The first implementation processes one stage at a time and uses 16-way merges.
+### 2. Generate OSM station-to-track candidates
 
-The first graph builder deliberately writes coordinate records for every OSM
-node before joining to railway endpoints. This is I/O-heavy, especially with
-a country-wide unfiltered PBF, but it makes memory use bounded. Prefer an
-OSM extract already filtered for railway infrastructure. Subsequent work
-can add a disk-backed reference-membership filter to reduce I/O further.
+Catenary stores OSM station entities under `gtfs.osm_stations` with
+`osm_type`, `osm_id`, `import_id`, `point`, `station_type`,
+`mode_type` and `parent_osm_id`. The candidate generator reads the latest
+available import of each primary rail-station identity, excluding child
+platforms and stop positions.
 
-The scratch directory must not already exist. It remains intact after a
-failed build for diagnosis; remove it before retrying.
-
-## Segment an already matched walk
-
-A trusted upstream matcher writes a file containing repeated records:
-
-```text
-start_osm_station_id: i64 BE
-edge_count:           u64 BE
-repeat edge_count times:
-    physical_edge_id: u64 BE
-    forward:          u8 (0 or 1)
-    arrival_station:  i64 BE (i64::MIN means no station)
+```bash
+DATABASE_URL=postgres://... \
+cargo run --release --bin meadowsweet -- build-station-anchors \
+  --graph-dir /data/meadowsweet/osm \
+  --output-dir /data/meadowsweet/anchors \
+  --radius-m 500 --memory-mib 64
 ```
 
-The station marker is attached to the **arrival of a traversed physical edge**,
-not the geographic proximity of an arbitrary point. A matcher must split
-physical edges at station anchors when necessary. This v1 format is
-intentionally simple; station anchors inside edges and ambiguous platforms
-are an upstream concern, not silently inferred.
+The output `anchor_candidates.bin` uses fixed 56-byte records:
+
+```text
+station_osm_id: i64 BE
+station_osm_type: u8  # 0=node, 1=way, 2=relation
+reserved: [u8; 7]
+physical_edge_id: u64 BE
+projected_lon: f64 BE bits
+projected_lat: f64 BE bits
+fraction_along_physical_edge: f64 BE bits
+distance_meters: f64 BE bits
+```
+
+The file stores **up to eight candidates per station**, sorted by distance
+then physical edge ID. A station near two parallel tracks gets two
+candidates, not an automatically accepted nearest-track connection.
+
+Station and edge records are spatially tiled and externally sorted.
+The spatial cell is 0.01 degrees. An edge may be replicated to nearby
+cells for its configured search radius; crossing a cell boundary never
+changes railway connectivity or canonical edge identity.
+
+A cell exceeding 100,000 physical edges or an individual edge requiring
+more than 4,096 cell copies causes a clear error rather than unbounded RAM.
+Long OSM atomic edges need to be subdivided before processing. These are
+safety limits, not proof that all real OSM data will pass unchanged.
+
+**Critical distinction:** this step returns geometric candidates. It
+does not establish which edge belongs to which station, split edges at
+interior anchors, infer physical station platforms, or create a network
+connection. Those require a topology-aware matcher and preferably GTFS
+stop-platform evidence. Unresolved stations remain unresolved.
+
+### 3. Segment a verified matched railway traversal
+
+The CLI uses typed OSM station identities, avoiding collisions between
+node/way/relation entities with the same numeric ID.
 
 ```bash
 cargo run --release --bin meadowsweet -- segment \
-  --input /data/verified-matched-traversals.bin \
+  --input /data/verified-traversals.bin \
   --output-dir /data/meadowsweet/segments
 ```
 
-Output:
-- `paths.bin`: 9 bytes per traversed edge (ID + direction).
-- `segments.bin`: 32-byte logical segment index records:
-  `from_station:i64, to_station:i64, path_offset:u64, edge_count:u64`.
+Input stream v2:
 
-A train crossing 100,000 physical edges without an intermediate OSM station
-produces **one** logical segment. A train that passes a station without
-stopping still produces two logical segments when the traversal contains its
-anchor. Unfinished trailing spans are not emitted. Repeated station IDs are
-allowed for real loops when the span contains multiple physical edges.
+```text
+repeat:
+  start_osm_type: u8
+  reserved: [u8; 7]
+  start_osm_id: i64 BE
+  edge_count: u64 BE
+  repeat edge_count:
+    physical_edge_id: u64 BE
+    forward: u8  # 0 or 1
+    arrival_osm_type: u8
+    reserved: [u8; 6]
+    arrival_osm_id: i64 BE  # i64::MIN if none
+```
+
+Station arrival annotations must be generated by a *trusted* matcher that
+follows topology and splits atomic edges when an OSM station anchor falls
+inside an edge. The currently implemented `build-station-anchors` command
+does not generate this input.
+
+Output:
+- `paths.bin`: 9 bytes per directed physical edge.
+- `segments.bin`: 48 bytes per logical station span:
+  `from_kind:u8, pad:7, from_id:i64, to_kind:u8, pad:7,
+  to_id:i64, path_offset:u64, edge_count:u64`.
+
+A 100,000-edge traversal between two consecutive OSM stations remains a
+single logical segment. A GTFS train skipping an intermediate station
+still has two segments if the physical traversal crosses that station
+anchor. The writer also preserves single-edge closed station loops.
 
 ```bash
 cargo run --release --bin meadowsweet -- inspect \
@@ -106,50 +139,107 @@ cargo run --release --bin meadowsweet -- inspect \
   --path-file /data/meadowsweet/segments/paths.bin
 ```
 
-The `inspect` command currently checks index record boundaries and path
-ranges; it does not validate physical-edge connectivity or station anchoring.
+Inspect checks record boundaries, nonempty spans, and path offsets, but
+**does not yet verify railway-edge connectivity or station topology**.
+
+### 4. Conservative exact physical-path corridor reduction
+
+```bash
+cargo run --release --bin meadowsweet -- reduce-exact-corridors \
+  --index /data/meadowsweet/segments/segments.bin \
+  --path-file /data/meadowsweet/segments/paths.bin \
+  --output /data/meadowsweet/corridors.bin \
+  --scratch-dir /data/meadowsweet/corridor-scratch \
+  --memory-mib 64
+```
+
+For each segment, a streaming BLAKE3 fingerprint is computed over the
+entire ordered physical-edge traversal, normalized under reversing
+direction and swapping endpoints. Loops normalize under either direction.
+Fixed 88-byte records are externally sorted. Equality is checked against
+the actual edge sequences using bounded 4,096-edge chunks, so a rare hash
+collision fails closed.
+
+The output has one fixed 104-byte record per **exactly equal physical
+path**; the first 88 bytes describe the representative (typed endpoints,
+32-byte hash, first path offset, edge count, reverse-orientation flag),
+followed by supporting traversal count u64 and reserved 8 bytes.
+
+This is an intentionally conservative equivalence relation. Two GTFS
+services taking different tracks of the *same* double-track alignment
+can still produce two records. That is safer than averaging physically
+different routes or declaring any two paths between A and B identical.
+
+### 5. Sort station segments
 
 ```bash
 cargo run --release --bin meadowsweet -- sort-segment-index \
   --input /data/meadowsweet/segments/segments.bin \
   --output /data/meadowsweet/segments/segments.sorted.bin \
-  --scratch-dir /data/meadowsweet/sort-segments \
+  --scratch-dir /data/meadowsweet/segment-sort-scratch \
   --memory-mib 64
 ```
 
-The sort key is `from_station` followed by `to_station`, then offsets.
-Full route membership and path-aware corridor deduplication are **not**
-performed by this command. An external sort alone cannot identify physically
-equivalent paths across different parallel OSM tracks.
+The 48-byte records sort by typed station identities, then path offset.
 
-## Algorithmic constraints and next steps
+## Review of Globeflower's experimental corridor algorithm
 
-1. Construct disk-backed OSM **station anchor** tables, preserving multiple
-   anchors per station when platforms or track sides differ.
-2. Match unique GTFS shape variants to the physical OSM graph using
-   sequence-aware dynamic programming, disk-backed traceback and bounded
-   graph-search state. A long distance between stations is not a search
-   cutoff. Missing/ambiguous geometry must be explicitly reported.
-3. Normalize parallel-track traversal into a physical **corridor identity**,
-   preserving different paths between the same two stations.
-4. Stream station-to-station physical paths to this format; perform global
-   external-memory route membership aggregation keyed by verified canonical
-   corridor identity. Do not equate a matching station pair with identical
-   physical geometry.
-5. Generate a single representative line per corridor in versioned vector
-   tiles, with a route-set dictionary and deterministic primary color.
+`src/globeflower/corridor.rs` cannot be reused unchanged:
+1. Its `OsmRailIndex` keeps the complete physical graph, adjacency and
+   R-trees in RAM. Its output being disk-backed does not bound peak RSS.
+2. `build_corridors_to_disk` also materializes a global
+   `HashMap<Tile, Vec<EdgeIndex>>` and assumes an approximately 200 m
+   halo. This is unsuitable for a station-to-station corridor which can
+   span hundreds of kilometers or arbitrary tile boundaries.
+3. Fragment union-find uses pairwise overlap. Geometric similarity is
+   **not transitive**, and connected components of near-overlaps may be
+   much wider or topologically different than any individual fragment.
+4. `weighted_average_centerline_metric` averages merged geometries.
+   That can invent tracks between existing physical railway alignments.
+5. Clusters use locally incremented numeric IDs and centroid tile
+   ownership. They are not durable global identities for a route path.
+6. It preserves only loose local corridor overlap, not the full matched
+   physical path or intermediate OSM station anchors.
 
-Complexity: the fixed-width graph-building phase is dominated by external
-sorts of OSM nodes, railway endpoints and adjacency records. For `n`
-records, `m` records per in-memory run and fixed merge fan-in `f >= 2`,
-an upper bound is `O(n log(n) + n log_f(n/m))` CPU comparisons and
-`O(n (1 + log_f(n/m)))` sequential record I/O. It uses `O(m + f)`
-record storage plus bounded reader buffers and PBF parser overhead.
-The station splitter uses `O(L)` sequential I/O and `O(1)` traversal
-state for a walk of `L` edges.
+The Meadowsweet reducer therefore keeps **full ordered edge sequences**
+as the safety baseline. A later physical-corridor conflation algorithm
+must establish a stronger correspondence: compatible mode/grade,
+continuous topology, matching station/branch sequence, geometry proximity,
+and path monotonicity. Only then may alternative physical tracks be
+assigned one display-corridor identity. Do not use transitive union of
+arbitrary spatial overlaps as the sole conflation criterion.
 
-Run tests with:
+## Complexity and memory
 
-```bash
-cargo test --bin meadowsweet
-```
+- External graph build: sort/merge of fixed records with bounded
+  in-memory runs; I/O proportional to the input size times the number of
+  external merge passes.
+- Spatial station join: sorting replicated railway-edge records and
+  stations; retains only a cell of up to 100,000 physical edges.
+- Matched traversal segmentation: `O(L)` sequential I/O and constant
+  per-traversal state, where `L` is the number of physical edges.
+- Exact-path reducer: sorting `R` paths with disk-streamed hashing;
+  verifying repeated equal paths uses bounded buffers, but may require
+  rereading long paths. RAM is independent of any single path length.
+
+`--memory-mib` sets external-sort record batch memory, **not an exact RSS
+limit**. PBF parser allocations, per-cell edge vectors, reader buffers
+and allocator overhead add to the process footprint. Measure actual
+RSS, page cache, memory.peak, Pss_File/Pss_Anon and elapsed time on
+representative European rail extracts.
+
+## Not yet implemented
+
+- GTFS stop/platform evidence for anchor acceptance, and proper
+  station-area-to-physical-track connectivity.
+- Exact/topology-constrained GTFS-to-OSM map matching with disk-backed
+  Viterbi traceback and bounded A* search.
+- Splitting OSM atomic edges at accepted interior station anchors.
+- Track-to-centerline physical corridor conflation for parallel rails.
+- Route-membership, service-frequency weighting, color selection and
+  MapLibre vector tile generation.
+- Cross-snapshot OSM/GTFS consistency verification.
+
+Run `cargo test --bin meadowsweet` once a Rust toolchain and project
+dependencies are available. Tests included in this PR have **not been
+executed in this environment**.
