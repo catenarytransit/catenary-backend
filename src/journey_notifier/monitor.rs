@@ -176,7 +176,9 @@ async fn process_subscription(db: &PgPool, sub: &Subscription, updates: &HashMap
             && !prior[index - 1].cancelled && !prior[index].cancelled;
         let currently_possible = next[index - 1].arrival.saturating_add(min_transfer) <= next[index].departure
             && !next[index - 1].cancelled && !next[index].cancelled;
-        if previously_possible && !currently_possible {
+        // Cancellation has its own alert; do not describe it as a delay.
+        if previously_possible && !currently_possible
+            && !next[index - 1].cancelled && !next[index].cancelled {
             let leg = &sub.legs[index];
             queue(db, sub,
                 &format!("transfer:{index}:{}:{}", next[index-1].arrival, next[index].departure),
