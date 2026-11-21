@@ -4,6 +4,7 @@
 //! traversals. The OSM importer and map matcher are separate future stages.
 //! There is intentionally no dependency on Globeflower or local LOOM.
 mod external_sort;
+mod osm_graph;
 mod segments;
 
 use anyhow::{Context, Result, bail};
@@ -23,6 +24,16 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Extract an on-disk OSM railway graph without materializing the whole
+    /// network in memory. Edges are physical node-to-node rail connections.
+    BuildOsmGraph {
+        #[arg(long)]
+        pbf: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
     /// Split externally map-matched traversals at OSM station anchors.
     ///
     /// Input format v1 (BE): repeating records of start_station:i64,
@@ -59,6 +70,10 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::BuildOsmGraph { pbf, output_dir, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            osm_graph::build(&pbf, &output_dir, memory)?;
+        }
         Command::Segment { input, output_dir } => {
             fs::create_dir_all(&output_dir)?;
             let path_file = output_dir.join("paths.bin");
