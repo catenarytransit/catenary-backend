@@ -11,7 +11,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-const RECORD_SIZE: usize = 80;
+const RECORD_SIZE: usize = 88;
 const CHUNK_EDGES: usize = 4096;
 
 fn station_lt(a: StationId, b: StationId) -> bool {
@@ -99,50 +99,73 @@ fn compare_oriented(
     file: &mut File, a: StationSegment, a_reverse: bool,
     b: StationSegment, b_reverse: bool,
 ) -> Result<bool> {
-    let mut a_buf = [0u8; 9];
-    let mut b_buf = [0u8; 9];
-    for i in 0..a.edge_count {
-        let ai = if a_reverse { a.edge_count - 1 - i } else { i };
-        let bi = if b_reverse { b.edge_count - 1 - i } else { i };
-        let a_off = a.path_offset.checked_add(ai.checked_mul(9).context("offset overflow")?)
-            .context("offset overflow")?;
-        let b_off = b.path_offset.checked_add(bi.checked_mul(9).context("offset overflow")?)
-            .context("offset overflow")?;
-        file.seek(SeekFrom::Start(a_off))?;
-        file.read_exact(&mut a_buf)?;
-        file.seek(SeekFrom::Start(b_off))?;
-        file.read_exact(&mut b_buf)?;
-        if a_buf[8] > 1 || b_buf[8] > 1 { bail!("invalid direction byte"); }
-        if a_reverse { a_buf[8] ^= 1; }
-        if b_reverse { b_buf[8] ^= 1; }
-        if a_buf != b_buf { return Ok(false); }
+    // Read contiguous 36 KiB runs, including in the reverse direction.
+    // This avoids 2*N random seeks on long duplicate corridors.
+    let mut abuf = vec![0u8; CHUNK_EDGES * 9];
+    let mut bbuf = vec![0u8; CHUNK_EDGES * 9];
+    let mut processed = 0u64;
+    while processed < a.edge_count {
+        let chunk = (a.edge_count - processed).min(CHUNK_EDGES as u64) as usize;
+        for (seg, reverse, dest) in [
+            (a, a_reverse, &mut abuf),
+            (b, b_reverse, &mut bbuf),
+        ] {
+            let index = if reverse {
+                seg.edge_count - processed - chunk as u64
+            } else { processed };
+            let off = seg.path_offset
+                .checked_add(index.checked_mul(9).context("path offset overflow")?)
+                .context("path offset overflow")?;
+            file.seek(SeekFrom::Start(off))?;
+            file.read_exact(&mut dest[..chunk * 9])?;
+            if reverse {
+                for item in dest[..chunk * 9].chunks_exact_mut(9) {
+                    if item[8] > 1 { bail!("invalid edge direction"); }
+                    item[8] ^= 1;
+                }
+                for i in 0..(chunk / 2) {
+                    for j in 0..9 {
+                        dest.swap(9*i+j, 9*(chunk-1-i)+j);
+                    }
+                }
+            }
+        }
+        if abuf[..chunk * 9] != bbuf[..chunk * 9] {
+            return Ok(false);
+        }
+        processed += chunk as u64;
     }
     Ok(true)
 }
 
 fn record(seg: StationSegment, hash: blake3::Hash) -> Result<[u8; RECORD_SIZE]> {
     let mut bytes = [0u8; RECORD_SIZE];
-    let (a, b, _) = normalized(seg);
+    let (a, b, reversed) = normalized(seg);
     let mut cursor = &mut bytes[..];
     write_station_key(&mut cursor, a)?;
     write_station_key(&mut cursor, b)?;
     cursor.write_all(hash.as_bytes())?;
     cursor.write_all(&seg.path_offset.to_be_bytes())?;
     cursor.write_all(&seg.edge_count.to_be_bytes())?;
+    cursor.write_all(&u64::from(reversed).to_be_bytes())?;
     Ok(bytes)
 }
 
 fn from_record(row: &[u8; RECORD_SIZE]) -> Result<StationSegment> {
+    let a = StationId::new(row[0], i64::from_be_bytes(row[8..16].try_into()?))?;
+    let b = StationId::new(row[16], i64::from_be_bytes(row[24..32].try_into()?))?;
+    let reverse = u64::from_be_bytes(row[80..88].try_into()?);
+    if reverse > 1 { bail!("invalid corridor path orientation"); }
     Ok(StationSegment {
-        from: StationId::new(row[0], i64::from_be_bytes(row[8..16].try_into()?))?,
-        to: StationId::new(row[16], i64::from_be_bytes(row[24..32].try_into()?))?,
+        from: if reverse == 1 { b } else { a },
+        to: if reverse == 1 { a } else { b },
         path_offset: u64::from_be_bytes(row[64..72].try_into()?),
         edge_count: u64::from_be_bytes(row[72..80].try_into()?),
     })
 }
 
 /// Exact-path deduplication within canonical endpoint pairs.
-/// Writes a fixed 80-byte record per input segment and a 96-byte record per
+/// Writes a fixed 88-byte record per input segment and a 104-byte record per
 /// unique physical path: canonical endpoints, digest, first path offset,
 /// edge count and supporting traversal count.
 pub fn reduce(index: &Path, paths: &Path, output: &Path, scratch: &Path, memory_bytes: usize) -> Result<()> {
