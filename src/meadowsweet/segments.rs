@@ -75,7 +75,7 @@ impl SegmentWriter {
     ) -> Result<u64> {
         // The matched edge must terminate at the proposed OSM anchor;
         // repeated anchors may still represent a real physical loop.
-        let emit = if to != *from || *span_count > 1 {
+        let emit = if *span_count > 0 {
             self.write_index(StationSegment {
                 from: *from,
                 to,
