@@ -1,10 +1,13 @@
 # Meadowsweet — external-memory OSM railway corridor compiler
 
-**Meadowsweet is independent of Globeflower.** It accepts **only GTFS\n`route_type=2`** and builds mainline railway corridors between consecutive\nOSM stations on matched railway traversals. It explicitly excludes GTFS\ntram, subway, and other route types. A logical station segment can contain an
+**Meadowsweet is independent of Globeflower.** It accepts **only GTFS
+`route_type=2`** and builds mainline railway corridors between consecutive
+OSM stations on matched railway traversals. It explicitly excludes GTFS
+tram, subway, and other route types. A logical station segment can contain an
 arbitrarily long physical path: it is not limited by spatial tile size.
 
-This draft builds a **partial pipeline**. It does not yet produce MapLibre
-rail tiles or claim complete GTFS-to-OSM map matching.
+This draft builds a **partial pipeline**. It can now export GeoJSON rail corridor geometries, but does not yet
+produce MapLibre vector tiles or claim complete GTFS-to-OSM map matching.
 
 ## Implemented stages
 
@@ -26,7 +29,10 @@ A two-pass OSM PBF scan and bounded external sorting create:
 - `manifest.txt`: graph format and record counts.
 
 Physical edge IDs encode the OSM way ID and segment index; node IDs are
-kept unchanged. Only OSM `railway=rail` and `railway=narrow_gauge` are extracted.\nBridge/tunnel grade classes are stored separately for future corridor checks.\nOSM railway tags are infrastructure classifications, not proof of GTFS\nroute type; GTFS route provenance must be verified independently. No geography-based line splitting or global railway hash
+kept unchanged. Only OSM `railway=rail` and `railway=narrow_gauge` are extracted.
+Bridge/tunnel grade classes are stored separately for future corridor checks.
+OSM railway tags are infrastructure classifications, not proof of GTFS
+route type; GTFS route provenance must be verified independently. No geography-based line splitting or global railway hash
 table is required.
 
 **Limits:** OSM ways with more than 65,535 edge segments, way IDs outside
@@ -224,6 +230,99 @@ limit**. PBF parser allocations, per-cell edge vectors, reader buffers
 and allocator overhead add to the process footprint. Measure actual
 RSS, page cache, memory.peak, Pss_File/Pss_Anon and elapsed time on
 representative European rail extracts.
+
+## 6. Export one geometry per canonical station-to-station corridor
+
+Use `reduce-exact-corridors` first, then export the resulting physical
+corridors as a streaming **GeoJSON FeatureCollection**. Every unique corridor
+is one connected `LineString` from its canonical first OSM station toward
+the next OSM station. Geometry consists of the exact OSM railway edge
+coordinates; direction is normalized so opposite train services share a line.
+
+```bash
+cargo run --release --bin meadowsweet -- export-geojson \
+  --graph-dir /data/meadowsweet/osm \
+  --corridors /data/meadowsweet/corridors.bin \
+  --path-file /data/meadowsweet/segments/paths.bin \
+  --output /data/meadowsweet/railway-corridors.geojson
+```
+
+Color is **entirely optional**. Without `--color` or `--colors-file`, the
+`color` property is not present. To apply one fallback color:
+
+```bash
+cargo run --release --bin meadowsweet -- export-geojson \
+  --graph-dir /data/meadowsweet/osm \
+  --corridors /data/meadowsweet/corridors.bin \
+  --path-file /data/meadowsweet/segments/paths.bin \
+  --output /data/meadowsweet/colored.geojson \
+  --color '#E30613'
+```
+
+For individual corridor colors, supply a UTF-8 TSV of
+`corridor_id<TAB>#RRGGBB`. The file **must already be sorted by
+corridor_id**, ascending, without duplicates; this permits a streaming merge
+without an in-memory color map. An override wins over `--color`; all
+unmatched corridors inherit the fallback color or have no color property.
+Unknown corridor IDs are errors, preventing silent typos.
+
+```bash
+cargo run --release --bin meadowsweet -- export-geojson \
+  --graph-dir /data/meadowsweet/osm \
+  --corridors /data/meadowsweet/corridors.bin \
+  --path-file /data/meadowsweet/segments/paths.bin \
+  --output /data/meadowsweet/colored.geojson \
+  --colors-file /data/meadowsweet/corridor-colors.tsv
+```
+
+Each GeoJSON feature has:
+
+```json
+{
+  "type": "Feature",
+  "id": "000000000000000001-000000000000000002-<64-hex-digest>",
+  "properties": {
+    "corridor_id": "000000000000000001-000000000000000002-<64-hex-digest>",
+    "route_type": 2,
+    "from_station": {"osm_type": 0, "osm_id": 1},
+    "to_station": {"osm_type": 0, "osm_id": 2},
+    "support_count": 3,
+    "physical_edge_count": 125,
+    "color": "#E30613"
+  },
+  "geometry": {
+    "type": "LineString",
+    "coordinates": [[8.5, 47.4], [8.51, 47.41]]
+  }
+}
+```
+
+That example is illustrative, not actual route output. `color` is
+omitted when no color is assigned. A MapLibre style can use
+`coalesce(get('color'), '#888888')` for a default appearance while
+retaining an uncolored geometry dataset.
+
+**Correctness:** The exporter validates that every physical edge exists
+and that directed edge endpoints connect. It normalizes reversal and uses
+the oriented physical-edge path recorded by the exact-corridor reducer.
+It does not fabricate connecting segments between physically disconnected
+OSM tracks. Station anchoring itself remains provisional until the
+GTFS-assisted station resolver is implemented.
+
+**What "one line" currently means:** exact-path deduplication removes
+duplicate traversals and reverse-direction duplication. Two parallel
+tracks between the same stations are not yet topologically conflated into
+one representative centerline. A distinct branch alignment remains a
+distinct feature. Station sections are only as complete as the confirmed
+station markers provided by the upstream matched traversal.
+
+**Memory:** the entire GeoJSON document and the geometry of each corridor
+are streamed; one 4096-edge path block and a 4096-slot direct-mapped
+physical-edge cache are held in memory. The exporter currently performs
+binary-search lookups on disk for individual edges, which is bounded in
+RAM but may be I/O intensive on very large exports. A future external
+edge-reference join would reduce random I/O. The output is ordinary
+GeoJSON, not yet clipped or encoded into vector tiles.
 
 ## Validate physical topology of matched station segments
 
