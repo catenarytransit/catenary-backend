@@ -8,6 +8,7 @@
 //! Physical edges are distributed to small grid cells in fixed-width files,
 //! externally sorted, then joined against one cell's stations at a time.
 use crate::external_sort::{read_record, sort_fixed};
+use fallible_iterator::FallibleIterator;
 use anyhow::{Context, Result, bail};
 use postgres::{Client, NoTls};
 use std::fs::{self, File};
@@ -203,9 +204,10 @@ pub fn build(
         ORDER BY osm_type, osm_id, import_id DESC
     "#;
     let mut station_total = 0u64;
-    let rows = client.query_raw(query, &[] as &[&(dyn postgres::types::ToSql + Sync)])?;
-    for result in rows {
-        let row = result?;
+    // postgres::RowIter is a fallible_iterator, not std::iter::Iterator.
+    // Passing an owned empty iterator also avoids the &&dyn ToSql BorrowToSql error.
+    let mut rows = client.query_raw(query, std::iter::empty::<&i32>())?;
+    while let Some(row) = rows.next()? {
         let name: String = row.get(0);
         let Some(osm_type) = station_type(&name) else { continue; };
         let id: i64 = row.get(1);
