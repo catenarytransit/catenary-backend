@@ -322,7 +322,10 @@ physical-edge cache are held in memory. The exporter currently performs
 binary-search lookups on disk for individual edges, which is bounded in
 RAM but may be I/O intensive on very large exports. A future external
 edge-reference join would reduce random I/O. The output is ordinary
-GeoJSON, not yet clipped or encoded into vector tiles.
+GeoJSON, not yet clipped or encoded into vector tiles. The exporter writes
+into a sibling `.meadowsweet-<pid>.partial` file and renames it into place
+only after successful validation; failed exports leave a partial file for
+diagnosis without overwriting an existing valid result.
 
 ## Validate physical topology of matched station segments
 
@@ -364,8 +367,9 @@ downstream grouping independent of spatial tile order.
   Viterbi traceback and bounded A* search.
 - Splitting OSM atomic edges at accepted interior station anchors.
 - Track-to-centerline physical corridor conflation for parallel rails.
-- Route-membership, service-frequency weighting, color selection and
-  MapLibre vector tile generation.
+- Automatic route-membership and service-frequency based *color inference*,
+  plus MapLibre vector tile generation. Manual optional corridor colors are
+  already supported by the GeoJSON exporter.
 - Cross-snapshot OSM/GTFS consistency verification.
 
 Run `cargo test --bin meadowsweet` once a Rust toolchain and project
