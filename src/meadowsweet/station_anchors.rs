@@ -264,7 +264,7 @@ pub fn build(
     // explicitly error rather than silently exceeding the allocation budget.
     let mut stations = BufReader::new(File::open(scratch.join("stations.sorted"))?);
     let mut edges = BufReader::new(File::open(scratch.join("edges.sorted"))?);
-    let mut output = BufWriter::new(File::create(output_dir.join("anchor_candidates.bin"))?);
+    let mut output = BufWriter::new(File::create(scratch.join("anchor_candidates.unsorted.bin"))?);
     let mut station = read_record::<TILED_STATION_LEN>(&mut stations)?;
     let mut edge_row = read_record::<TILED_EDGE_LEN>(&mut edges)?;
     let mut anchors = 0u64;
@@ -296,6 +296,16 @@ pub fn build(
         cells += 1;
     }
     output.flush()?;
+    drop(output);
+    // Deterministic station/type grouping for downstream topology resolution.
+    // Sorting here also makes the dataset independent of spatial cell order.
+    sort_fixed::<56>(
+        &scratch.join("anchor_candidates.unsorted.bin"),
+        &output_dir.join("anchor_candidates.bin"),
+        &scratch.join("candidate_sort_runs"),
+        memory_bytes,
+        16,
+    )?;
     std::fs::write(
         output_dir.join("manifest.txt"),
         format!(
