@@ -337,6 +337,29 @@ mod tests {
     }
 
     #[test]
+    fn station_near_spatial_cell_boundary_sees_same_edge() -> Result<()> {
+        let edge = Edge {
+            id: 3, mode: 1,
+            from: (8.009, 47.0), to: (8.011, 47.0),
+        };
+        let (min_x, min_y, max_x, max_y) = edge_range(edge, 500.0)?;
+        let (sx, sy) = grid_cell(8.010001, 47.00005);
+        assert!(min_x <= sx && sx <= max_x);
+        assert!(min_y <= sy && sy <= max_y);
+        assert_eq!(candidates(&[edge], 8.010001, 47.00005, 500.0).len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn reject_very_long_atomic_edge_fanout_instead_of_unbounded_ram() {
+        let edge = Edge {
+            id: 7, mode: 1,
+            from: (-30.0, 47.0), to: (30.0, 47.0),
+        };
+        assert!(edge_range(edge, 500.0).is_err());
+    }
+
+    #[test]
     fn distinct_osm_types_are_preserved() {
         assert_eq!(station_type("node"), Some(0));
         assert_eq!(station_type("way"), Some(1));
