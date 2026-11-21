@@ -6,6 +6,7 @@
 mod external_sort;
 mod osm_graph;
 mod segments;
+mod station_anchors;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -24,6 +25,20 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Propose nearby OSM railway-edge anchors for primary rail stations.
+    /// These candidates are NOT yet globally connected or map-matched.
+    BuildStationAnchors {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long)]
+        graph_dir: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 500.0)]
+        radius_m: f64,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
     /// Extract an on-disk OSM railway graph without materializing the whole
     /// network in memory. Edges are physical node-to-node rail connections.
     BuildOsmGraph {
@@ -70,6 +85,10 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::BuildStationAnchors { database_url, graph_dir, output_dir, radius_m, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            station_anchors::build(&database_url, &graph_dir, &output_dir, radius_m, memory)?;
+        }
         Command::BuildOsmGraph { pbf, output_dir, memory_mib } => {
             let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
             osm_graph::build(&pbf, &output_dir, memory)?;
