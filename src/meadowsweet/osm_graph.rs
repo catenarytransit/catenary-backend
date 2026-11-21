@@ -212,3 +212,27 @@ pub fn build(pbf: &Path, out: &Path, memory_bytes: usize) -> Result<()> {
     eprintln!("Meadowsweet: wrote {written} railway edges and {} adjacency records", written * 2);
     Ok(())
 }
+
+#[cfg(test)]
+mod rail_filter_tests {
+    use super::*;
+
+    fn sample(tags: &[(&str, &str)]) -> osmpbfreader::Way {
+        use osmpbfreader::{Tags, Way, WayId};
+        let mut map = Tags::new();
+        for &(key, value) in tags {
+            map.insert(key.into(), value.into());
+        }
+        Way { id: WayId(123), tags: map, nodes: vec![] }
+    }
+
+    #[test]
+    fn excludes_local_transit_rails() {
+        for tag in ["tram", "subway", "light_rail"] {
+            assert!(rail_metadata(&sample(&[("railway", tag)])).is_none(), "{tag}");
+        }
+        for tag in ["rail", "narrow_gauge"] {
+            assert!(rail_metadata(&sample(&[("railway", tag)])).is_some(), "{tag}");
+        }
+    }
+}
