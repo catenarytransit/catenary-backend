@@ -64,6 +64,7 @@ struct State {
     db: PgPool,
     firebase: Arc<firebase::Firebase>,
     config: catenary::catenaryconfig::JourneyNotifierConfig,
+    aspen: catenary::catenaryconfig::AspenConfig,
 }
 fn unix() -> i64 { chrono::Utc::now().timestamp() }
 fn hash_secret(s: &str) -> String { hex::encode(Sha256::digest(s.as_bytes())) }
@@ -189,7 +190,7 @@ async fn main() -> Result<()> {
     let db = PgPoolOptions::new().max_connections(12).connect(&db_url).await?;
     sqlx::query("SELECT 1 FROM journey_notifier_devices LIMIT 1").execute(&db).await
         .context("journey-notifier migration missing; run diesel migration run")?;
-    let state = web::Data::new(State { db, firebase, config: notifier });
+    let state = web::Data::new(State { db, firebase, config: notifier, aspen: config.aspen });
     let worker_state = state.clone();
     actix_web::rt::spawn(async move { monitor::run(worker_state).await; });
     let listen = state.config.listen.as_deref().unwrap_or("127.0.0.1:40521").to_owned();
