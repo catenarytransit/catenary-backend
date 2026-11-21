@@ -1,0 +1,216 @@
+//! Meadowsweet: independent, bounded-memory OSM station railway pipeline.
+//!
+//! This first-stage executable accepts verified, map-matched physical-edge
+//! traversals. The OSM importer and map matcher are separate future stages.
+//! There is intentionally no dependency on Globeflower or local LOOM.
+mod corridors;
+mod external_sort;
+mod graph_validation;
+mod geojson;
+mod osm_graph;
+mod rail_policy;
+mod segments;
+mod station_anchors;
+
+use anyhow::{Context, Result, bail};
+use clap::{Parser, Subcommand};
+use external_sort::sort_fixed;
+use segments::{SegmentWriter, StationId, read_segment, SEGMENT_RECORD_BYTES};
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
+use std::path::PathBuf;
+
+#[derive(Parser)]
+#[command(about = "Meadowsweet disk-backed railway station segment builder")]
+struct Args {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Export a GeoJSON FeatureCollection containing one connected LineString
+    /// for each unique station-to-station physical corridor. Color is optional.
+    ExportGeojson {
+        /// Directory containing the 64-byte OSM edges.bin graph store.
+        #[arg(long)]
+        graph_dir: PathBuf,
+        /// Output from reduce-exact-corridors.
+        #[arg(long)]
+        corridors: PathBuf,
+        /// Source paths.bin used by the corridor reducer.
+        #[arg(long)]
+        path_file: PathBuf,
+        /// Destination .geojson file. Geometry is written incrementally.
+        #[arg(long)]
+        output: PathBuf,
+        /// Optional fallback CSS hex color for every corridor (#RRGGBB).
+        #[arg(long)]
+        color: Option<String>,
+        /// Optional sorted TSV of corridor_id<TAB>#RRGGBB overrides.
+        #[arg(long)]
+        colors_file: Option<PathBuf>,
+    },
+    /// Validate that every directed physical-edge path is connected in the
+    /// disk-backed OSM graph. Does not yet validate station endpoint anchors.
+    ValidateTopology {
+        #[arg(long)]
+        graph_dir: PathBuf,
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        path_file: PathBuf,
+    },
+    /// Group exactly equal station-to-station physical edge paths, including
+    /// opposite directions. This is conservative; parallel-track conflation
+    /// requires topology matching and is not attempted by this command.
+    ReduceExactCorridors {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        path_file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        scratch_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
+    /// Propose nearby OSM railway-edge anchors for primary rail stations.
+    /// These candidates are NOT yet globally connected or map-matched.
+    BuildStationAnchors {
+        #[arg(long, env = "DATABASE_URL")]
+        database_url: String,
+        #[arg(long)]
+        graph_dir: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 500.0)]
+        radius_m: f64,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
+    /// Extract an on-disk OSM railway graph without materializing the whole
+    /// network in memory. Edges are physical node-to-node rail connections.
+    BuildOsmGraph {
+        #[arg(long)]
+        pbf: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
+    /// Split externally map-matched traversals at OSM station anchors.
+    ///
+    /// Input format v3 (BE): repeating 24-byte headers of start_kind:u8,
+    /// route_type:u16 (MUST be 2), 5 reserved bytes, start_station:i64,
+    /// edge_count:u64, then edge_count
+    /// 24-byte records (edge_id:u64, forward:u8, arrival_kind:u8,
+    /// 6 reserved bytes, arrival_station:i64; i64::MIN means none).
+    /// Stations must already be anchored to the physical railway graph.
+    Segment {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output_dir: PathBuf,
+    },
+    /// Sort fixed 48-byte station-segment index records by their typed endpoints.
+    /// Intermediate files remain on disk, not in process memory.
+    SortSegmentIndex {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        scratch_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
+    /// Verify structural integrity of a Meadowsweet station segment index.
+    Inspect {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        path_file: PathBuf,
+    },
+}
+
+fn main() -> Result<()> {
+    let args = Args::parse();
+    match args.command {
+        Command::ExportGeojson { graph_dir, corridors, path_file, output, color, colors_file } => {
+            let count = geojson::export(
+                &graph_dir, &corridors, &path_file, &output,
+                color.as_deref(), colors_file.as_deref(),
+            )?;
+            println!("exported {count} unique railway corridor geometries to {}", output.display());
+        }
+        Command::ValidateTopology { graph_dir, index, path_file } => {
+            graph_validation::validate(&index, &path_file, &graph_dir)?;
+        }
+        Command::ReduceExactCorridors { index, path_file, output, scratch_dir, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            corridors::reduce(&index, &path_file, &output, &scratch_dir, memory)?;
+        }
+        Command::BuildStationAnchors { database_url, graph_dir, output_dir, radius_m, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            station_anchors::build(&database_url, &graph_dir, &output_dir, radius_m, memory)?;
+        }
+        Command::BuildOsmGraph { pbf, output_dir, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            osm_graph::build(&pbf, &output_dir, memory)?;
+        }
+        Command::Segment { input, output_dir } => {
+            fs::create_dir_all(&output_dir)?;
+            let path_file = output_dir.join("paths.bin");
+            let index_file = output_dir.join("segments.bin");
+            let source = File::open(&input)?;
+            let mut reader = BufReader::new(source);
+            let mut writer = SegmentWriter::create(&path_file, &index_file)?;
+            let mut traversals = 0u64;
+            let mut segments = 0u64;
+            loop {
+                let mut first = [0u8; 1];
+                if reader.read(&mut first)? == 0 {
+                    break;
+                }
+                let mut header = [0u8; 24];
+                header[0] = first[0];
+                reader.read_exact(&mut header[1..]).context("truncated traversal header")?;
+                let route_type = u16::from_be_bytes(header[1..3].try_into()?);
+                rail_policy::validate_gtfs_route_type(route_type)?;
+                let station = StationId::new(header[0], i64::from_be_bytes(header[8..16].try_into()?))?;
+                let count = u64::from_be_bytes(header[16..24].try_into()?);
+                segments += writer.append_records(station, &mut reader, count)?;
+                traversals += 1;
+            }
+            writer.finish()?;
+            println!("processed {traversals} traversals and {segments} station segments");
+        }
+        Command::SortSegmentIndex { input, output, scratch_dir, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024)
+                .context("memory limit overflow")?;
+            let records = sort_fixed::<SEGMENT_RECORD_BYTES>(&input, &output, &scratch_dir, memory, 16)?;
+            println!("sorted {records} station segment index records");
+        }
+        Command::Inspect { index, path_file } => {
+            let path_len = fs::metadata(path_file)?.len();
+            let mut reader = BufReader::new(File::open(index)?);
+            let mut segments = 0u64;
+            while let Some(segment) = read_segment(&mut reader)? {
+                let end = segment.path_offset
+                    .checked_add(segment.edge_count.checked_mul(9).context("edge count overflow")?)
+                    .context("path offset overflow")?;
+                if end > path_len {
+                    bail!("segment {} references beyond path store", segments);
+                }
+                if segment.edge_count == 0 {
+                    bail!("zero-length station segment");
+                }
+                segments += 1;
+            }
+            println!("validated {segments} station segment records, {path_len} path bytes");
+        }
+    }
+    Ok(())
+}
