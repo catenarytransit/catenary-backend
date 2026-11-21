@@ -42,3 +42,13 @@ CREATE TABLE journey_notifier_events (
     FOREIGN KEY (device_id, journey_id) REFERENCES journey_notifier_journeys(device_id, journey_id) ON DELETE CASCADE
 );
 CREATE INDEX journey_notifier_events_outbox ON journey_notifier_events(next_attempt, created_at) WHERE sent_at IS NULL;
+
+-- Prevent periodic mobile reconciliation from recreating a journey that has
+-- already reached its server-controlled monitoring expiration.
+CREATE TABLE journey_notifier_expired (
+    device_id TEXT NOT NULL REFERENCES journey_notifier_devices(id) ON DELETE CASCADE,
+    journey_id TEXT NOT NULL,
+    expires_at BIGINT NOT NULL,
+    PRIMARY KEY (device_id,journey_id)
+);
+CREATE INDEX journey_notifier_expired_expiry ON journey_notifier_expired(expires_at);
