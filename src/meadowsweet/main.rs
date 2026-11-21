@@ -7,6 +7,7 @@ mod corridors;
 mod external_sort;
 mod graph_validation;
 mod osm_graph;
+mod rail_policy;
 mod segments;
 mod station_anchors;
 
@@ -78,8 +79,9 @@ enum Command {
     },
     /// Split externally map-matched traversals at OSM station anchors.
     ///
-    /// Input format v2 (BE): repeating 24-byte headers of start_kind:u8,
-    /// 7 reserved bytes, start_station:i64, edge_count:u64, then edge_count
+    /// Input format v3 (BE): repeating 24-byte headers of start_kind:u8,
+    /// route_type:u16 (MUST be 2), 5 reserved bytes, start_station:i64,
+    /// edge_count:u64, then edge_count
     /// 24-byte records (edge_id:u64, forward:u8, arrival_kind:u8,
     /// 6 reserved bytes, arrival_station:i64; i64::MIN means none).
     /// Stations must already be anchored to the physical railway graph.
@@ -145,6 +147,8 @@ fn main() -> Result<()> {
                 let mut header = [0u8; 24];
                 header[0] = first[0];
                 reader.read_exact(&mut header[1..]).context("truncated traversal header")?;
+                let route_type = u16::from_be_bytes(header[1..3].try_into()?);
+                rail_policy::validate_gtfs_route_type(route_type)?;
                 let station = StationId::new(header[0], i64::from_be_bytes(header[8..16].try_into()?))?;
                 let count = u64::from_be_bytes(header[16..24].try_into()?);
                 segments += writer.append_records(station, &mut reader, count)?;
