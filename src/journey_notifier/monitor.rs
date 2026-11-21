@@ -7,7 +7,7 @@ use catenary::{
     aspen_dataset::{AspenisedTripScheduleRelationship, AspenisedStopTimeScheduleRelationship, AspenisedTripUpdate},
     etcd_cache::EtcdCache,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use futures::stream::{self, StreamExt};
 use serde_json::{Value, json};
 use sqlx::{Row, PgPool};
@@ -50,7 +50,7 @@ impl StateLeg {
 fn evaluate(leg: &Leg, update: &AspenisedTripUpdate) -> StateLeg {
     let mut result = StateLeg::from_input(leg);
     result.cancelled = matches!(
-        update.trip.schedule_relationship,
+        update.trip.schedule_relationship.as_ref(),
         Some(AspenisedTripScheduleRelationship::Cancelled | AspenisedTripScheduleRelationship::Deleted)
     );
     let departure = update.stop_time_update.iter().find(|st| {
@@ -209,9 +209,18 @@ async fn process_subscription(db: &PgPool, sub: &Subscription, updates: &HashMap
 
 async fn sweep(state: &State, assignments: &EtcdCache<ChateauMetadataEtcd>) -> Result<()> {
     let now = unix();
-    // Remove whole expired subscriptions; ON DELETE CASCADE clears their states and event receipts.
+    // Keep a 30-day tombstone so WorkManager's full-device reconciliation
+    // cannot reactivate journeys which the backend has already completed.
+    let mut tx = state.db.begin().await?;
+    sqlx::query("INSERT INTO journey_notifier_expired(device_id,journey_id,expires_at)
+        SELECT device_id,journey_id,$2 FROM journey_notifier_journeys WHERE expires_at <= $1
+        ON CONFLICT(device_id,journey_id) DO UPDATE SET expires_at=GREATEST(journey_notifier_expired.expires_at, EXCLUDED.expires_at)")
+        .bind(now).bind(now + 30 * 86400).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM journey_notifier_journeys WHERE expires_at <= $1")
-        .bind(now).execute(&state.db).await?;
+        .bind(now).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM journey_notifier_expired WHERE expires_at <= $1")
+        .bind(now).execute(&mut *tx).await?;
+    tx.commit().await?;
     sqlx::query("DELETE FROM journey_notifier_devices WHERE updated_at < $1 AND NOT EXISTS (SELECT 1 FROM journey_notifier_journeys j WHERE j.device_id=journey_notifier_devices.id)")
         .bind(now - 30 * 86400).execute(&state.db).await?;
     let rows = sqlx::query("SELECT device_id,journey_id,legs::text AS legs,created_at FROM journey_notifier_journeys WHERE expires_at > $1")
