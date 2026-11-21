@@ -83,6 +83,51 @@ impl SegmentWriter {
         Ok(emitted)
     }
 
+    /// Ingest exactly `edge_count` pre-matched edge occurrences without
+    /// materializing a traversal in memory. The input is a sequence of
+    /// (u64 edge ID, u8 direction, i64 arrival station) records; i64::MIN
+    /// denotes no station. The caller must validate the source/provenance.
+    pub fn append_records(
+        &mut self,
+        start_station: i64,
+        reader: &mut impl Read,
+        edge_count: u64,
+    ) -> Result<u64> {
+        let mut from = start_station;
+        let mut span_offset = self.offset;
+        let mut span_count = 0u64;
+        let mut emitted = 0u64;
+        for _ in 0..edge_count {
+            let mut record = [0u8; 17];
+            reader.read_exact(&mut record)?;
+            let edge_id = u64::from_be_bytes(record[0..8].try_into()?);
+            let direction = record[8];
+            if direction > 1 {
+                bail!("invalid directed edge");
+            }
+            let arrival = i64::from_be_bytes(record[9..17].try_into()?);
+            self.path.write_all(&edge_id.to_be_bytes())?;
+            self.path.write_all(&[direction])?;
+            self.offset = self.offset.checked_add(9).ok_or_else(|| anyhow::anyhow!("path offset overflow"))?;
+            span_count = span_count.checked_add(1).ok_or_else(|| anyhow::anyhow!("path length overflow"))?;
+            if arrival != i64::MIN {
+                if arrival != from || span_count > 1 {
+                    self.write_index(StationSegment {
+                        from_station: from,
+                        to_station: arrival,
+                        path_offset: span_offset,
+                        edge_count: span_count,
+                    })?;
+                    emitted += 1;
+                }
+                from = arrival;
+                span_offset = self.offset;
+                span_count = 0;
+            }
+        }
+        Ok(emitted)
+    }
+
     fn write_index(&mut self, seg: StationSegment) -> Result<()> {
         self.index.write_all(&seg.from_station.to_be_bytes())?;
         self.index.write_all(&seg.to_station.to_be_bytes())?;
