@@ -41,8 +41,6 @@ pub mod osr_graph_identity;
 pub mod transfer_optimizer;
 #[path = "../../../src/routing_common/transport_index.rs"]
 pub mod transport_index;
-#[path = "../../../src/routing_common/routing_index.rs"]
-pub mod routing_index;
 
 pub mod routing_common {
     pub use crate::mmap_residency;
@@ -64,5 +62,4 @@ pub mod routing_common {
     pub use crate::timetable;
     pub use crate::transfer_optimizer;
     pub use crate::transport_index;
-    pub use crate::routing_index;
 }
