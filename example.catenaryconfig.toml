@@ -94,3 +94,15 @@ excluded_regions = []
 # none: preserve current behavior; cold: prefer reclaim; pageout: request reclaim.
 [edelweiss]
 startup_mmap_advice = "none"
+
+# Server-side push subscriptions. The service account file must be readable only
+# by the journey-notifier process; never commit it or include it in an APK.
+[journey_notifier]
+listen = "127.0.0.1:40521"
+poll_interval_seconds = 45
+retention_hours = 6
+max_monitor_days = 30
+
+[journey_notifier.firebase]
+project_id = "" # Firebase project ID associated with the Android app
+service_account_path = "" # e.g. /run/secrets/catenary-fcm-service-account.json
