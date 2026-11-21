@@ -186,7 +186,18 @@ async fn main() -> Result<()> {
     let text = std::fs::read_to_string(&args.config)
         .with_context(|| format!("reading {}", args.config.display()))?;
     let config: CatenaryConfig = toml::from_str(&text).context("parsing catenaryconfig.toml")?;
-    let notifier = config.journey_notifier;
+    let mut notifier = config.journey_notifier;
+    // The daemon parses --config itself; apply the documented environment
+    // overrides here without depending on the library's global config path.
+    if let Ok(project) = std::env::var("JOURNEY_NOTIFIER_FIREBASE_PROJECT_ID") {
+        notifier.firebase.project_id = Some(project);
+    }
+    if let Ok(path) = std::env::var("JOURNEY_NOTIFIER_FIREBASE_SERVICE_ACCOUNT_PATH") {
+        notifier.firebase.service_account_path = Some(path);
+    }
+    if let Ok(listen) = std::env::var("JOURNEY_NOTIFIER_LISTEN") {
+        notifier.listen = Some(listen);
+    }
     let project = notifier.firebase.project_id.as_deref().filter(|s| !s.is_empty())
         .context("configure [journey_notifier.firebase].project_id")?;
     let credentials = notifier.firebase.service_account_path.as_deref().filter(|s| !s.is_empty())
