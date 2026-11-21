@@ -186,7 +186,7 @@ impl Colors {
         ensure!(!key.is_empty() && !key.contains(char::is_whitespace), "invalid corridor ID in color TSV");
         validate_color(color)?;
         if let Some(ref last) = self.last_read {
-            ensure!(key > last, "color TSV must be strictly sorted by corridor ID without duplicates");
+            ensure!(key > last.as_str(), "color TSV must be strictly sorted by corridor ID without duplicates");
         }
         self.last_read = Some(key.to_owned());
         self.pending = Some((key.to_owned(), color.to_owned()));
@@ -324,7 +324,7 @@ pub fn export(
         let corridor = Corridor::parse(raw)?;
         let key = corridor.stable_id();
         if let Some(ref previous) = previous_key {
-            ensure!(key > *previous, "corridors.bin is not sorted by canonical corridor identity");
+            ensure!(key.as_str() > previous.as_str(), "corridors.bin is not sorted by canonical corridor identity");
         }
         previous_key = Some(key.clone());
         let color = if let Some(overrides) = overrides.as_mut() {
