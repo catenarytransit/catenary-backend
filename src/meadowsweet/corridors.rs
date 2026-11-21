@@ -253,6 +253,44 @@ mod tests {
     }
 
     #[test]
+    fn reducer_aggregates_reverse_path_but_not_distinct_branch() -> Result<()> {
+        use crate::segments::{SegmentWriter, TraversedEdge};
+        let dir = std::env::temp_dir().join(format!(
+            "meadowsweet-reduce-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_nanos()
+        ));
+        fs::create_dir_all(&dir)?;
+        let a = StationId::new(0, 1)?;
+        let b = StationId::new(0, 2)?;
+        let mut writer = SegmentWriter::create(&dir.join("paths"), &dir.join("index"))?;
+        assert_eq!(writer.append(a, [
+            TraversedEdge { edge_id: 100, forward: true, arrival_station: None },
+            TraversedEdge { edge_id: 101, forward: true, arrival_station: Some(b) },
+        ])?, 1);
+        assert_eq!(writer.append(b, [
+            TraversedEdge { edge_id: 101, forward: false, arrival_station: None },
+            TraversedEdge { edge_id: 100, forward: false, arrival_station: Some(a) },
+        ])?, 1);
+        assert_eq!(writer.append(a, [
+            TraversedEdge { edge_id: 100, forward: true, arrival_station: None },
+            TraversedEdge { edge_id: 102, forward: true, arrival_station: Some(b) },
+        ])?, 1);
+        writer.finish()?;
+        reduce(&dir.join("index"), &dir.join("paths"), &dir.join("reduced"), &dir.join("scratch"), 88 * 2)?;
+        let bytes = fs::read(dir.join("reduced"))?;
+        assert_eq!(bytes.len(), 104 * 2);
+        let mut weights = vec![
+            u64::from_be_bytes(bytes[88..96].try_into()?),
+            u64::from_be_bytes(bytes[104+88..104+96].try_into()?),
+        ];
+        weights.sort();
+        assert_eq!(weights, vec![1, 2]);
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn two_different_routes_between_same_stations_remain_distinct() -> Result<()> {
         let dir = std::env::temp_dir().join(format!("meadowsweet-distinct-{}", std::process::id()));
         fs::create_dir_all(&dir)?;
