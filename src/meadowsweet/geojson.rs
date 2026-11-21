@@ -472,6 +472,53 @@ mod tests {
     }
 
     #[test]
+    fn opposite_direction_station_loops_export_one_stable_line() -> Result<()> {
+        let dir = sample_dir("loops")?;
+        let mut edges = BufWriter::new(File::create(dir.join("edges.bin"))?);
+        for (id, from, to, start, end) in [
+            (10u64, 1i64, 2i64, (8.0f64, 47.0f64), (8.01f64, 47.0f64)),
+            (20, 2, 3, (8.01, 47.0), (8.01, 47.01)),
+            (40, 3, 1, (8.01, 47.01), (8.0, 47.0)),
+        ] {
+            edges.write_all(&id.to_be_bytes())?;
+            edges.write_all(&from.to_be_bytes())?;
+            edges.write_all(&to.to_be_bytes())?;
+            edges.write_all(&[1u8, 0, 0, 0, 0, 0, 0, 0])?;
+            for coord in [start.0, start.1, end.0, end.1] {
+                edges.write_all(&coord.to_bits().to_be_bytes())?;
+            }
+        }
+        edges.flush()?;
+        drop(edges);
+        let mut writer = SegmentWriter::create(&dir.join("paths.bin"), &dir.join("segments.bin"))?;
+        writer.append(station(1), [
+            TraversedEdge { edge_id: 10, forward: true, arrival_station: None },
+            TraversedEdge { edge_id: 20, forward: true, arrival_station: None },
+            TraversedEdge { edge_id: 40, forward: true, arrival_station: Some(station(1)) },
+        ])?;
+        writer.append(station(1), [
+            TraversedEdge { edge_id: 40, forward: false, arrival_station: None },
+            TraversedEdge { edge_id: 20, forward: false, arrival_station: None },
+            TraversedEdge { edge_id: 10, forward: false, arrival_station: Some(station(1)) },
+        ])?;
+        writer.finish()?;
+        reduce(&dir.join("segments.bin"), &dir.join("paths.bin"), &dir.join("corridors.bin"),
+            &dir.join("scratch"), 88 * 2)?;
+        assert_eq!(
+            export(&dir, &dir.join("corridors.bin"), &dir.join("paths.bin"),
+                &dir.join("loops.geojson"), None, None)?,
+            1
+        );
+        let doc: serde_json::Value = serde_json::from_slice(&fs::read(dir.join("loops.geojson"))?)?;
+        assert_eq!(doc["features"][0]["properties"]["support_count"], 2);
+        let coordinates = doc["features"][0]["geometry"]["coordinates"].as_array().unwrap();
+        assert_eq!(coordinates.len(), 4);
+        assert_eq!(coordinates.first(), coordinates.last());
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn per_corridor_color_tsv_can_override_default() -> Result<()> {
         let dir = sample_dir("overrides")?;
         fixture(&dir)?;
