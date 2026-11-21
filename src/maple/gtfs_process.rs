@@ -1205,6 +1205,42 @@ pub async fn gtfs_process_feed(
     )?;
 
     let gtfs: Gtfs = match feed_id {
+        "f-gtfs~de~nordrhein~westfalen" => {
+            let mut gtfs = gtfs;
+            let bogestra_agency_ids: HashSet<&str> = gtfs
+                .agencies
+                .iter()
+                .filter(|agency| agency.name == "BOGESTRA Bus")
+                .filter_map(|agency| agency.id.as_deref())
+                .collect();
+            let only_bogestra_agency =
+                gtfs.agencies.len() == 1 && gtfs.agencies[0].name == "BOGESTRA Bus";
+            let mut buses = 0usize;
+            let mut trams = 0usize;
+
+            for route in gtfs.routes.values_mut() {
+                if !is_bogestra_bus_agency(
+                    route.agency_id.as_deref(),
+                    &bogestra_agency_ids,
+                    only_bogestra_agency,
+                ) {
+                    continue;
+                }
+                let target = bogestra_route_type(route.short_name.as_deref());
+                if target == gtfs_structures::RouteType::Tramway {
+                    trams += 1;
+                } else {
+                    buses += 1;
+                }
+                route.route_type = target;
+            }
+
+            println!(
+                "Normalized BOGESTRA Bus route types for {}: {} trams, {} buses",
+                feed_id, trams, buses
+            );
+            gtfs
+        }
         "f-dr5-nj~transit~rail~no~realtime" => {
             let route_types = vec![gtfs_structures::RouteType::Tramway];
 
@@ -3300,6 +3336,66 @@ pub(crate) fn faster_stop_time_reader_injection(
     }
 
     Ok(gtfs)
+}
+
+// GTFS permits missing route agency_id only for a single-agency feed.
+// In a regional multi-agency feed, do not reassign ambiguous routes.
+fn is_bogestra_bus_agency(
+    route_agency_id: Option<&str>,
+    bogestra_agency_ids: &HashSet<&str>,
+    only_bogestra_agency: bool,
+) -> bool {
+    match route_agency_id {
+        Some(id) => bogestra_agency_ids.contains(id),
+        None => only_bogestra_agency,
+    }
+}
+
+// The BOGESTRA Bus agency also carries tram and Stadtbahn services.
+// Keep these GTFS route_type 0; normalize the other services to bus (3).
+fn bogestra_route_type(short_name: Option<&str>) -> gtfs_structures::RouteType {
+    const TRAMS: [&str; 11] = [
+        "107", "301", "302", "305", "306", "308", "309", "310", "316", "318", "U35",
+    ];
+    if short_name.is_some_and(|name| TRAMS.contains(&name.trim())) {
+        gtfs_structures::RouteType::Tramway
+    } else {
+        gtfs_structures::RouteType::Bus
+    }
+}
+
+#[cfg(test)]
+mod bogestra_route_type_tests {
+    use super::{bogestra_route_type, is_bogestra_bus_agency};
+    use gtfs_structures::RouteType;
+    use std::collections::HashSet;
+
+    #[test]
+    fn tram_and_stadtbahn_lines_are_exempt() {
+        for line in [
+            "107", "301", "302", "305", "306", "308", "309", "310", "316", "318", "U35",
+        ] {
+            assert_eq!(bogestra_route_type(Some(line)), RouteType::Tramway);
+        }
+        assert_eq!(bogestra_route_type(Some(" U35 ")), RouteType::Tramway);
+    }
+
+    #[test]
+    fn remaining_lines_are_buses() {
+        for line in [Some("300"), Some("303"), Some("SB33"), Some("NE1"), None] {
+            assert_eq!(bogestra_route_type(line), RouteType::Bus);
+        }
+    }
+
+    #[test]
+    fn matches_only_bogestra_agency() {
+        let ids = HashSet::from(["bogestra"]);
+        assert!(is_bogestra_bus_agency(Some("bogestra"), &ids, false));
+        assert!(!is_bogestra_bus_agency(Some("other"), &ids, false));
+        assert!(!is_bogestra_bus_agency(None, &ids, false));
+        assert!(is_bogestra_bus_agency(None, &ids, true));
+        assert!(!is_bogestra_bus_agency(Some("other"), &ids, true));
+    }
 }
 
 #[cfg(test)]
