@@ -6,6 +6,7 @@
 //!
 //! This is an *infrastructure* graph, not a GTFS transit line graph.
 use crate::external_sort::{read_record, sort_fixed};
+use crate::rail_policy::osm_railway_is_eligible;
 use anyhow::{Context, Result, bail};
 use osmpbfreader::{OsmObj, OsmPbfReader};
 use std::fs::{self, File};
@@ -18,19 +19,16 @@ fn read_i64(bytes: &[u8]) -> i64 {
 fn read_u64(bytes: &[u8]) -> u64 {
     u64::from_be_bytes(bytes.try_into().expect("validated record field"))
 }
-/// Mainline and urban railway modes are kept separate for later corridor rules.
+/// Only mainline railway infrastructure eligible for GTFS route_type=2.
 fn rail_metadata(way: &osmpbfreader::Way) -> Option<[u8; 8]> {
     if matches!(way.tags.get("service").map(|s| s.as_str()), Some("yard")) {
         return None;
     }
-    let mode = match way.tags.get("railway")?.as_str() {
-        "rail" => 1,
-        "narrow_gauge" => 2,
-        "subway" => 3,
-        "light_rail" => 4,
-        "tram" => 5,
-        _ => return None,
-    };
+    let tag = way.tags.get("railway")?.as_str();
+    if !osm_railway_is_eligible(tag) {
+        return None;
+    }
+    let mode = if tag == "rail" { 1 } else { 2 };
     let grade = way
         .tags
         .get("layer")
