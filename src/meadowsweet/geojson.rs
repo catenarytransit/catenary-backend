@@ -177,9 +177,22 @@ impl Colors {
     }
 
     fn advance(&mut self) -> Result<()> {
-        let mut line = String::new();
         self.pending = None;
-        if self.reader.read_line(&mut line)? == 0 { return Ok(()); }
+        let mut line = Vec::with_capacity(160);
+        loop {
+            let buffered = self.reader.fill_buf()?;
+            if buffered.is_empty() {
+                if line.is_empty() { return Ok(()); }
+                break;
+            }
+            let end = buffered.iter().position(|&b| b == b'\n');
+            let take = end.map_or(buffered.len(), |pos| pos + 1);
+            ensure!(line.len() + take <= 256, "corridor color TSV line exceeds 256 bytes");
+            line.extend_from_slice(&buffered[..take]);
+            self.reader.consume(take);
+            if end.is_some() { break; }
+        }
+        let line = String::from_utf8(line).context("invalid UTF-8 in corridor colors")?;
         let line = line.trim_end_matches(['\r', '\n']);
         let (key, color) = line.split_once('\t')
             .context("color TSV requires corridor_id<TAB>#RRGGBB")?;
