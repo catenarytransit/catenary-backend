@@ -3,6 +3,7 @@
 //! This first-stage executable accepts verified, map-matched physical-edge
 //! traversals. The OSM importer and map matcher are separate future stages.
 //! There is intentionally no dependency on Globeflower or local LOOM.
+mod corridors;
 mod external_sort;
 mod osm_graph;
 mod segments;
@@ -25,6 +26,21 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Group exactly equal station-to-station physical edge paths, including
+    /// opposite directions. This is conservative; parallel-track conflation
+    /// requires topology matching and is not attempted by this command.
+    ReduceExactCorridors {
+        #[arg(long)]
+        index: PathBuf,
+        #[arg(long)]
+        path_file: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long)]
+        scratch_dir: PathBuf,
+        #[arg(long, default_value_t = 64)]
+        memory_mib: usize,
+    },
     /// Propose nearby OSM railway-edge anchors for primary rail stations.
     /// These candidates are NOT yet globally connected or map-matched.
     BuildStationAnchors {
@@ -86,6 +102,10 @@ enum Command {
 fn main() -> Result<()> {
     let args = Args::parse();
     match args.command {
+        Command::ReduceExactCorridors { index, path_file, output, scratch_dir, memory_mib } => {
+            let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
+            corridors::reduce(&index, &path_file, &output, &scratch_dir, memory)?;
+        }
         Command::BuildStationAnchors { database_url, graph_dir, output_dir, radius_m, memory_mib } => {
             let memory = memory_mib.checked_mul(1024 * 1024).context("memory limit overflow")?;
             station_anchors::build(&database_url, &graph_dir, &output_dir, radius_m, memory)?;
