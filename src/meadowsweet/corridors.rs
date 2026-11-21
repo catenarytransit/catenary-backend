@@ -68,16 +68,27 @@ fn hash_path(file: &mut File, seg: StationSegment, reverse: bool) -> Result<blak
     Ok(hasher.finalize())
 }
 
-fn path_digest(file: &mut File, seg: StationSegment) -> Result<blake3::Hash> {
+/// The orientation bit accompanies the canonical fingerprint so geometry
+/// export can reproduce a stable A-to-B line in either input direction.
+/// Closed loops select the lexicographically smaller traversal fingerprint.
+fn canonical_digest(file: &mut File, seg: StationSegment) -> Result<(blake3::Hash, bool)> {
     let (_, _, reverse) = normalized(seg);
     if seg.from == seg.to {
-        // Loops require canonical orientation independent of travel direction.
         let forward = hash_path(file, seg, false)?;
         let backward = hash_path(file, seg, true)?;
-        Ok(if forward.as_bytes() <= backward.as_bytes() { forward } else { backward })
+        if forward.as_bytes() <= backward.as_bytes() {
+            Ok((forward, false))
+        } else {
+            Ok((backward, true))
+        }
     } else {
-        hash_path(file, seg, reverse)
+        Ok((hash_path(file, seg, reverse)?, reverse))
     }
+}
+
+#[cfg(test)]
+fn path_digest(file: &mut File, seg: StationSegment) -> Result<blake3::Hash> {
+    Ok(canonical_digest(file, seg)?.0)
 }
 
 /// Exact comparison, even when two paths share a BLAKE3 digest.
@@ -138,9 +149,9 @@ fn compare_oriented(
     Ok(true)
 }
 
-fn record(seg: StationSegment, hash: blake3::Hash) -> Result<[u8; RECORD_SIZE]> {
+fn record(seg: StationSegment, hash: blake3::Hash, reversed: bool) -> Result<[u8; RECORD_SIZE]> {
     let mut bytes = [0u8; RECORD_SIZE];
-    let (a, b, reversed) = normalized(seg);
+    let (a, b, _) = normalized(seg);
     let mut cursor = &mut bytes[..];
     write_station_key(&mut cursor, a)?;
     write_station_key(&mut cursor, b)?;
@@ -176,8 +187,8 @@ pub fn reduce(index: &Path, paths: &Path, output: &Path, scratch: &Path, memory_
     let mut ungrouped = BufWriter::new(File::create(scratch.join("fingerprints.raw"))?);
     let mut count = 0u64;
     while let Some(seg) = read_segment(&mut reader)? {
-        let digest = path_digest(&mut path_file, seg)?;
-        ungrouped.write_all(&record(seg, digest)?)?;
+        let (digest, reversed) = canonical_digest(&mut path_file, seg)?;
+        ungrouped.write_all(&record(seg, digest, reversed)?)?;
         count += 1;
     }
     ungrouped.flush()?;
