@@ -11,6 +11,8 @@ pub struct CatenaryConfig {
     #[serde(default)]
     pub edelweiss: EdelweissConfig,
     #[serde(default)]
+    pub journey_notifier: JourneyNotifierConfig,
+    #[serde(default)]
     pub maple: MapleConfig,
     #[serde(default)]
     pub aspen: AspenConfig,
@@ -28,6 +30,24 @@ pub struct CatenaryConfig {
     pub postgres: PostgresConfig,
     #[serde(default)]
     pub elasticsearch: ElasticsearchConfig,
+}
+
+/// Configuration for the standalone journey-notifier binary.
+/// Firebase credentials are read from the file named here, never from a mobile client.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct JourneyNotifierConfig {
+    pub listen: Option<String>,
+    pub poll_interval_seconds: Option<u64>,
+    pub retention_hours: Option<i64>,
+    pub max_monitor_days: Option<i64>,
+    #[serde(default)]
+    pub firebase: JourneyNotifierFirebaseConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct JourneyNotifierFirebaseConfig {
+    pub project_id: Option<String>,
+    pub service_account_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -251,6 +271,7 @@ fn parse_comma_separated(value: &str) -> Vec<String> {
 
 impl CatenaryConfig {
     fn apply_env_overrides(&mut self) {
+        self.journey_notifier.apply_env_overrides();
         self.maple.apply_env_overrides();
         self.aspen.apply_env_overrides();
         self.aspenleader.apply_env_overrides();
@@ -260,6 +281,20 @@ impl CatenaryConfig {
         self.ramonda.apply_env_overrides();
         self.postgres.apply_env_overrides();
         self.elasticsearch.apply_env_overrides();
+    }
+}
+
+impl JourneyNotifierConfig {
+    fn apply_env_overrides(&mut self) {
+        if let Ok(project_id) = std::env::var("JOURNEY_NOTIFIER_FIREBASE_PROJECT_ID") {
+            self.firebase.project_id = Some(project_id);
+        }
+        if let Ok(path) = std::env::var("JOURNEY_NOTIFIER_FIREBASE_SERVICE_ACCOUNT_PATH") {
+            self.firebase.service_account_path = Some(path);
+        }
+        if let Ok(listen) = std::env::var("JOURNEY_NOTIFIER_LISTEN") {
+            self.listen = Some(listen);
+        }
     }
 }
 
@@ -595,5 +630,22 @@ darwin = ""
             config.alpenrose.darwin_rt_base_url(),
             "http://localhost:3000"
         );
+    }
+}
+
+#[cfg(test)]
+mod journey_notifier_tests {
+    use super::*;
+
+    #[test]
+    fn firebase_config_is_opt_in_and_round_trips() {
+        let missing: CatenaryConfig = toml::from_str("").unwrap();
+        assert!(missing.journey_notifier.firebase.project_id.is_none());
+        let parsed: CatenaryConfig = toml::from_str(
+            "[journey_notifier]\npoll_interval_seconds = 30\nretention_hours = 6\n[journey_notifier.firebase]\nproject_id = 'test-project'\nservice_account_path = '/run/secrets/fcm.json'\n",
+        ).unwrap();
+        assert_eq!(parsed.journey_notifier.poll_interval_seconds, Some(30));
+        assert_eq!(parsed.journey_notifier.firebase.project_id.as_deref(), Some("test-project"));
+        assert_eq!(parsed.journey_notifier.firebase.service_account_path.as_deref(), Some("/run/secrets/fcm.json"));
     }
 }
