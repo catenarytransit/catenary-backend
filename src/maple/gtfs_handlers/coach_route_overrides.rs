@@ -17,10 +17,16 @@ pub struct CoachRouteOverrides {
 
 impl CoachRouteOverrides {
     pub fn load() -> Result<Self> {
-        let path = std::env::var("COACH_ROUTE_OVERRIDES_PATH")
-            .unwrap_or_else(|_| "coach-route-overrides.json".to_string());
-        let content = std::fs::read_to_string(Path::new(&path))
-            .with_context(|| format!("reading coach route overrides from {path}"))?;
+        let override_path = std::env::var("COACH_ROUTE_OVERRIDES_PATH").ok();
+        let path = override_path.as_deref().unwrap_or("coach-route-overrides.json");
+        // An installed Maple executable may run outside the repository root.
+        // Use the bundled default only when no explicit config was requested.
+        let content = match std::fs::read_to_string(Path::new(path)) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && override_path.is_none() =>
+                include_str!("../../../coach-route-overrides.json").to_string(),
+            Err(err) => return Err(err).with_context(|| format!("reading coach route overrides from {path}")),
+        };
         serde_json::from_str(&content)
             .with_context(|| format!("parsing coach route overrides from {path}"))
     }
