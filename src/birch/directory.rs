@@ -953,6 +953,7 @@ async fn fetch_route_connections(
           AND a.chateau = r.chateau
           AND a.agency_id = r.agency_id
          WHERE NOT (r.chateau = $1 AND r.route_id = $3)
+           AND r.route_type NOT BETWEEN 200 AND 209
          "#,
     )
     .bind(chateau)
