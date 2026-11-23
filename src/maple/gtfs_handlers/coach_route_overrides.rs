@@ -40,7 +40,8 @@ impl CoachRouteOverrides {
     pub fn apply(&self, feed_id: &str, chateau: &str, gtfs: &mut Gtfs) -> usize {
         let whole_feed = self.coach_feeds.iter().any(|id| id == feed_id)
             || self.coach_feed_prefixes.iter().any(|prefix| feed_id.starts_with(prefix));
-        let chateau_buses = self.coach_bus_chateaux.iter().any(|id| id == chateau);
+        let chateau_buses = self.coach_bus_chateaux.iter().any(|id|
+            id == chateau || chateau.strip_prefix(id).is_some_and(|suffix| suffix.starts_with('~')));
         let selected = self.coach_agencies_by_feed.get(feed_id);
         let agency_ids = selected.map(|names| {
             gtfs.agencies.iter()
