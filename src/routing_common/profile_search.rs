@@ -798,6 +798,7 @@ mod tests {
 
     fn request() -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 18 * 3_600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
