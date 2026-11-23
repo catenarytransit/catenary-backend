@@ -44,10 +44,13 @@
     "f-tds~yes~blue~transportation"
   ],
   "coach_feed_prefixes": [
-    "f-adirondack~trailways"
+    "f-adirondack~trailways",
+    "f-flixbus~"
   ],
   "coach_bus_chateaux": [
-    "amtrak"
+    "amtrak",
+    "flixbus~america",
+    "flixbus~europe"
   ],
   "coach_agencies_by_feed": {
     "f-bus~dft~gov~uk~england": [
