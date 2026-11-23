@@ -456,6 +456,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 1000,
+            allowed_modes: u16::MAX,
         };
         for reverse in [false, true] {
             let anchor = base + if reverse { 86_605 } else { 86_425 };
@@ -506,6 +507,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 1000,
+            allowed_modes: u16::MAX,
         };
         let mut state = ProfileSearchState::new(
             &tt,
@@ -573,6 +575,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 1000,
+            allowed_modes: u16::MAX,
         };
         let mut state =
             ProfileSearchState::new(&tt, &q, base, base, false, Duration::from_secs(2)).unwrap();
@@ -610,6 +613,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 1000,
+            allowed_modes: u16::MAX,
         };
         let mut state =
             ProfileSearchState::new(&tt, &q, base, base + 200, false, Duration::from_secs(2))
@@ -668,6 +672,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 1000,
+            allowed_modes: u16::MAX,
         };
         let options = ProfileOptions {
             search_window_seconds: 60,
@@ -714,6 +719,7 @@ mod tests {
                 direct_walk_seconds: None,
                 max_boardings: 1,
                 max_duration_seconds: 1000,
+                allowed_modes: u16::MAX,
             };
             let options = ProfileOptions {
                 search_window_seconds: 3 * 86400,
@@ -790,6 +796,7 @@ mod tests {
             direct_walk_seconds: None,
             max_boardings: 1,
             max_duration_seconds: 7 * 86400,
+            allowed_modes: u16::MAX,
         };
         let (reference, old_stats) = route_with_stats(&tt, &q).unwrap();
         let mut state =
