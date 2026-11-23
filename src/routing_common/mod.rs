@@ -3,6 +3,7 @@ pub(crate) mod dial;
 pub mod dijkstra;
 pub mod extract;
 pub mod feed_policy;
+pub mod mode_filter;
 pub mod graph_loader;
 pub mod lookup;
 pub mod metadata_index;
