@@ -97,6 +97,8 @@ pub struct Query {
     pub direct_walk_seconds: Option<u32>,
     pub max_boardings: usize,
     pub max_duration_seconds: u32,
+    /// Allowed compiled transport class mask (all classes when unfiltered).
+    pub allowed_modes: u16,
 }
 
 /// A realtime run handle is valid ONLY within one pinned regional snapshot.
@@ -1040,7 +1042,10 @@ fn route_with_stats_impl(
             })
             .collect();
         stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
-        let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8);
+        let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8)
+            .into_iter()
+            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes))
+            .collect::<Vec<_>>();
         if routes.is_empty() {
             break;
         }
@@ -1148,6 +1153,7 @@ mod tests {
         let bytes = fixture().encode().unwrap();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -1262,6 +1268,7 @@ mod tests {
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: departure,
             access: vec![
                 WalkingEndpoint {
@@ -1342,6 +1349,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![
                     WalkingEndpoint {
@@ -1379,6 +1387,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1410,6 +1419,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1644,6 +1654,7 @@ mod tests {
         let (_journeys, stats) = route_with_stats(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1672,6 +1683,7 @@ mod tests {
         let (journeys, stats) = route_with_stats(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: scheduled,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1785,6 +1797,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
+            allowed_modes: u16::MAX,
                 departure_unix_seconds: dep,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1955,6 +1968,7 @@ mod tests {
             route(
                 &view,
                 &Query {
+            allowed_modes: u16::MAX,
                     departure_unix_seconds: departure,
                     access: vec![WalkingEndpoint {
                         stop: LocationIdx(0),
@@ -1986,6 +2000,7 @@ mod tests {
         let midnight = 20_000_i64 * 86_400;
         let deadline = midnight + 9 * 3600;
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: deadline,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2020,6 +2035,7 @@ mod tests {
         let bytes = fixture().encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 8 * 3600 + 23 * 60,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2055,6 +2071,7 @@ mod tests {
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let deadline = 20_000_i64 * 86_400 + 8 * 3600 + 40 * 60;
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: deadline,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2095,6 +2112,7 @@ mod tests {
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let deadline = 20_000_i64 * 86_400 + 72000;
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: deadline,
             access: vec![],
             egress: vec![],
@@ -2117,6 +2135,7 @@ mod tests {
         let binary = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&binary).unwrap();
         let input = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 475 * 60 + 33,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),

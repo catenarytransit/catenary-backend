@@ -1778,10 +1778,9 @@ pub async fn gtfs_process_feed(
         }
         //"f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
         "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
-        "f-bus~dft~gov~uk~england" => crate::gtfs_handlers::remove_agencies::remove_agencies(
-            gtfs,
-            &Vec::from([String::from("FlixBus")]),
-        ),
+        // Keep FlixBus services in combined UK feeds; classify these by
+        // agency from coach-route-overrides.json rather than deleting them.
+        "f-bus~dft~gov~uk~england" => gtfs,
         /*
             "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
@@ -1926,6 +1925,11 @@ pub async fn gtfs_process_feed(
     };
 
     let mut gtfs = gtfs;
+    let coach_policy = crate::gtfs_handlers::coach_route_overrides::CoachRouteOverrides::load()?;
+    let coach_routes = coach_policy.apply(feed_id, chateau_id, &mut gtfs);
+    if coach_routes != 0 {
+        println!("Coach GTFS normalization: {coach_routes} routes -> 200 for {feed_id}");
+    }
 
     if feed_id == "f-genentech" {
         let allowed_routes = [

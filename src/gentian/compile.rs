@@ -483,7 +483,14 @@ fn clasz(gtfs_route_type: i16) -> u8 {
         4 => Clasz::Ship,
         5 => Clasz::AerialLift,
         6 => Clasz::AerialLift,
-        7 => Clasz::Funicular,
+        7 | 117 | 1400 => Clasz::Funicular,
+        100..=116 => Clasz::Regional,
+        200..=209 => Clasz::Coach,
+        400..=405 => Clasz::Subway,
+        700..=716 | 800 => Clasz::Bus,
+        900..=906 => Clasz::Tram,
+        1000..=1021 | 1200 => Clasz::Ship,
+        1300 => Clasz::AerialLift,
         _ => Clasz::Other,
     };
     mode as u8

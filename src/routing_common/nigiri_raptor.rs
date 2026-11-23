@@ -6,7 +6,6 @@
 use crate::routing_common::profile_compact::{LowerBoundTopology, point_lower_bounds};
 use crate::routing_common::raptor_query::{Query, RaptorStats, WalkingEndpoint};
 use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
-use crate::routing_common::realtime_scan::scan_realtime_round_with;
 use crate::routing_common::timetable::{DayIdx, Delta, LocationIdx, RouteIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Context, Result, ensure};
@@ -91,6 +90,7 @@ pub(crate) struct NigiriRaptor {
     route_mark_: Marks,
     pub(crate) reverse: bool,
     pub(crate) target: usize,
+    pub(crate) allowed_modes: u16,
     base_: i64,
     lb_: Vec<u32>,
     dist_to_end_: Vec<u32>,
@@ -171,6 +171,7 @@ impl NigiriRaptor {
             route_mark_: Marks::new(tt.route_transport_ranges().len()),
             reverse,
             target,
+            allowed_modes: q.allowed_modes,
             base_: i64::from(tt.header().first_utc_day) * 86_400,
             lb_: lb,
             dist_to_end_: offsets(ends),
@@ -363,6 +364,9 @@ impl NigiriRaptor {
                     continue;
                 }
                 for &route in tt.routes_at(LocationIdx(stop as u32)) {
+                    if !crate::routing_common::mode_filter::allows_route(tt, route, self.allowed_modes) {
+                        continue;
+                    }
                     any_marked = true;
                     self.route_mark_.set(route.idx());
                 }
@@ -430,11 +434,12 @@ impl NigiriRaptor {
         let tmp = &mut self.tmp_;
         let station_mark = &mut self.station_mark_;
         let stats = &mut self.stats_;
-        scan_realtime_round_with(
+        crate::routing_common::realtime_scan::scan_realtime_round_filtered(
             tt,
             snapshot,
             &marked,
             reverse,
+            self.allowed_modes,
             |loc| {
                 let t = *previous.get(loc)?;
                 (t != if reverse { NEG_INF } else { INF }).then_some(base + i64::from(t))
@@ -971,6 +976,7 @@ mod parallel_tests {
 
     fn query(stops: usize) -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000 * 86_400 + 22 * 3600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),

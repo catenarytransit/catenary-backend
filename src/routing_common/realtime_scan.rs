@@ -52,6 +52,19 @@ pub fn scan_realtime_round_with(
     marked: &[usize],
     reverse: bool,
     ready_at: impl Fn(usize) -> Option<i64>,
+    emit: impl FnMut(RtScanCandidate),
+) {
+    scan_realtime_round_filtered(tt, snapshot, marked, reverse, u16::MAX, ready_at, emit);
+}
+
+/// Mode-restricted realtime scan, using the same transport mask as static RAPTOR.
+pub fn scan_realtime_round_filtered(
+    tt: &ZeroCopyTimetable<'_>,
+    snapshot: &RegionRealtimeSnapshot,
+    marked: &[usize],
+    reverse: bool,
+    allowed_modes: u16,
+    ready_at: impl Fn(usize) -> Option<i64>,
     mut emit: impl FnMut(RtScanCandidate),
 ) {
     if marked.is_empty() || !snapshot.is_published() {
@@ -79,6 +92,9 @@ pub fn scan_realtime_round_with(
             continue;
         }
         for handle in snapshot.run_handles_for(pattern) {
+            if !crate::routing_common::mode_filter::allows_realtime_run(tt, snapshot, handle, allowed_modes) {
+                continue;
+            }
             let mut carried: Option<(usize, u32, i64)> = None;
             if reverse {
                 for pos in (0..stops.len()).rev() {

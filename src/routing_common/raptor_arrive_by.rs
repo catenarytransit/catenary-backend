@@ -453,7 +453,10 @@ fn route_arrive_by_with_stats_impl(
             })
             .collect::<Vec<_>>();
         stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
-        let routes = routes_from_marked(tt, &marked, &mut seen, round as u8);
+        let routes = routes_from_marked(tt, &marked, &mut seen, round as u8)
+            .into_iter()
+            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes))
+            .collect::<Vec<_>>();
         if routes.is_empty() {
             break;
         }
@@ -556,6 +559,7 @@ mod deadline_tests {
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400,
             access: vec![],
             egress: vec![],

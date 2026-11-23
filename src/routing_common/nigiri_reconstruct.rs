@@ -58,6 +58,9 @@ fn visit_realtime_transports(
             continue;
         };
         for handle in snapshot.run_handles_for(pattern) {
+            if !crate::routing_common::mode_filter::allows_realtime_run(tt, snapshot, handle, state.allowed_modes) {
+                continue;
+            }
             let Some(run) = snapshot.run(handle) else {
                 continue;
             };
@@ -182,6 +185,9 @@ fn visit_static_transports(
     let reverse = state.reverse;
     let base = i64::from(tt.header().first_utc_day) * DAY;
     for &route in tt.routes_at(LocationIdx(location as u32)) {
+        if !crate::routing_common::mode_filter::allows_route(tt, route, state.allowed_modes) {
+            continue;
+        }
         let stops = tt.stops_on(route);
         for (finish, stop) in stops.iter().enumerate() {
             if stop.location().idx() != location

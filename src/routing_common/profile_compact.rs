@@ -1047,7 +1047,10 @@ impl ProfileSearchState {
             for &stop in &marked {
                 self.stop_stamps[stop] = self.stop_stamp;
             }
-            let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp);
+            let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp)
+            .into_iter()
+            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, q.allowed_modes))
+            .collect::<Vec<_>>();
             let mut improved_rides = Vec::new();
             // Independent snapshot paths are required for route-distinct
             // terminal journeys even when their arrival cells tie. Nigiri
@@ -2042,6 +2045,7 @@ mod profile_bound_tests {
     fn initial_nigiri_destination_bound_does_not_cap_long_distance_without_direct() {
         use crate::routing_common::raptor_query::WalkingEndpoint;
         let mut q = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 1000,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2138,6 +2142,7 @@ mod compressed_timetable_profile_tests {
 
     fn query() -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 18 * 3_600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2854,6 +2859,7 @@ mod transfer_round_regressions {
 
     fn request() -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86400 + 8 * 3600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -3372,6 +3378,7 @@ mod lower_bound_graph_tests {
 
     fn request(from: usize, to: usize) -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(from as u32),

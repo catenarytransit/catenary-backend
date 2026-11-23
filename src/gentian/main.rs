@@ -89,7 +89,7 @@ struct Args {
     #[arg(long, requires = "region")]
     list_chateaux: bool,
 
-    /// Inspect source IDs embedded in a compiled binary; fails on excluded FlixBus.
+    /// Inspect source IDs embedded in a compiled binary, including coach sources.
     #[arg(long, value_name = "PATH", conflicts_with_all = ["region", "sources", "build", "list_chateaux", "list_timetable_sizes", "output"])]
     inspect_timetable: Option<PathBuf>,
 
@@ -383,7 +383,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flixbus_chateaux_are_excluded_from_region_selection() {
+    fn flixbus_chateaux_are_available_in_region_selection() {
         use catenary::routing_common::routing_regions::ChateauSource;
 
         let chateaux = ["flixbus~america", "other", "flixbus~europe"];
@@ -401,13 +401,13 @@ mod tests {
                 .collect(),
         };
         exclude_chateaux(&mut selection);
-        assert_eq!(selection.chateaux, vec!["other".to_string()]);
-        assert_eq!(selection.sources.len(), 1);
-        assert_eq!(selection.sources[0].chateau, "other");
+        assert_eq!(selection.chateaux.len(), 3);
+        assert_eq!(selection.sources.len(), 3);
+        assert!(selection.sources.iter().any(|source| source.chateau == "flixbus~america"));
     }
 
     #[test]
-    fn explicit_sources_skip_flixbus_but_validate_source_syntax() {
+    fn explicit_sources_include_flixbus_and_validate_source_syntax() {
         let mut tt = TimetableOwned::empty(0, 1);
         add_explicit_sources(
             &mut tt,
@@ -420,12 +420,12 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(tt.sources.len(), 1);
+        assert_eq!(tt.sources.len(), 5);
         assert!(add_explicit_sources(&mut tt, &["invalid".into()]).is_err());
     }
 
     #[test]
-    fn renamed_flixbus_feeds_cannot_enter_us_region() {
+    fn renamed_flixbus_feeds_are_routable_in_us_region() {
         use catenary::routing_common::routing_regions::ChateauSource;
         let mut selection = RegionSelection {
             id: "us".into(),
@@ -445,8 +445,8 @@ mod tests {
             ],
         };
         exclude_chateaux(&mut selection);
-        assert_eq!(selection.sources.len(), 1);
-        assert_eq!(selection.sources[0].onestop_feed_id, "regular");
+        assert_eq!(selection.sources.len(), 2);
+        assert!(selection.sources.iter().any(|source| source.onestop_feed_id == "f-flixbus~us"));
     }
 
     #[test]
