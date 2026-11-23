@@ -27,6 +27,7 @@ pub async fn nearby_from_coords_v3(
             Ok(data) => {
                 if !catenary::observability::is_synthetics_request(req.headers()) {
                     catenary::observability::record_chateaus(
+                        catenary::observability::country_from_headers(req.headers()),
                         catenary::observability::nearby_chateaus(&data),
                     );
                 }
