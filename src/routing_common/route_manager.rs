@@ -641,11 +641,23 @@ impl Router {
         egress: Vec<WalkingEndpoint>,
         direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
+        self.route_with_access_filtered(selection, departure_unix_seconds, access, egress, direct_walk_seconds, u16::MAX)
+    }
+
+    pub fn route_with_access_filtered(
+        &self,
+        selection: RoutingSelection,
+        departure_unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+        allowed_modes: u16,
+    ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
         let (journeys, raptor_stats) = raptor_query::route_with_stats(
             &tt,
             &Query {
-            allowed_modes: u16::MAX,
+            allowed_modes,
                 departure_unix_seconds,
                 access,
                 egress,
@@ -699,6 +711,22 @@ impl Router {
         control: &pong::PongControl<'_>,
         observer: &mut pong::PongObserver<'_>,
     ) -> Result<RoutingResponse> {
+        self.route_profile_observed_filtered(selection, unix_seconds, access, egress, direct_walk_seconds, arrive_by, options, u16::MAX, control, observer)
+    }
+
+    pub fn route_profile_observed_filtered(
+        &self,
+        selection: RoutingSelection,
+        unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+        arrive_by: bool,
+        options: ProfileOptions,
+        allowed_modes: u16,
+        control: &pong::PongControl<'_>,
+        observer: &mut pong::PongObserver<'_>,
+    ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
         let precomputed = self
             .transit
@@ -708,7 +736,7 @@ impl Router {
         let (journeys, raptor_stats) = pong::route_pong_observed(
             &tt,
             &Query {
-            allowed_modes: u16::MAX,
+            allowed_modes,
                 departure_unix_seconds: unix_seconds,
                 access,
                 egress,
@@ -739,11 +767,23 @@ impl Router {
         egress: Vec<WalkingEndpoint>,
         direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
+        self.route_arrive_by_with_access_filtered(selection, arrival_unix_seconds, access, egress, direct_walk_seconds, u16::MAX)
+    }
+
+    pub fn route_arrive_by_with_access_filtered(
+        &self,
+        selection: RoutingSelection,
+        arrival_unix_seconds: i64,
+        access: Vec<WalkingEndpoint>,
+        egress: Vec<WalkingEndpoint>,
+        direct_walk_seconds: Option<u32>,
+        allowed_modes: u16,
+    ) -> Result<RoutingResponse> {
         let tt = self.timetable_for(&selection.transit_region)?;
         let (journeys, raptor_stats) = raptor_arrive_by::route_arrive_by_with_stats(
             &tt,
             &Query {
-            allowed_modes: u16::MAX,
+            allowed_modes,
                 departure_unix_seconds: arrival_unix_seconds,
                 access,
                 egress,
