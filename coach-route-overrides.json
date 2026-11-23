@@ -51,7 +51,9 @@
   ],
   "coach_agencies_by_feed": {
     "f-bus~dft~gov~uk~england": [
-      "National Express"
+      "National Express",
+      "FlixBus",
+      "FlixBus-de"
     ]
   }
 }
