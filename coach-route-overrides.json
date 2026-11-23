@@ -1,0 +1,57 @@
+{
+  "description": "Coach GTFS route-type overrides. Reloaded on each Maple import; edit this file without recompiling Maple. Existing data must be reimported and regional Gentian timetables rebuilt.",
+  "coach_feeds": [
+    "f-flixbus~eu",
+    "f-flixbus~us",
+    "f-megabus~us",
+    "f-tds~all~aboard~america",
+    "f-tds~american~star~tours",
+    "f-tds~barons~bus~lines",
+    "f-tds~bayrunner~shuttle",
+    "f-tds~beeline~express~village~travel",
+    "f-tds~c~j~bus~lines",
+    "f-tds~delta~bus~lines~inc",
+    "f-tds~expreso~lackawanna",
+    "f-tds~express~arrow",
+    "f-tds~fullington~trailways",
+    "f-tds~hazleton~transportation",
+    "f-tds~indian~trails",
+    "f-tds~international~bus~lines",
+    "f-tds~jefferson~lines",
+    "f-tds~lamers~connect",
+    "f-tds~land~to~air~express",
+    "f-tds~limousine~de~mexico",
+    "f-tds~limousine~express",
+    "f-tds~martz~bus",
+    "f-tds~mexicoach",
+    "f-tds~michigan~flyer",
+    "f-tds~michigan~flyer~d2a2",
+    "f-tds~michigan~flyer~dax",
+    "f-tds~miller~transportation",
+    "f-tds~mtr~western",
+    "f-tds~ourbus",
+    "f-tds~peter~pan~bus~lines",
+    "f-tds~peter~pan~bz",
+    "f-tds~rapid~connection",
+    "f-tds~salt~lake~express",
+    "f-tds~shore~connect",
+    "f-tds~shutto",
+    "f-tds~smile~bus",
+    "f-tds~sunway~charters",
+    "f-tds~tac~transportation",
+    "f-tds~virginia~breeze~operated~by~academy",
+    "f-tds~virginia~breeze~operated~by~dillon~s",
+    "f-tds~yes~blue~transportation"
+  ],
+  "coach_feed_prefixes": [
+    "f-adirondack~trailways"
+  ],
+  "coach_bus_chateaux": [
+    "amtrak"
+  ],
+  "coach_agencies_by_feed": {
+    "f-bus~dft~gov~uk~england": [
+      "National Express"
+    ]
+  }
+}
