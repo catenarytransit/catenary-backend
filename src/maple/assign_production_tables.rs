@@ -36,6 +36,45 @@ fn date_is_within_feed_time_range(date: NaiveDate, feed_time_range: &FeedTimeRan
     within_start_bounds && within_end_bounds
 }
 
+// This feed replaces its previous schedule on each successful import rather
+// than using the normal, date-range-based retention of historical GTFS copies.
+const AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED: &str =
+    "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle";
+
+fn amtrak_california_retention(
+    all_feeds: &[catenary::models::IngestedStatic],
+) -> Option<(FeedTimeRange, Vec<String>)> {
+    // Use start time, as Maple does for normal retention. Break ties
+    // deterministically to avoid selecting a different attempt on each run.
+    let newest = all_feeds
+        .iter()
+        .filter(|attempt| attempt.ingestion_successfully_finished && !attempt.deleted)
+        .max_by(|a, b| {
+            a.ingest_start_unix_time_ms
+                .cmp(&b.ingest_start_unix_time_ms)
+                .then_with(|| a.ingest_end_unix_time_ms.cmp(&b.ingest_end_unix_time_ms))
+                .then_with(|| a.attempt_id.cmp(&b.attempt_id))
+        })?;
+
+    // Do not destroy an attempt which is still actively ingesting.
+    let mut drop_attempt_ids = all_feeds
+        .iter()
+        .filter(|attempt| attempt.attempt_id != newest.attempt_id && !attempt.ingesting_in_progress)
+        .map(|attempt| attempt.attempt_id.clone())
+        .collect::<Vec<_>>();
+    drop_attempt_ids.sort();
+    drop_attempt_ids.dedup();
+
+    Some((
+        FeedTimeRange {
+            attempt_id: newest.attempt_id.clone(),
+            start_date: newest.feed_start_date,
+            expiration_date: newest.feed_expiration_date,
+        },
+        drop_attempt_ids,
+    ))
+}
+
 pub async fn assign_production_tables(
     feed_id: &str,
     attempt_id: &str,
@@ -152,57 +191,66 @@ pub async fn assign_production_tables(
         drop_attempt_list.push(to_drop_feed.attempt_id);
     }
 
-    let mut last_claimed_start_time: Option<Option<NaiveDate>> = None;
+    if feed_id == AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED {
+        // This feed must have exactly one retained successful ingest, even
+        // when old and new feed_info date ranges do not overlap.
+        let (latest, old_attempts) = amtrak_california_retention(&all_feeds)
+            .ok_or_else(|| format!("No successful ingest to retain for {}", feed_id))?;
+        feed_time_ranges.push(latest);
+        drop_attempt_list = old_attempts;
+    } else {
+        let mut last_claimed_start_time: Option<Option<NaiveDate>> = None;
 
-    // go from latest ingest feed to earliest ingest feed
-    for (i, ingested_item) in sorted_feeds.into_iter().rev().enumerate() {
-        //i = 0 is latest, followed by earlier and earlier data
-        match last_claimed_start_time {
-            None => {
-                last_claimed_start_time = Some(ingested_item.feed_start_date);
+        // go from latest ingest feed to earliest ingest feed
+        for (i, ingested_item) in sorted_feeds.into_iter().rev().enumerate() {
+            //i = 0 is latest, followed by earlier and earlier data
+            match last_claimed_start_time {
+                None => {
+                    last_claimed_start_time = Some(ingested_item.feed_start_date);
 
-                feed_time_ranges.push(FeedTimeRange {
-                    attempt_id: ingested_item.attempt_id.clone(),
-                    start_date: ingested_item.feed_start_date,
-                    expiration_date: ingested_item.feed_expiration_date,
-                });
-            }
-            Some(last_claimed_start_time_prev) => {
-                //if the last claimed time is none, drop this attempt because the newer feed claims all timestamp_millis
+                    feed_time_ranges.push(FeedTimeRange {
+                        attempt_id: ingested_item.attempt_id.clone(),
+                        start_date: ingested_item.feed_start_date,
+                        expiration_date: ingested_item.feed_expiration_date,
+                    });
+                }
+                Some(last_claimed_start_time_prev) => {
+                    //if the last claimed time is none, drop this attempt because the newer feed claims all timestamp_millis
 
-                match last_claimed_start_time_prev {
-                    None => {
-                        drop_attempt_list.push(ingested_item.attempt_id.clone());
-                    }
-                    Some(last_claimed_start_time_prev) => {
-                        // calculate new expiration date
-
-                        //does this feed have an expiration date
-                        let new_expiration_date = match ingested_item.feed_expiration_date {
-                            Some(this_feed_expiration) => last_claimed_start_time_prev
-                                .sub(chrono::Days::new(1))
-                                .min(this_feed_expiration),
-                            // look at the previous feed's start date and subtract 1 as the expiration date
-                            None => last_claimed_start_time_prev.sub(chrono::Days::new(1)),
-                        };
-
-                        // if the new expiration date is more than 5 days ago, then drop it
-
-                        if new_expiration_date < now.sub(chrono::Days::new(5)) {
-                            //drop the feed
+                    match last_claimed_start_time_prev {
+                        None => {
                             drop_attempt_list.push(ingested_item.attempt_id.clone());
-                        } else {
-                            // add to the feed time range, claim the time range
-                            last_claimed_start_time = Some(ingested_item.feed_start_date);
+                        }
+                        Some(last_claimed_start_time_prev) => {
+                            // calculate new expiration date
 
-                            // Store the effective expiration date instead of the feed's original
-                            // expiration date. This prevents an older feed from remaining current
-                            // after a newer, future-dated feed reaches its feed_start_date.
-                            feed_time_ranges.push(FeedTimeRange {
-                                attempt_id: ingested_item.attempt_id.clone(),
-                                start_date: ingested_item.feed_start_date,
-                                expiration_date: Some(new_expiration_date),
-                            });
+                            //does this feed have an expiration date
+                            let new_expiration_date = match ingested_item.feed_expiration_date {
+                                Some(this_feed_expiration) => last_claimed_start_time_prev
+                                    .sub(chrono::Days::new(1))
+                                    .min(this_feed_expiration),
+                                // look at the previous feed's start date and subtract 1 as the expiration date
+                                None => last_claimed_start_time_prev.sub(chrono::Days::new(1)),
+                            };
+
+                            // if the new expiration date is more than 5 days ago, then drop it
+
+                            if new_expiration_date < now.sub(chrono::Days::new(5)) {
+                                //drop the feed
+                                drop_attempt_list.push(ingested_item.attempt_id.clone());
+                            } else {
+                                // add to the feed time range, claim the time range
+                                last_claimed_start_time = Some(ingested_item.feed_start_date);
+
+                                // Store the effective expiration date instead of the feed's original
+                                // expiration date. This prevents an older feed from remaining current
+                                // after a newer, future-dated feed reaches its feed_start_date.
+                                feed_time_ranges.push(FeedTimeRange {
+                                    attempt_id: ingested_item.attempt_id.clone(),
+                                    start_date: ingested_item.feed_start_date,
+                                    expiration_date: Some(new_expiration_date),
+                                });
+                            }
                         }
                     }
                 }
@@ -337,7 +385,27 @@ pub async fn assign_production_tables(
             "Deleting old data {} in feed {}",
             &drop_attempt_id, &feed_id
         );
-        let _ = delete_attempt_objects(feed_id, drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
+        let cleanup_result =
+            delete_attempt_objects(feed_id, drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
+
+        if feed_id == AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED {
+            // Delete the ingest record itself only after its PostgreSQL schedule
+            // rows have been cleaned. A failed cleanup is surfaced for retry.
+            cleanup_result?;
+            let mut conn = arc_conn_pool.get().await?;
+            diesel::delete(
+                ingested_static
+                    .filter(ingested_static_columns::onestop_feed_id.eq(feed_id))
+                    .filter(ingested_static_columns::attempt_id.eq(drop_attempt_id)),
+            )
+            .execute(&mut conn)
+            .await?;
+        } else if let Err(error) = cleanup_result {
+            eprintln!(
+                "Failed to delete old attempt {} for feed {}: {}",
+                drop_attempt_id, feed_id, error
+            );
+        }
     }
 
     //wipe the old tile cache
@@ -358,4 +426,81 @@ pub async fn assign_production_tables(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attempt(
+        id: &str,
+        start_ms: i64,
+        successful: bool,
+        in_progress: bool,
+        deleted: bool,
+    ) -> catenary::models::IngestedStatic {
+        catenary::models::IngestedStatic {
+            onestop_feed_id: AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED.to_string(),
+            attempt_id: id.to_string(),
+            ingest_start_unix_time_ms: start_ms,
+            ingest_end_unix_time_ms: start_ms + 100,
+            ingest_duration_ms: 100,
+            file_hash: id.to_string(),
+            ingesting_in_progress: in_progress,
+            ingestion_errored: !successful && !in_progress,
+            ingestion_successfully_finished: successful,
+            production: successful,
+            deleted,
+            feed_expiration_date: None,
+            feed_start_date: None,
+            ingestion_version: 1,
+            default_lang: None,
+            languages_avaliable: vec![],
+            hash_of_file_contents: None,
+        }
+    }
+
+    #[test]
+    fn amtrak_california_keeps_only_latest_successful_ingest() {
+        let mut older = attempt("older", 100, true, false, false);
+        older.feed_expiration_date = NaiveDate::from_ymd_opt(2026, 11, 30);
+        let mut newer = attempt("newer", 200, true, false, false);
+        newer.feed_start_date = NaiveDate::from_ymd_opt(2026, 12, 1);
+
+        let (retained, removed) =
+            amtrak_california_retention(&[older, newer]).expect("one successful ingest");
+        assert_eq!(retained.attempt_id, "newer");
+        assert_eq!(retained.start_date, NaiveDate::from_ymd_opt(2026, 12, 1));
+        assert_eq!(removed, vec!["older"]);
+    }
+
+    #[test]
+    fn amtrak_california_preserves_active_and_last_successful_ingests() {
+        let older = attempt("older", 100, true, false, false);
+        let latest_success = attempt("success", 200, true, false, false);
+        let failed = attempt("failed", 300, false, false, false);
+        let in_progress = attempt("processing", 400, false, true, false);
+        let already_deleted = attempt("deleted", 50, true, false, true);
+
+        let (retained, removed) = amtrak_california_retention(&[
+            older,
+            latest_success,
+            failed,
+            in_progress,
+            already_deleted,
+        ])
+        .expect("one successful ingest");
+
+        assert_eq!(retained.attempt_id, "success");
+        assert_eq!(removed, vec!["deleted", "failed", "older"]);
+    }
+
+    #[test]
+    fn amtrak_california_does_not_prune_without_successful_ingest() {
+        assert!(amtrak_california_retention(&[
+            attempt("failed", 200, false, false, false),
+            attempt("processing", 300, false, true, false),
+        ])
+        .is_none());
+    }
 }
