@@ -1335,7 +1335,10 @@ mod tests {
         headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0"));
         assert!(should_emit_routing_metrics(&headers));
 
-        headers.insert(USER_AGENT, HeaderValue::from_static("Datadog/Synthetics/1.0"));
+        headers.insert(
+            USER_AGENT,
+            HeaderValue::from_static("Datadog/Synthetics/1.0"),
+        );
         assert!(!should_emit_routing_metrics(&headers));
 
         headers.clear();
