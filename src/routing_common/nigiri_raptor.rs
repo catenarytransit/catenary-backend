@@ -6,7 +6,6 @@
 use crate::routing_common::profile_compact::{LowerBoundTopology, point_lower_bounds};
 use crate::routing_common::raptor_query::{Query, RaptorStats, WalkingEndpoint};
 use crate::routing_common::realtime_region::RegionRealtimeSnapshot;
-use crate::routing_common::realtime_scan::scan_realtime_round_with;
 use crate::routing_common::timetable::{DayIdx, Delta, LocationIdx, RouteIdx, ZeroCopyTimetable};
 use crate::routing_common::transport_index::TransportIndex;
 use anyhow::{Context, Result, ensure};
