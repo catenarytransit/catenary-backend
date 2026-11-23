@@ -34,8 +34,11 @@ ensure `DD_AGENT_HOST`/`DD_DOGSTATSD_PORT` point to a reachable DogStatsD
 agent. Check `catenary.routing.queries{service:edelweiss}` first: if it
 is missing too, troubleshoot exporter enablement before chateau extraction.
 
-Both counters exclude Datadog Synthetics requests using the same header
-detection as nearby departures. Sample Datadog queries:
+Stop-board and routing chateau counters exclude Datadog Synthetics requests using
+the same header detection as nearby departures. Edelweiss also excludes these
+requests from `catenary.routing.queries` and `catenary.routing.phase_ms` on
+both HTTP and WebSocket routes. CLI routing queries are unaffected.
+Sample Datadog queries:
 
 ```text
 sum:catenary.stop_board.chateau_accesses{service:birch} by {endpoint,chateau}.as_count()
@@ -93,4 +96,5 @@ HTTP requests identified by a User-Agent containing `synthetics`, a
 header containing `synthetics` (case-insensitive) are excluded from
 HTTP request and duration metrics. Birch and Spruce nearby-departures handlers
 also exclude these requests from per-chateau counters, which are emitted
-independently of HTTP middleware. The API response is not changed.
+independently of HTTP middleware. Edelweiss excludes them from routing query
+counts and phase latency distributions as well. The API response is not changed.
