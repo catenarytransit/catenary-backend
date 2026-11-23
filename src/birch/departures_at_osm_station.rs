@@ -47,6 +47,12 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::join;
 
+// Limit the number of simultaneous compressed-trip lookups across all chateaux
+// in one station-board request, rather than overloading the PostgreSQL pool.
+const TRIP_BATCH_SIZE: usize = 128;
+const TRIP_BATCHES_PER_CHATEAU: usize = 4;
+const MAX_CONCURRENT_TRIP_BATCHES: usize = 8;
+
 // Use shared types from departures_shared module
 use crate::departures_shared::{
     AlertIndex, ItinOption, MovedStopData, ValidTripSet, estimate_service_date,
@@ -221,30 +227,37 @@ pub async fn departures_at_osm_station(
                 .await
                 .unwrap_or_default();
 
-            let mut candidates = Vec::new();
-
-            for nearby_station in nearby_osm_stations {
-                if let (Some(name1), Some(name2)) = (&station_info.name, &nearby_station.name) {
-                    let similarity =
-                        strsim::jaro_winkler(&name1.to_lowercase(), &name2.to_lowercase());
-
-                    if similarity > 0.8 {
-                        let nearby_stops_count: i64 = catenary::schema::gtfs::stops::dsl::stops
-                            .filter(
-                                catenary::schema::gtfs::stops::osm_station_id
-                                    .eq(nearby_station.osm_id),
-                            )
-                            .filter(catenary::schema::gtfs::stops::allowed_spatial_query.eq(true))
-                            .count()
-                            .get_result(&mut *conn)
-                            .await
-                            .unwrap_or(0);
-
-                        if nearby_stops_count > 0 {
-                            candidates.push(nearby_station);
+            // Compare names locally and check every candidate's stop linkage in
+            // one indexed query. Large station complexes can have dozens of nearby
+            // OSM features, so per-feature COUNT queries form a slow N+1 path.
+            let normalized_name = station_info.name.as_ref().map(|name| name.to_lowercase());
+            let mut candidates: Vec<_> = nearby_osm_stations
+                .into_iter()
+                .filter(|station| {
+                    match (&normalized_name, &station.name) {
+                        (Some(name), Some(candidate_name)) => {
+                            strsim::jaro_winkler(name, &candidate_name.to_lowercase()) > 0.8
                         }
+                        _ => false,
                     }
-                }
+                })
+                .collect();
+
+            if !candidates.is_empty() {
+                let candidate_ids: Vec<i64> =
+                    candidates.iter().map(|station| station.osm_id).collect();
+                let linked_osm_ids: HashSet<i64> = catenary::schema::gtfs::stops::dsl::stops
+                    .filter(catenary::schema::gtfs::stops::osm_station_id.eq_any(&candidate_ids))
+                    .filter(catenary::schema::gtfs::stops::allowed_spatial_query.eq(true))
+                    .select(catenary::schema::gtfs::stops::osm_station_id)
+                    .distinct()
+                    .load::<Option<i64>>(&mut *conn)
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                candidates.retain(|station| linked_osm_ids.contains(&station.osm_id));
             }
 
             if !candidates.is_empty() {
@@ -357,12 +370,14 @@ pub async fn departures_at_osm_station(
 
     let stop_data_fetch_timer = Instant::now();
 
+    let trip_batch_limiter = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_TRIP_BATCHES));
     let stops_stream = futures::stream::iter(stops_to_search.iter())
         .map(|(chateau_id_to_search, stop_ids_to_search)| {
             let pool = pool.get_ref().clone();
             let chateau_id = chateau_id_to_search.clone();
             let stop_ids: Vec<String> = stop_ids_to_search.iter().cloned().collect();
             let include_shapes = include_shapes;
+            let trip_batch_limiter = trip_batch_limiter.clone();
 
             let lookback_days = match chateau_id.as_str() {
                 "sncb"
@@ -390,6 +405,7 @@ pub async fn departures_at_osm_station(
                     stop_ids,
                     include_shapes,
                     Some((check_start_date, check_end_date)),
+                    trip_batch_limiter,
                 )
                 .await
             }
@@ -1221,6 +1237,7 @@ async fn fetch_chateau_data_optimized(
     stop_ids: Vec<String>,
     include_shapes: bool,
     date_filter: Option<(NaiveDate, NaiveDate)>,
+    trip_batch_limiter: Arc<tokio::sync::Semaphore>,
 ) -> crate::departures_shared::StopDataResult {
     let mut conn = pool.get().await.unwrap();
 
@@ -1296,8 +1313,40 @@ async fn fetch_chateau_data_optimized(
 
     let direction_pattern_ids_clone = direction_pattern_ids.clone();
 
+    // Fetch the indexed compressed-trip batches while direction/route metadata
+    // loads. Keep both per-chateau and request-wide limits to bound DB pressure.
+    let trips_task = async {
+        futures::stream::iter(itinerary_ids.chunks(TRIP_BATCH_SIZE))
+            .map(|batch| {
+                let pool = pool.clone();
+                let chateau_id = chateau_id.clone();
+                let trip_batch_limiter = trip_batch_limiter.clone();
+                let batch = batch.to_vec();
+                async move {
+                    let _permit = trip_batch_limiter.acquire_owned().await.unwrap();
+                    let mut conn = pool.get().await.unwrap();
+                    catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
+                        .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(chateau_id))
+                        .filter(
+                            catenary::schema::gtfs::trips_compressed::itinerary_pattern_id
+                                .eq_any(&batch),
+                        )
+                        .select(catenary::models::CompressedTrip::as_select())
+                        .load::<catenary::models::CompressedTrip>(&mut conn)
+                        .await
+                        .unwrap_or_default()
+                }
+            })
+            .buffer_unordered(TRIP_BATCHES_PER_CHATEAU)
+            .collect::<Vec<Vec<catenary::models::CompressedTrip>>>()
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+    };
+
     // START PARALLEL FETCHES
-    let (itins_result, direction_meta_result, direction_rows_result, routes_result) = tokio::join!(
+    let (itins_result, direction_meta_result, direction_rows_result, routes_result, trips_result) = tokio::join!(
         async { selected_rows },
         async {
             let mut conn = pool_clone.get().await.unwrap();
@@ -1337,7 +1386,8 @@ async fn fetch_chateau_data_optimized(
                 .load::<catenary::models::Route>(&mut conn)
                 .await
                 .unwrap_or_default()
-        }
+        },
+        trips_task
     );
 
     // Fetch Agencies
@@ -1389,24 +1439,6 @@ async fn fetch_chateau_data_optimized(
                 shapes_map.insert(s.shape_id.into(), poly);
             }
         }
-    }
-
-    // Match nearby departures: bounded predicates on the indexed itinerary key,
-    // rather than loading every trip of every route and discarding most rows.
-    let mut trips_result = Vec::new();
-    for batch in itinerary_ids.chunks(128) {
-        let mut conn = pool.get().await.unwrap();
-        let mut trips: Vec<catenary::models::CompressedTrip> =
-            catenary::schema::gtfs::trips_compressed::dsl::trips_compressed
-                .filter(catenary::schema::gtfs::trips_compressed::chateau.eq(&chateau_id))
-                .filter(
-                    catenary::schema::gtfs::trips_compressed::itinerary_pattern_id.eq_any(batch),
-                )
-                .select(catenary::models::CompressedTrip::as_select())
-                .load(&mut conn)
-                .await
-                .unwrap_or_default();
-        trips_result.append(&mut trips);
     }
 
     // Fetch Calendar
@@ -1520,4 +1552,26 @@ async fn fetch_chateau_data_optimized(
         calendar,
         calendar_dates,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TRIP_BATCH_SIZE;
+
+    #[test]
+    fn compressed_trip_batches_cover_all_itinerary_ids() {
+        let itinerary_ids: Vec<String> = (0..(TRIP_BATCH_SIZE * 2 + 3))
+            .map(|id| id.to_string())
+            .collect();
+        let batches: Vec<_> = itinerary_ids.chunks(TRIP_BATCH_SIZE).collect();
+
+        assert_eq!(batches.len(), 3);
+        assert_eq!(batches[0].len(), TRIP_BATCH_SIZE);
+        assert_eq!(batches[1].len(), TRIP_BATCH_SIZE);
+        assert_eq!(batches[2].len(), 3);
+        assert_eq!(
+            batches.into_iter().flatten().cloned().collect::<Vec<_>>(),
+            itinerary_ids
+        );
+    }
 }
