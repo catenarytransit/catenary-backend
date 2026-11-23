@@ -52,13 +52,17 @@ impl RamondaWebSocket {
         progressive: Option<bool>,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        catenary::observability::count("nearby.requests", &[("transport", "websocket")]);
+        catenary::observability::count(
+            "nearby.requests",
+            &[("transport", "websocket"), ("country", &self.country)],
+        );
         self.cancel_nearby(ctx);
         let generation = self.nearby_generation;
         let pool = self.pool.clone();
         let cache = self.aspen_chateau_cache.clone();
         let address = ctx.address();
         let progressive = progressive.unwrap_or(!self.nearby_loaded);
+        let country = self.country.clone();
         let future = async move {
             let result = async {
                 if request_id.is_empty() || request_id.len() > 128 {
@@ -88,12 +92,13 @@ impl RamondaWebSocket {
                     if let Ok(ref result) = remaining {
                         seen.extend(catenary::observability::nearby_chateaus(result));
                     }
-                    catenary::observability::record_chateaus(seen);
+                    catenary::observability::record_chateaus(&country, seen);
                     remaining
                 } else {
                     let all = prepared.load(pool, cache, RouteSelection::All).await;
                     if let Ok(ref result) = all {
                         catenary::observability::record_chateaus(
+                            &country,
                             catenary::observability::nearby_chateaus(result),
                         );
                     }

@@ -18,6 +18,7 @@ use crate::{ClientMessage, ServerMessage, nearby_departures};
 use futures::StreamExt;
 
 pub struct TripWebSocket {
+    pub country: String,
     pub pool: Arc<CatenaryPostgresPool>,
     pub aspen_chateau_cache: Arc<catenary::aspen::lib::AspenChateauCache>,
     pub aspen_client_manager: Arc<AspenClientManager>,
@@ -40,8 +41,10 @@ impl TripWebSocket {
         etcd_connection_ips: Arc<EtcdConnectionIps>,
         etcd_connection_options: Arc<Option<etcd_client::ConnectOptions>>,
         etcd_reuser: Arc<tokio::sync::RwLock<Option<etcd_client::Client>>>,
+        country: String,
     ) -> Self {
         Self {
+            country,
             pool,
             aspen_chateau_cache,
             aspen_client_manager,
@@ -182,7 +185,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
             }
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
-                crate::record_ws_message("trip", &msg);
+                crate::record_ws_message("trip", &self.country, &msg);
                 match msg {
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
                         self.subscriptions.remove(&(chateau, params));
@@ -193,9 +196,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
                         catenary::observability::count(
                             "spruce.chateau_requests",
-                            &[("chateau", &chateau)],
+                            &[("chateau", &chateau), ("country", &self.country)],
                         );
-                        catenary::observability::count("trip.views", &[("chateau", &chateau)]);
+                        catenary::observability::count(
+                            "trip.views",
+                            &[("chateau", &chateau), ("country", &self.country)],
+                        );
                         self.subscriptions
                             .insert((chateau.clone(), params.clone()), None);
 
@@ -235,6 +241,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                         };
 
                         let request_id_clone = request_id.clone();
+                        let country = self.country.clone();
 
                         let fut = async move {
                             let stream =
@@ -259,7 +266,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for TripWebSocket {
                                     serde_json::to_string(&msg).unwrap_or_default()
                                 })
                                 .collect::<Vec<String>>();
-                            catenary::observability::record_spruce_chateaus(chateaus);
+                            catenary::observability::record_spruce_chateaus(&country, chateaus);
                             messages
                         };
 

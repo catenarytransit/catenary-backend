@@ -34,6 +34,7 @@ use crate::{ClientMessage, MapViewportUpdate, ServerMessage, trajectories};
 use futures::StreamExt;
 
 pub struct LiveLocationsWebSocket {
+    pub country: String,
     pub pool: Arc<CatenaryPostgresPool>,
     pub aspen_chateau_cache:
         std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
@@ -67,8 +68,10 @@ impl LiveLocationsWebSocket {
         aspen_client_manager: Arc<AspenClientManager>,
         coordinator_pool: Arc<BulkFetchCoordinatorPool>,
         chateau_rtree: Arc<crate::chateau_rtree::ChateauRTree>,
+        country: String,
     ) -> Self {
         Self {
+            country,
             pool,
             aspen_chateau_cache,
             aspen_client_manager,
@@ -761,12 +764,12 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
             }
             Ok(ws::Message::Text(text)) => {
                 let msg: Result<ClientMessage, _> = serde_json::from_str(&text);
-                crate::record_ws_message("live", &msg);
+                crate::record_ws_message("live", &self.country, &msg);
                 match msg {
                     Ok(ClientMessage::UpdateMap { params }) => {
                         catenary::observability::count(
                             "spruce.map_requests",
-                            &[("mode", "legacy")],
+                            &[("mode", "legacy"), ("country", &self.country)],
                         );
                         for chateau in params
                             .chateaus
@@ -775,7 +778,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                         {
                             catenary::observability::count(
                                 "spruce.chateau_requests",
-                                &[("chateau", chateau)],
+                                &[("chateau", chateau), ("country", &self.country)],
                             );
                         }
                         let new_chateaus: HashSet<String> =
@@ -818,7 +821,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                         self.trajectory_subscription = None;
                     }
                     Ok(ClientMessage::SubscribeMapV2 { params }) => {
-                        catenary::observability::count("spruce.map_requests", &[("mode", "v2")]);
+                        catenary::observability::count(
+                            "spruce.map_requests",
+                            &[("mode", "v2"), ("country", &self.country)],
+                        );
                         self.client_viewport_v2 = Some(params.clone());
                         let mut new_chateaus = HashSet::new();
 
@@ -870,7 +876,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                         }
 
                         if new_chateaus.is_empty() {
-                            catenary::observability::count("spruce.map_empty", &[("mode", "v2")]);
+                            catenary::observability::count(
+                                "spruce.map_empty",
+                                &[("mode", "v2"), ("country", &self.country)],
+                            );
                         }
 
                         // Count the distinct chateaus requested by the V2 map viewport.
@@ -879,7 +888,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for LiveLocationsWebS
                         for chateau in &new_chateaus {
                             catenary::observability::count(
                                 "spruce.chateau_requests",
-                                &[("chateau", chateau.as_str())],
+                                &[("chateau", chateau.as_str()), ("country", &self.country)],
                             );
                         }
 

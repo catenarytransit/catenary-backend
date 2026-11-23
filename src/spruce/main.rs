@@ -85,7 +85,11 @@ pub enum ClientMessage {
 
 /// Low-cardinality counters that identify the actual Spruce WebSocket message
 /// type; HTTP upgrade counters alone cannot tell whether any messages arrive.
-fn record_ws_message(endpoint: &'static str, message: &Result<ClientMessage, serde_json::Error>) {
+fn record_ws_message(
+    endpoint: &'static str,
+    country: &str,
+    message: &Result<ClientMessage, serde_json::Error>,
+) {
     if !catenary::observability::enabled() {
         return;
     }
@@ -104,7 +108,7 @@ fn record_ws_message(endpoint: &'static str, message: &Result<ClientMessage, ser
     };
     catenary::observability::count(
         "spruce.ws.messages",
-        &[("endpoint", endpoint), ("type", kind)],
+        &[("endpoint", endpoint), ("type", kind), ("country", country)],
     );
 }
 
@@ -171,6 +175,7 @@ async fn index(
             etcd_connection_ips.as_ref().clone(),
             etcd_connection_options.as_ref().clone(),
             etcd_reuser.get_ref().clone(),
+            catenary::observability::country_from_headers(req.headers()).to_owned(),
         ),
         &req,
         stream,
@@ -193,6 +198,7 @@ async fn index_live(
             aspen_client_manager.as_ref().clone(),
             coordinator_pool.get_ref().clone(),
             chateau_rtree.get_ref().clone(),
+            catenary::observability::country_from_headers(req.headers()).to_owned(),
         ),
         &req,
         stream,
