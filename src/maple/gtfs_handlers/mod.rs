@@ -1,3 +1,4 @@
+pub mod coach_route_overrides;
 pub mod colour_correction;
 pub mod convex_hull;
 pub mod fix_files;
