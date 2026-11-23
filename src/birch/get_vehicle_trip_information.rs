@@ -194,6 +194,7 @@ pub async fn get_trip_rt_update(
 
 #[actix_web::get("/get_trip_information/{chateau}/")]
 pub async fn get_trip_init(
+    req: actix_web::HttpRequest,
     path: web::Path<String>,
     query: web::Query<QueryTripInformationParams>,
     pool: web::Data<Arc<CatenaryPostgresPool>>,
@@ -204,7 +205,13 @@ pub async fn get_trip_init(
 ) -> impl Responder {
     let mut timer = simple_server_timing_header::Timer::new();
     let chateau = path.into_inner();
-    catenary::observability::count("trip.views", &[("chateau", &chateau)]);
+    catenary::observability::count(
+        "trip.views",
+        &[
+            ("chateau", &chateau),
+            ("country", catenary::observability::country_from_headers(req.headers())),
+        ],
+    );
     let query_params = query.into_inner();
 
     match fetch_trip_information(

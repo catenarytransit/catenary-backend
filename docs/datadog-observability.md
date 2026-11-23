@@ -13,14 +13,23 @@ Counters: `catenary.http.requests`, `catenary.nearby.requests`,
 `catenary.directory.requests`, `catenary.spruce.initial_requests`,
 `catenary.spruce.chateau_requests`, and `catenary.routing.queries`.
 
+All request-scoped metrics carry the validated `country` tag representing
+the **client's country**, including `trip.views`, stop-board and nearby
+chateau counters, Spruce map/WebSocket counters, routing query/chateau
+counters, routing phase distributions and successful tile counts. The
+`chateau` and `region` tags still describe the transit data returned,
+not the requester's location. Country tags use uppercase two-letter codes
+(e.g. `US`, `FR`, `CH`) or `unknown` when the trusted header is absent
+or invalid; we do not use IPs, coordinates or unbounded country strings.
+
 Stop/station boards export `catenary.stop_board.chateau_accesses` tagged by
 `service:birch`, `endpoint:departures_at_stop|departures_at_osm_station`,
-and `chateau`. Only unique chateaus in the final returned departure events
+`chateau` and `country`. Only unique chateaus in the final returned departure events
 are counted (one count per chateau per HTTP request), not every nearby candidate
 or route metadata entry. Empty boards emit no chateau counter.
 
 Routing exports `catenary.routing.chateau_accesses` tagged by
-`service:edelweiss` and `chateau`. It extracts GTFS provenance directly
+`service:edelweiss`, `chateau` and `country`. It extracts GTFS provenance directly
 from compiled timetable transit rides, not from hydrated MOTIS response JSON.
 Each distinct chateau is counted once per logical query, as soon as it appears
 in a rendered result. Progressive WebSocket snapshots and a subsequent final
@@ -41,8 +50,10 @@ both HTTP and WebSocket routes. CLI routing queries are unaffected.
 Sample Datadog queries:
 
 ```text
-sum:catenary.stop_board.chateau_accesses{service:birch} by {endpoint,chateau}.as_count()
-sum:catenary.routing.chateau_accesses{service:edelweiss} by {chateau}.as_count()
+sum:catenary.stop_board.chateau_accesses{service:birch} by {country,endpoint,chateau}.as_count()
+sum:catenary.routing.chateau_accesses{service:edelweiss} by {country,chateau}.as_count()
+sum:catenary.trip.views{*} by {service,country,chateau}.as_count()
+sum:catenary.routing.queries{service:edelweiss} by {country,region}.as_count()
 ```
 
 Distributions: `catenary.http.duration_ms` and
@@ -54,7 +65,11 @@ HTTP metrics use the matched Actix route template, never an unbounded URL;
 WebSocket logical requests are counted inside their respective message handlers.
 `CF-IPCountry` is accepted as a country tag only when the infrastructure ensures
 it was set/overwritten by Cloudflare or a trusted gateway. Otherwise it must
-not be considered authoritative.
+not be considered authoritative. Never trust a client-supplied country header:
+strip/overwrite it at the ingress proxy, and use `country:unknown` for direct
+requests without a trusted header. WebSocket message metrics use the country
+captured from the initial handshake so asynchronous follow-up frames retain
+the same country without forwarding user-controlled headers.
 
 Datadog logs and traces can be collected by an external Datadog Agent using
 existing application stdout and tracing pipelines; this change adds the metric
@@ -74,9 +89,9 @@ An HTTP GET to `/ws/live` is a WebSocket upgrade and is reported as
 map subscription. Query:
 
 ```text
-sum:catenary.spruce.ws.messages{service:spruce} by {endpoint,type}.as_count()
-sum:catenary.spruce.map_requests{service:spruce} by {mode}.as_count()
-sum:catenary.spruce.chateau_requests{service:spruce} by {chateau}.as_count()
+sum:catenary.spruce.ws.messages{service:spruce} by {country,endpoint,type}.as_count()
+sum:catenary.spruce.map_requests{service:spruce} by {country,mode}.as_count()
+sum:catenary.spruce.chateau_requests{service:spruce} by {country,chateau}.as_count()
 ```
 
 If only initial requests are visible, and no `spruce.ws.messages`, verify

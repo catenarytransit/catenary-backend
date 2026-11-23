@@ -175,6 +175,7 @@ const CLIENT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
 
 pub struct RamondaWebSocket {
+    pub country: String,
     pub pool: Arc<CatenaryPostgresPool>,
     pub aspen_chateau_cache:
         std::sync::Arc<catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>>,
@@ -208,8 +209,10 @@ impl RamondaWebSocket {
             catenary::etcd_cache::EtcdCache<catenary::aspen::lib::ChateauMetadataEtcd>,
         >,
         aspen_client_manager: Arc<AspenClientManager>,
+        country: String,
     ) -> Self {
         Self {
+            country,
             pool,
             aspen_chateau_cache,
             aspen_client_manager,
@@ -387,7 +390,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                         self.in_progress_trip_fetches.clear();
                     }
                     Ok(ClientMessage::SubscribeTrip { chateau, params }) => {
-                        catenary::observability::count("trip.views", &[("chateau", &chateau)]);
+                        catenary::observability::count(
+                            "trip.views",
+                            &[("chateau", &chateau), ("country", &self.country)],
+                        );
                         self.next_subscription_generation =
                             self.next_subscription_generation.wrapping_add(1);
                         let generation = self.next_subscription_generation;
@@ -474,6 +480,7 @@ async fn index(
             pool.as_ref().clone(),
             aspen_chateau_cache.as_ref().clone(),
             aspen_client_manager.as_ref().clone(),
+            catenary::observability::country_from_headers(req.headers()).to_owned(),
         ),
         &req,
         stream,

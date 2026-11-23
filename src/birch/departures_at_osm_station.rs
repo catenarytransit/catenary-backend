@@ -1202,6 +1202,7 @@ pub async fn departures_at_osm_station(
     if !catenary::observability::is_synthetics_request(req.headers()) {
         catenary::observability::record_stop_board_chateaus(
             "departures_at_osm_station",
+            catenary::observability::country_from_headers(req.headers()),
             events.iter().map(|event| event.chateau.clone()),
         );
     }

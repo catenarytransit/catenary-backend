@@ -109,6 +109,16 @@ pub fn country(header: Option<&str>) -> &str {
         _ => "unknown",
     }
 }
+
+/// Client country from a trusted Cloudflare/gateway header. Unknown stays a
+/// single bounded tag value rather than creating arbitrary time-series.
+pub fn country_from_headers(headers: &actix_web::http::header::HeaderMap) -> &str {
+    country(
+        headers
+            .get("CF-IPCountry")
+            .and_then(|value| value.to_str().ok()),
+    )
+}
 fn is_datadog_synthetics_user_agent(user_agent: Option<&str>) -> bool {
     user_agent.is_some_and(|agent| agent.to_ascii_lowercase().contains("datadog/synthetics"))
 }
@@ -144,12 +154,7 @@ pub async fn http_metrics(
             .map(ServiceResponse::map_into_boxed_body);
     }
     let started = Instant::now();
-    let country = country(
-        req.headers()
-            .get("CF-IPCountry")
-            .and_then(|h| h.to_str().ok()),
-    )
-    .to_owned();
+    let country = country_from_headers(req.headers()).to_owned();
     let result = next.call(req).await;
     if let Ok(response) = &result {
         let endpoint = response
@@ -180,7 +185,10 @@ pub async fn http_metrics(
         if (endpoint.contains("tile") || endpoint.contains("tiles"))
             && response.status().is_success()
         {
-            count("tiles.sent", &[("endpoint", &endpoint)]);
+            count(
+                "tiles.sent",
+                &[("endpoint", &endpoint), ("country", &country)],
+            );
         }
         if METRICS
             .get()
@@ -215,22 +223,30 @@ pub fn nearby_chateaus(
     result
 }
 /// Emit one Spruce usage count per distinct chateau in a logical request.
-pub fn record_spruce_chateaus(chateaus: impl IntoIterator<Item = String>) {
+pub fn record_spruce_chateaus(country: &str, chateaus: impl IntoIterator<Item = String>) {
     for chateau in chateaus {
-        count("spruce.chateau_requests", &[("chateau", &chateau)]);
+        count(
+            "spruce.chateau_requests",
+            &[("chateau", &chateau), ("country", country)],
+        );
     }
 }
 /// Record one count per chateau actually present on a returned stop/station board.
 /// No metrics are emitted for empty boards or purely looked-up candidate feeds.
 pub fn record_stop_board_chateaus(
     endpoint: &'static str,
+    country: &str,
     chateaus: impl IntoIterator<Item = String>,
 ) {
     let distinct: std::collections::HashSet<String> = chateaus.into_iter().collect();
     for chateau in distinct {
         count(
             "stop_board.chateau_accesses",
-            &[("endpoint", endpoint), ("chateau", &chateau)],
+            &[
+                ("endpoint", endpoint),
+                ("chateau", &chateau),
+                ("country", country),
+            ],
         );
     }
 }
@@ -250,15 +266,21 @@ pub fn routing_chateaus(response: &serde_json::Value) -> std::collections::HashS
         .collect()
 }
 
-pub fn record_routing_chateaus(response: &serde_json::Value) {
+pub fn record_routing_chateaus(response: &serde_json::Value, country: &str) {
     for chateau in routing_chateaus(response) {
-        count("routing.chateau_accesses", &[("chateau", &chateau)]);
+        count(
+            "routing.chateau_accesses",
+            &[("chateau", &chateau), ("country", country)],
+        );
     }
 }
 
-pub fn record_chateaus(chateaus: impl IntoIterator<Item = String>) {
+pub fn record_chateaus(country: &str, chateaus: impl IntoIterator<Item = String>) {
     for chateau in chateaus {
-        count("nearby.chateau_accesses", &[("chateau", &chateau)]);
+        count(
+            "nearby.chateau_accesses",
+            &[("chateau", &chateau), ("country", country)],
+        );
     }
 }
 #[cfg(test)]
@@ -329,6 +351,24 @@ mod tests {
         assert_eq!(country(Some("USA")), "unknown");
         assert_eq!(country(None), "unknown");
     }
+    #[test]
+    fn country_from_headers_validates_proxy_country() {
+        use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
+
+        let mut headers = HeaderMap::new();
+        assert_eq!(country_from_headers(&headers), "unknown");
+        headers.insert(
+            HeaderName::from_static("cf-ipcountry"),
+            HeaderValue::from_static("CH"),
+        );
+        assert_eq!(country_from_headers(&headers), "CH");
+        headers.insert(
+            HeaderName::from_static("cf-ipcountry"),
+            HeaderValue::from_static("usa"),
+        );
+        assert_eq!(country_from_headers(&headers), "unknown");
+    }
+
     #[test]
     fn tags_cannot_inject_dogstatsd_fields() {
         assert_eq!(safe_tag("x|#evil:yes"), "x__evil_yes");

@@ -305,6 +305,7 @@ fn run_query(
         false,
         false,
         true, // CLI queries are not Datadog Synthetics traffic.
+        "unknown", // No client country for local CLI requests.
         &AtomicBool::new(false),
         &mut |_| Ok(()),
         false,
@@ -350,6 +351,7 @@ fn run_query_observed(
     streaming: bool,
     emit_chateau_metrics: bool,
     emit_routing_metrics: bool,
+    country: &str,
     cancelled: &AtomicBool,
     observer: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     v2: bool,
@@ -461,7 +463,10 @@ fn run_query_observed(
     let selection = router.select(request.from, request.to)?;
     timings.selection_ms = milliseconds(phase);
     if emit_routing_metrics {
-        catenary::observability::count("routing.queries", &[("region", &selection.transit_region)]);
+        catenary::observability::count(
+            "routing.queries",
+            &[("region", &selection.transit_region), ("country", country)],
+        );
     }
     // Feature-gated realtime routing pins one immutable regional publication.
     // Each published chateau shard is authoritative only for that chateau;
@@ -714,7 +719,7 @@ fn run_query_observed(
                 if counted_chateaus.insert(chateau.clone()) {
                     catenary::observability::count(
                         "routing.chateau_accesses",
-                        &[("chateau", &chateau)],
+                        &[("chateau", &chateau), ("country", country)],
                     );
                 }
             }
@@ -898,7 +903,11 @@ fn run_query_observed(
             catenary::observability::distribution(
                 "routing.phase_ms",
                 ms,
-                &[("region", &selection.transit_region), ("phase", phase)],
+                &[
+                    ("region", &selection.transit_region),
+                    ("phase", phase),
+                    ("country", country),
+                ],
             );
         }
     }
@@ -930,6 +939,7 @@ async fn route_ws_version(
 ) -> Result<HttpResponse, actix_web::Error> {
     let state = state.into_inner();
     let emit_routing_metrics = should_emit_routing_metrics(request.headers());
+    let country = catenary::observability::country_from_headers(request.headers()).to_owned();
     let runner: Arc<websocket::Runner> = Arc::new(move |query, request_id, cancelled, observer| {
         let mut request: Request = serde_json::from_value(query)?;
         anyhow::ensure!(
@@ -949,6 +959,7 @@ async fn route_ws_version(
             true,
             emit_routing_metrics,
             emit_routing_metrics,
+            &country,
             &cancelled,
             observer,
             v2,
@@ -1006,6 +1017,7 @@ async fn route_version(
     v2: bool,
 ) -> HttpResponse {
     let emit_routing_metrics = should_emit_routing_metrics(http_request.headers());
+    let country = catenary::observability::country_from_headers(http_request.headers()).to_owned();
     let state = state.into_inner();
     let request = payload.into_inner();
     let id = match request_id(&request) {
@@ -1025,6 +1037,7 @@ async fn route_version(
             false,
             emit_routing_metrics,
             emit_routing_metrics,
+            &country,
             &AtomicBool::new(false),
             &mut |_| Ok(()),
             v2,

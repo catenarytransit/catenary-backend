@@ -1381,6 +1381,7 @@ pub async fn departures_at_stop(
     if !catenary::observability::is_synthetics_request(req.headers()) {
         catenary::observability::record_stop_board_chateaus(
             "departures_at_stop",
+            catenary::observability::country_from_headers(req.headers()),
             response.events.iter().map(|event| event.chateau.clone()),
         );
     }
