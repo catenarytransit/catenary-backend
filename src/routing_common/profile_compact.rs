@@ -2042,6 +2042,7 @@ mod profile_bound_tests {
     fn initial_nigiri_destination_bound_does_not_cap_long_distance_without_direct() {
         use crate::routing_common::raptor_query::WalkingEndpoint;
         let mut q = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 1000,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2138,6 +2139,7 @@ mod compressed_timetable_profile_tests {
 
     fn query() -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400 + 18 * 3_600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -2854,6 +2856,7 @@ mod transfer_round_regressions {
 
     fn request() -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86400 + 8 * 3600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
@@ -3372,6 +3375,7 @@ mod lower_bound_graph_tests {
 
     fn request(from: usize, to: usize) -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(from as u32),
