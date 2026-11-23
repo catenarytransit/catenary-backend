@@ -1,28 +1,18 @@
-//! Sources forbidden from regional RAPTOR timetables.
-//!
-//! This policy applies only to routing, not to GTFS imports, directory pages,
-//! or realtime feeds. Check both identifiers so a remapped feed stays excluded.
+//! Routing source policy. All scheduled feeds, including FlixBus, are routable.
+//! Per-request coach exclusion is handled by Edelweiss mode_filter.
 use crate::routing_common::timetable::ZeroCopyTimetable;
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 
-pub fn excluded_routing_source(chateau: &str, feed_id: &str) -> bool {
-    matches!(chateau, "flixbus~america" | "flixbus~europe")
-        || matches!(feed_id, "f-flixbus~us" | "f-flixbus~eu")
+/// Retained for Gentian's routing source selection compatibility.
+pub fn excluded_routing_source(_chateau: &str, _feed_id: &str) -> bool {
+    false
 }
 
-/// Validate the actual serialized source table, not only the resolved input.
+/// Check embedded identifiers without denying routable intercity coach sources.
 pub fn validate_routing_sources(timetable: &ZeroCopyTimetable<'_>) -> Result<()> {
     for source in timetable.sources() {
-        let chateau = timetable
-            .get_string(source.chateau)
-            .context("compiled source contains invalid chateau")?;
-        let feed_id = timetable
-            .get_string(source.onestop_feed_id)
-            .context("compiled source contains invalid feed ID")?;
-        ensure!(
-            !excluded_routing_source(chateau, feed_id),
-            "timetable contains excluded routing source {chateau}/{feed_id}; rebuild this region with the updated Gentian, then restart Edelweiss"
-        );
+        timetable.get_string(source.chateau).context("invalid chateau")?;
+        timetable.get_string(source.onestop_feed_id).context("invalid feed ID")?;
     }
     Ok(())
 }
@@ -33,36 +23,16 @@ mod tests {
     use crate::routing_common::timetable::TimetableOwned;
 
     #[test]
-    fn excludes_both_chateaux_and_feed_ids() {
-        assert!(excluded_routing_source("flixbus~america", "some-feed"));
-        assert!(excluded_routing_source("flixbus~europe", "some-feed"));
-        assert!(excluded_routing_source("renamed-chateau", "f-flixbus~us"));
-        assert!(excluded_routing_source("renamed-chateau", "f-flixbus~eu"));
-        assert!(!excluded_routing_source("greyhound", "f-other"));
-        assert!(!excluded_routing_source("flixbus~americas", "other"));
-    }
-
-    #[test]
-    fn validates_serialized_source_records() {
-        let mut allowed = TimetableOwned::empty(20_000, 1);
-        allowed
-            .add_source("other", "other-feed", "attempt")
-            .unwrap();
-        let encoded = allowed.encode().unwrap();
-        let timetable = ZeroCopyTimetable::new(&encoded).unwrap();
-        validate_routing_sources(&timetable).unwrap();
-
+    fn flixbus_is_routable_again() {
         for (chateau, feed) in [
-            ("flixbus~america", "anything"),
-            ("flixbus~europe", "anything"),
-            ("renamed", "f-flixbus~us"),
-            ("renamed", "f-flixbus~eu"),
+            ("flixbus~america", "f-flixbus~us"),
+            ("flixbus~europe", "f-flixbus~eu"),
         ] {
-            let mut invalid = TimetableOwned::empty(20_000, 1);
-            invalid.add_source(chateau, feed, "attempt").unwrap();
-            let encoded = invalid.encode().unwrap();
-            let timetable = ZeroCopyTimetable::new(&encoded).unwrap();
-            assert!(validate_routing_sources(&timetable).is_err());
+            assert!(!excluded_routing_source(chateau, feed));
+            let mut owned = TimetableOwned::empty(20_000, 1);
+            owned.add_source(chateau, feed, "attempt").unwrap();
+            let encoded = owned.encode().unwrap();
+            validate_routing_sources(&ZeroCopyTimetable::new(&encoded).unwrap()).unwrap();
         }
     }
 }
