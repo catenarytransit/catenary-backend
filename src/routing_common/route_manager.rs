@@ -657,7 +657,7 @@ impl Router {
         let (journeys, raptor_stats) = raptor_query::route_with_stats(
             &tt,
             &Query {
-            allowed_modes,
+                allowed_modes,
                 departure_unix_seconds,
                 access,
                 egress,
@@ -736,7 +736,7 @@ impl Router {
         let (journeys, raptor_stats) = pong::route_pong_observed(
             &tt,
             &Query {
-            allowed_modes,
+                allowed_modes,
                 departure_unix_seconds: unix_seconds,
                 access,
                 egress,
@@ -783,7 +783,7 @@ impl Router {
         let (journeys, raptor_stats) = raptor_arrive_by::route_arrive_by_with_stats(
             &tt,
             &Query {
-            allowed_modes,
+                allowed_modes,
                 departure_unix_seconds: arrival_unix_seconds,
                 access,
                 egress,
