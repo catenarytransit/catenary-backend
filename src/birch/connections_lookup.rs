@@ -1,6 +1,7 @@
 use ahash::AHashMap;
 use ahash::AHashSet;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::transfer_connection_filters::exclude_coaches_from_transfer_connections;
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
 use diesel::ExpressionMethods;
@@ -380,6 +381,14 @@ pub async fn connections_lookup(
             }
         }
     }
+
+    // Transfer suggestions must not advertise coach services, even when a
+    // mixed-mode stop lists coaches alongside local transit routes.
+    exclude_coaches_from_transfer_connections(
+        &mut response_connecting_routes,
+        &mut connections_per_stop,
+        |route| route.route_type,
+    );
 
     let end_timer = std::time::Instant::now();
     let duration = end_timer.duration_since(start_timer);

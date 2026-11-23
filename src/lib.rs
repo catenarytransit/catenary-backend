@@ -110,6 +110,7 @@ pub mod compact_formats;
 pub mod compact_rt_v2;
 pub mod compressed_aspen_dataset;
 pub mod connections_lookup;
+pub mod transfer_connection_filters;
 pub mod etcd_cache;
 pub mod genentech_auth;
 pub mod graph_formats;
