@@ -909,6 +909,9 @@ pub async fn gtfs_process_large_feed(
             faster_stop_time_reader_injection(agency_gtfs, &agency_path.join("stop_times.txt"))?;
 
         let mut agency_gtfs = crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(agency_gtfs);
+        // Large-feed agency partitions use the same import-time policy as regular feeds.
+        let coach_policy = crate::gtfs_handlers::coach_route_overrides::CoachRouteOverrides::load()?;
+        coach_policy.apply(feed_id, chateau_id, &mut agency_gtfs);
 
         let today = catenary_time::utc_now().naive_utc().date();
         let mut agency_gtfs = minimum_day_filter(agency_gtfs, today - chrono::Duration::days(7));
