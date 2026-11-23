@@ -38,10 +38,16 @@ fn date_is_within_feed_time_range(date: NaiveDate, feed_time_range: &FeedTimeRan
 
 // This feed replaces its previous schedule on each successful import rather
 // than using the normal, date-range-based retention of historical GTFS copies.
-const AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED: &str =
-    "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle";
+const SINGLE_INGEST_FEEDS: &[&str] = &[
+    "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle",
+    "f-networkrail",
+];
 
-fn amtrak_california_retention(
+fn retain_only_latest_ingest(feed_id: &str) -> bool {
+    SINGLE_INGEST_FEEDS.contains(&feed_id)
+}
+
+fn single_ingest_retention(
     all_feeds: &[catenary::models::IngestedStatic],
 ) -> Option<(FeedTimeRange, Vec<String>)> {
     // Use start time, as Maple does for normal retention. Break ties
@@ -191,10 +197,10 @@ pub async fn assign_production_tables(
         drop_attempt_list.push(to_drop_feed.attempt_id);
     }
 
-    if feed_id == AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED {
+    if retain_only_latest_ingest(feed_id) {
         // This feed must have exactly one retained successful ingest, even
         // when old and new feed_info date ranges do not overlap.
-        let (latest, old_attempts) = amtrak_california_retention(&all_feeds)
+        let (latest, old_attempts) = single_ingest_retention(&all_feeds)
             .ok_or_else(|| format!("No successful ingest to retain for {}", feed_id))?;
         feed_time_ranges.push(latest);
         drop_attempt_list = old_attempts;
@@ -388,7 +394,7 @@ pub async fn assign_production_tables(
         let cleanup_result =
             delete_attempt_objects(feed_id, drop_attempt_id, Arc::clone(&arc_conn_pool)).await;
 
-        if feed_id == AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED {
+        if retain_only_latest_ingest(feed_id) {
             // Delete the ingest record itself only after its PostgreSQL schedule
             // rows have been cleaned. A failed cleanup is surfaced for retry.
             cleanup_result?;
@@ -440,7 +446,7 @@ mod tests {
         deleted: bool,
     ) -> catenary::models::IngestedStatic {
         catenary::models::IngestedStatic {
-            onestop_feed_id: AMTRAK_CALIFORNIA_SINGLE_INGEST_FEED.to_string(),
+            onestop_feed_id: SINGLE_INGEST_FEEDS[0].to_string(),
             attempt_id: id.to_string(),
             ingest_start_unix_time_ms: start_ms,
             ingest_end_unix_time_ms: start_ms + 100,
@@ -461,28 +467,28 @@ mod tests {
     }
 
     #[test]
-    fn amtrak_california_keeps_only_latest_successful_ingest() {
+    fn single_ingest_keeps_only_latest_successful_ingest() {
         let mut older = attempt("older", 100, true, false, false);
         older.feed_expiration_date = NaiveDate::from_ymd_opt(2026, 11, 30);
         let mut newer = attempt("newer", 200, true, false, false);
         newer.feed_start_date = NaiveDate::from_ymd_opt(2026, 12, 1);
 
         let (retained, removed) =
-            amtrak_california_retention(&[older, newer]).expect("one successful ingest");
+            single_ingest_retention(&[older, newer]).expect("one successful ingest");
         assert_eq!(retained.attempt_id, "newer");
         assert_eq!(retained.start_date, NaiveDate::from_ymd_opt(2026, 12, 1));
         assert_eq!(removed, vec!["older"]);
     }
 
     #[test]
-    fn amtrak_california_preserves_active_and_last_successful_ingests() {
+    fn single_ingest_preserves_active_and_last_successful_ingests() {
         let older = attempt("older", 100, true, false, false);
         let latest_success = attempt("success", 200, true, false, false);
         let failed = attempt("failed", 300, false, false, false);
         let in_progress = attempt("processing", 400, false, true, false);
         let already_deleted = attempt("deleted", 50, true, false, true);
 
-        let (retained, removed) = amtrak_california_retention(&[
+        let (retained, removed) = single_ingest_retention(&[
             older,
             latest_success,
             failed,
@@ -496,8 +502,15 @@ mod tests {
     }
 
     #[test]
-    fn amtrak_california_does_not_prune_without_successful_ingest() {
-        assert!(amtrak_california_retention(&[
+    fn retention_policy_is_limited_to_the_two_requested_feeds() {
+        assert!(retain_only_latest_ingest(SINGLE_INGEST_FEEDS[0]));
+        assert!(retain_only_latest_ingest("f-networkrail"));
+        assert!(!retain_only_latest_ingest("f-u0-switzerland"));
+    }
+
+    #[test]
+    fn single_ingest_does_not_prune_without_successful_ingest() {
+        assert!(single_ingest_retention(&[
             attempt("failed", 200, false, false, false),
             attempt("processing", 300, false, true, false),
         ])
