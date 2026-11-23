@@ -389,6 +389,9 @@ fn timetable_start_events(
                 .max(boundary)
                 .saturating_add(if arrive_by { -offset } else { offset });
         for &route in tt.routes_at(endpoint.stop) {
+            if !crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes) {
+                continue;
+            }
             if Instant::now() >= stop_at {
                 stats.profile_budget_exhausted = true;
                 break;
