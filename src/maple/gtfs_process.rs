@@ -512,7 +512,7 @@ pub async fn gtfs_process_feed(
             .await?;
         }
         "f-china~railway" => {
-        let _ = execute_pfaedle_rs(
+            let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-china-latest-rail-only.osm.pbf",
                 None,

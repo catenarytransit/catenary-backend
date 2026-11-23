@@ -455,7 +455,9 @@ fn route_arrive_by_with_stats_impl(
         stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
         let routes = routes_from_marked(tt, &marked, &mut seen, round as u8)
             .into_iter()
-            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes))
+            .filter(|&route| {
+                crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes)
+            })
             .collect::<Vec<_>>();
         if routes.is_empty() {
             break;

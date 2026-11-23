@@ -1044,7 +1044,9 @@ fn route_with_stats_impl(
         stats.round_copy_bytes += (n * std::mem::size_of::<Label>()) as u64;
         let routes = routes_from_marked(tt, &marked_stops, &mut seen_epoch, round as u8)
             .into_iter()
-            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes))
+            .filter(|&route| {
+                crate::routing_common::mode_filter::allows_route(tt, route, request.allowed_modes)
+            })
             .collect::<Vec<_>>();
         if routes.is_empty() {
             break;
@@ -1349,7 +1351,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![
                     WalkingEndpoint {
@@ -1387,7 +1389,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1419,7 +1421,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1654,7 +1656,7 @@ mod tests {
         let (_journeys, stats) = route_with_stats(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: departure,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1683,7 +1685,7 @@ mod tests {
         let (journeys, stats) = route_with_stats(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: scheduled,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1797,7 +1799,7 @@ mod tests {
         let journeys = route(
             &view,
             &Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: dep,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1968,7 +1970,7 @@ mod tests {
             route(
                 &view,
                 &Query {
-            allowed_modes: u16::MAX,
+                    allowed_modes: u16::MAX,
                     departure_unix_seconds: departure,
                     access: vec![WalkingEndpoint {
                         stop: LocationIdx(0),

@@ -488,14 +488,9 @@ mod tests {
         let in_progress = attempt("processing", 400, false, true, false);
         let already_deleted = attempt("deleted", 50, true, false, true);
 
-        let (retained, removed) = single_ingest_retention(&[
-            older,
-            latest_success,
-            failed,
-            in_progress,
-            already_deleted,
-        ])
-        .expect("one successful ingest");
+        let (retained, removed) =
+            single_ingest_retention(&[older, latest_success, failed, in_progress, already_deleted])
+                .expect("one successful ingest");
 
         assert_eq!(retained.attempt_id, "success");
         assert_eq!(removed, vec!["deleted", "failed", "older"]);
@@ -510,10 +505,12 @@ mod tests {
 
     #[test]
     fn single_ingest_does_not_prune_without_successful_ingest() {
-        assert!(single_ingest_retention(&[
-            attempt("failed", 200, false, false, false),
-            attempt("processing", 300, false, true, false),
-        ])
-        .is_none());
+        assert!(
+            single_ingest_retention(&[
+                attempt("failed", 200, false, false, false),
+                attempt("processing", 300, false, true, false),
+            ])
+            .is_none()
+        );
     }
 }

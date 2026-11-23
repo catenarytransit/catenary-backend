@@ -11,8 +11,12 @@ pub fn excluded_routing_source(_chateau: &str, _feed_id: &str) -> bool {
 /// Check embedded identifiers without denying routable intercity coach sources.
 pub fn validate_routing_sources(timetable: &ZeroCopyTimetable<'_>) -> Result<()> {
     for source in timetable.sources() {
-        timetable.get_string(source.chateau).context("invalid chateau")?;
-        timetable.get_string(source.onestop_feed_id).context("invalid feed ID")?;
+        timetable
+            .get_string(source.chateau)
+            .context("invalid chateau")?;
+        timetable
+            .get_string(source.onestop_feed_id)
+            .context("invalid feed ID")?;
     }
     Ok(())
 }

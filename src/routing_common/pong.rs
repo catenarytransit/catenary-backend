@@ -947,7 +947,7 @@ mod tests {
         );
         for reverse in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base + 8 * 3600 + if reverse { 1900 } else { 240 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1110,7 +1110,7 @@ mod tests {
         assert!(!snapshot.is_complete());
         for reverse in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base
                     + if reverse {
                         8 * 3600 + 35 * 60
@@ -1247,7 +1247,7 @@ mod tests {
         );
         for reverse in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base + 8 * 3600 + if reverse { 930 } else { 240 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1370,7 +1370,7 @@ mod tests {
         );
         for reverse in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base + 8 * 3600 + if reverse { 2100 } else { -120 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1596,7 +1596,7 @@ mod tests {
             let tt = ZeroCopyTimetable::new(&bytes).unwrap();
             for reverse in [false, true] {
                 let q = Query {
-            allowed_modes: u16::MAX,
+                    allowed_modes: u16::MAX,
                     departure_unix_seconds: base
                         + i64::from(if reverse { *backward } else { *forward }),
                     access: vec![WalkingEndpoint {
@@ -1674,7 +1674,7 @@ mod tests {
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
         for reverse in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: 20_010_i64 * 86_400
                     + 8 * 3_600
                     + if reverse { 600 } else { 0 },
@@ -1782,7 +1782,7 @@ mod tests {
             // six days, forcing termination by the cap rather than count.
             let reference = base + 10 * i64::from(DAY) + 8 * 3_600 + if reverse { 600 } else { 0 };
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: reference,
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -1853,7 +1853,7 @@ mod tests {
             let base = 20_000_i64 * 86_400;
             for reverse in [false, true] {
                 let q = Query {
-            allowed_modes: u16::MAX,
+                    allowed_modes: u16::MAX,
                     departure_unix_seconds: base + if reverse { 9 * 3600 } else { 8 * 3600 },
                     access: vec![WalkingEndpoint {
                         stop: LocationIdx(0),
@@ -1914,7 +1914,7 @@ mod tests {
             let base = 20_000_i64 * 86_400;
             for reverse in [false, true] {
                 let q = Query {
-            allowed_modes: u16::MAX,
+                    allowed_modes: u16::MAX,
                     departure_unix_seconds: base
                         + if reverse {
                             8 * 3600 + 30 * 60
@@ -1969,7 +1969,7 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         for arrive_by in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base + if arrive_by { 9 * 3_600 } else { 8 * 3_600 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),
@@ -2026,7 +2026,7 @@ mod tests {
         let base = 20_000_i64 * 86_400;
         for arrive_by in [false, true] {
             let q = Query {
-            allowed_modes: u16::MAX,
+                allowed_modes: u16::MAX,
                 departure_unix_seconds: base + if arrive_by { 9 * 3_600 } else { 8 * 3_600 },
                 access: vec![WalkingEndpoint {
                     stop: LocationIdx(0),

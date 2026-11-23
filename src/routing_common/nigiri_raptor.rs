@@ -364,7 +364,11 @@ impl NigiriRaptor {
                     continue;
                 }
                 for &route in tt.routes_at(LocationIdx(stop as u32)) {
-                    if !crate::routing_common::mode_filter::allows_route(tt, route, self.allowed_modes) {
+                    if !crate::routing_common::mode_filter::allows_route(
+                        tt,
+                        route,
+                        self.allowed_modes,
+                    ) {
                         continue;
                     }
                     any_marked = true;

@@ -92,7 +92,12 @@ pub fn scan_realtime_round_filtered(
             continue;
         }
         for handle in snapshot.run_handles_for(pattern) {
-            if !crate::routing_common::mode_filter::allows_realtime_run(tt, snapshot, handle, allowed_modes) {
+            if !crate::routing_common::mode_filter::allows_realtime_run(
+                tt,
+                snapshot,
+                handle,
+                allowed_modes,
+            ) {
                 continue;
             }
             let mut carried: Option<(usize, u32, i64)> = None;

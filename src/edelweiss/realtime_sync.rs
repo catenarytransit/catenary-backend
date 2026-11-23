@@ -107,7 +107,9 @@ fn mark_source_failure(
     chateau: &str,
 ) -> bool {
     let mut failures = failures.lock().unwrap_or_else(|e| e.into_inner());
-    let since = failures.entry(chateau.to_owned()).or_insert_with(Instant::now);
+    let since = failures
+        .entry(chateau.to_owned())
+        .or_insert_with(Instant::now);
     since.elapsed() >= STALE_SOURCE_TIMEOUT && sources.withdraw_chateau(chateau)
 }
 
@@ -423,11 +425,13 @@ impl RealtimeSources {
             let mut scheduled_actions = BTreeMap::<StaticInstance, Vec<PreparedAction>>::new();
             let mut unscheduled_actions = Vec::new();
             for action in actions {
-                if retention_cutoff.is_some_and(|cutoff| !keep_realtime_action(&tt, &action, cutoff)) {
+                if retention_cutoff
+                    .is_some_and(|cutoff| !keep_realtime_action(&tt, &action, cutoff))
+                {
                     match action {
                         PreparedAction::Cancel(_, _) => stats.expired_cancellations += 1,
                         PreparedAction::Run(_) => stats.expired_runs += 1,
-                        PreparedAction::NoChange => {},
+                        PreparedAction::NoChange => {}
                     }
                     continue;
                 }
@@ -1454,18 +1458,20 @@ mod tests {
         };
         let bytes = fixture();
         let tt = ZeroCopyTimetable::new(&bytes).unwrap();
-        let create = |end: i64| PreparedAction::Run(RtRunInput {
-            source: SourceIdx(0),
-            original: None,
-            service_date: 20_000,
-            external_id: Some("added".to_string()),
-            pattern: catenary::routing_common::realtime_overlay::RtPatternInput::Stops(vec![
-                PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
-                PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
-            ]),
-            metadata: None,
-            event_times: vec![end - 60, end],
-        });
+        let create = |end: i64| {
+            PreparedAction::Run(RtRunInput {
+                source: SourceIdx(0),
+                original: None,
+                service_date: 20_000,
+                external_id: Some("added".to_string()),
+                pattern: catenary::routing_common::realtime_overlay::RtPatternInput::Stops(vec![
+                    PackedStop::new(LocationIdx(0), true, true, true, true).unwrap(),
+                    PackedStop::new(LocationIdx(1), true, true, true, true).unwrap(),
+                ]),
+                metadata: None,
+                event_times: vec![end - 60, end],
+            })
+        };
         assert!(!keep_realtime_action(&tt, &create(900), 1_000));
         assert!(keep_realtime_action(&tt, &create(1_100), 1_000));
         // Never delete a scheduled replacement when its static bound cannot

@@ -102,7 +102,10 @@ mod tests {
         exclude_coaches_from_transfer_connections(&mut routes, &mut per_stop, |route| *route);
 
         assert_eq!(
-            routes["mixed-feed"].keys().map(String::as_str).collect::<Vec<_>>(),
+            routes["mixed-feed"]
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
             vec!["local-bus", "other-bus", "tram"]
         );
         assert!(!routes.contains_key("coach-feed"));

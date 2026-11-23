@@ -1,7 +1,7 @@
 use crate::postgres_tools::CatenaryPostgresPool;
-use crate::transfer_connection_filters::exclude_coaches_from_transfer_connections;
 use crate::schema::gtfs::routes as routes_pg_schema;
 use crate::schema::gtfs::stops as stops_pg_schema;
+use crate::transfer_connection_filters::exclude_coaches_from_transfer_connections;
 use ahash::AHashMap;
 use ahash::AHashSet;
 use diesel::ExpressionMethods;

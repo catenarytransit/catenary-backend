@@ -233,13 +233,11 @@ pub async fn departures_at_osm_station(
             let normalized_name = station_info.name.as_ref().map(|name| name.to_lowercase());
             let mut candidates: Vec<_> = nearby_osm_stations
                 .into_iter()
-                .filter(|station| {
-                    match (&normalized_name, &station.name) {
-                        (Some(name), Some(candidate_name)) => {
-                            strsim::jaro_winkler(name, &candidate_name.to_lowercase()) > 0.8
-                        }
-                        _ => false,
+                .filter(|station| match (&normalized_name, &station.name) {
+                    (Some(name), Some(candidate_name)) => {
+                        strsim::jaro_winkler(name, &candidate_name.to_lowercase()) > 0.8
                     }
+                    _ => false,
                 })
                 .collect();
 

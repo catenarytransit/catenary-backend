@@ -22,7 +22,13 @@ pub enum PtMode {
 impl PtMode {
     fn mask(self) -> u16 {
         let classes: &[Clasz] = match self {
-            Self::Train => &[Clasz::HighSpeed, Clasz::LongDistance, Clasz::Night, Clasz::Regional, Clasz::Suburban],
+            Self::Train => &[
+                Clasz::HighSpeed,
+                Clasz::LongDistance,
+                Clasz::Night,
+                Clasz::Regional,
+                Clasz::Suburban,
+            ],
             Self::Metro => &[Clasz::Subway],
             Self::Tram => &[Clasz::Tram],
             Self::Bus => &[Clasz::Bus],
@@ -31,11 +37,15 @@ impl PtMode {
             Self::Funicular => &[Clasz::Funicular],
             Self::AerialTramway => &[Clasz::AerialLift],
         };
-        classes.iter().fold(0u16, |mask, class| mask | (1u16 << (*class as u8)))
+        classes
+            .iter()
+            .fold(0u16, |mask, class| mask | (1u16 << (*class as u8)))
     }
 }
 
-fn default_exclude() -> bool { true }
+fn default_exclude() -> bool {
+    true
+}
 
 /// OJP ModeAndModeOfOperationFilter-style selection. Multiple inclusive
 /// entries are unioned; exclusion entries are then subtracted.
@@ -54,8 +64,14 @@ pub fn allowed_classes(filters: &[ModeAndModeOfOperationFilter]) -> Result<u16> 
     let mut excluded = 0u16;
     let mut has_inclusion = false;
     for filter in filters {
-        ensure!(!filter.pt_modes.is_empty(), "ptModes must contain at least one mode");
-        let selected = filter.pt_modes.iter().fold(0u16, |mask, mode| mask | mode.mask());
+        ensure!(
+            !filter.pt_modes.is_empty(),
+            "ptModes must contain at least one mode"
+        );
+        let selected = filter
+            .pt_modes
+            .iter()
+            .fold(0u16, |mask, mode| mask | mode.mask());
         if filter.exclude {
             excluded |= selected;
         } else {
@@ -68,12 +84,15 @@ pub fn allowed_classes(filters: &[ModeAndModeOfOperationFilter]) -> Result<u16> 
 
 #[inline]
 pub fn allows_class(mask: u16, class: u8) -> bool {
-    mask.checked_shr(u32::from(class)).is_some_and(|bits| bits & 1 != 0)
+    mask.checked_shr(u32::from(class))
+        .is_some_and(|bits| bits & 1 != 0)
 }
 
 #[inline]
 pub fn allows_route(tt: &ZeroCopyTimetable<'_>, route: RouteIdx, mask: u16) -> bool {
-    tt.route_clasz().get(route.idx()).is_some_and(|&class| allows_class(mask, class))
+    tt.route_clasz()
+        .get(route.idx())
+        .is_some_and(|&class| allows_class(mask, class))
 }
 
 /// Unscheduled ADDED runs without a known static route have no GTFS route
@@ -85,12 +104,19 @@ pub fn allows_realtime_run(
     handle: RegionRtRun,
     mask: u16,
 ) -> bool {
-    if mask == u16::MAX { return true; }
-    let Some(run) = snapshot.run(handle) else { return false };
+    if mask == u16::MAX {
+        return true;
+    }
+    let Some(run) = snapshot.run(handle) else {
+        return false;
+    };
     let route = match run.pattern {
         RtPatternRef::Static(id) => Some(RouteIdx(id)),
-        RtPatternRef::Dynamic(_) => run.original
-            .and_then(|original| tt.transport_route().get(original.transport as usize).copied()),
+        RtPatternRef::Dynamic(_) => run.original.and_then(|original| {
+            tt.transport_route()
+                .get(original.transport as usize)
+                .copied()
+        }),
     };
     route.is_some_and(|route| allows_route(tt, route, mask))
 }
@@ -105,8 +131,14 @@ mod tests {
     #[test]
     fn includes_are_union_and_excludes_subtracted() {
         let filters = vec![
-            ModeAndModeOfOperationFilter { exclude: false, pt_modes: vec![PtMode::Train, PtMode::Coach] },
-            ModeAndModeOfOperationFilter { exclude: true, pt_modes: vec![PtMode::Coach] },
+            ModeAndModeOfOperationFilter {
+                exclude: false,
+                pt_modes: vec![PtMode::Train, PtMode::Coach],
+            },
+            ModeAndModeOfOperationFilter {
+                exclude: true,
+                pt_modes: vec![PtMode::Coach],
+            },
         ];
         let mask = allowed_classes(&filters).unwrap();
         assert!(allows_class(mask, Clasz::Regional as u8));
@@ -117,8 +149,10 @@ mod tests {
     #[test]
     fn exclusion_only_keeps_other_modes() {
         let mask = allowed_classes(&[ModeAndModeOfOperationFilter {
-            exclude: true, pt_modes: vec![PtMode::Coach],
-        }]).unwrap();
+            exclude: true,
+            pt_modes: vec![PtMode::Coach],
+        }])
+        .unwrap();
         assert!(allows_class(mask, Clasz::Other as u8));
         assert!(!allows_class(mask, Clasz::Coach as u8));
     }
@@ -126,7 +160,13 @@ mod tests {
     fn ojp_style_json_decodes() {
         let filters: Vec<ModeAndModeOfOperationFilter> =
             serde_json::from_str(r#"[{"exclude":false,"ptModes":["TRAIN","METRO"]}]"#).unwrap();
-        assert!(allows_class(allowed_classes(&filters).unwrap(), Clasz::Subway as u8));
-        assert!(!allows_class(allowed_classes(&filters).unwrap(), Clasz::Bus as u8));
+        assert!(allows_class(
+            allowed_classes(&filters).unwrap(),
+            Clasz::Subway as u8
+        ));
+        assert!(!allows_class(
+            allowed_classes(&filters).unwrap(),
+            Clasz::Bus as u8
+        ));
     }
 }

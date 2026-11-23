@@ -110,13 +110,13 @@ pub mod compact_formats;
 pub mod compact_rt_v2;
 pub mod compressed_aspen_dataset;
 pub mod connections_lookup;
-pub mod transfer_connection_filters;
 pub mod etcd_cache;
 pub mod genentech_auth;
 pub mod graph_formats;
 pub mod proxy_pool;
 pub mod region_names;
 pub mod stop_matching;
+pub mod transfer_connection_filters;
 pub mod trip_logic;
 
 lazy_static! {

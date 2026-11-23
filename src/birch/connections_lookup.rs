@@ -1,9 +1,9 @@
 use ahash::AHashMap;
 use ahash::AHashSet;
 use catenary::postgres_tools::CatenaryPostgresPool;
-use catenary::transfer_connection_filters::exclude_coaches_from_transfer_connections;
 use catenary::schema::gtfs::routes as routes_pg_schema;
 use catenary::schema::gtfs::stops as stops_pg_schema;
+use catenary::transfer_connection_filters::exclude_coaches_from_transfer_connections;
 use diesel::ExpressionMethods;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;

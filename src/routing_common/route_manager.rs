@@ -641,7 +641,14 @@ impl Router {
         egress: Vec<WalkingEndpoint>,
         direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
-        self.route_with_access_filtered(selection, departure_unix_seconds, access, egress, direct_walk_seconds, u16::MAX)
+        self.route_with_access_filtered(
+            selection,
+            departure_unix_seconds,
+            access,
+            egress,
+            direct_walk_seconds,
+            u16::MAX,
+        )
     }
 
     pub fn route_with_access_filtered(
@@ -711,7 +718,18 @@ impl Router {
         control: &pong::PongControl<'_>,
         observer: &mut pong::PongObserver<'_>,
     ) -> Result<RoutingResponse> {
-        self.route_profile_observed_filtered(selection, unix_seconds, access, egress, direct_walk_seconds, arrive_by, options, u16::MAX, control, observer)
+        self.route_profile_observed_filtered(
+            selection,
+            unix_seconds,
+            access,
+            egress,
+            direct_walk_seconds,
+            arrive_by,
+            options,
+            u16::MAX,
+            control,
+            observer,
+        )
     }
 
     pub fn route_profile_observed_filtered(
@@ -767,7 +785,14 @@ impl Router {
         egress: Vec<WalkingEndpoint>,
         direct_walk_seconds: Option<u32>,
     ) -> Result<RoutingResponse> {
-        self.route_arrive_by_with_access_filtered(selection, arrival_unix_seconds, access, egress, direct_walk_seconds, u16::MAX)
+        self.route_arrive_by_with_access_filtered(
+            selection,
+            arrival_unix_seconds,
+            access,
+            egress,
+            direct_walk_seconds,
+            u16::MAX,
+        )
     }
 
     pub fn route_arrive_by_with_access_filtered(

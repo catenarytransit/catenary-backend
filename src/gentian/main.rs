@@ -403,7 +403,12 @@ mod tests {
         exclude_chateaux(&mut selection);
         assert_eq!(selection.chateaux.len(), 3);
         assert_eq!(selection.sources.len(), 3);
-        assert!(selection.sources.iter().any(|source| source.chateau == "flixbus~america"));
+        assert!(
+            selection
+                .sources
+                .iter()
+                .any(|source| source.chateau == "flixbus~america")
+        );
     }
 
     #[test]
@@ -446,7 +451,12 @@ mod tests {
         };
         exclude_chateaux(&mut selection);
         assert_eq!(selection.sources.len(), 2);
-        assert!(selection.sources.iter().any(|source| source.onestop_feed_id == "f-flixbus~us"));
+        assert!(
+            selection
+                .sources
+                .iter()
+                .any(|source| source.onestop_feed_id == "f-flixbus~us")
+        );
     }
 
     #[test]

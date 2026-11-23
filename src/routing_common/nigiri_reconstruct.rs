@@ -58,7 +58,12 @@ fn visit_realtime_transports(
             continue;
         };
         for handle in snapshot.run_handles_for(pattern) {
-            if !crate::routing_common::mode_filter::allows_realtime_run(tt, snapshot, handle, state.allowed_modes) {
+            if !crate::routing_common::mode_filter::allows_realtime_run(
+                tt,
+                snapshot,
+                handle,
+                state.allowed_modes,
+            ) {
                 continue;
             }
             let Some(run) = snapshot.run(handle) else {

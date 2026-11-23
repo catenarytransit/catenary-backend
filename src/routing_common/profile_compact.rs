@@ -1048,9 +1048,11 @@ impl ProfileSearchState {
                 self.stop_stamps[stop] = self.stop_stamp;
             }
             let routes = routes_from_marked(tt, &marked, &mut self.stamps, &mut self.stamp)
-            .into_iter()
-            .filter(|&route| crate::routing_common::mode_filter::allows_route(tt, route, q.allowed_modes))
-            .collect::<Vec<_>>();
+                .into_iter()
+                .filter(|&route| {
+                    crate::routing_common::mode_filter::allows_route(tt, route, q.allowed_modes)
+                })
+                .collect::<Vec<_>>();
             let mut improved_rides = Vec::new();
             // Independent snapshot paths are required for route-distinct
             // terminal journeys even when their arrival cells tie. Nigiri

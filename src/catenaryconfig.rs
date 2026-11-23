@@ -645,7 +645,17 @@ mod journey_notifier_tests {
             "[journey_notifier]\npoll_interval_seconds = 30\nretention_hours = 6\n[journey_notifier.firebase]\nproject_id = 'test-project'\nservice_account_path = '/run/secrets/fcm.json'\n",
         ).unwrap();
         assert_eq!(parsed.journey_notifier.poll_interval_seconds, Some(30));
-        assert_eq!(parsed.journey_notifier.firebase.project_id.as_deref(), Some("test-project"));
-        assert_eq!(parsed.journey_notifier.firebase.service_account_path.as_deref(), Some("/run/secrets/fcm.json"));
+        assert_eq!(
+            parsed.journey_notifier.firebase.project_id.as_deref(),
+            Some("test-project")
+        );
+        assert_eq!(
+            parsed
+                .journey_notifier
+                .firebase
+                .service_account_path
+                .as_deref(),
+            Some("/run/secrets/fcm.json")
+        );
     }
 }
