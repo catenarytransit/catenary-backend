@@ -1268,6 +1268,7 @@ mod tests {
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let departure = 20_000_i64 * 86_400 + 7 * 3_600 + 50 * 60;
         let query = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: departure,
             access: vec![
                 WalkingEndpoint {
