@@ -556,6 +556,7 @@ mod deadline_tests {
         let bytes = tt.encode().unwrap();
         let view = ZeroCopyTimetable::new(&bytes).unwrap();
         let q = Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000_i64 * 86_400,
             access: vec![],
             egress: vec![],
