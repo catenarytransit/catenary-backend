@@ -1926,6 +1926,11 @@ pub async fn gtfs_process_feed(
     };
 
     let mut gtfs = gtfs;
+    let coach_policy = crate::gtfs_handlers::coach_route_overrides::CoachRouteOverrides::load()?;
+    let coach_routes = coach_policy.apply(feed_id, chateau_id, &mut gtfs);
+    if coach_routes != 0 {
+        println!("Coach GTFS normalization: {coach_routes} routes -> 200 for {feed_id}");
+    }
 
     if feed_id == "f-genentech" {
         let allowed_routes = [
