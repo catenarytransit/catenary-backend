@@ -89,5 +89,12 @@ mod tests {
         assert!(config.coach_feeds.contains(&"f-flixbus~us".to_string()));
         assert!(config.coach_feed_prefixes.contains(&"f-adirondack~trailways".to_string()));
         assert!(config.coach_bus_chateaux.contains(&"amtrak".to_string()));
+        assert_eq!(
+            config.coach_feeds.iter().filter(|feed| feed.starts_with("f-tds~")).count(),
+            38,
+            "must contain all 38 coach feeds from pinned Transcor atlas"
+        );
+        assert!(config.coach_feed_prefixes.iter().any(|prefix| "f-flixbus~de".starts_with(prefix)));
+        assert!(!config.coach_feed_prefixes.iter().any(|prefix| "f-flixtrain~de".starts_with(prefix)));
     }
 }
