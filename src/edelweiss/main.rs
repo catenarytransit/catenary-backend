@@ -300,6 +300,7 @@ fn run_query(
         osr,
         false,
         false,
+        true, // CLI queries are not Datadog Synthetics traffic.
         &AtomicBool::new(false),
         &mut |_| Ok(()),
         false,
@@ -332,6 +333,11 @@ fn query_key(request: &Request) -> Result<String> {
     pagination::digest(&value)
 }
 
+/// Exclude Datadog Synthetics monitoring traffic from routing request metrics.
+fn should_emit_routing_metrics(headers: &actix_web::http::header::HeaderMap) -> bool {
+    !catenary::observability::is_synthetics_request(headers)
+}
+
 fn run_query_observed(
     router: &Router,
     mut request: Request,
@@ -339,6 +345,7 @@ fn run_query_observed(
     osr: &NativeOsr,
     streaming: bool,
     emit_chateau_metrics: bool,
+    emit_routing_metrics: bool,
     cancelled: &AtomicBool,
     observer: &mut dyn FnMut(serde_json::Value) -> Result<()>,
     v2: bool,
@@ -448,7 +455,9 @@ fn run_query_observed(
     let phase = Instant::now();
     let selection = router.select(request.from, request.to)?;
     timings.selection_ms = milliseconds(phase);
-    catenary::observability::count("routing.queries", &[("region", &selection.transit_region)]);
+    if emit_routing_metrics {
+        catenary::observability::count("routing.queries", &[("region", &selection.transit_region)]);
+    }
     // Feature-gated realtime routing pins one immutable regional publication.
     // Each published chateau shard is authoritative only for that chateau;
     // missing chateaux retain their static timetable runs. Full regional
@@ -855,22 +864,24 @@ fn run_query_observed(
     timings.response_build_ms = rendering_total;
     timings.query_total_ms = milliseconds(query_start);
     attach_query_timings(&mut response, &timings);
-    for (phase, ms) in [
-        ("selection", timings.selection_ms),
-        ("access", timings.access_ms),
-        ("egress", timings.egress_ms),
-        ("direct_walk", timings.direct_walk_ms),
-        ("osr_parallel_wall", timings.osr_parallel_wall_ms),
-        ("raptor", timings.raptor_ms),
-        ("metadata", timings.metadata_ms),
-        ("response_build", timings.response_build_ms),
-        ("query_total", timings.query_total_ms),
-    ] {
-        catenary::observability::distribution(
-            "routing.phase_ms",
-            ms,
-            &[("region", &selection.transit_region), ("phase", phase)],
-        );
+    if emit_routing_metrics {
+        for (phase, ms) in [
+            ("selection", timings.selection_ms),
+            ("access", timings.access_ms),
+            ("egress", timings.egress_ms),
+            ("direct_walk", timings.direct_walk_ms),
+            ("osr_parallel_wall", timings.osr_parallel_wall_ms),
+            ("raptor", timings.raptor_ms),
+            ("metadata", timings.metadata_ms),
+            ("response_build", timings.response_build_ms),
+            ("query_total", timings.query_total_ms),
+        ] {
+            catenary::observability::distribution(
+                "routing.phase_ms",
+                ms,
+                &[("region", &selection.transit_region), ("phase", phase)],
+            );
+        }
     }
 
     Ok((response, timings))
@@ -899,7 +910,7 @@ async fn route_ws_version(
     v2: bool,
 ) -> Result<HttpResponse, actix_web::Error> {
     let state = state.into_inner();
-    let is_synthetics = catenary::observability::is_synthetics_request(request.headers());
+    let emit_routing_metrics = should_emit_routing_metrics(request.headers());
     let runner: Arc<websocket::Runner> = Arc::new(move |query, request_id, cancelled, observer| {
         let mut request: Request = serde_json::from_value(query)?;
         anyhow::ensure!(
@@ -917,7 +928,8 @@ async fn route_ws_version(
             state.database_url.as_deref(),
             &state.osr,
             true,
-            !is_synthetics,
+            emit_routing_metrics,
+            emit_routing_metrics,
             &cancelled,
             observer,
             v2,
@@ -974,8 +986,7 @@ async fn route_version(
     payload: web::Json<Request>,
     v2: bool,
 ) -> HttpResponse {
-    let emit_chateau_metrics =
-        !catenary::observability::is_synthetics_request(http_request.headers());
+    let emit_routing_metrics = should_emit_routing_metrics(http_request.headers());
     let state = state.into_inner();
     let request = payload.into_inner();
     let id = match request_id(&request) {
@@ -993,7 +1004,8 @@ async fn route_version(
             state.database_url.as_deref(),
             &state.osr,
             false,
-            emit_chateau_metrics,
+            emit_routing_metrics,
+            emit_routing_metrics,
             &AtomicBool::new(false),
             &mut |_| Ok(()),
             v2,
@@ -1293,6 +1305,34 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn datadog_synthetics_are_excluded_from_routing_metrics() {
+        use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue, USER_AGENT};
+
+        let mut headers = HeaderMap::new();
+        assert!(should_emit_routing_metrics(&headers));
+
+        headers.insert(USER_AGENT, HeaderValue::from_static("Mozilla/5.0"));
+        assert!(should_emit_routing_metrics(&headers));
+
+        headers.insert(USER_AGENT, HeaderValue::from_static("Datadog/Synthetics/1.0"));
+        assert!(!should_emit_routing_metrics(&headers));
+
+        headers.clear();
+        headers.insert(
+            HeaderName::from_static("sec-datadog"),
+            HeaderValue::from_static("synthetics"),
+        );
+        assert!(!should_emit_routing_metrics(&headers));
+
+        headers.clear();
+        headers.insert(
+            HeaderName::from_static("x-datadog-origin"),
+            HeaderValue::from_static("Synthetics"),
+        );
+        assert!(!should_emit_routing_metrics(&headers));
+    }
 
     #[test]
     fn page_identity_tracks_query_and_cursors_allow_new_counts() {
