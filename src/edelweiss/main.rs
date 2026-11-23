@@ -114,6 +114,9 @@ struct Request {
     departure_unix_seconds: Option<i64>,
     #[serde(default)]
     arrival_unix_seconds: Option<i64>,
+    /// OJP-inspired include/exclude filtering of public transport categories.
+    #[serde(default, rename = "modeAndModeOfOperationFilter", alias = "modeAndModeOfOperationFilters")]
+    mode_filters: Vec<catenary::routing_common::mode_filter::ModeAndModeOfOperationFilter>,
     #[serde(default, rename = "preTransitModes")]
     pre_transit_modes: Vec<StreetMode>,
     #[serde(default, rename = "postTransitModes")]
@@ -397,6 +400,7 @@ fn run_query_observed(
         !cancelled.load(Ordering::Relaxed),
         "routing request cancelled"
     );
+    let allowed_modes = catenary::routing_common::mode_filter::allowed_classes(&request.mode_filters)?;
     let origin = request.from;
     let destination = request.to;
     let detailed_legs = request.detailed_legs;
@@ -809,7 +813,7 @@ fn run_query_observed(
                 );
                 Ok(unique)
             };
-            let routing = router.route_profile_observed(
+            let routing = router.route_profile_observed_filtered(
                 selection.clone(),
                 time,
                 from.clone(),
@@ -817,6 +821,7 @@ fn run_query_observed(
                 direct,
                 reverse,
                 side_options,
+                allowed_modes,
                 &control,
                 &mut |part, stats| publish(&merge(part)?, stats),
             )?;
@@ -834,9 +839,9 @@ fn run_query_observed(
         }
     } else {
         let routing = if arrive_by {
-            router.route_arrive_by_with_access(selection.clone(), request_time, from, to, direct)?
+            router.route_arrive_by_with_access_filtered(selection.clone(), request_time, from, to, direct, allowed_modes)?
         } else {
-            router.route_with_access(selection.clone(), request_time, from, to, direct)?
+            router.route_with_access_filtered(selection.clone(), request_time, from, to, direct, allowed_modes)?
         };
         completed = routing.journeys;
         final_stats = routing.raptor_stats;
