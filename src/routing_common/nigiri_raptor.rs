@@ -971,6 +971,7 @@ mod parallel_tests {
 
     fn query(stops: usize) -> Query {
         Query {
+            allowed_modes: u16::MAX,
             departure_unix_seconds: 20_000 * 86_400 + 22 * 3600,
             access: vec![WalkingEndpoint {
                 stop: LocationIdx(0),
