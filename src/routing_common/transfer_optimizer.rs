@@ -806,6 +806,7 @@ mod tests {
                     direct_walk_seconds: None,
                     max_boardings: 2,
                     max_duration_seconds: 3600,
+                    allowed_modes: u16::MAX,
                 };
                 let (journeys, _) = route_pong_with_stats_precomputed(
                     &tt,
