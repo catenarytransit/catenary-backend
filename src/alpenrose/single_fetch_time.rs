@@ -102,7 +102,7 @@ pub async fn single_fetch_time(
     client: reqwest::Client,
     assignments: Arc<RwLock<HashMap<String, RealtimeFeedFetch>>>,
     last_fetch_per_feed: Arc<DashMap<String, Instant>>,
-    amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
+    amtrak_gtfs: custom_rt_feeds::amtrak::AmtrakGtfsCache, //   etcd_client_addresses: Arc<RwLock<Vec<String>>>
     chicago_text_str: Arc<RwLock<Option<String>>>,
     chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>>,
     marta_realtime: Arc<RwLock<Option<Arc<marta_gtfs_rt::MartaGtfsRt>>>>,
@@ -556,8 +556,8 @@ pub async fn single_fetch_time(
                     } else {
                         match feed_id.as_str() {
                             "f-amtrak~rt" => {
-                                let amtrak_lock = amtrak_gtfs.read().await;
-                                if let Some(gtfs) = amtrak_lock.as_ref() {
+                                let schedule = amtrak_gtfs.read().await.clone();
+                                if let Some(gtfs) = schedule.as_deref() {
                                     let _ = custom_rt_feeds::amtrak::fetch_amtrak_data(
                                         realtime_feed_cache.clone(),
                                         &feed_id,
