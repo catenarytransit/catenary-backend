@@ -209,7 +209,10 @@ pub async fn get_trip_init(
         "trip.views",
         &[
             ("chateau", &chateau),
-            ("country", catenary::observability::country_from_headers(req.headers())),
+            (
+                "country",
+                catenary::observability::country_from_headers(req.headers()),
+            ),
         ],
     );
     let query_params = query.into_inner();

@@ -67,7 +67,10 @@ pub async fn refresh_static_gtfs(
                 REFRESH_INTERVAL
             }
             Ok(Err(e)) => {
-                eprintln!("Failed to download Amtrak GTFS: {}; retaining previous schedule", e);
+                eprintln!(
+                    "Failed to download Amtrak GTFS: {}; retaining previous schedule",
+                    e
+                );
                 RETRY_INTERVAL
             }
             Err(_) => {

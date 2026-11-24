@@ -1282,7 +1282,9 @@ pub async fn new_rt_data(
             if chateau_id == "amtrak" {
                 let should_replace = trip_id_to_trip.get(&trip.trip_id).map_or(true, |existing| {
                     let has_name = |trip: &catenary::models::CompressedTrip| {
-                        trip.trip_short_name.as_deref().is_some_and(|name| !name.trim().is_empty())
+                        trip.trip_short_name
+                            .as_deref()
+                            .is_some_and(|name| !name.trim().is_empty())
                     };
                     (has_name(&trip), &trip.attempt_id) > (has_name(existing), &existing.attempt_id)
                 });

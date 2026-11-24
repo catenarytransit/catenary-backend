@@ -304,7 +304,7 @@ fn run_query(
         osr,
         false,
         false,
-        true, // CLI queries are not Datadog Synthetics traffic.
+        true,      // CLI queries are not Datadog Synthetics traffic.
         "unknown", // No client country for local CLI requests.
         &AtomicBool::new(false),
         &mut |_| Ok(()),

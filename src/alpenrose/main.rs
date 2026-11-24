@@ -463,13 +463,15 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
                 // Amtrak: keep one refresh task only while this worker owns the feed.
                 if assigned_feeds.contains(custom_rt_feeds::amtrak::FEED_ID) {
-                    if amtrak_refresh_task.as_ref().is_none_or(|task| task.is_finished()) {
-                        amtrak_refresh_task = Some(tokio::spawn(
-                            custom_rt_feeds::amtrak::refresh_static_gtfs(
+                    if amtrak_refresh_task
+                        .as_ref()
+                        .is_none_or(|task| task.is_finished())
+                    {
+                        amtrak_refresh_task =
+                            Some(tokio::spawn(custom_rt_feeds::amtrak::refresh_static_gtfs(
                                 Arc::clone(&assignments_for_this_worker),
                                 Arc::clone(&amtrak_gtfs),
-                            ),
-                        ));
+                            )));
                     }
                 } else if let Some(task) = amtrak_refresh_task.take() {
                     task.abort();
