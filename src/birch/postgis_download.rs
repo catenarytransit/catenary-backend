@@ -461,7 +461,7 @@ pub async fn shapes_bus(
         x,
         y,
         simplification_threshold,
-        "route_type IN (3,11,200) AND routes != '{}' AND chateau != 'flixbus~europe' AND chateau != 'flixbus~america' AND chateau != 'ouibus'",
+        "route_type IN (3,11,200) AND routes != '{}' AND chateau != 'flixbus~europe' AND chateau != 'flixbus~america' AND chateau != 'ouibus' AND onestop_feed_id NOT LIKE 'f-tds~%'",
     );
 
     fetch_mvt(sqlx_pool_ref, query_str, 1000).await
