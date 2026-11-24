@@ -1230,6 +1230,18 @@ pub async fn new_rt_data(
         );
 
         let cpu_started = current_thread_cpu_time();
+        // Amtrak's static feed can be replaced while its trains are still running.
+        // Refresh active trip metadata periodically rather than retaining a stale
+        // trip_short_name (or itinerary) for the lifetime of the realtime trip.
+        let now = catenary_time::utc_now();
+        if chateau_id == "amtrak"
+            && now.signed_duration_since(compressed_trip_internal_cache.last_time_full_refreshed)
+                >= chrono::Duration::minutes(5)
+        {
+            compressed_trip_internal_cache.compressed_trips.clear();
+            compressed_trip_internal_cache.last_time_full_refreshed = now;
+        }
+
         // Remove trips not in the current lookup set using retain (avoids intermediate Vec allocation)
         compressed_trip_internal_cache
             .compressed_trips
@@ -1264,6 +1276,20 @@ pub async fn new_rt_data(
             AHashMap::new();
 
         for trip in trips {
+            // Multiple static ingests can contain the same Amtrak trip_id.
+            // Prefer a row with a public train number, then the newer ingest,
+            // rather than depending on PostgreSQL's unspecified row order.
+            if chateau_id == "amtrak" {
+                let should_replace = trip_id_to_trip.get(&trip.trip_id).map_or(true, |existing| {
+                    let has_name = |trip: &catenary::models::CompressedTrip| {
+                        trip.trip_short_name.as_deref().is_some_and(|name| !name.trim().is_empty())
+                    };
+                    (has_name(&trip), &trip.attempt_id) > (has_name(existing), &existing.attempt_id)
+                });
+                if !should_replace {
+                    continue;
+                }
+            }
             trip_id_to_trip.insert(trip.trip_id.clone(), trip);
         }
 
