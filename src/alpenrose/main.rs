@@ -105,7 +105,8 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 
     let start = Instant::now();
 
-    let amtrak_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
+    let amtrak_gtfs: custom_rt_feeds::amtrak::AmtrakGtfsCache = Arc::new(RwLock::new(None));
+    let mut amtrak_refresh_task: Option<tokio::task::JoinHandle<()>> = None;
     let rtc_quebec_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let chicago_gtfs: Arc<RwLock<Option<gtfs_structures::Gtfs>>> = Arc::new(RwLock::new(None));
     let marta_realtime: Arc<RwLock<Option<Arc<marta_gtfs_rt::MartaGtfsRt>>>> =
@@ -460,25 +461,20 @@ async fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 let assigned_feeds: HashSet<String> = assignments_guard.keys().cloned().collect();
                 drop(assignments_guard);
 
-                // Amtrak
-                if assigned_feeds.contains("f-amtrak~rt") && !downloads_started.contains("amtrak") {
-                    println!("Spawning Amtrak download task...");
-                    downloads_started.insert("amtrak".to_string());
-                    let amtrak_gtfs = amtrak_gtfs.clone();
-                    tokio::spawn(async move {
-                        let gtfs = gtfs_structures::GtfsReader::default()
-                            .read_shapes(false)
-                            .read_from_url_async("https://github.com/catenarytransit/amtrak-schedule-fixer/releases/download/latest/amtrak-gtfs-noshapes-fixed.zip")
-                            .await;
-
-                        match gtfs {
-                            Ok(gtfs) => {
-                                println!("Amtrak GTFS downloaded.");
-                                *amtrak_gtfs.write().await = Some(gtfs);
-                            }
-                            Err(e) => eprintln!("Failed to download Amtrak GTFS: {}", e),
-                        }
-                    });
+                // Amtrak: keep one refresh task only while this worker owns the feed.
+                if assigned_feeds.contains(custom_rt_feeds::amtrak::FEED_ID) {
+                    if amtrak_refresh_task.as_ref().is_none_or(|task| task.is_finished()) {
+                        amtrak_refresh_task = Some(tokio::spawn(
+                            custom_rt_feeds::amtrak::refresh_static_gtfs(
+                                Arc::clone(&assignments_for_this_worker),
+                                Arc::clone(&amtrak_gtfs),
+                            ),
+                        ));
+                    }
+                } else if let Some(task) = amtrak_refresh_task.take() {
+                    task.abort();
+                    // Wait for cancellation before another assignment can start a task.
+                    let _ = task.await;
                 }
 
                 // RTC Quebec
