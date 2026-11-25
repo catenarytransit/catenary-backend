@@ -1215,6 +1215,28 @@ pub async fn gtfs_process_feed(
     )?;
 
     let gtfs: Gtfs = match feed_id {
+        "f-gtfs~de~bayern" => {
+            let mut gtfs = gtfs;
+            let agency_ids: HashSet<&str> = gtfs
+                .agencies
+                .iter()
+                .filter(|agency| agency.name == "Bus Nürnberg")
+                .filter_map(|agency| agency.id.as_deref())
+                .collect();
+            let only_target_agency =
+                gtfs.agencies.len() == 1 && gtfs.agencies[0].name == "Bus Nürnberg";
+
+            for route in gtfs.routes.values_mut() {
+                if route
+                    .agency_id
+                    .as_deref()
+                    .map_or(only_target_agency, |id| agency_ids.contains(id))
+                {
+                    route.route_type = gtfs_structures::RouteType::Bus;
+                }
+            }
+            gtfs
+        }
         "f-gtfs~de~nordrhein~westfalen" => {
             let mut gtfs = gtfs;
             let bogestra_agency_ids: HashSet<&str> = gtfs
