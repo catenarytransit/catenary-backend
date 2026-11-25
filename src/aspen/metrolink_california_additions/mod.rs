@@ -3,10 +3,18 @@ use ahash::AHashMap;
 use catenary::aspen_dataset::*;
 use compact_str::CompactString;
 
-// Metrolink sometimes reports a fixed off-railway coordinate instead of a
-// real vehicle position. Match both f32 coordinates exactly, not a radius.
+// Metrolink sometimes reports fixed off-railway coordinates instead of real
+// vehicle positions. Includes the three formerly filtered by catenary-web.
+// Match both f32 coordinates exactly, not a radius.
+const INVALID_METROLINK_POSITIONS: [(f32, f32); 4] = [
+    (33.5539, -117.675),
+    (34.099503, -117.29602),
+    (34.250793, -119.205025),
+    (34.05573, -118.23351),
+];
+
 fn is_invalid_metrolink_position(latitude: f32, longitude: f32) -> bool {
-    latitude == 33.5539 && longitude == -117.675
+    INVALID_METROLINK_POSITIONS.contains(&(latitude, longitude))
 }
 
 pub fn vehicle_pos_supplement(
@@ -108,66 +116,88 @@ mod tests {
         Some(positions)
     }
 
+    // Independent fixtures for the original report and all three legacy web
+    // exclusions, so accidentally removing an entry from the list fails tests.
+    const REPORTED_INVALID_POSITIONS: [(f32, f32); 4] = [
+        (33.5539, -117.675),
+        (34.099503, -117.29602),
+        (34.250793, -119.205025),
+        (34.05573, -118.23351),
+    ];
+
     #[test]
-    fn metrolink_discards_exact_invalid_primary_position() {
-        let result = vehicle_pos_supplement(
-            vehicle(Some(position(33.5539, -117.675))),
-            &None,
-            "metrolinktrains",
-        );
-        assert!(result.position.is_none());
-        assert_eq!(result.timestamp, Some(123));
-        assert_eq!(result.vehicle.unwrap().id.as_deref(), Some("M100"));
+    fn metrolink_discards_exact_invalid_primary_positions() {
+        for (latitude, longitude) in REPORTED_INVALID_POSITIONS {
+            let result = vehicle_pos_supplement(
+                vehicle(Some(position(latitude, longitude))),
+                &None,
+                "metrolinktrains",
+            );
+            assert!(result.position.is_none(), "{latitude}, {longitude}");
+            assert_eq!(result.timestamp, Some(123));
+            assert_eq!(result.vehicle.unwrap().id.as_deref(), Some("M100"));
+        }
     }
 
     #[test]
-    fn metrolink_discards_exact_invalid_supplemental_position() {
-        for primary in [None, Some(position(33.5539, -117.675))] {
-            let result = vehicle_pos_supplement(
-                vehicle(primary),
-                &supplemental(33.5539, -117.675),
-                "metrolinktrains",
-            );
-            assert!(result.position.is_none());
+    fn metrolink_discards_exact_invalid_supplemental_positions() {
+        for (latitude, longitude) in REPORTED_INVALID_POSITIONS {
+            for primary in [None, Some(position(latitude, longitude))] {
+                let result = vehicle_pos_supplement(
+                    vehicle(primary),
+                    &supplemental(latitude, longitude),
+                    "metrolinktrains",
+                );
+                assert!(result.position.is_none(), "{latitude}, {longitude}");
+            }
         }
     }
 
     #[test]
     fn metrolink_can_replace_invalid_primary_with_valid_supplemental_position() {
-        let result = vehicle_pos_supplement(
-            vehicle(Some(position(33.5539, -117.675))),
-            &supplemental(33.5540, -117.675),
-            "metrolinktrains",
-        );
-        let pos = result.position.unwrap();
-        assert_eq!(pos.latitude, 33.5540);
-        assert_eq!(pos.longitude, -117.675);
-        assert_eq!(pos.speed, Some(4.0));
+        for (latitude, longitude) in REPORTED_INVALID_POSITIONS {
+            let result = vehicle_pos_supplement(
+                vehicle(Some(position(latitude, longitude))),
+                &supplemental(latitude + 0.0001, longitude),
+                "metrolinktrains",
+            );
+            let pos = result.position.unwrap();
+            assert_eq!(pos.latitude, latitude + 0.0001);
+            assert_eq!(pos.longitude, longitude);
+            assert_eq!(pos.speed, Some(4.0));
+        }
     }
 
     #[test]
     fn metrolink_keeps_nearby_primary_positions() {
-        for (latitude, longitude) in [(33.5540, -117.675), (33.5539, -117.6751)] {
+        for (latitude, longitude) in REPORTED_INVALID_POSITIONS {
+            for (lat, lon) in [
+                (latitude + 0.0001, longitude),
+                (latitude, longitude - 0.0001),
+            ] {
+                let result = vehicle_pos_supplement(
+                    vehicle(Some(position(lat, lon))),
+                    &supplemental(latitude, longitude),
+                    "metrolinktrains",
+                );
+                let pos = result.position.unwrap();
+                assert_eq!(pos.latitude, lat);
+                assert_eq!(pos.longitude, lon);
+            }
+        }
+    }
+
+    #[test]
+    fn other_chateaux_keep_the_same_coordinates() {
+        for (latitude, longitude) in REPORTED_INVALID_POSITIONS {
             let result = vehicle_pos_supplement(
                 vehicle(Some(position(latitude, longitude))),
-                &supplemental(33.5539, -117.675),
-                "metrolinktrains",
+                &None,
+                "amtrak",
             );
             let pos = result.position.unwrap();
             assert_eq!(pos.latitude, latitude);
             assert_eq!(pos.longitude, longitude);
         }
-    }
-
-    #[test]
-    fn other_chateaux_keep_the_same_coordinate() {
-        let result = vehicle_pos_supplement(
-            vehicle(Some(position(33.5539, -117.675))),
-            &None,
-            "amtrak",
-        );
-        let pos = result.position.unwrap();
-        assert_eq!(pos.latitude, 33.5539);
-        assert_eq!(pos.longitude, -117.675);
     }
 }
