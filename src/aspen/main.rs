@@ -773,7 +773,10 @@ impl AspenRpc for AspenServer {
             let mut vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                     "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-                    _ => gtfs_rt_feed,
+                    _ => metrolink_california_additions::filter_gtfs_rt_vehicle_positions(
+                        gtfs_rt_feed,
+                        realtime_feed_id.as_str(),
+                    ),
                 });
 
             if realtime_feed_id == "f-metro~losangeles~bus~rt"
@@ -1193,7 +1196,10 @@ impl AspenRpc for AspenServer {
             let vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                     "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
-                    _ => gtfs_rt_feed,
+                    _ => metrolink_california_additions::filter_gtfs_rt_vehicle_positions(
+                        gtfs_rt_feed,
+                        realtime_feed_id.as_str(),
+                    ),
                 });
 
             let trips_gtfs_rt = match trips_response_code {
@@ -2310,6 +2316,7 @@ async fn main() -> anyhow::Result<()> {
     let this_worker_id = Arc::new(Uuid::new_v4().to_string());
 
     let aspen_config = &catenaryconfig::config().aspen;
+    metrolink_california_additions::load_invalid_gtfs_rt_positions()?;
 
     let etcd_urls_original = std::env::var("ETCD_URLS")
         .ok()

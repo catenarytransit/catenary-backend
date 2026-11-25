@@ -1,0 +1,7 @@
+# Invalid Metrolink GTFS-RT positions, latitude,longitude.
+# Both coordinates are matched exactly as GTFS-RT float32 values.
+# Supplemental PTC positions are not filtered.
+33.5539,-117.675
+34.099503,-117.29602
+34.250793,-119.205025
+34.05573,-118.23351
