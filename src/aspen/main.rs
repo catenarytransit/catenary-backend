@@ -773,6 +773,9 @@ impl AspenRpc for AspenServer {
             let mut vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                     "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                    "f-metrolinktrains~rt" => {
+                        metrolink_california_additions::filter_gtfs_rt_vehicle_positions(gtfs_rt_feed)
+                    }
                     _ => gtfs_rt_feed,
                 });
 
@@ -1193,6 +1196,9 @@ impl AspenRpc for AspenServer {
             let vehicles_gtfs_rt =
                 vehicles_gtfs_rt.map(|gtfs_rt_feed| match realtime_feed_id.as_str() {
                     "f-amtrak~rt" => amtrak_gtfs_rt::filter_capital_corridor(gtfs_rt_feed),
+                    "f-metrolinktrains~rt" => {
+                        metrolink_california_additions::filter_gtfs_rt_vehicle_positions(gtfs_rt_feed)
+                    }
                     _ => gtfs_rt_feed,
                 });
 
