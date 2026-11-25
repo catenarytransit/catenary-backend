@@ -46,8 +46,6 @@ Data is matched against the GTFS schedules stored in Postgres data, and addition
 
 ### Metrolink GTFS-RT position exclusions
 
-Aspen reads `metrolink-invalid-positions.txt` from its working directory once at startup. Each nonempty line is a comma-separated latitude and longitude; `#` introduces a comment. The file is runtime data, not embedded in the executable. To use a different path (for example a mounted file), set `ASPEN_METROLINK_INVALID_POSITIONS_FILE`.
+Only the `f-metrolinktrains~rt` vehicle feed loads `metrolink-invalid-positions.txt` (relative to Aspen's working directory) on its first use. Set `ASPEN_METROLINK_INVALID_POSITIONS_FILE` to override the path. Each line contains an exact `latitude,longitude` pair; blank lines and `#` comments are supported.
 
-Deploy the text file with Aspen and restart the process after editing it; no Rust rebuild is required for coordinate changes. The Aspen Docker build already copies the repository into its working directory. A missing default file logs a warning and disables this filter, so existing deployments must install the file. An unreadable explicitly configured file or malformed entry causes startup to fail with a diagnostic. An empty file intentionally disables filtering.
-
-Only the `f-metrolinktrains~rt` GTFS-RT vehicle feed is filtered, before compact feed storage. Exact coordinate pairs are removed from the position field while the vehicle and trip metadata remain intact. Supplemental PTC data retains its original behavior and can fill a missing position even if its coordinates match an exclusion.
+Deploy the file alongside Aspen and restart after editing it; no rebuild is needed. A missing, unreadable or malformed file logs a warning and disables filtering. Only the GTFS-RT position field is cleared; supplemental PTC processing is unchanged.
