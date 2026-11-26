@@ -150,7 +150,9 @@ JOIN eligible_routes r
 #[derive(QueryableByName)]
 struct NearbyItineraryMatch {
     #[diesel(embed)]
-    row: crate::models::ItineraryPatternRow,
+    // Diesel's QueryableByName derive uses a parameter named row.
+    // Avoid shadowing it before deserializing the second embedded struct.
+    stop_row: crate::models::ItineraryPatternRow,
     #[diesel(embed)]
     metadata: NearbyItineraryPatternMeta,
 }
@@ -1390,27 +1392,37 @@ async fn fetch_chateau_data(
         .into_iter()
         .collect();
     let matching_rows_and_metadata: Vec<NearbyItineraryMatch> =
-        load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| async {
-            // NULL priority means unrestricted; an empty priority array
-            // matches nothing. Earlier phases exclude only local modes from
-            // subsequent loads, not railway calls at other stations.
-            let query = sql_query(NEARBY_ITINERARY_SQL)
-                .bind::<Text, _>(&chateau)
-                .bind::<Array<Text>, _>(&stop_batch)
-                .bind::<Array<Text>, _>(&direction_pattern_ids)
-                .bind::<Nullable<Array<Text>>, _>(priority_route_ids.as_deref())
-                .bind::<Array<Text>, _>(&excluded_local_route_ids)
-                .bind::<SmallInt, _>(COACH_ROUTE_TYPE);
-            timed_nearby_sql!(
-                sql_timings,
-                request_started,
-                &chateau,
-                "itinerary_rows_by_selected_stops",
-                stop_batch.len(),
-                pool,
-                query,
-                NearbyItineraryMatch
-            )
+        load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| {
+            // The returned future owns this batch and borrows shared request
+            // state. Keep the loader an Fn so it can run concurrent batches.
+            let chateau = &chateau;
+            let direction_pattern_ids = &direction_pattern_ids;
+            let priority_route_ids = priority_route_ids.as_deref();
+            let excluded_local_route_ids = &excluded_local_route_ids;
+            let sql_timings = &sql_timings;
+            let pool = &pool;
+            async move {
+                let input_ids = stop_batch.len();
+                // NULL priority means unrestricted; an empty priority array
+                // matches nothing. Earlier phases exclude only local modes.
+                let query = sql_query(NEARBY_ITINERARY_SQL)
+                    .bind::<Text, _>(chateau)
+                    .bind::<Array<Text>, _>(stop_batch)
+                    .bind::<Array<Text>, _>(direction_pattern_ids)
+                    .bind::<Nullable<Array<Text>>, _>(priority_route_ids)
+                    .bind::<Array<Text>, _>(excluded_local_route_ids)
+                    .bind::<SmallInt, _>(COACH_ROUTE_TYPE);
+                timed_nearby_sql!(
+                    sql_timings,
+                    request_started,
+                    chateau,
+                    "itinerary_rows_by_selected_stops",
+                    input_ids,
+                    pool,
+                    query,
+                    NearbyItineraryMatch
+                )
+            }
         })
         .await
         .unwrap_or_default();
@@ -1420,11 +1432,11 @@ async fn fetch_chateau_data(
     let mut itin_meta_list = Vec::new();
     let mut itins_result = Vec::with_capacity(matching_rows_and_metadata.len());
     let mut seen_itinerary_ids = HashSet::new();
-    for NearbyItineraryMatch { row, metadata: meta } in matching_rows_and_metadata {
+    for NearbyItineraryMatch { stop_row, metadata: meta } in matching_rows_and_metadata {
         if seen_itinerary_ids.insert(meta.itinerary_pattern_id.clone()) {
             itin_meta_list.push(meta);
         }
-        itins_result.push(row);
+        itins_result.push(stop_row);
     }
 
     // Keep the coarse route restriction before loading the route dictionaries.
@@ -3253,15 +3265,15 @@ INSERT INTO itinerary_pattern (
             let mut actual: Vec<Key> = rows
                 .into_iter()
                 .map(|matched| {
-                    assert_eq!(matched.row.itinerary_pattern_id, matched.metadata.itinerary_pattern_id);
+                    assert_eq!(matched.stop_row.itinerary_pattern_id, matched.metadata.itinerary_pattern_id);
                     assert_eq!(matched.metadata.direction_pattern_id.as_deref(), Some("d"));
                     assert_eq!(matched.metadata.timezone, "UTC");
-                    assert_eq!(matched.row.stop_id.as_str(), "near");
+                    assert_eq!(matched.stop_row.stop_id.as_str(), "near");
                     (
-                        matched.row.onestop_feed_id,
-                        matched.row.attempt_id,
-                        matched.row.itinerary_pattern_id,
-                        matched.row.stop_sequence,
+                        matched.stop_row.onestop_feed_id,
+                        matched.stop_row.attempt_id,
+                        matched.stop_row.itinerary_pattern_id,
+                        matched.stop_row.stop_sequence,
                     )
                 })
                 .collect();
