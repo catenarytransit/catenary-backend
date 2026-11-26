@@ -8,6 +8,7 @@ use ahash::AHashSet;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::nearby_departures::{dense_nearby_bus_radius, is_bus_route_type};
 use chrono::NaiveDate;
 use chrono::TimeZone;
 use compact_str::CompactString;
@@ -299,6 +300,7 @@ pub async fn nearby_from_coords_v3(
     let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
 
     let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+    let dense_bus_radius = dense_nearby_bus_radius(input_point, &stops);
 
     for stop in &stops {
         let stop_point = geo::Point::new(
@@ -308,6 +310,12 @@ pub async fn nearby_from_coords_v3(
         let dist = Haversine.distance(input_point, stop_point);
 
         // Distance filtering
+        if dense_bus_radius.is_some_and(|limit| dist > limit)
+            && stop.primary_route_type.is_some_and(is_bus_route_type)
+            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+        {
+            continue;
+        }
         if stop.primary_route_type == Some(3) {
             if stops.len() > 100 && dist > 4000.0 {
                 continue;
@@ -398,6 +406,7 @@ pub async fn nearby_from_coords_v3(
         db_connection_time,
         stops_fetch_time,
         start,
+        dense_bus_radius,
     )
     .await;
 
@@ -436,6 +445,7 @@ async fn fetch_chateau_intermediate(
     stop_full_info_map: HashMap<String, catenary::models::Stop>,
     stop_dist_map: HashMap<String, f64>,
     query_point: geo::Point<f64>,
+    dense_bus_radius: Option<f64>,
 ) -> Option<ChateauIntermediate> {
     // 1. Determine Date Window
     let lookback_days = match chateau.as_str() {
@@ -600,6 +610,25 @@ async fn fetch_chateau_intermediate(
         }
     );
 
+    // Keep mixed-mode stops available to rail but drop distant bus calls
+    // before loading compressed trips or calendars.
+    let mut itins_result = itins_result;
+    if let Some(limit) = dense_bus_radius {
+        let modes: HashMap<_, _> = routes_result
+            .iter()
+            .map(|route| (route.route_id.as_str(), route.route_type))
+            .collect();
+        let bus_patterns: HashSet<_> = itin_meta_list
+            .iter()
+            .filter(|meta| modes.get(meta.route_id.as_str()).is_some_and(|mode| is_bus_route_type(*mode)))
+            .map(|meta| meta.itinerary_pattern_id.as_str())
+            .collect();
+        itins_result.retain(|row| {
+            !bus_patterns.contains(row.itinerary_pattern_id.as_str())
+                || stop_dist_map.get(row.stop_id.as_str()).is_some_and(|distance| *distance <= limit)
+        });
+    }
+
     let actual_itinerary_ids: Vec<String> = itins_result
         .iter()
         .map(|r| r.itinerary_pattern_id.clone())
@@ -607,6 +636,12 @@ async fn fetch_chateau_intermediate(
         .into_iter()
         .collect();
 
+    let route_ids: Vec<CompactString> = if dense_bus_radius.is_some() {
+        let approved: HashSet<_> = actual_itinerary_ids.iter().map(String::as_str).collect();
+        itin_meta_list.iter().filter(|meta| approved.contains(meta.itinerary_pattern_id.as_str())).map(|meta| meta.route_id.clone()).collect()
+    } else {
+        route_ids
+    };
     let trips_compressed_raw: Vec<catenary::models::CompressedTrip> = {
         let chateau_clone_trips = chateau.clone();
         let mut conn = pool.get().await.unwrap();
@@ -1000,6 +1035,7 @@ pub async fn get_nearby_departures_stream(
     let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
 
     let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+    let dense_bus_radius = dense_nearby_bus_radius(input_point, &stops);
 
     for stop in &stops {
         let stop_point = geo::Point::new(
@@ -1009,6 +1045,12 @@ pub async fn get_nearby_departures_stream(
         let dist = Haversine.distance(input_point, stop_point);
 
         // Distance filtering (reused)
+        if dense_bus_radius.is_some_and(|limit| dist > limit)
+            && stop.primary_route_type.is_some_and(is_bus_route_type)
+            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+        {
+            continue;
+        }
         if stop.primary_route_type == Some(3) {
             if stops.len() > 100 && dist > 4000.0 {
                 continue;
@@ -1120,6 +1162,7 @@ pub async fn get_nearby_departures_stream(
                     db_connection_time,
                     stops_fetch_time,
                     start,
+                    dense_bus_radius,
                 )
                 .await;
 
@@ -1199,6 +1242,7 @@ async fn fetch_chunk_intermediates(
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
     total_start_time: Instant,
+    dense_bus_radius: Option<f64>,
 ) -> Vec<Option<ChateauIntermediate>> {
     if station_groups.is_empty() {
         return Vec::new();
@@ -1303,6 +1347,7 @@ async fn fetch_chunk_intermediates(
                 full_info_map_unwrap,
                 stop_dist_map_unwrap,
                 input_point_clone,
+                dense_bus_radius,
             )
             .await
         });
