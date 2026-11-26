@@ -269,6 +269,23 @@ impl DepartureDistanceLimits {
     }
 }
 
+// A stop with no known modes must remain eligible (for example, a station
+// parent or realtime-only stop). Exclude only explicitly coach-only stops.
+fn has_non_coach_mode(
+    primary: Option<i16>,
+    route_types: &[Option<i16>],
+    children_route_types: &[Option<i16>],
+) -> bool {
+    let mut modes = route_types
+        .iter()
+        .chain(children_route_types)
+        .flatten()
+        .copied()
+        .chain(primary)
+        .peekable();
+    modes.peek().is_none() || modes.any(|mode| mode != COACH_ROUTE_TYPE)
+}
+
 #[derive(Deserialize, Clone, Debug)]
 pub struct NearbyFromCoordsV3 {
     pub lat: f64,
@@ -432,7 +449,16 @@ pub async fn prepare_nearby(
         stops_start,
         &stops_result,
     );
-    let stops = stops_result.map_err(|e| e.to_string())?;
+    let mut stops = stops_result.map_err(|e| e.to_string())?;
+    // Coach-only stops must not inflate the density thresholds or trigger
+    // direction, calendar, trip or realtime requests in any phase.
+    stops.retain(|stop| {
+        has_non_coach_mode(
+            stop.primary_route_type,
+            &stop.route_types,
+            &stop.children_route_types,
+        )
+    });
     Ok(PreparedNearby {
         query,
         stops,
@@ -595,6 +621,20 @@ impl RouteSelection {
             _ => return None,
         };
         Some(ids.into_iter().collect())
+    }
+
+    fn excluded_local_route_ids(&self, chateau: &str) -> Vec<String> {
+        match self {
+            Self::Except(priority) => priority.local_routes.iter()
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            Self::ExceptBoth(priority) => priority.local_routes.iter().chain(&priority.next_routes)
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            _ => Vec::new(),
+        }
     }
 
     fn allows(
@@ -1077,6 +1117,7 @@ async fn fetch_chateau_data(
 )> {
     let query_slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
     let priority_route_ids = selection.included_route_ids(&chateau);
+    let excluded_local_route_ids = selection.excluded_local_route_ids(&chateau);
 
     // 1. Determine Date Window
     let lookback_days = match chateau.as_str() {
@@ -1228,6 +1269,15 @@ async fn fetch_chateau_data(
             .into_boxed();
         if let Some(ids) = &priority_route_ids {
             query = query.filter(im::route_id.eq_any(ids));
+        }
+        // These three modes always produce local route groups (see
+        // is_station_group). Other modes can still have station departures
+        // in the final phase even when their local group was sent earlier.
+        if !excluded_local_route_ids.is_empty() {
+            query = query.filter(
+                routes::route_type.ne_all([0_i16, 1, 3])
+                    .or(im::route_id.ne_all(&excluded_local_route_ids)),
+            );
         }
         timed_nearby_sql!(
             sql_timings,
@@ -2317,7 +2367,7 @@ mod pattern_batch_tests {
 
 #[cfg(test)]
 mod distance_limit_tests {
-    use super::DepartureDistanceLimits;
+    use super::{DepartureDistanceLimits, has_non_coach_mode};
 
     #[test]
     fn mixed_stop_keeps_metro_but_rejects_bus_beyond_dense_bus_radius() {
@@ -2369,6 +2419,11 @@ mod distance_limit_tests {
         assert!(!limits.allows(200, 0.0));
         assert!(!limits.allows_stop(Some(200), &[Some(200)], &[], 10.0));
         assert!(limits.allows_stop(Some(200), &[Some(200), Some(3)], &[], 10.0));
+        assert!(!has_non_coach_mode(Some(200), &[Some(200)], &[Some(200)]));
+        assert!(has_non_coach_mode(Some(200), &[Some(3)], &[]));
+        assert!(has_non_coach_mode(Some(200), &[], &[Some(2)]));
+        assert!(has_non_coach_mode(None, &[None], &[]));
+        assert!(has_non_coach_mode(Some(201), &[], &[]));
     }
 
     #[test]
@@ -2732,6 +2787,11 @@ mod progressive_tests {
         let next = RouteSelection::Next(priority.clone());
         let last = RouteSelection::ExceptBoth(priority.clone());
         let legacy = RouteSelection::Except(priority);
+        assert_eq!(first.included_route_ids("bus").unwrap().len(), 4);
+        assert_eq!(next.included_route_ids("bus").unwrap().len(), 10);
+        assert_eq!(last.excluded_local_route_ids("bus").len(), 14);
+        assert_eq!(legacy.excluded_local_route_ids("bus").len(), 4);
+        assert!(last.excluded_local_route_ids("rail").is_empty());
         let stop = StationKey::Stop("stop".into());
         for i in 0..18 {
             let route = i.to_string();
