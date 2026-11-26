@@ -34,6 +34,8 @@ const PATTERN_QUERY_BATCH_SIZE: usize = 128;
 const PATTERN_QUERY_CONCURRENCY: usize = 4;
 const COACH_ROUTE_TYPE: i16 = 200;
 const INTERMEDIATE_ROUTE_LIMIT: usize = 10;
+const DENSE_BUS_RADIUS_M: f64 = 1500.0;
+const DENSE_BUS_STOP_THRESHOLD: usize = 200;
 
 const LONG_DISTANCE_CHATEAUX: &[&str] = &[
     "sncf",
@@ -303,7 +305,12 @@ struct DepartureDistanceLimits {
 }
 
 impl DepartureDistanceLimits {
-    fn new(radius_m: f64, stop_count: usize, station_count: usize) -> Self {
+    fn new(
+        radius_m: f64,
+        stop_count: usize,
+        station_count: usize,
+        dense_bus_radius: Option<f64>,
+    ) -> Self {
         let other_m = radius_m.min(match station_count {
             201.. => 1000.0,
             101.. => 2000.0,
@@ -322,7 +329,8 @@ impl DepartureDistanceLimits {
                 101.. => 1000.0,
                 1.. => 2000.0,
                 _ => radius_m,
-            });
+            })
+            .min(dense_bus_radius.unwrap_or(radius_m));
         Self { bus_m, other_m }
     }
 
@@ -331,7 +339,7 @@ impl DepartureDistanceLimits {
         if route_type == COACH_ROUTE_TYPE {
             return false;
         }
-        let is_bus = matches!(route_type, 3 | 11 | 201..=209 | 700..=799 | 800);
+        let is_bus = is_bus_route_type(route_type);
         distance_m.is_finite() && distance_m <= if is_bus { self.bus_m } else { self.other_m }
     }
 
@@ -356,6 +364,36 @@ impl DepartureDistanceLimits {
         }
         modes.any(|mode| self.allows(mode, distance_m))
     }
+}
+
+pub fn is_bus_route_type(route_type: i16) -> bool {
+    matches!(route_type, 3 | 11 | 201..=209 | 700..=799 | 800)
+}
+
+fn dense_stop_bus_radius(distances: impl Iterator<Item = f64>) -> Option<f64> {
+    (distances
+        .filter(|distance| *distance <= DENSE_BUS_RADIUS_M)
+        .take(DENSE_BUS_STOP_THRESHOLD + 1)
+        .count()
+        > DENSE_BUS_STOP_THRESHOLD)
+        .then_some(DENSE_BUS_RADIUS_M)
+}
+
+/// Use the existing spatial stop snapshot and the same metric distance as the
+/// departure filters. Coach-only stops do not contribute to density.
+pub fn dense_nearby_bus_radius(
+    point: geo::Point<f64>,
+    stops: &[crate::models::Stop],
+) -> Option<f64> {
+    dense_stop_bus_radius(stops.iter().filter_map(|stop| {
+        let p = stop.point.as_ref()?;
+        has_non_coach_mode(
+            stop.primary_route_type,
+            &stop.route_types,
+            &stop.children_route_types,
+        )
+        .then(|| Haversine.distance(point, geo::Point::new(p.x, p.y)))
+    }))
 }
 
 // A stop with no known modes must remain eligible (for example, a station
@@ -595,9 +633,26 @@ pub async fn prepare_nearby(
             &stop.children_route_types,
         )
     });
+    let number_of_unique_osm_stations = stops
+        .iter()
+        .filter_map(|s| s.osm_station_id)
+        .collect::<AHashSet<_>>()
+        .len();
+    let distance_limits = DepartureDistanceLimits::new(
+        radius,
+        stops.len(),
+        number_of_unique_osm_stations,
+        if radius > DENSE_BUS_RADIUS_M {
+            dense_nearby_bus_radius(input_point, &stops)
+        } else {
+            None
+        },
+    );
     Ok(PreparedNearby {
         query,
         stops,
+        distance_limits,
+        number_of_unique_osm_stations,
         start,
         db_connection_time,
         stops_fetch_time: stops_start.elapsed(),
@@ -609,6 +664,8 @@ pub async fn prepare_nearby(
 pub struct PreparedNearby {
     query: NearbyFromCoordsV3,
     stops: Vec<crate::models::Stop>,
+    distance_limits: DepartureDistanceLimits,
+    number_of_unique_osm_stations: usize,
     start: Instant,
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
@@ -822,7 +879,6 @@ impl PreparedNearby {
         let long_distance_chateaux_arc = Arc::new(long_distance_chateaux);
 
         let input_point = geo::Point::new(query.lon, query.lat);
-        let radius = query.radius.unwrap_or(5000.0);
         let stops = &self.stops;
         let stops_fetch_time = self.stops_fetch_time;
         if stops.is_empty() {
@@ -854,14 +910,7 @@ impl PreparedNearby {
         let mut stop_dist_map: HashMap<(String, String), f64> = HashMap::new();
         let mut stop_full_info_map: HashMap<(String, String), crate::models::Stop> = HashMap::new();
 
-        let number_of_unique_osm_stations = stops
-            .iter()
-            .filter_map(|s| s.osm_station_id)
-            .collect::<AHashSet<_>>()
-            .len();
-
-        let distance_limits =
-            DepartureDistanceLimits::new(radius, stops.len(), number_of_unique_osm_stations);
+        let distance_limits = self.distance_limits;
 
         for stop in stops {
             let Some(point) = &stop.point else {
@@ -1225,7 +1274,7 @@ impl PreparedNearby {
                 etcd_connection_time_ms: etcd_connection_time.as_millis(),
                 pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
                 initial_stop_count: Some(stops.len()),
-                initial_osm_station_count: Some(number_of_unique_osm_stations),
+                initial_osm_station_count: Some(self.number_of_unique_osm_stations),
                 sql_queries: snapshot_sql_timings(&sql_timings),
                 processing,
                 processing_by_chateau,
@@ -2530,11 +2579,11 @@ mod pattern_batch_tests {
 
 #[cfg(test)]
 mod distance_limit_tests {
-    use super::{DepartureDistanceLimits, has_non_coach_mode};
+    use super::{DepartureDistanceLimits, dense_stop_bus_radius, has_non_coach_mode};
 
     #[test]
     fn mixed_stop_keeps_metro_but_rejects_bus_beyond_dense_bus_radius() {
-        let limits = DepartureDistanceLimits::new(5000.0, 801, 10);
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 10, None);
         assert!(limits.allows_stop(Some(1), &[Some(1), Some(3)], &[], 1500.0));
         assert!(limits.allows(1, 1500.0));
         assert!(!limits.allows(3, 1500.0));
@@ -2555,7 +2604,7 @@ mod distance_limit_tests {
             (1, 100, 2000.0),
             (1, 101, 1000.0),
         ] {
-            let limits = DepartureDistanceLimits::new(5000.0, stops, stations);
+            let limits = DepartureDistanceLimits::new(5000.0, stops, stations, None);
             assert!(
                 limits.allows(3, cutoff),
                 "{stops} stops, {stations} stations"
@@ -2565,8 +2614,45 @@ mod distance_limit_tests {
     }
 
     #[test]
+    fn dense_bus_radius_counts_only_stops_within_1500_metres() {
+        let distances = std::iter::repeat_n(1500.0, 200)
+            .chain(std::iter::repeat_n(1500.1, 100))
+            .chain([f64::NAN, f64::INFINITY]);
+        let sparse_radius = dense_stop_bus_radius(distances.clone());
+        assert_eq!(sparse_radius, None);
+        let dense_radius = dense_stop_bus_radius(distances.chain([1499.0]));
+        assert_eq!(dense_radius, Some(1500.0));
+
+        let sparse = DepartureDistanceLimits::new(5000.0, 302, 0, sparse_radius);
+        let dense = DepartureDistanceLimits::new(5000.0, 303, 0, dense_radius);
+        assert!(sparse.allows(3, 1500.1));
+        for mode in [3, 11, 209, 700, 799, 800] {
+            assert!(dense.allows(mode, 1500.0));
+            assert!(!dense.allows(mode, 1500.1));
+        }
+        for mode in [0, 1, 2] {
+            assert!(dense.allows(mode, 5000.0));
+        }
+        assert!(dense.allows_stop(Some(3), &[Some(3), Some(2)], &[], 2000.0));
+        assert!(!dense.allows_stop(Some(3), &[Some(3)], &[], 2000.0));
+    }
+
+    #[test]
+    fn dense_bus_radius_never_relaxes_existing_limits() {
+        for (radius, stops, stations, expected) in [
+            (500.0, 201, 0, 500.0),
+            (5000.0, 801, 0, 1000.0),
+            (5000.0, 201, 101, 1000.0),
+        ] {
+            let limits = DepartureDistanceLimits::new(radius, stops, stations, Some(1500.0));
+            assert!(limits.allows(3, expected));
+            assert!(!limits.allows(3, expected + 0.1));
+        }
+    }
+
+    #[test]
     fn extended_bus_modes_use_the_same_cutoff() {
-        let limits = DepartureDistanceLimits::new(5000.0, 801, 0);
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 0, None);
         for mode in [3, 11, 209, 700, 701, 799, 800] {
             assert!(limits.allows(mode, 1000.0));
             assert!(!limits.allows(mode, 1000.1));
@@ -2578,7 +2664,7 @@ mod distance_limit_tests {
 
     #[test]
     fn coaches_are_excluded_but_shared_bus_stops_are_retained() {
-        let limits = DepartureDistanceLimits::new(5000.0, 10, 1);
+        let limits = DepartureDistanceLimits::new(5000.0, 10, 1, None);
         assert!(!limits.allows(200, 0.0));
         assert!(!limits.allows_stop(Some(200), &[Some(200)], &[], 10.0));
         assert!(limits.allows_stop(Some(200), &[Some(200), Some(3)], &[], 10.0));
@@ -2591,7 +2677,7 @@ mod distance_limit_tests {
 
     #[test]
     fn requested_radius_caps_every_mode_including_unknown_stops() {
-        let limits = DepartureDistanceLimits::new(500.0, 1000, 300);
+        let limits = DepartureDistanceLimits::new(500.0, 1000, 300, None);
         for mode in [0, 1, 2, 3, 700] {
             assert!(limits.allows(mode, 500.0));
             assert!(!limits.allows(mode, 500.1));
@@ -2605,7 +2691,7 @@ mod distance_limit_tests {
     #[test]
     fn station_density_tightens_the_non_bus_radius_at_existing_boundaries() {
         for (stations, cutoff) in [(100, 5000.0), (101, 2000.0), (200, 2000.0), (201, 1000.0)] {
-            let limits = DepartureDistanceLimits::new(5000.0, 1, stations);
+            let limits = DepartureDistanceLimits::new(5000.0, 1, stations, None);
             assert!(limits.allows(1, cutoff));
             assert!(!limits.allows(1, cutoff + 0.1));
         }
@@ -2693,15 +2779,7 @@ impl PreparedNearby {
         pool: Arc<CatenaryPostgresPool>,
     ) -> Result<Arc<PrioritySelection>, String> {
         let point = geo::Point::new(self.query.lon, self.query.lat);
-        let limits = DepartureDistanceLimits::new(
-            self.query.radius.unwrap_or(5000.0),
-            self.stops.len(),
-            self.stops
-                .iter()
-                .filter_map(|s| s.osm_station_id)
-                .collect::<HashSet<_>>()
-                .len(),
-        );
+        let limits = self.distance_limits;
         let mut by_chateau: HashMap<String, HashMap<String, (f64, StationKey)>> = HashMap::new();
         let mut station_distances: HashMap<PriorityStation, f64> = HashMap::new();
         for stop in &self.stops {
