@@ -954,6 +954,51 @@ mod tests {
     }
 
     #[test]
+    fn nearby_departures_require_trip_updates_for_cancellation() {
+        // Route 93 has a detour advisory at specific stops. Without an
+        // authoritative trip update, scheduled calls remain departures.
+        let date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        let stops = HashSet::from([
+            "17123".to_owned(),
+            "20177".to_owned(),
+            "unaffected".to_owned(),
+        ]);
+        let mut events: Vec<_> = ["17123", "20177", "unaffected"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, stop)| {
+                let mut event = empty_event("feed", "trip", "93", stop);
+                event.service_date = date;
+                event.stop_sequence = Some(index as u32 + 1);
+                event.scheduled_departure = Some(100 + index as u64 * 100);
+                event
+            })
+            .collect();
+
+        overlay_updates(&mut events, "feed", &stops, &[]);
+        assert!(events.iter().all(|event| {
+            !event.trip_cancelled && !event.stop_cancelled && nearby_event_time(event, 0).is_some()
+        }));
+
+        // A SKIPPED stop-time update affects only its matched stop.
+        let mut scheduled = update(AspenisedTripScheduleRelationship::Scheduled);
+        scheduled.trip.route_id = Some("93".into());
+        let mut skipped = stu("17123", 1, 100);
+        skipped.schedule_relationship = Some(AspenisedStopTimeScheduleRelationship::Skipped);
+        scheduled.stop_time_update = vec![skipped];
+        overlay_updates(&mut events, "feed", &stops, &[scheduled]);
+        assert!(events[0].stop_cancelled);
+        assert!(events.iter().all(|event| !event.trip_cancelled));
+        assert!(events[1..].iter().all(|event| !event.stop_cancelled));
+
+        // A matching CANCELED trip update still cancels all of its calls.
+        let mut cancelled = update(AspenisedTripScheduleRelationship::Cancelled);
+        cancelled.trip.route_id = Some("93".into());
+        overlay_updates(&mut events, "feed", &stops, &[cancelled]);
+        assert!(events.iter().all(|event| event.trip_cancelled));
+    }
+
+    #[test]
     fn trip_level_deletion_without_stop_updates_is_instance_scoped() {
         for relationship in [
             AspenisedTripScheduleRelationship::Deleted,
