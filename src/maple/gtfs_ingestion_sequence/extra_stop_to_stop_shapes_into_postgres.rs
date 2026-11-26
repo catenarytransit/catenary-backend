@@ -10,7 +10,7 @@ pub async fn insert_stop_to_stop_geometry(
     chateau_id: &str,
     route: &gtfs_structures::Route,
     gtfs: &gtfs_structures::Gtfs,
-    direction_id: u64,
+    direction_id: &str,
     linestring: &postgis_diesel::types::LineString<postgis_diesel::types::Point>,
     arc_conn_pool: Arc<CatenaryPostgresPool>,
 ) -> Result<(), Box<dyn std::error::Error + Sync + Send>> {

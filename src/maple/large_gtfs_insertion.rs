@@ -9,6 +9,7 @@ use crate::gtfs_handlers::shape_colour_calculator::{ShapeToColourResponse, shape
 use crate::gtfs_handlers::stops_associated_items::make_hashmaps_of_children_stop_info;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
+use catenary::maple_syrup::pattern_id::encode_pattern_id;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
 use crate::gtfs_process::{
@@ -945,7 +946,7 @@ pub async fn gtfs_process_large_feed(
             }
         }
 
-        let reduction = maple_syrup::reduce(&agency_gtfs);
+        let reduction = maple_syrup::reduce(&agency_gtfs, feed_id)?;
 
         // immediately clear trip.stop_times after reduction
         for trip in agency_gtfs.trips.values_mut() {
@@ -992,14 +993,18 @@ pub async fn gtfs_process_large_feed(
         )
         .await?;
 
-        for group in &reduction.direction_patterns.iter().chunks(5000) {
+        for group in &reduction
+            .direction_patterns
+            .iter()
+            .sorted_unstable_by_key(|(id, _)| **id)
+            .chunks(5000) {
             let mut d_final: Vec<DirectionPatternMeta> = vec![];
             let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
 
             for (direction_pattern_id, direction_pattern) in group {
                 let gtfs_shape_id = match &direction_pattern.gtfs_shape_id {
                     Some(gtfs_shape_id) => gtfs_shape_id.clone(),
-                    None => direction_pattern_id.to_string(),
+                    None => encode_pattern_id(*direction_pattern_id),
                 };
 
                 let first_itin_id = reduction
@@ -1007,7 +1012,7 @@ pub async fn gtfs_process_large_feed(
                     .get(direction_pattern_id)
                     .unwrap()
                     .iter()
-                    .next()
+                    .min()
                     .expect("Expected Itin for direction id");
 
                 let itin_pattern = reduction
@@ -1055,7 +1060,7 @@ pub async fn gtfs_process_large_feed(
                                 chateau_id,
                                 route,
                                 &agency_gtfs,
-                                *direction_pattern_id,
+                                &gtfs_shape_id,
                                 &linestring,
                                 Arc::clone(&arc_conn_pool),
                             )
@@ -1066,7 +1071,7 @@ pub async fn gtfs_process_large_feed(
 
                 let direction_pattern_meta = DirectionPatternMeta {
                     chateau: chateau_id.to_string(),
-                    direction_pattern_id: direction_pattern_id.to_string(),
+                    direction_pattern_id: encode_pattern_id(*direction_pattern_id),
                     headsign_or_destination: direction_pattern
                         .headsign_or_destination
                         .clone()
@@ -1078,12 +1083,9 @@ pub async fn gtfs_process_large_feed(
                     route_id: Some(itin_pattern.route_id.clone()),
                     route_type: Some(itin_pattern.route_type),
                     direction_id: itin_pattern.direction_id,
-                    direction_pattern_id_parents: Some(
-                        direction_pattern
-                            .direction_pattern_id_with_parents
-                            .clone()
-                            .to_string(),
-                    ),
+                    direction_pattern_id_parents: Some(encode_pattern_id(
+                        direction_pattern.direction_pattern_id_with_parents,
+                    )),
                     stop_headsigns_unique_list: itin_pattern
                         .stop_headsigns_unique_list
                         .as_ref()
@@ -1104,7 +1106,7 @@ pub async fn gtfs_process_large_feed(
                     .map(|(stop_idx, stop_time)| DirectionPatternRow {
                         attempt_id: attempt_id.to_string(),
                         chateau: chateau_id.to_string(),
-                        direction_pattern_id: direction_pattern_id.to_string(),
+                        direction_pattern_id: encode_pattern_id(*direction_pattern_id),
                         stop_id: stop_time.stop_id.clone(),
                         stop_sequence: stop_idx as u32,
                         onestop_feed_id: feed_id.to_string(),
@@ -1158,7 +1160,11 @@ pub async fn gtfs_process_large_feed(
                     .await?;
         }
 
-        for group in &reduction.itineraries.iter().chunks(5000) {
+        for group in &reduction
+            .itineraries
+            .iter()
+            .sorted_unstable_by_key(|(id, _)| **id)
+            .chunks(5000) {
             let mut t_final: Vec<ItineraryPatternMeta> = vec![];
             let mut t_rows: Vec<Vec<ItineraryPatternRow>> = vec![];
 
@@ -1170,7 +1176,7 @@ pub async fn gtfs_process_large_feed(
                     timezone: itinerary.timezone.clone(),
                     trip_headsign: itinerary.trip_headsign.clone(),
                     trip_headsign_translations: None,
-                    itinerary_pattern_id: itinerary_id.to_string(),
+                    itinerary_pattern_id: encode_pattern_id(*itinerary_id),
                     trip_ids: reduction
                         .itineraries_to_trips
                         .get(itinerary_id)
@@ -1181,7 +1187,7 @@ pub async fn gtfs_process_large_feed(
                         .collect::<Vec<Option<String>>>(),
                     shape_id: itinerary.shape_id.clone(),
                     route_id: itinerary.route_id.clone(),
-                    direction_pattern_id: Some(itinerary.direction_pattern_id.to_string()),
+                    direction_pattern_id: Some(encode_pattern_id(itinerary.direction_pattern_id)),
                     row_count: itinerary.stop_sequences.len() as i32,
                 };
 
@@ -1195,7 +1201,7 @@ pub async fn gtfs_process_large_feed(
                         onestop_feed_id: feed_id.to_string(),
                         chateau: chateau_id.to_string(),
                         attempt_id: attempt_id.to_string(),
-                        itinerary_pattern_id: itinerary_id.to_string(),
+                        itinerary_pattern_id: encode_pattern_id(*itinerary_id),
                         stop_sequence: stop_index as i32,
                         stop_id: stop_sequence.stop_id.clone(),
                         gtfs_stop_sequence: stop_sequence.gtfs_stop_sequence as u32,
@@ -1249,7 +1255,11 @@ pub async fn gtfs_process_large_feed(
                     .await?;
         }
 
-        for group in &reduction.itineraries_to_trips.iter().chunks(5000) {
+        for group in &reduction
+            .itineraries_to_trips
+            .iter()
+            .sorted_unstable_by_key(|(id, _)| **id)
+            .chunks(5000) {
             let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
             for (itinerary_id, compressed_trip_list) in group {
                 let trip_pg = compressed_trip_list
@@ -1258,7 +1268,7 @@ pub async fn gtfs_process_large_feed(
                         onestop_feed_id: feed_id.to_string(),
                         chateau: chateau_id.to_string(),
                         attempt_id: attempt_id.to_string(),
-                        itinerary_pattern_id: itinerary_id.to_string(),
+                        itinerary_pattern_id: encode_pattern_id(*itinerary_id),
                         trip_id: compressed_trip_raw.trip_id.to_string(),
                         service_id: compressed_trip_raw.service_id.clone(),
                         direction_id: reduction
