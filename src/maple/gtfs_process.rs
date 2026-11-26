@@ -846,7 +846,8 @@ pub async fn gtfs_process_feed(
         | "f-rhdf02sco~seau~scolaire~fr"
         | "f-gbqu-semitan"
         | "f-gbwc-mobibreizh"
-        | "f-hauts~de~france~loise~1" => {
+        | "f-hauts~de~france~loise~1"
+        | "f-sp9x-normandie" => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-france-latest.osm.pbf",
