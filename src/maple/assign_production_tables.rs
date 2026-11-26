@@ -41,6 +41,7 @@ fn date_is_within_feed_time_range(date: NaiveDate, feed_time_range: &FeedTimeRan
 const SINGLE_INGEST_FEEDS: &[&str] = &[
     "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle",
     "f-networkrail",
+    "f-sncf~fr",
 ];
 
 fn retain_only_latest_ingest(feed_id: &str) -> bool {
