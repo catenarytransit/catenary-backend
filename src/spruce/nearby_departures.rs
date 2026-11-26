@@ -29,11 +29,10 @@ use std::time::Instant;
 
 // Import logic from shared modules
 use crate::departures_shared::{
-    AlertIndex, ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
     fetch_stop_data_for_chateau,
 };
 use catenary::aspen::lib::AspenRpcClient;
-use catenary::aspen_dataset::{AspenisedAlert, AspenisedTripUpdate};
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_calendar_structure_from_pg;
 
@@ -1379,7 +1378,6 @@ async fn render_chateau_response(
     HashMap<String, StopOutputV3>,
 ) {
     let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
-    let mut rt_alerts: BTreeMap<String, catenary::aspen_dataset::AspenisedAlert> = BTreeMap::new();
     let chateau = intermediate.chateau.clone();
 
     if !skip_realtime {
@@ -1405,20 +1403,15 @@ async fn render_chateau_response(
                             if let Ok(client) =
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                             {
-                                let (t, a) = tokio::join!(
-                                    client.get_all_trips_with_route_ids(
+                                let t = client
+                                    .get_all_trips_with_route_ids(
                                         tarpc::context::current(),
                                         chateau.clone(),
-                                        route_ids.into_iter().map(|x| x.into()).collect()
-                                    ),
-                                    client
-                                        .get_all_alerts(tarpc::context::current(), chateau.clone())
-                                );
+                                        route_ids.into_iter().map(|x| x.into()).collect(),
+                                    )
+                                    .await;
                                 if let Ok(Some(tr)) = t {
                                     rt_data = Some(tr);
-                                }
-                                if let Ok(Some(al)) = a {
-                                    rt_alerts = al.into_iter().collect();
                                 }
                             }
                         }
@@ -1437,7 +1430,6 @@ async fn render_chateau_response(
     let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new();
     let mut stop_output_map: HashMap<String, StopOutputV3> = HashMap::new();
 
-    let alert_index = AlertIndex::new(&rt_alerts);
     let relevant_stop_ids: HashSet<String> = intermediate
         .stop_to_key_map
         .keys()
@@ -1524,22 +1516,8 @@ async fn render_chateau_response(
                     let mut is_cancelled = false;
                     let mut is_delayed = false;
 
-                    // Alerts
-                    let relevant_alerts = alert_index.search(route_id.as_str(), trip_id.as_str());
-                    for alert in relevant_alerts {
-                        if alert.effect == Some(1) {
-                            let is_active = alert.active_period.iter().any(|ap| {
-                                let start = ap.start.unwrap_or(0);
-                                let end = ap.end.unwrap_or(u64::MAX);
-                                (departure_ts as u64) >= start && (departure_ts as u64) <= end
-                            });
-                            if is_active {
-                                // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-                            }
-                        }
-                    }
-
-                    // Trip Updates
+                    // Service alerts are advisory; only matching trip updates can
+                    // cancel a departure or mark its stop as skipped.
                     let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> =
                         None;
                     if let Some(data) = &rt_data {

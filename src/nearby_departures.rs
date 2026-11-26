@@ -21,9 +21,8 @@ use std::time::Instant;
 
 // Import logic from shared modules
 use crate::aspen::lib::AspenRpcClient;
-use crate::aspen_dataset::{AspenisedAlert, AspenisedTripUpdate};
 use crate::departures_shared::{
-    AlertIndex, ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
     fetch_stop_data_for_chateau,
 };
 use crate::gtfs_schedule_protobuf::protobuf_to_frequencies;
@@ -1796,7 +1795,6 @@ async fn fetch_chateau_data(
     let trip_ids: Vec<String> = trips_compressed.keys().cloned().collect();
 
     let mut rt_data: Option<crate::aspen::lib::TripsSelectionResponse> = None;
-    let mut rt_alerts: BTreeMap<String, crate::aspen_dataset::AspenisedAlert> = BTreeMap::new();
 
     if !skip_realtime {
         if let Some(meta) = aspen_chateau_cache.get(&chateau) {
@@ -1810,23 +1808,19 @@ async fn fetch_chateau_data(
                     let timer_get_trips = std::time::Instant::now();
                     let timeout_result = tokio::time::timeout(
                         std::time::Duration::from_millis(rt_timeout_ms),
-                        async {
-                            tokio::join!(
-                                client.get_all_trips_with_ids(
-                                    tarpc::context::current(),
-                                    chateau.clone(),
-                                    trip_ids.clone()
-                                ),
-                                client.get_all_alerts(tarpc::context::current(), chateau.clone()),
-                            )
-                        },
+                        // Service alerts are advisory; only trip updates affect departures.
+                        client.get_all_trips_with_ids(
+                            tarpc::context::current(),
+                            chateau.clone(),
+                            trip_ids.clone(),
+                        ),
                     )
                     .await;
                     let time_get_trips = timer_get_trips.elapsed();
                     processing.realtime_rpc_ms += time_get_trips.as_secs_f64() * 1000.0;
 
                     match timeout_result {
-                        Ok((t, a)) => {
+                        Ok(t) => {
                             println!(
                                 "nearby deps realtime data fetch chateau {}, aspen connect time {:?}, get trips time {:?}",
                                 chateau.as_str(),
@@ -1845,9 +1839,6 @@ async fn fetch_chateau_data(
 
                                 processing.legacy_realtime_update_count = tr.trip_updates.len();
                                 rt_data = Some(tr);
-                            }
-                            if let Ok(Some(al)) = a {
-                                rt_alerts = al.into_iter().collect();
                             }
                         }
                         Err(_) => {
@@ -1959,13 +1950,6 @@ async fn fetch_chateau_data(
     }
 
     let event_construction_started = Instant::now();
-    let alerts_idx_timer = std::time::Instant::now();
-    let alert_index = AlertIndex::new(&rt_alerts);
-    println!(
-        "alerts index formation time: {:?}",
-        alerts_idx_timer.elapsed()
-    );
-
     let relevant_stop_ids: HashSet<String> = stop_to_key_map
         .keys()
         .filter(|(c, _)| c == &chateau)
@@ -1973,7 +1957,6 @@ async fn fetch_chateau_data(
         .collect();
 
     let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
-    let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
 
     for trip_id in trip_ids {
         let trip = trips_compressed.get(&trip_id);
@@ -2064,44 +2047,8 @@ async fn fetch_chateau_data(
                         let mut rt_platform = None;
                         let mut is_cancelled = false;
 
-                        let timer_looking_at_rt_alerts = std::time::Instant::now();
-                        let relevant_alerts =
-                            alert_index.search(route_id.as_str(), trip_id.as_str());
-                        for alert in relevant_alerts {
-                            if alert.effect == Some(1) {
-                                // NO_SERVICE
-                                let is_active = alert.active_period.iter().any(|ap| {
-                                    let start = ap.start.unwrap_or(0);
-                                    let end = ap.end.unwrap_or(u64::MAX);
-                                    (departure_ts as u64) >= start && (departure_ts as u64) <= end
-                                });
-
-                                let applies_to_trip_without_a_referenced_stop = alert
-                                    .informed_entity
-                                    .iter()
-                                    .filter(|e| e.stop_id.is_none())
-                                    .any(|e| {
-                                        let route_match = e
-                                            .route_id
-                                            .as_ref()
-                                            .is_some_and(|r_id| *r_id == trip.route_id);
-                                        let trip_match = e.trip.as_ref().is_some_and(|t| {
-                                            t.trip_id
-                                                .as_ref()
-                                                .is_some_and(|t_id| *t_id == trip.trip_id)
-                                        });
-
-                                        route_match || trip_match
-                                    });
-
-                                if is_active && applies_to_trip_without_a_referenced_stop {
-                                    // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-                                }
-                            }
-                        }
-                        total_time_added_looking_at_rt_alerts +=
-                            timer_looking_at_rt_alerts.elapsed();
-
+                        // Cancellation is determined by the matching trip/stop update,
+                        // never by a service alert (including NO_SERVICE or DETOUR).
                         let mut active_update: Option<&crate::aspen_dataset::AspenisedTripUpdate> =
                             None;
                         if let Some(data) = &rt_data {
@@ -2169,7 +2116,7 @@ async fn fetch_chateau_data(
                         }
 
                         if let Some(update) = active_update {
-                            let timer_looking_at_rt_alerts = std::time::Instant::now();
+                            let timer_applying_rt_trip_update = std::time::Instant::now();
                             if let Some(stu) = crate::stop_matching::find_stop_time_update(
                                 &update.stop_time_update,
                                 row.gtfs_stop_sequence,
@@ -2196,8 +2143,8 @@ async fn fetch_chateau_data(
                                 if stu.schedule_relationship == Some(crate::aspen_dataset::AspenisedStopTimeScheduleRelationship::Skipped) { is_cancelled = true; }
                             }
                             if update.trip.schedule_relationship == Some(crate::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) { is_cancelled = true; }
-                            total_time_added_looking_at_rt_alerts +=
-                                timer_looking_at_rt_alerts.elapsed();
+                            total_time_added_looking_at_rt_trips +=
+                                timer_applying_rt_trip_update.elapsed();
                         }
 
                         let display_platform = rt_platform.or_else(|| {
@@ -2243,18 +2190,13 @@ async fn fetch_chateau_data(
     }
 
     println!(
-        "Total time added looking at rt alerts: {} ms",
-        total_time_added_looking_at_rt_alerts.as_millis()
-    );
-    println!(
         "Total time added looking at rt trips: {} ms",
         total_time_added_looking_at_rt_trips.as_millis()
     );
 
     processing.event_construction_ms = event_construction_started.elapsed().as_secs_f64() * 1000.0;
     processing.legacy_realtime_matching_ms =
-        (total_time_added_looking_at_rt_alerts + total_time_added_looking_at_rt_trips)
-            .as_secs_f64() * 1000.0;
+        total_time_added_looking_at_rt_trips.as_secs_f64() * 1000.0;
     processing.events_before_overlay = board_events.len();
 
     // Use the same indexed overlay as station boards, before time filtering and
