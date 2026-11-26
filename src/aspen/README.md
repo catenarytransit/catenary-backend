@@ -43,3 +43,9 @@ Deploy Aspen and Birch together because this adds a method to the tarpc service.
 ### Processing of data
 
 Data is matched against the GTFS schedules stored in Postgres data, and additional data is often fetched and brought in, such as train formation and platform information. The data is stored actively in RSS memory (DRAM) as it changes extremely frequently, sometimes second-to-second.
+
+### Metrolink GTFS-RT position exclusions
+
+Only the `f-metrolinktrains~rt` vehicle feed loads `metrolink-invalid-positions.txt` (relative to Aspen's working directory) on its first use. Set `ASPEN_METROLINK_INVALID_POSITIONS_FILE` to override the path. Each line contains an exact `latitude,longitude` pair; blank lines and `#` comments are supported.
+
+Deploy the file alongside Aspen and restart after editing it; no rebuild is needed. A missing, unreadable or malformed file logs a warning and disables filtering. Only the GTFS-RT position field is cleared; supplemental PTC processing is unchanged.

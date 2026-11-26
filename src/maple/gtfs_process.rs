@@ -195,6 +195,71 @@ async fn execute_pfaedle_rs(
     Ok(())
 }
 
+// Correct the raw route types before Pfaedle selects a transport network.
+fn normalize_nuernberg_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut agencies = csv::Reader::from_path(Path::new(gtfs_path).join("agency.txt"))?;
+    let headers = agencies.headers()?.clone();
+    let name_index = headers
+        .iter()
+        .position(|h| h == "agency_name")
+        .ok_or("agency.txt missing agency_name")?;
+    let id_index = headers.iter().position(|h| h == "agency_id");
+    let mut agency_ids = HashSet::new();
+    let mut agency_count = 0;
+    for record in agencies.records() {
+        let record = record?;
+        agency_count += 1;
+        if record.get(name_index) == Some("Bus Nürnberg") {
+            agency_ids.insert(
+                id_index
+                    .and_then(|i| record.get(i))
+                    .unwrap_or("")
+                    .to_owned(),
+            );
+        }
+    }
+    if agency_ids.is_empty() {
+        return Ok(());
+    }
+
+    let routes_path = Path::new(gtfs_path).join("routes.txt");
+    let temp_path = routes_path.with_extension("txt.tmp");
+    let mut routes = csv::ReaderBuilder::new()
+        .flexible(true)
+        .from_path(&routes_path)?;
+    let headers = routes.headers()?.clone();
+    let id_index = headers.iter().position(|h| h == "agency_id");
+    let type_index = headers
+        .iter()
+        .position(|h| h == "route_type")
+        .ok_or("routes.txt missing route_type")?;
+    let mut writer = csv::WriterBuilder::new()
+        .flexible(true)
+        .from_path(&temp_path)?;
+    writer.write_record(&headers)?;
+    for record in routes.records() {
+        let record = record?;
+        let id = id_index.and_then(|i| record.get(i)).unwrap_or("");
+        let matches_agency = if id.is_empty() {
+            agency_count == 1
+        } else {
+            agency_ids.contains(id)
+        };
+        if matches_agency {
+            let mut fields: Vec<&str> = record.iter().collect();
+            *fields.get_mut(type_index).ok_or("route missing route_type")? = "3";
+            writer.write_record(&fields)?;
+        } else {
+            writer.write_record(&record)?;
+        }
+    }
+    writer.flush()?;
+    drop(writer);
+    drop(routes);
+    std::fs::rename(temp_path, routes_path)?;
+    Ok(())
+}
+
 fn clear_invalid_trips_direction_ids(
     gtfs_path: &str,
 ) -> Result<usize, Box<dyn Error + Send + Sync>> {
@@ -348,6 +413,10 @@ pub async fn gtfs_process_feed(
 
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
+
+    if feed_id == "f-gtfs~de~bayern" {
+        normalize_nuernberg_bus_routes(&path)?;
+    }
 
     // Fix route colors before processing
     let _ = crate::gtfs_handlers::route_file_fixer::fix_gtfs_route_colors(&path);
