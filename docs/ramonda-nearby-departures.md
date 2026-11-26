@@ -14,8 +14,11 @@ The initial request returns two messages with the same `request_id`:
 
 - `type: "nearby_departures", phase: "priority", complete: false`: the single
   closest eligible station group, only if its distance is strictly below 1 km,
-  the nearest metro route, metros within 500 m, trams within 400 m, and the five
-  nearest distinct local bus routes across all chateaux. Station selection
+  the nearest metro route, metros within 500 m, trams within 400 m, and up to five
+  nearest distinct local bus routes across all chateaux. Each hoisted station
+  group or distinct hoisted metro/tram route reduces the bus budget by one,
+  saturating at zero. A nearest metro outside 500 m does not reduce the budget.
+  Station selection
   matches the Compose and web hoisting rule, using the OSM station point where
   available. All statically identified routes at the chosen station are
   included, even when several feeds serve it. If no station qualifies, no
