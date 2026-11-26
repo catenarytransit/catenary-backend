@@ -2379,16 +2379,19 @@ fn priority_routes(
         .filter(|(_, distance)| *distance < 1000.0)
         .min_by(|(a, da), (b, db)| da.total_cmp(db).then_with(|| a.cmp(b)))
         .map(|(station, _)| station.clone());
-    // Reserve one slot for hoisted rail/metro/tram content. Determine the
-    // budget before sorting so a closer bus cannot consume the reserved slot.
-    let has_hoisted = station.is_some() || candidates.iter().any(|candidate| {
-        candidate.station.is_none()
-            && ((matches!(candidate.mode, 1 | 7 | 12 | 400..=499)
-                && candidate.distance < 500.0)
-                || (matches!(candidate.mode, 0 | 5 | 900..=999)
-                    && candidate.distance < 400.0))
-    });
-    let bus_limit = if has_hoisted { 4 } else { 5 };
+    // Each hoisted display group replaces one priority bus slot.
+    // Count distinct local routes, not their stops or directions.
+    let hoisted_routes: HashSet<_> = candidates.iter()
+        .filter(|candidate| {
+            candidate.station.is_none()
+                && ((matches!(candidate.mode, 1 | 7 | 12 | 400..=499)
+                    && candidate.distance < 500.0)
+                    || (matches!(candidate.mode, 0 | 5 | 900..=999)
+                        && candidate.distance < 400.0))
+        })
+        .map(|candidate| (&candidate.chateau, &candidate.route))
+        .collect();
+    let bus_limit = 5usize.saturating_sub(hoisted_routes.len() + usize::from(station.is_some()));
     let mut selected = PrioritySelection { station, ..Default::default() };
     candidates.sort_by(|a, b| {
         a.distance
@@ -2591,7 +2594,7 @@ mod progressive_tests {
     }
 
     #[test]
-    fn prioritises_rail_hoisted_modes_and_four_distinct_bus_routes_globally() {
+    fn prioritises_hoisted_groups_and_remaining_bus_slots_globally() {
         let mut candidates = vec![
             station_candidate("rail", "train", 1, 900.0),
             candidate("city", "metro", 1, 100.0),
@@ -2613,21 +2616,19 @@ mod progressive_tests {
             ("city", "metro-2"),
             ("city", "tram"),
             ("other", "0"),
-            ("bus", "0"),
-            ("bus", "2"),
         ] {
             assert!(selected.contains_route(key.0, key.1));
         }
-        for key in [("city", "metro-far"), ("city", "tram-far"), ("bus", "3"), ("bus", "4")] {
+        for key in [("city", "metro-far"), ("city", "tram-far"), ("bus", "0"), ("bus", "3"), ("bus", "4")] {
             assert!(!selected.contains_route(key.0, key.1));
         }
-        assert_eq!(selected.local_routes.len() + selected.station_routes.len(), 8);
+        assert_eq!(selected.local_routes.len() + selected.station_routes.len(), 5);
     }
 
     #[test]
-    fn bus_budget_decreases_once_if_any_station_or_route_is_hoisted() {
-        // Each mode independently reserves a slot, including when all buses
-        // are closer than the station. Exact threshold distances do not hoist.
+    fn bus_budget_decreases_for_each_distinct_hoisted_group() {
+        // Each group reserves a slot, including when all buses are closer.
+        // Exact threshold distances do not hoist and the budget saturates at zero.
         for (extra, station_distance, expected_buses) in [
             (vec![], 1000.0, 5),
             (vec![station_candidate("rail", "train", 1, 999.0)], 999.0, 4),
@@ -2640,7 +2641,13 @@ mod progressive_tests {
                 station_candidate("rail", "train", 1, 999.0),
                 candidate("city", "metro", 1, 499.0),
                 candidate("city", "tram", 900, 399.0),
-            ], 999.0, 4),
+            ], 999.0, 2),
+            (vec![
+                candidate("city", "metro", 1, 100.0),
+                candidate("city", "metro", 1, 200.0),
+                candidate("city", "metro-2", 1, 300.0),
+            ], 1000.0, 3),
+            ((0..6).map(|i| candidate("city", &i.to_string(), 1, 100.0)).collect(), 1000.0, 0),
         ] {
             let mut candidates: Vec<_> = (0..7)
                 .map(|i| candidate("bus", &i.to_string(), 3, 10.0 + i as f64))
