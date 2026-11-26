@@ -317,6 +317,50 @@ pub struct NearbyDeparturesV3Response {
     pub debug: NearbyDeparturesDebug,
 }
 
+/// Durations are cumulative across chateaux, not critical-path wall time.
+/// Event construction includes service-date and legacy realtime matching.
+/// Output grouping includes both per-chateau grouping and final assembly.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct NearbyProcessingDebug {
+    pub realtime_connection_ms: f64,
+    pub realtime_rpc_ms: f64,
+    pub realtime_overlay_ms: f64,
+    pub realtime_additional_sql_ms: f64,
+    pub service_date_processing_ms: f64,
+    pub event_construction_ms: f64,
+    pub output_grouping_ms: f64,
+    pub legacy_realtime_matching_ms: f64,
+    pub realtime_loader_total_ms: f64,
+    pub compressed_trip_count: usize,
+    pub events_before_overlay: usize,
+    pub realtime_update_count: usize,
+    pub events_after_time_filter: usize,
+    pub legacy_realtime_update_count: usize,
+    pub realtime_modification_count: usize,
+    pub events_after_overlay: usize,
+}
+
+impl NearbyProcessingDebug {
+    fn accumulate(&mut self, other: &Self) {
+        self.realtime_connection_ms += other.realtime_connection_ms;
+        self.realtime_rpc_ms += other.realtime_rpc_ms;
+        self.realtime_overlay_ms += other.realtime_overlay_ms;
+        self.realtime_additional_sql_ms += other.realtime_additional_sql_ms;
+        self.service_date_processing_ms += other.service_date_processing_ms;
+        self.event_construction_ms += other.event_construction_ms;
+        self.output_grouping_ms += other.output_grouping_ms;
+        self.legacy_realtime_matching_ms += other.legacy_realtime_matching_ms;
+        self.realtime_loader_total_ms += other.realtime_loader_total_ms;
+        self.compressed_trip_count += other.compressed_trip_count;
+        self.events_before_overlay += other.events_before_overlay;
+        self.realtime_update_count += other.realtime_update_count;
+        self.events_after_time_filter += other.events_after_time_filter;
+        self.legacy_realtime_update_count += other.legacy_realtime_update_count;
+        self.realtime_modification_count += other.realtime_modification_count;
+        self.events_after_overlay += other.events_after_overlay;
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct NearbyDeparturesDebug {
     pub total_time_ms: u128,
@@ -327,6 +371,9 @@ pub struct NearbyDeparturesDebug {
     pub initial_stop_count: Option<usize>,
     pub initial_osm_station_count: Option<usize>,
     pub sql_queries: Vec<NearbySqlTiming>,
+    #[serde(flatten)]
+    pub processing: NearbyProcessingDebug,
+    pub processing_by_chateau: BTreeMap<String, NearbyProcessingDebug>,
 }
 
 // --- Long Distance Structs ---
@@ -704,6 +751,8 @@ impl PreparedNearby {
                     initial_stop_count: Some(0),
                     initial_osm_station_count: Some(0),
                     sql_queries: snapshot_sql_timings(&sql_timings),
+                    processing: NearbyProcessingDebug::default(),
+                    processing_by_chateau: BTreeMap::new(),
                 },
             });
         }
@@ -878,9 +927,14 @@ impl PreparedNearby {
         let mut routes_output: HashMap<String, HashMap<String, RouteInfoExport>> = HashMap::new();
         let mut stops_output: HashMap<String, HashMap<String, StopOutputV3>> = HashMap::new();
 
+        let mut processing = NearbyProcessingDebug::default();
+        let mut processing_by_chateau = BTreeMap::new();
         let mut chateau_stream = futures::stream::iter(chateau_futures).buffer_unordered(3);
         while let Some(res) = chateau_stream.next().await {
-            if let Some((ld_part, local_part, route_part, stop_part)) = res {
+            if let Some((ld_part, local_part, route_part, stop_part, debug_chateau, chateau_debug)) = res {
+                processing.accumulate(&chateau_debug);
+                processing_by_chateau.insert(debug_chateau, chateau_debug);
+                let grouping_started = Instant::now();
                 let mut chateau_opt = None;
                 if let Some((c, _)) = ld_part.keys().next() {
                     chateau_opt = Some(c.clone());
@@ -913,10 +967,12 @@ impl PreparedNearby {
                         .extend(route_part);
                     stops_output.entry(c).or_default().extend(stop_part);
                 }
+                processing.output_grouping_ms += grouping_started.elapsed().as_secs_f64() * 1000.0;
             }
         }
 
         let pipeline_processing_time = pipeline_start.elapsed();
+        let final_grouping_started = Instant::now();
 
         // A. Long Distance Output Generation
         let mut ld_output: Vec<StationDepartureGroupExport> = Vec::new();
@@ -957,6 +1013,7 @@ impl PreparedNearby {
             ld_output.iter().filter_map(|g| g.osm_station_id).collect();
         let mut osm_station_info_map: HashMap<i64, crate::models::OsmStation> = HashMap::new();
 
+        processing.output_grouping_ms += final_grouping_started.elapsed().as_secs_f64() * 1000.0;
         if !osm_ids_to_fetch.is_empty() {
             let osm_stations_data: Vec<crate::models::OsmStation> = timed_nearby_sql!(
                 sql_timings,
@@ -975,6 +1032,7 @@ impl PreparedNearby {
             }
         }
 
+        let final_grouping_started = Instant::now();
         let mut merged_ld_output: Vec<StationDepartureGroupExport> =
             Vec::with_capacity(ld_output.len());
         let mut osm_station_map: HashMap<i64, usize> = HashMap::new();
@@ -1065,6 +1123,7 @@ impl PreparedNearby {
         }
         local_output.sort_by(|a, b| a.closest_distance.partial_cmp(&b.closest_distance).unwrap());
 
+        processing.output_grouping_ms += final_grouping_started.elapsed().as_secs_f64() * 1000.0;
         Ok(NearbyDeparturesV3Response {
             long_distance: ld_output,
             local: local_output,
@@ -1079,6 +1138,8 @@ impl PreparedNearby {
                 initial_stop_count: Some(stops.len()),
                 initial_osm_station_count: Some(number_of_unique_osm_stations),
                 sql_queries: snapshot_sql_timings(&sql_timings),
+                processing,
+                processing_by_chateau,
             },
         })
     }
@@ -1114,7 +1175,10 @@ async fn fetch_chateau_data(
     >,
     HashMap<String, RouteInfoExport>,
     HashMap<String, StopOutputV3>,
+    String,
+    NearbyProcessingDebug,
 )> {
+    let mut processing = NearbyProcessingDebug::default();
     let query_slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
     let priority_route_ids = selection.included_route_ids(&chateau);
     let excluded_local_route_ids = selection.excluded_local_route_ids(&chateau);
@@ -1482,6 +1546,8 @@ async fn fetch_chateau_data(
     //     actual_itinerary_ids.len()
     // );
 
+    processing.compressed_trip_count = trips_compressed_result.len();
+
     // Fetch Calendar (Moved here to optimize performance)
     let mut service_ids_to_fetch = HashSet::new();
     for trip in &trips_compressed_result {
@@ -1542,9 +1608,11 @@ async fn fetch_chateau_data(
         (vec![], vec![])
     };
 
+    let service_date_started = Instant::now();
     let calendar_struct =
         crate::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates])
             .unwrap_or_default();
+    processing.service_date_processing_ms += service_date_started.elapsed().as_secs_f64() * 1000.0;
     let service_map = calendar_struct.get(&chateau);
 
     // Build Maps
@@ -1618,10 +1686,10 @@ async fn fetch_chateau_data(
         if let Some(meta) = aspen_chateau_cache.get(&chateau) {
             if !trip_ids.is_empty() {
                 let timer_to_connect_to_aspen = std::time::Instant::now();
-                if let Ok(client) =
-                    crate::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
-                {
-                    let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+                let client = crate::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await;
+                let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+                processing.realtime_connection_ms += time_to_connect_to_aspen.as_secs_f64() * 1000.0;
+                if let Ok(client) = client {
 
                     let timer_get_trips = std::time::Instant::now();
                     let timeout_result = tokio::time::timeout(
@@ -1639,6 +1707,7 @@ async fn fetch_chateau_data(
                     )
                     .await;
                     let time_get_trips = timer_get_trips.elapsed();
+                    processing.realtime_rpc_ms += time_get_trips.as_secs_f64() * 1000.0;
 
                     match timeout_result {
                         Ok((t, a)) => {
@@ -1658,6 +1727,7 @@ async fn fetch_chateau_data(
                                     tr.stop_id_to_parent_id.len()
                                 );
 
+                                processing.legacy_realtime_update_count = tr.trip_updates.len();
                                 rt_data = Some(tr);
                             }
                             if let Ok(Some(al)) = a {
@@ -1772,6 +1842,7 @@ async fn fetch_chateau_data(
         }
     }
 
+    let event_construction_started = Instant::now();
     let alerts_idx_timer = std::time::Instant::now();
     let alert_index = AlertIndex::new(&rt_alerts);
     println!(
@@ -1803,6 +1874,7 @@ async fn fetch_chateau_data(
             };
 
             // Service Date Check
+            let service_date_started = Instant::now();
             let mut valid_service_dates = Vec::new();
             if let Some(services) = service_map {
                 if let Some(service) = services.get(trip.service_id.as_str()) {
@@ -1815,6 +1887,8 @@ async fn fetch_chateau_data(
                     }
                 }
             }
+
+            processing.service_date_processing_ms += service_date_started.elapsed().as_secs_f64() * 1000.0;
 
             let rows = match itins.get(&trip.itinerary_pattern_id) {
                 Some(r) => r,
@@ -2061,6 +2135,12 @@ async fn fetch_chateau_data(
         total_time_added_looking_at_rt_trips.as_millis()
     );
 
+    processing.event_construction_ms = event_construction_started.elapsed().as_secs_f64() * 1000.0;
+    processing.legacy_realtime_matching_ms =
+        (total_time_added_looking_at_rt_alerts + total_time_added_looking_at_rt_trips)
+            .as_secs_f64() * 1000.0;
+    processing.events_before_overlay = board_events.len();
+
     // Use the same indexed overlay as station boards, before time filtering and
     // limits. Query every nearby stop: static direction pruning cannot predict
     // a detour or an added trip's stop calls.
@@ -2068,7 +2148,9 @@ async fn fetch_chateau_data(
     let mut agency_dictionaries = BTreeMap::from([(chateau.clone(), agencies)]);
     let mut realtime_stops = BTreeMap::new();
     if !skip_realtime {
-        realtime_stops = crate::departure_realtime_loader::apply_departure_realtime(
+        let mut realtime_timings = crate::departure_realtime_loader::DepartureRealtimeTimings::default();
+        let realtime_loader_started = Instant::now();
+        realtime_stops = crate::departure_realtime_loader::apply_departure_realtime_timed(
             &mut board_events,
             &BTreeMap::from([(chateau.clone(), stop_ids.iter().cloned().collect())]),
             &pool,
@@ -2077,9 +2159,19 @@ async fn fetch_chateau_data(
             &mut agency_dictionaries,
             &mut BTreeMap::new(),
             false,
+            &mut realtime_timings,
         )
         .await;
+        processing.realtime_loader_total_ms = realtime_loader_started.elapsed().as_secs_f64() * 1000.0;
+        processing.realtime_connection_ms += realtime_timings.connection_ms;
+        processing.realtime_rpc_ms += realtime_timings.rpc_ms;
+        processing.realtime_overlay_ms = realtime_timings.overlay_ms;
+        processing.realtime_additional_sql_ms = realtime_timings.additional_sql_ms;
+        processing.realtime_update_count = realtime_timings.update_count;
+        processing.realtime_modification_count = realtime_timings.modification_count;
     }
+    processing.events_after_overlay = board_events.len();
+    let grouping_started = Instant::now();
     let routes = route_dictionaries.remove(&chateau).unwrap_or_default();
     let agencies = agency_dictionaries.remove(&chateau).unwrap_or_default();
     for event in board_events {
@@ -2121,6 +2213,7 @@ async fn fetch_chateau_data(
         ) else {
             continue;
         };
+        processing.events_after_time_filter += 1;
         let Some(datetime) = chrono::Utc.timestamp_opt(time as i64, 0).single() else {
             continue;
         };
@@ -2274,6 +2367,7 @@ async fn fetch_chateau_data(
         }
     }
 
+    processing.output_grouping_ms = grouping_started.elapsed().as_secs_f64() * 1000.0;
     Some((
         ld_departures_by_group,
         local_departures
@@ -2285,6 +2379,8 @@ async fn fetch_chateau_data(
             .collect(),
         route_info_map,
         stop_output_map,
+        chateau,
+        processing,
     ))
 }
 
@@ -2964,6 +3060,24 @@ mod nearby_sql_timing_tests {
 #[cfg(test)]
 mod nearby_metadata_projection_tests {
     use super::*;
+
+    #[test]
+    fn processing_debug_accumulates_and_serializes() {
+        let mut total = NearbyProcessingDebug::default();
+        let one = NearbyProcessingDebug {
+            realtime_overlay_ms: 12.5,
+            events_before_overlay: 100,
+            realtime_update_count: 3,
+            ..Default::default()
+        };
+        total.accumulate(&one);
+        total.accumulate(&one);
+        let json = serde_json::to_value(total).unwrap();
+        assert_eq!(json["realtime_overlay_ms"], 25.0);
+        assert_eq!(json["events_before_overlay"], 200);
+        assert_eq!(json["realtime_update_count"], 6);
+        assert_eq!(json["realtime_rpc_ms"], 0.0);
+    }
 
     #[test]
     fn nearby_metadata_sql_omits_trip_ids() {
