@@ -2379,6 +2379,16 @@ fn priority_routes(
         .filter(|(_, distance)| *distance < 1000.0)
         .min_by(|(a, da), (b, db)| da.total_cmp(db).then_with(|| a.cmp(b)))
         .map(|(station, _)| station.clone());
+    // Reserve one slot for hoisted rail/metro/tram content. Determine the
+    // budget before sorting so a closer bus cannot consume the reserved slot.
+    let has_hoisted = station.is_some() || candidates.iter().any(|candidate| {
+        candidate.station.is_none()
+            && ((matches!(candidate.mode, 1 | 7 | 12 | 400..=499)
+                && candidate.distance < 500.0)
+                || (matches!(candidate.mode, 0 | 5 | 900..=999)
+                    && candidate.distance < 400.0))
+    });
+    let bus_limit = if has_hoisted { 4 } else { 5 };
     let mut selected = PrioritySelection { station, ..Default::default() };
     candidates.sort_by(|a, b| {
         a.distance
@@ -2404,7 +2414,7 @@ fn priority_routes(
         let is_tram = matches!(candidate.mode, 0 | 5 | 900..=999);
         let hoisted = (is_metro && (!metro || candidate.distance < 500.0))
             || (is_tram && candidate.distance < 400.0);
-        if hoisted || (is_bus && buses < 5) {
+        if hoisted || (is_bus && buses < bus_limit) {
             selected.local_routes.insert(key);
         }
         if is_bus {
@@ -2581,7 +2591,7 @@ mod progressive_tests {
     }
 
     #[test]
-    fn prioritises_rail_hoisted_modes_and_five_distinct_bus_routes_globally() {
+    fn prioritises_rail_hoisted_modes_and_four_distinct_bus_routes_globally() {
         let mut candidates = vec![
             station_candidate("rail", "train", 1, 900.0),
             candidate("city", "metro", 1, 100.0),
@@ -2604,14 +2614,51 @@ mod progressive_tests {
             ("city", "tram"),
             ("other", "0"),
             ("bus", "0"),
-            ("bus", "3"),
+            ("bus", "2"),
         ] {
             assert!(selected.contains_route(key.0, key.1));
         }
-        for key in [("city", "metro-far"), ("city", "tram-far"), ("bus", "4")] {
+        for key in [("city", "metro-far"), ("city", "tram-far"), ("bus", "3"), ("bus", "4")] {
             assert!(!selected.contains_route(key.0, key.1));
         }
-        assert_eq!(selected.local_routes.len() + selected.station_routes.len(), 9);
+        assert_eq!(selected.local_routes.len() + selected.station_routes.len(), 8);
+    }
+
+    #[test]
+    fn bus_budget_decreases_once_if_any_station_or_route_is_hoisted() {
+        // Each mode independently reserves a slot, including when all buses
+        // are closer than the station. Exact threshold distances do not hoist.
+        for (extra, station_distance, expected_buses) in [
+            (vec![], 1000.0, 5),
+            (vec![station_candidate("rail", "train", 1, 999.0)], 999.0, 4),
+            (vec![station_candidate("rail", "train", 1, 1000.0)], 1000.0, 5),
+            (vec![candidate("city", "metro", 1, 499.0)], 1000.0, 4),
+            (vec![candidate("city", "metro", 1, 500.0)], 1000.0, 5),
+            (vec![candidate("city", "tram", 900, 399.0)], 1000.0, 4),
+            (vec![candidate("city", "tram", 900, 400.0)], 1000.0, 5),
+            (vec![
+                station_candidate("rail", "train", 1, 999.0),
+                candidate("city", "metro", 1, 499.0),
+                candidate("city", "tram", 900, 399.0),
+            ], 999.0, 4),
+        ] {
+            let mut candidates: Vec<_> = (0..7)
+                .map(|i| candidate("bus", &i.to_string(), 3, 10.0 + i as f64))
+                .collect();
+            candidates.extend(extra);
+            let priority = Arc::new(priority_routes(
+                candidates,
+                &HashMap::from([(PriorityStation::Osm(1), station_distance)]),
+            ));
+            let first = RouteSelection::Only(priority.clone());
+            let second = RouteSelection::Except(priority);
+            let stop = StationKey::Stop("stop".into());
+            for i in 0..7 {
+                let route = i.to_string();
+                assert_eq!(first.allows("bus", &route, &stop, false), i < expected_buses);
+                assert_eq!(second.allows("bus", &route, &stop, false), i >= expected_buses);
+            }
+        }
     }
 
     #[test]
