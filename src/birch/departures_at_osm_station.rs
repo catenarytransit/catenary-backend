@@ -22,14 +22,11 @@ use chrono::Datelike;
 use chrono::NaiveDate;
 use chrono::TimeZone;
 use compact_str::CompactString;
-use diesel::BoolExpressionMethods;
 use diesel::ExpressionMethods;
-use diesel::JoinOnDsl;
 use diesel::QueryDsl;
 use diesel::SelectableHelper;
 use diesel::dsl::sql;
 use diesel::sql_types::Bool;
-use diesel::sql_types::*;
 use diesel_async::RunQueryDsl;
 use ecow::EcoString;
 use futures::StreamExt;
@@ -1238,54 +1235,13 @@ async fn fetch_chateau_data_optimized(
     date_filter: Option<(NaiveDate, NaiveDate)>,
     trip_batch_limiter: Arc<tokio::sync::Semaphore>,
 ) -> crate::departures_shared::StopDataResult {
-    let mut conn = pool.get().await.unwrap();
-
-    // Anchor at selected stop occurrences, matching the nearby-departures pipeline.
-    // Substitute an empty trip_ids array: departure boards read trips_compressed.
-    use catenary::schema::gtfs::{itinerary_pattern as ip, itinerary_pattern_meta as im};
-    let matching: Vec<(
-        catenary::models::ItineraryPatternRow,
-        catenary::models::ItineraryPatternMeta,
-    )> = ip::table
-        .inner_join(
-            im::table.on(ip::onestop_feed_id
-                .eq(im::onestop_feed_id)
-                .and(ip::attempt_id.eq(im::attempt_id))
-                .and(ip::itinerary_pattern_id.eq(im::itinerary_pattern_id))),
-        )
-        .filter(ip::chateau.eq(&chateau_id))
-        .filter(im::chateau.eq(&chateau_id))
-        .filter(ip::stop_id.eq_any(&stop_ids))
-        .select((
-            catenary::models::ItineraryPatternRow::as_select(),
-            (
-                im::onestop_feed_id,
-                im::attempt_id,
-                sql::<Array<Nullable<Text>>>("ARRAY[]::text[]"),
-                im::itinerary_pattern_id,
-                im::chateau,
-                im::trip_headsign,
-                im::trip_headsign_translations,
-                im::shape_id,
-                im::timezone,
-                im::route_id,
-                im::direction_pattern_id,
-                im::row_count,
-            ),
-        ))
-        .load(&mut conn)
-        .await
-        .unwrap_or_default();
-    let mut selected_rows = Vec::new();
-    let mut selected_meta = BTreeMap::new();
-    for (row, meta) in matching {
-        selected_rows.push(row);
-        selected_meta
-            .entry(meta.itinerary_pattern_id.clone())
-            .or_insert(meta);
-    }
-    let itin_meta_list: Vec<_> = selected_meta.into_values().collect();
-    drop(conn);
+    let (selected_rows, itin_meta_list) = catenary::departures_shared::load_stop_itineraries(
+        &pool,
+        &chateau_id,
+        &stop_ids,
+        None,
+    )
+    .await;
 
     let direction_pattern_ids: Vec<String> = itin_meta_list
         .iter()
