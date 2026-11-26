@@ -1,7 +1,6 @@
 // GTFS stop time compression algorithm
 // Compatible with transfer patterns
 
-use crate::ahash_fast_hash;
 use crate::enum_to_int::*;
 use ahash::AHashMap;
 use ahash::AHashSet;
@@ -13,7 +12,10 @@ use std::collections::hash_map::Entry::Occupied;
 use std::collections::hash_map::Entry::Vacant;
 use std::hash::Hash;
 use tzf_rs::DefaultFinder;
+pub mod pattern_id;
 pub mod service_optimisation;
+
+use pattern_id::{PatternIds, route_group_prefix};
 
 lazy_static! {
     static ref FINDER: DefaultFinder = DefaultFinder::new();
@@ -87,7 +89,24 @@ pub struct ResponseFromReduce {
     pub direction_pattern_id_to_itineraries: AHashMap<u64, AHashSet<u64>>,
 }
 
-pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
+pub fn reduce(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> anyhow::Result<ResponseFromReduce> {
+    let mut ids = PatternIds::new(feed_id);
+    // Short names are grouping hints, not unique identities.
+    // Compute prefixes once; never assign them by route enumeration order.
+    let route_prefixes: AHashMap<&str, u16> = gtfs
+        .routes
+        .iter()
+        .map(|(id, route)| {
+            (
+                id.as_str(),
+                route_group_prefix(
+                    route.agency_id.as_deref(),
+                    route.short_name.as_deref(),
+                    id,
+                ),
+            )
+        })
+        .collect();
     let mut itineraries: AHashMap<u64, ItineraryCover> = AHashMap::new();
     let mut trips_to_itineraries: AHashMap<CompactString, u64> = AHashMap::new();
     let mut itineraries_to_trips: AHashMap<u64, Vec<TripUnderItinerary>> = AHashMap::new();
@@ -275,15 +294,21 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
         //calculate direction pattern reference
 
-        let direction_pattern_id = calculate_direction_pattern_id(
+        let route_prefix = route_prefixes
+            .get(trip.route_id.as_str())
+            .copied()
+            .unwrap_or_else(|| route_group_prefix(None, None, &trip.route_id));
+        let direction_pattern_id = ids.direction(
+            route_prefix,
             &trip.route_id,
             stop_diffs
                 .iter()
                 .map(|x| x.stop_id.clone())
                 .collect::<Vec<CompactString>>(),
-        );
+        )?;
 
-        let direction_pattern_id_with_parents = calculate_direction_pattern_id(
+        let direction_pattern_id_with_parents = ids.direction(
+            route_prefix,
             &trip.route_id,
             stop_diffs
                 .iter()
@@ -295,7 +320,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
                     None => x.stop_id.clone(),
                 })
                 .collect::<Vec<CompactString>>(),
-        );
+        )?;
 
         let itinerary_cover = ItineraryCover {
             stop_sequences: stop_diffs,
@@ -329,9 +354,20 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         };
 
         //itinerary id generated
-        let hash_of_itinerary = ahash_fast_hash(&itinerary_cover);
+        let hash_of_itinerary = ids.itinerary(&itinerary_cover)?;
 
-        itineraries.insert(hash_of_itinerary, itinerary_cover);
+        // Never let a truncated digest silently replace a distinct pattern.
+        match itineraries.entry(hash_of_itinerary) {
+            Occupied(entry) => {
+                anyhow::ensure!(
+                    entry.get() == &itinerary_cover,
+                    "itinerary pattern ID collision in feed {feed_id}: {hash_of_itinerary:016x}"
+                );
+            }
+            Vacant(entry) => {
+                entry.insert(itinerary_cover);
+            }
+        }
         trips_to_itineraries.insert(trip_id.into(), hash_of_itinerary);
 
         let trip_under_itinerary = TripUnderItinerary {
@@ -356,7 +392,9 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
 
     let mut direction_patterns: AHashMap<u64, DirectionPattern> = AHashMap::new();
 
-    for (itinerary_id, itinerary) in &itineraries {
+    // Select the same representative for each direction regardless of
+    // hash-map traversal or trip insertion order.
+    for (itinerary_id, itinerary) in itineraries.iter().sorted_unstable_by_key(|(id, _)| **id) {
         let mut stop_sequence: Vec<CompactString> = Vec::new();
 
         for stop_diff in &itinerary.stop_sequences {
@@ -384,12 +422,11 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
             route_type: itinerary.route_type,
         };
 
-        let hash_of_direction_pattern_output = calculate_direction_pattern_id(
-            &direction_pattern.route_id,
-            direction_pattern.stop_sequence.to_vec(),
-        );
+        let hash_of_direction_pattern_output = itinerary.direction_pattern_id;
 
-        direction_patterns.insert(hash_of_direction_pattern_output, direction_pattern);
+        direction_patterns
+            .entry(hash_of_direction_pattern_output)
+            .or_insert(direction_pattern);
         direction_pattern_id_to_itineraries
             .entry(hash_of_direction_pattern_output)
             .and_modify(|x| {
@@ -512,13 +549,13 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs) -> ResponseFromReduce {
         }
     }
 
-    ResponseFromReduce {
+    Ok(ResponseFromReduce {
         itineraries,
         trips_to_itineraries,
         itineraries_to_trips,
         direction_patterns,
         direction_pattern_id_to_itineraries,
-    }
+    })
 }
 
 // Returns a checked offset, retaining GTFS's service-day representation
@@ -617,22 +654,6 @@ where
         .sort_by_key(|(stop, (arrival, departure))| (*arrival, *departure, stop_sequence(stop)));
 
     Ok(stops_with_keys.into_iter().map(|(stop, _)| stop).collect())
-}
-
-fn calculate_direction_pattern_id(route_id: &str, stop_sequence: Vec<CompactString>) -> u64 {
-    let mut hash_of_direction_pattern_temp: Vec<String> = Vec::new();
-
-    hash_of_direction_pattern_temp.push(route_id.into());
-
-    for stop_id in stop_sequence {
-        hash_of_direction_pattern_temp.push(stop_id.into());
-    }
-
-    let convert_to_bytes =
-        bincode::encode_to_vec(&hash_of_direction_pattern_temp, bincode::config::standard())
-            .unwrap();
-
-    seahash::hash(&convert_to_bytes)
 }
 
 #[cfg(test)]
@@ -859,7 +880,7 @@ mod pickup_drop_off_tests {
                 }
             }
 
-            let reduced = reduce(&gtfs);
+            let reduced = reduce(&gtfs, "test-feed").unwrap();
             assert_eq!(reduced.itineraries.len(), methods.len() * methods.len());
             for (_, pickup_code) in methods {
                 for (_, drop_off_code) in methods {
@@ -885,10 +906,58 @@ mod pickup_drop_off_tests {
             gtfs.trips.insert(id.to_string(), trip);
         }
 
-        let reduced = reduce(&gtfs);
+        let reduced = reduce(&gtfs, "test-feed").unwrap();
         assert_eq!(reduced.itineraries.len(), 1);
         let hash = reduced.trips_to_itineraries["first"];
         assert_eq!(hash, reduced.trips_to_itineraries["second"]);
         assert_eq!(reduced.itineraries_to_trips[&hash].len(), 2);
     }
+
+    #[test]
+    fn pattern_ids_are_stable_when_unrelated_trips_are_added() {
+        let mut gtfs = Gtfs::default();
+        gtfs.trips.insert("first".into(), trip("first", 3600));
+        let original = reduce(&gtfs, "test-feed").unwrap();
+        let id = original.trips_to_itineraries["first"];
+        let direction = original.itineraries[&id].direction_pattern_id;
+
+        let mut other = trip("other", 7200);
+        other.route_id = "new-route".into();
+        gtfs.trips.insert("other".into(), other);
+        let expanded = reduce(&gtfs, "test-feed").unwrap();
+        assert_eq!(expanded.trips_to_itineraries["first"], id);
+        assert_eq!(expanded.itineraries[&id].direction_pattern_id, direction);
+        assert_eq!(id >> 32, direction >> 32);
+    }
+
+    #[test]
+    fn timing_changes_preserve_direction_prefix_but_change_itinerary() {
+        let mut gtfs = Gtfs::default();
+        let first = trip("first", 3600);
+        let mut second = trip("second", 3600);
+        second.stop_times[1].arrival_time = Some(4300);
+        second.stop_times[1].departure_time = Some(4300);
+        gtfs.trips.insert("first".into(), first);
+        gtfs.trips.insert("second".into(), second);
+        let reduced = reduce(&gtfs, "test-feed").unwrap();
+        let a = reduced.trips_to_itineraries["first"];
+        let b = reduced.trips_to_itineraries["second"];
+        assert_ne!(a, b);
+        assert_eq!(a >> 32, b >> 32);
+        assert_eq!(
+            reduced.itineraries[&a].direction_pattern_id,
+            reduced.itineraries[&b].direction_pattern_id
+        );
+    }
+
+    #[test]
+    fn pattern_identity_is_namespaced_by_feed_without_changing_route_prefix() {
+        let mut gtfs = Gtfs::default();
+        gtfs.trips.insert("first".into(), trip("first", 3600));
+        let a = reduce(&gtfs, "feed-a").unwrap().trips_to_itineraries["first"];
+        let b = reduce(&gtfs, "feed-b").unwrap().trips_to_itineraries["first"];
+        assert_eq!(a >> 48, b >> 48);
+        assert_ne!(a, b);
+    }
+
 }
