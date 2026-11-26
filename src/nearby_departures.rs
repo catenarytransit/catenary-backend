@@ -58,7 +58,7 @@ const LONG_DISTANCE_CHATEAUX: &[&str] = &[
 // This endpoint reads its trips from trips_compressed, so it never uses the
 // potentially large itinerary_pattern_meta.trip_ids array. Explicitly select
 // only the metadata needed to construct nearby departures.
-#[derive(Debug, Queryable, Selectable)]
+#[derive(Debug, Queryable, Selectable, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
 struct NearbyItineraryPatternMeta {
     itinerary_pattern_id: String,
@@ -66,6 +66,93 @@ struct NearbyItineraryPatternMeta {
     direction_pattern_id: Option<String>,
     timezone: String,
     row_count: i32,
+}
+
+// A stop-first optimization fence is intentional: the unrestricted three-way
+// join can start from routes, repeatedly scan all metadata for a feed/attempt,
+// then read entire itinerary patterns just to discard non-nearby occurrences.
+// Materialize the selected stop rows, deduplicate complete metadata/route keys,
+// and keep the LATERAL lookups parameterized (OFFSET 0 prevents pull-up).
+// All stages run in one statement on the same snapshot. Do not change global
+// planner settings or introduce additional indexes to enforce this order.
+const NEARBY_ITINERARY_SQL: &str = r#"
+WITH stop_rows AS MATERIALIZED (
+    SELECT
+        ip.onestop_feed_id,
+        ip.attempt_id,
+        ip.itinerary_pattern_id,
+        ip.stop_sequence,
+        ip.arrival_time_since_start,
+        ip.departure_time_since_start,
+        ip.interpolated_time_since_start,
+        ip.stop_id,
+        ip.chateau,
+        ip.gtfs_stop_sequence,
+        ip.timepoint,
+        ip.stop_headsign_idx,
+        ip.pickup_type,
+        ip.drop_off_type
+    FROM gtfs.itinerary_pattern ip
+    WHERE ip.chateau = $1
+      AND ip.stop_id = ANY($2)
+),
+pattern_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, itinerary_pattern_id
+    FROM stop_rows
+),
+metadata AS MATERIALIZED (
+    SELECT k.onestop_feed_id, k.attempt_id, k.itinerary_pattern_id,
+           m.route_id, m.direction_pattern_id, m.timezone, m.row_count
+    FROM pattern_keys k
+    CROSS JOIN LATERAL (
+        SELECT im.route_id, im.direction_pattern_id, im.timezone, im.row_count
+        FROM gtfs.itinerary_pattern_meta im
+        WHERE im.onestop_feed_id = k.onestop_feed_id
+          AND im.attempt_id = k.attempt_id
+          AND im.itinerary_pattern_id = k.itinerary_pattern_id
+          AND im.chateau = $1
+          AND im.direction_pattern_id = ANY($3)
+          AND ($4::text[] IS NULL OR im.route_id = ANY($4))
+        OFFSET 0
+    ) m
+),
+route_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, route_id
+    FROM metadata
+),
+eligible_routes AS MATERIALIZED (
+    SELECT k.onestop_feed_id, k.attempt_id, k.route_id
+    FROM route_keys k
+    CROSS JOIN LATERAL (
+        SELECT 1
+        FROM gtfs.routes r
+        WHERE r.onestop_feed_id = k.onestop_feed_id
+          AND r.attempt_id = k.attempt_id
+          AND r.route_id = k.route_id
+          AND r.chateau = $1
+          AND r.route_type <> $6
+          AND (r.route_type <> ALL(ARRAY[0, 1, 3]::smallint[])
+               OR r.route_id <> ALL($5))
+        OFFSET 0
+    ) r
+)
+SELECT s.*, m.route_id, m.direction_pattern_id, m.timezone, m.row_count
+FROM stop_rows s
+JOIN metadata m USING (onestop_feed_id, attempt_id, itinerary_pattern_id)
+JOIN eligible_routes r
+    ON r.onestop_feed_id = m.onestop_feed_id
+    AND r.attempt_id = m.attempt_id
+    AND r.route_id = m.route_id
+"#;
+
+// Both embedded structs read the same itinerary_pattern_id column; the
+// complete-key join above guarantees the two IDs would be identical.
+#[derive(QueryableByName)]
+struct NearbyItineraryMatch {
+    #[diesel(embed)]
+    row: crate::models::ItineraryPatternRow,
+    #[diesel(embed)]
+    metadata: NearbyItineraryPatternMeta,
 }
 
 // Each HTTP/WS load has its own trace; concurrent chateaux and batches add
@@ -1302,70 +1389,38 @@ async fn fetch_chateau_data(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let matching_rows_and_metadata: Vec<(
-        crate::models::ItineraryPatternRow,
-        NearbyItineraryPatternMeta,
-    )> = load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| async {
-        use crate::schema::gtfs::{itinerary_pattern as ip, itinerary_pattern_meta as im, routes};
-        let input_ids = stop_batch.len();
-        let mut query = ip::table
-            .inner_join(
-                im::table.on(ip::onestop_feed_id
-                    .eq(im::onestop_feed_id)
-                    .and(ip::attempt_id.eq(im::attempt_id))
-                    .and(ip::itinerary_pattern_id.eq(im::itinerary_pattern_id)))
+    let matching_rows_and_metadata: Vec<NearbyItineraryMatch> =
+        load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| async {
+            // NULL priority means unrestricted; an empty priority array
+            // matches nothing. Earlier phases exclude only local modes from
+            // subsequent loads, not railway calls at other stations.
+            let query = sql_query(NEARBY_ITINERARY_SQL)
+                .bind::<Text, _>(&chateau)
+                .bind::<Array<Text>, _>(&stop_batch)
+                .bind::<Array<Text>, _>(&direction_pattern_ids)
+                .bind::<Nullable<Array<Text>>, _>(priority_route_ids.as_deref())
+                .bind::<Array<Text>, _>(&excluded_local_route_ids)
+                .bind::<SmallInt, _>(COACH_ROUTE_TYPE);
+            timed_nearby_sql!(
+                sql_timings,
+                request_started,
+                &chateau,
+                "itinerary_rows_by_selected_stops",
+                stop_batch.len(),
+                pool,
+                query,
+                NearbyItineraryMatch
             )
-            .inner_join(routes::table.on(
-                routes::chateau.eq(im::chateau)
-                    .and(routes::onestop_feed_id.eq(im::onestop_feed_id))
-                    .and(routes::attempt_id.eq(im::attempt_id))
-                    .and(routes::route_id.eq(im::route_id)),
-            ))
-            .filter(ip::chateau.eq(&chateau))
-            .filter(im::chateau.eq(&chateau))
-            .filter(routes::route_type.ne(COACH_ROUTE_TYPE))
-            .filter(ip::stop_id.eq_any(stop_batch))
-            .filter(im::direction_pattern_id.eq_any(&direction_pattern_ids))
-            .select((
-                crate::models::ItineraryPatternRow::as_select(),
-                NearbyItineraryPatternMeta::as_select(),
-            ))
-            .into_boxed();
-        if let Some(ids) = &priority_route_ids {
-            query = query.filter(im::route_id.eq_any(ids));
-        }
-        // These three modes always produce local route groups (see
-        // is_station_group). Other modes can still have station departures
-        // in the final phase even when their local group was sent earlier.
-        if !excluded_local_route_ids.is_empty() {
-            query = query.filter(
-                routes::route_type.ne_all([0_i16, 1, 3])
-                    .or(im::route_id.ne_all(&excluded_local_route_ids)),
-            );
-        }
-        timed_nearby_sql!(
-            sql_timings,
-            request_started,
-            &chateau,
-            "itinerary_rows_by_selected_stops",
-            input_ids,
-            pool,
-            query,
-            (
-                crate::models::ItineraryPatternRow,
-                NearbyItineraryPatternMeta
-            )
-        )
-    })
-    .await
-    .unwrap_or_default();
+        })
+        .await
+        .unwrap_or_default();
 
     // Only materialize one copy of a pattern's metadata. Multiple stops and
     // repeated occurrences of the same stop must remain distinct row entries.
     let mut itin_meta_list = Vec::new();
     let mut itins_result = Vec::with_capacity(matching_rows_and_metadata.len());
     let mut seen_itinerary_ids = HashSet::new();
-    for (row, meta) in matching_rows_and_metadata {
+    for NearbyItineraryMatch { row, metadata: meta } in matching_rows_and_metadata {
         if seen_itinerary_ids.insert(meta.itinerary_pattern_id.clone()) {
             itin_meta_list.push(meta);
         }
@@ -3077,6 +3132,144 @@ mod nearby_metadata_projection_tests {
         assert_eq!(json["events_before_overlay"], 200);
         assert_eq!(json["realtime_update_count"], 6);
         assert_eq!(json["realtime_rpc_ms"], 0.0);
+    }
+
+    #[test]
+    fn stop_first_itinerary_sql_has_materialization_fences() {
+        let sql = NEARBY_ITINERARY_SQL;
+        for cte in ["stop_rows", "pattern_keys", "metadata", "route_keys", "eligible_routes"] {
+            assert!(sql.contains(&format!("{cte} AS MATERIALIZED")));
+        }
+        assert_eq!(sql.matches("OFFSET 0").count(), 2);
+        assert!(!sql.contains("trip_ids"));
+        assert!(sql.contains("ip.stop_id = ANY($2)"));
+        assert!(sql.contains("im.direction_pattern_id = ANY($3)"));
+        assert!(sql.contains("$4::text[] IS NULL"));
+        assert!(sql.contains("r.route_type <> ALL(ARRAY[0, 1, 3]::smallint[])"));
+    }
+
+    // Opt-in integration test: all fixture tables are connection-local
+    // temporary tables; no changes to the real GTFS schema or persistent data.
+    #[tokio::test]
+    #[ignore = "requires a PostgreSQL DATABASE_URL and permission to create temporary tables"]
+    async fn stop_first_itinerary_query_preserves_rows_and_phase_filters() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+        let mut conn = AsyncPgConnection::establish(
+            &std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        )
+        .await
+        .unwrap();
+        conn.batch_execute(
+            r#"
+CREATE TEMP TABLE itinerary_pattern (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, stop_sequence integer NOT NULL,
+    arrival_time_since_start integer, departure_time_since_start integer,
+    interpolated_time_since_start integer, stop_id text NOT NULL,
+    chateau text NOT NULL, gtfs_stop_sequence oid NOT NULL,
+    timepoint boolean, stop_headsign_idx smallint,
+    pickup_type smallint NOT NULL, drop_off_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence)
+);
+CREATE TEMP TABLE itinerary_pattern_meta (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, chateau text NOT NULL,
+    route_id text NOT NULL, direction_pattern_id text,
+    timezone text NOT NULL, row_count integer NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id)
+);
+CREATE TEMP TABLE routes (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    route_id text NOT NULL, chateau text NOT NULL, route_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
+);
+INSERT INTO routes VALUES
+    ('f1', 'a1', 'shared', 'test', 3),
+    ('f1', 'a2', 'shared', 'test', 2),
+    ('f2', 'a1', 'shared', 'test', 200),
+    ('f1', 'a1', 'other', 'test', 3),
+    ('f1', 'a1', 'missing-direction', 'test', 3),
+    ('f1', 'a1', 'foreign', 'another', 3);
+INSERT INTO itinerary_pattern_meta VALUES
+    ('f1', 'a1', 'same', 'test', 'shared', 'd', 'UTC', 3),
+    ('f1', 'a2', 'same', 'test', 'shared', 'd', 'UTC', 1),
+    ('f2', 'a1', 'same', 'test', 'shared', 'd', 'UTC', 1),
+    ('f1', 'a1', 'other', 'test', 'other', 'd', 'UTC', 1),
+    ('f1', 'a1', 'wrong-dir', 'test', 'missing-direction', 'x', 'UTC', 1),
+    ('f1', 'a1', 'foreign', 'another', 'foreign', 'd', 'UTC', 1),
+    ('f1', 'a1', 'no-route', 'test', 'absent', 'd', 'UTC', 1);
+INSERT INTO itinerary_pattern (
+    onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+    arrival_time_since_start, departure_time_since_start, stop_id,
+    chateau, gtfs_stop_sequence, pickup_type, drop_off_type
+)
+SELECT onestop_feed_id, attempt_id, itinerary_pattern_id, 0, 10, 20,
+       'near', chateau, 1::oid, 0, 0
+FROM itinerary_pattern_meta;
+-- A loop revisits the nearby stop; the intervening distant stop must not be read out.
+INSERT INTO itinerary_pattern (
+    onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+    arrival_time_since_start, departure_time_since_start, stop_id,
+    chateau, gtfs_stop_sequence, pickup_type, drop_off_type
+) VALUES
+    ('f1', 'a1', 'same', 1, 30, 40, 'far', 'test', 2::oid, 0, 0),
+    ('f1', 'a1', 'same', 2, 50, 60, 'near', 'test', 3::oid, 0, 0);
+"#,
+        )
+        .await
+        .unwrap();
+
+        // The production query is schema-qualified. Redirect only the
+        // fixture query to this connection's temporary schema.
+        let fixture_sql = NEARBY_ITINERARY_SQL.replace("gtfs.", "pg_temp.");
+        let stops = vec!["near".to_string()];
+        let directions = vec!["d".to_string()];
+        let shared = vec!["shared".to_string()];
+        let empty: Vec<String> = Vec::new();
+        type Key = (String, String, String, i32);
+        let key = |attempt: &str, pattern: &str, sequence: i32| -> Key {
+            ("f1".into(), attempt.into(), pattern.into(), sequence)
+        };
+        let bus_loop = [key("a1", "same", 0), key("a1", "same", 2)];
+        let rail = key("a2", "same", 0);
+        let other = key("a1", "other", 0);
+        for (priority, excluded, expected) in [
+            (None, empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone(), other.clone()]),
+            (Some(shared.as_slice()), empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone()]),
+            (None, shared.as_slice(), vec![rail.clone(), other.clone()]),
+            (Some(empty.as_slice()), empty.as_slice(), vec![]),
+        ] {
+            let rows: Vec<NearbyItineraryMatch> = sql_query(&fixture_sql)
+                .bind::<Text, _>("test")
+                .bind::<Array<Text>, _>(&stops)
+                .bind::<Array<Text>, _>(&directions)
+                .bind::<Nullable<Array<Text>>, _>(priority)
+                .bind::<Array<Text>, _>(excluded)
+                .bind::<SmallInt, _>(COACH_ROUTE_TYPE)
+                .load(&mut conn)
+                .await
+                .unwrap();
+            let mut actual: Vec<Key> = rows
+                .into_iter()
+                .map(|matched| {
+                    assert_eq!(matched.row.itinerary_pattern_id, matched.metadata.itinerary_pattern_id);
+                    assert_eq!(matched.metadata.direction_pattern_id.as_deref(), Some("d"));
+                    assert_eq!(matched.metadata.timezone, "UTC");
+                    assert_eq!(matched.row.stop_id.as_str(), "near");
+                    (
+                        matched.row.onestop_feed_id,
+                        matched.row.attempt_id,
+                        matched.row.itinerary_pattern_id,
+                        matched.row.stop_sequence,
+                    )
+                })
+                .collect();
+            let mut expected = expected;
+            actual.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
