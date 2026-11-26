@@ -10,7 +10,9 @@ The coordinate, time, radius, limits and realtime parameters match Birch's
 `/nearbydeparturesfromcoordsv3`. Birch and Ramonda use the same library pipeline.
 Stops and the effective departure timestamp are captured once for both phases.
 
-The initial request returns two messages with the same `request_id`:
+The initial request returns two messages with the same `request_id` by default.
+Clients that support three phases can send `"three_phase":true` alongside
+`"progressive":true` (or use the default initial progressive request):
 
 - `type: "nearby_departures", phase: "priority", complete: false`: the single
   closest eligible station group, only if its distance is strictly below 1 km,
@@ -23,6 +25,9 @@ The initial request returns two messages with the same `request_id`:
   available. All statically identified routes at the chosen station are
   included, even when several feeds serve it. If no station qualifies, no
   station is prioritised.
+- With `three_phase: true`, `phase: "intermediate", complete: false` returns
+  the next ten closest distinct local routes, excluding priority routes. It
+  starts immediately after the priority frame is queued.
 - `type: "nearby_departures", phase: "remaining", complete: true`: all other
   station groups and local routes. The same rail route may appear in both
   phases at different stations. This phase starts its departure work after
@@ -35,7 +40,9 @@ Prioritisation reads static direction and route metadata before trip,
 calendar and realtime retrieval. If the chosen station has no departures in
 the requested window, or a realtime-only route is discovered later, the
 remaining phase can supply the next eligible station or additional departures.
-Both phases retain the same stop density and distance filtering policy.
+All phases retain the same stop density and distance filtering policy.
+GTFS route type 200 (coach) is excluded from nearby departures, including full
+WebSocket responses and Birch HTTP responses. Mixed-mode stops remain eligible.
 
 Merge local groups by `(chateau_id, route_id)`, preserving headsigns and deduplicating
 scheduled trip/stop/date occurrences within each headsign. Merge station groups by
