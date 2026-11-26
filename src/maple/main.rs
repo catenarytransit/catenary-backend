@@ -70,6 +70,8 @@ mod agency_metadata;
 mod assign_production_tables;
 mod chateau_postprocess;
 mod cleanup;
+mod feed_lock;
+mod successful_cleanup;
 mod gtfs_handlers;
 mod gtfs_ingestion_sequence;
 mod gtfs_process;
@@ -125,6 +127,15 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Retire superseded successful imports without downloading or ingesting feeds.
+    Cleanup {
+        /// Restrict cleanup to a single static feed.
+        #[arg(long)]
+        feed_id: Option<String>,
+        /// Report eligible attempts without deleting data.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Only run OSM station matching for a specific feed (prevents re-ingestion)
     MatchOsm {
         #[arg(long)]
@@ -202,9 +213,13 @@ mod discord_status_tests {
 }
 
 async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let args = Args::parse();
+    if let Some(Commands::Cleanup { feed_id, dry_run }) = &args.command {
+        return successful_cleanup::run(feed_id.as_deref(), *dry_run).await;
+    }
+
     let catenary_config = catenaryconfig::config();
     let maple_config = &catenary_config.maple;
-    let args = Args::parse();
 
     if args.recompute_route_url_slugs {
         let conn_pool: CatenaryPostgresPool = make_async_pool().await?;
@@ -240,6 +255,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
     }
 
     if let Some(Commands::DeleteStaleAttempts { feed_id }) = &args.command {
+        let _feed_lock = feed_lock::acquire(feed_id).await?;
         // get connection pool from database pool
         let conn_pool: CatenaryPostgresPool = make_async_pool().await.unwrap();
         let arc_conn_pool: Arc<CatenaryPostgresPool> = Arc::new(conn_pool);
@@ -893,6 +909,16 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                     // Acquire semaphore permit for concurrency control
                     let _permit = sem.acquire().await.unwrap();
 
+                    // Serialize writes, production assignment and cleanup for this feed
+                    // across Maple processes without locking unrelated feeds.
+                    let _feed_lock = match feed_lock::acquire(&feed_id).await {
+                        Ok(lock) => lock,
+                        Err(error) => {
+                            eprintln!("Failed to lock feed {feed_id} for ingestion: {error}");
+                            return;
+                        }
+                    };
+
                     let this_download_data = download_feed_info_hashmap.get(&feed_id).unwrap();
 
                     let get_hash_of_file_contents =
@@ -1376,6 +1402,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 
             for feed in inserted_feeds {
                 if !dmfr_result.feed_hashmap.contains_key(&feed.onestop_feed_id) {
+                    let _feed_lock = feed_lock::acquire(&feed.onestop_feed_id).await?;
                     println!(
                         "Deleting whole feed {}, no longer exists",
                         feed.onestop_feed_id
@@ -1476,6 +1503,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
 }
 
 async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
+    let _feed_lock = feed_lock::acquire(&feed_id).await?;
     println!("Running OSM matching for feed: {}", feed_id);
 
     println!("Initializing database connection");
