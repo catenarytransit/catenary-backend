@@ -12,18 +12,26 @@ Stops and the effective departure timestamp are captured once for both phases.
 
 The initial request returns two messages with the same `request_id`:
 
-- `type: "nearby_departures", phase: "priority", complete: false`: rail station
-  groups, nearest metro route, metros within 500 m, trams within 400 m, and the
-  five nearest distinct bus routes across all chateaux. Modes use Compose's
-  hoisting rules, with extended GTFS metro, tram and bus codes supported too.
-  All rail routes are included so a rail station's directions stay together.
-- `type: "nearby_departures", phase: "remaining", complete: true`: the remaining
-  routes, including the rest of the buses. This phase starts its departure work
-  after the priority response has been queued for transmission.
+- `type: "nearby_departures", phase: "priority", complete: false`: the single
+  closest eligible station group, only if its distance is strictly below 1 km,
+  the nearest metro route, metros within 500 m, trams within 400 m, and the five
+  nearest distinct local bus routes across all chateaux. Station selection
+  matches the Compose and web hoisting rule, using the OSM station point where
+  available. All statically identified routes at the chosen station are
+  included, even when several feeds serve it. If no station qualifies, no
+  station is prioritised.
+- `type: "nearby_departures", phase: "remaining", complete: true`: all other
+  station groups and local routes. The same rail route may appear in both
+  phases at different stations. This phase starts its departure work after
+  the priority response has been queued for transmission.
 
-Each message's `data` has Birch's v3 response shape. Route partitions are disjoint
-and exhaustive by `(chateau_id, route_id)`. Prioritisation reads direction metadata;
-remaining routes' itinerary rows, trips, calendars and realtime are deferred.
+Each message's `data` has Birch's v3 response shape. Local departures are
+partitioned by `(chateau_id, route_id)` and station departures additionally by
+physical station identity (OSM ID or chateau-scoped GTFS station key).
+Prioritisation reads static direction and route metadata before trip,
+calendar and realtime retrieval. If the chosen station has no departures in
+the requested window, or a realtime-only route is discovered later, the
+remaining phase can supply the next eligible station or additional departures.
 Both phases retain the same stop density and distance filtering policy.
 
 Merge local groups by `(chateau_id, route_id)`, preserving headsigns and deduplicating
