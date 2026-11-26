@@ -30,6 +30,7 @@ pub enum ClientMessage {
         #[serde(flatten)]
         params: catenary::nearby_departures::NearbyFromCoordsV3,
         progressive: Option<bool>,
+        three_phase: Option<bool>,
     },
     #[serde(rename = "cancel_nearby_departures")]
     CancelNearbyDepartures,
@@ -376,8 +377,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                         request_id,
                         params,
                         progressive,
+                        three_phase,
                     }) => {
-                        self.fetch_nearby(request_id, params, progressive, ctx);
+                        self.fetch_nearby(request_id, params, progressive, three_phase.unwrap_or(false), ctx);
                     }
                     Ok(ClientMessage::CancelNearbyDepartures) => self.cancel_nearby(ctx),
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {
