@@ -197,7 +197,7 @@ async fn execute_pfaedle_rs(
 }
 
 // Correct the raw route types before Pfaedle selects a transport network.
-fn normalize_nuernberg_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn normalize_bayern_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut agencies = csv::Reader::from_path(Path::new(gtfs_path).join("agency.txt"))?;
     let headers = agencies.headers()?.clone();
     let name_index = headers
@@ -210,7 +210,10 @@ fn normalize_nuernberg_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error +
     for record in agencies.records() {
         let record = record?;
         agency_count += 1;
-        if record.get(name_index) == Some("Bus Nürnberg") {
+        if matches!(
+            record.get(name_index),
+            Some("Bus Nürnberg" | "Weissenburg" | "Ansbach Bd 6_2" | "Ansbach Bd 6_1")
+        ) {
             agency_ids.insert(
                 id_index
                     .and_then(|i| record.get(i))
@@ -416,7 +419,7 @@ pub async fn gtfs_process_feed(
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
 
     if feed_id == "f-gtfs~de~bayern" {
-        normalize_nuernberg_bus_routes(&path)?;
+        normalize_bayern_bus_routes(&path)?;
     }
 
     // Fix route colors before processing
