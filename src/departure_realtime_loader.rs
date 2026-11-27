@@ -1,6 +1,16 @@
 /// Refresh the board using one indexed Aspen lookup per chateau. In particular,
 /// a modification indexed by a replacement stop can introduce a trip that did
 /// not serve this station in the static schedule.
+#[derive(Default, Clone, Debug)]
+pub struct DepartureRealtimeTimings {
+    pub connection_ms: f64,
+    pub rpc_ms: f64,
+    pub overlay_ms: f64,
+    pub additional_sql_ms: f64,
+    pub update_count: usize,
+    pub modification_count: usize,
+}
+
 pub async fn apply_departure_realtime(
     events: &mut Vec<crate::departure_realtime::StopEvent>,
     stops: &std::collections::BTreeMap<String, std::collections::HashSet<String>>,
@@ -23,6 +33,35 @@ pub async fn apply_departure_realtime(
     String,
     std::collections::BTreeMap<String, crate::aspen_dataset::AspenisedStop>,
 > {
+    apply_departure_realtime_timed(
+        events, stops, pool, cache, routes, agencies, shapes, include_shapes,
+        &mut DepartureRealtimeTimings::default(),
+    ).await
+}
+
+pub async fn apply_departure_realtime_timed(
+    events: &mut Vec<crate::departure_realtime::StopEvent>,
+    stops: &std::collections::BTreeMap<String, std::collections::HashSet<String>>,
+    pool: &std::sync::Arc<crate::postgres_tools::CatenaryPostgresPool>,
+    cache: &crate::aspen::lib::AspenChateauCache,
+    routes: &mut std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::models::Route>,
+    >,
+    agencies: &mut std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, crate::models::Agency>,
+    >,
+    shapes: &mut std::collections::BTreeMap<
+        ecow::EcoString,
+        std::collections::BTreeMap<ecow::EcoString, String>,
+    >,
+    include_shapes: bool,
+    timings: &mut DepartureRealtimeTimings,
+) -> std::collections::BTreeMap<
+    String,
+    std::collections::BTreeMap<String, crate::aspen_dataset::AspenisedStop>,
+> {
     use crate::departure_realtime::*;
     use chrono::TimeZone;
     use diesel::prelude::*;
@@ -41,33 +80,55 @@ pub async fn apply_departure_realtime(
                 .into_iter()
                 .collect();
             async move {
-                let metadata = metadata?;
-                // Bound both connection setup and RPC time, including a stale etcd socket.
-                tokio::time::timeout(std::time::Duration::from_secs(3), async {
-                    let client = crate::aspen::lib::spawn_aspen_client_from_ip(&metadata.socket)
-                        .await
-                        .ok()?;
-                    let data = client
+                let mut connection_ms = 0.0;
+                let mut rpc_ms = 0.0;
+                let mut connection_started = None;
+                let mut rpc_started = None;
+                // Preserve the existing combined 3-second deadline, and
+                // record elapsed time even when the connect or RPC times out.
+                let response = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                    let metadata = metadata?;
+                    connection_started = Some(std::time::Instant::now());
+                    let result = crate::aspen::lib::spawn_aspen_client_from_ip(&metadata.socket).await;
+                    connection_ms = connection_started.take().unwrap().elapsed().as_secs_f64() * 1000.0;
+                    let client = result.ok()?;
+                    rpc_started = Some(std::time::Instant::now());
+                    let result = client
                         .get_departure_realtime(
                             tarpc::context::current(),
                             chateau.clone(),
                             trip_ids,
                             stop_ids.iter().cloned().collect(),
                         )
-                        .await
-                        .ok()??;
+                        .await;
+                    rpc_ms = rpc_started.take().unwrap().elapsed().as_secs_f64() * 1000.0;
+                    let data = result.ok()??;
                     Some((chateau, stop_ids, client, data))
                 })
                 .await
                 .ok()
-                .flatten()
+                .flatten();
+                if let Some(started) = connection_started {
+                    connection_ms = started.elapsed().as_secs_f64() * 1000.0;
+                }
+                if let Some(started) = rpc_started {
+                    rpc_ms = started.elapsed().as_secs_f64() * 1000.0;
+                }
+                (response, connection_ms, rpc_ms)
             }
         })
         .buffer_unordered(8)
         .collect()
         .await;
     let mut realtime_stops = BTreeMap::new();
-    for (chateau, _stop_ids, client, data) in responses.into_iter().flatten() {
+    for (response, connection_ms, rpc_ms) in responses {
+        timings.connection_ms += connection_ms;
+        timings.rpc_ms += rpc_ms;
+        let Some((chateau, _stop_ids, client, data)) = response else {
+            continue;
+        };
+        timings.update_count += data.updates.len();
+        timings.modification_count += data.modifications.len();
         let stop_ids: HashSet<String> = data.searched_stop_ids.iter().cloned().collect();
         realtime_stops.insert(chateau.clone(), data.realtime_stops.clone());
         if data.modifications.is_empty() && data.updates.is_empty() {
@@ -85,6 +146,7 @@ pub async fn apply_departure_realtime(
             .into_iter()
             .collect();
         if !affected.is_empty() {
+            let sql_started = std::time::Instant::now();
             if let Ok(mut conn) = pool.get().await {
                 use crate::schema::gtfs::{
                     itinerary_pattern as ip, itinerary_pattern_meta as im, trips_compressed as tc,
@@ -122,6 +184,8 @@ pub async fn apply_departure_realtime(
                     .await
                     .unwrap_or_default();
                 drop(conn);
+                timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
+                let modification_started = std::time::Instant::now();
                 for modification in data.modifications.values() {
                     for selected in &modification.selected_trips {
                         for trip in trips
@@ -227,9 +291,14 @@ pub async fn apply_departure_realtime(
                         }
                     }
                 }
+                timings.overlay_ms += modification_started.elapsed().as_secs_f64() * 1000.0;
+            } else {
+                timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
             }
         }
+        let overlay_started = std::time::Instant::now();
         overlay_updates(events, chateau, &stop_ids, &data.updates);
+        timings.overlay_ms += overlay_started.elapsed().as_secs_f64() * 1000.0;
         // Added trips may name routes absent from the selected static itineraries.
         let missing_routes: Vec<_> = events
             .iter()
@@ -244,6 +313,7 @@ pub async fn apply_departure_realtime(
             .into_iter()
             .collect();
         if !missing_routes.is_empty() {
+            let sql_started = std::time::Instant::now();
             if let Ok(mut conn) = pool.get().await {
                 use crate::schema::gtfs::{agencies as a, routes as r};
                 let new_routes = r::table
@@ -264,6 +334,7 @@ pub async fn apply_departure_realtime(
                     .load::<crate::models::Agency>(&mut conn)
                     .await
                     .unwrap_or_default();
+                timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
                 for route in new_routes {
                     routes
                         .entry(chateau.clone())
@@ -276,6 +347,8 @@ pub async fn apply_departure_realtime(
                         .or_default()
                         .insert(agency.agency_id.clone(), agency);
                 }
+            } else {
+                timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
             }
         }
         if include_shapes {
@@ -294,6 +367,7 @@ pub async fn apply_departure_realtime(
                         .is_some_and(|shapes| shapes.contains_key(id.as_str()))
                 })
                 .collect();
+            let shape_rpc_started = std::time::Instant::now();
             let fetched: Vec<_> = futures::stream::iter(shape_ids.iter())
                 .map(|id| {
                     let client = &client;
@@ -315,6 +389,7 @@ pub async fn apply_departure_realtime(
                 .buffer_unordered(8)
                 .collect()
                 .await;
+            timings.rpc_ms += shape_rpc_started.elapsed().as_secs_f64() * 1000.0;
             for (id, shape) in fetched.into_iter().flatten() {
                 shapes
                     .entry(chateau.as_str().into())
@@ -331,6 +406,7 @@ pub async fn apply_departure_realtime(
                 })
                 .collect();
             if !missing.is_empty() {
+                let sql_started = std::time::Instant::now();
                 if let Ok(mut conn) = pool.get().await {
                     use crate::schema::gtfs::shapes as sh;
                     let static_shapes = sh::table
@@ -339,6 +415,7 @@ pub async fn apply_departure_realtime(
                         .load::<crate::models::Shape>(&mut conn)
                         .await
                         .unwrap_or_default();
+                    timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
                     for shape in static_shapes {
                         if let Ok(polyline) = polyline::encode_coordinates(
                             geo::LineString::new(
@@ -360,6 +437,8 @@ pub async fn apply_departure_realtime(
                                 .insert(shape.shape_id.into(), polyline);
                         }
                     }
+                } else {
+                    timings.additional_sql_ms += sql_started.elapsed().as_secs_f64() * 1000.0;
                 }
             }
         }

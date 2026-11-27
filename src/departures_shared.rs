@@ -30,6 +30,118 @@ pub type StopDataResult = (
     Vec<crate::models::CalendarDate>,                          // calendar_dates
 );
 
+// Station boards need headsign/shape metadata, unlike nearby departures, but
+// both benefit from materializing the stop-index scan before looking up metadata.
+// Do not join through routes or exclude coaches here: station boards also show
+// coach departures. The exact feed/attempt/pattern keys avoid broad scans.
+const STOP_ITINERARY_SQL: &str = r#"
+WITH stop_rows AS MATERIALIZED (
+    SELECT
+        ip.onestop_feed_id, ip.attempt_id, ip.itinerary_pattern_id,
+        ip.stop_sequence, ip.arrival_time_since_start,
+        ip.departure_time_since_start, ip.interpolated_time_since_start,
+        ip.stop_id, ip.chateau, ip.gtfs_stop_sequence,
+        ip.timepoint, ip.stop_headsign_idx, ip.pickup_type, ip.drop_off_type
+    FROM gtfs.itinerary_pattern ip
+    WHERE ip.chateau = $1 AND ip.stop_id = ANY($2)
+),
+pattern_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, itinerary_pattern_id
+    FROM stop_rows
+),
+metadata AS MATERIALIZED (
+    SELECT k.onestop_feed_id, k.attempt_id, k.itinerary_pattern_id,
+           m.trip_headsign, m.trip_headsign_translations, m.shape_id,
+           m.timezone, m.route_id, m.direction_pattern_id, m.row_count
+    FROM pattern_keys k
+    CROSS JOIN LATERAL (
+        SELECT im.trip_headsign, im.trip_headsign_translations, im.shape_id,
+               im.timezone, im.route_id, im.direction_pattern_id, im.row_count
+        FROM gtfs.itinerary_pattern_meta im
+        WHERE im.onestop_feed_id = k.onestop_feed_id
+          AND im.attempt_id = k.attempt_id
+          AND im.itinerary_pattern_id = k.itinerary_pattern_id
+          AND im.chateau = $1
+          AND ($3::text[] IS NULL OR im.direction_pattern_id = ANY($3))
+        OFFSET 0
+    ) m
+)
+SELECT s.*, ARRAY[]::text[] AS trip_ids,
+       m.trip_headsign, m.trip_headsign_translations, m.shape_id,
+       m.timezone, m.route_id, m.direction_pattern_id, m.row_count
+FROM stop_rows s
+JOIN metadata m USING (onestop_feed_id, attempt_id, itinerary_pattern_id)
+"#;
+
+// Avoid naming an embedded field `row`: Diesel's generated QueryableByName
+// implementation uses that name for the NamedRow argument.
+#[derive(QueryableByName)]
+struct StopItineraryMatch {
+    #[diesel(embed)]
+    stop_row: crate::models::ItineraryPatternRow,
+    #[diesel(embed)]
+    metadata: crate::models::ItineraryPatternMeta,
+}
+
+async fn query_stop_itinerary_matches(
+    conn: &mut diesel_async::AsyncPgConnection,
+    statement: &str,
+    chateau_id: &str,
+    stop_ids: &[String],
+    direction_pattern_ids: Option<&[String]>,
+) -> diesel::QueryResult<Vec<StopItineraryMatch>> {
+    use diesel::sql_types::{Array, Nullable, Text};
+
+    diesel::sql_query(statement)
+        .bind::<Text, _>(chateau_id)
+        .bind::<Array<Text>, _>(stop_ids)
+        .bind::<Nullable<Array<Text>>, _>(direction_pattern_ids)
+        .load(conn)
+        .await
+}
+
+/// Fetch selected stop occurrences and metadata in a single database snapshot.
+/// The unused trip_ids array is intentionally not read from the metadata table;
+/// both stop-board paths use trips_compressed for schedules.
+pub async fn load_stop_itineraries(
+    pool: &CatenaryPostgresPool,
+    chateau_id: &str,
+    stop_ids: &[String],
+    direction_pattern_ids: Option<&[String]>,
+) -> (
+    Vec<crate::models::ItineraryPatternRow>,
+    Vec<crate::models::ItineraryPatternMeta>,
+) {
+    if stop_ids.is_empty() || direction_pattern_ids.is_some_and(|ids| ids.is_empty()) {
+        return (Vec::new(), Vec::new());
+    }
+    let mut conn = pool.get().await.unwrap();
+    let matching = query_stop_itinerary_matches(
+        &mut conn,
+        STOP_ITINERARY_SQL,
+        chateau_id,
+        stop_ids,
+        direction_pattern_ids,
+    )
+    .await
+    .unwrap_or_default();
+
+    let mut rows = Vec::with_capacity(matching.len());
+    let mut metadata = BTreeMap::new();
+    for matched in matching {
+        rows.push(matched.stop_row);
+        let meta = matched.metadata;
+        metadata
+            .entry((
+                meta.onestop_feed_id.clone(),
+                meta.attempt_id.clone(),
+                meta.itinerary_pattern_id.clone(),
+            ))
+            .or_insert(meta);
+    }
+    (rows, metadata.into_values().collect())
+}
+
 pub async fn fetch_stop_data_for_chateau(
     pool: Arc<CatenaryPostgresPool>,
     chateau_id: String,
@@ -38,76 +150,28 @@ pub async fn fetch_stop_data_for_chateau(
     date_filter: Option<(NaiveDate, NaiveDate)>,
     direction_pattern_ids: Option<Vec<String>>,
 ) -> StopDataResult {
-    let mut conn = pool.get().await.unwrap();
-    let global_start = std::time::Instant::now();
-
-    let itins = crate::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-        .filter(crate::schema::gtfs::itinerary_pattern::chateau.eq(chateau_id.clone()))
-        .filter(crate::schema::gtfs::itinerary_pattern::stop_id.eq_any(&stop_ids))
-        .select(crate::models::ItineraryPatternRow::as_select())
-        .load::<crate::models::ItineraryPatternRow>(&mut conn)
-        .await
-        .unwrap_or_default();
-    // println!(
-    //     "PERF: itinerary_pattern fetch took {}ms",
-    //     global_start.elapsed().as_millis()
-    // );
-    let t_section = std::time::Instant::now();
+    let (itins, itin_meta) = load_stop_itineraries(
+        &pool,
+        &chateau_id,
+        &stop_ids,
+        direction_pattern_ids.as_deref(),
+    )
+    .await;
 
     let mut itins_btreemap = BTreeMap::<String, Vec<crate::models::ItineraryPatternRow>>::new();
-    for itin in itins.iter() {
+    for itin in itins {
         itins_btreemap
             .entry(itin.itinerary_pattern_id.clone())
-            .or_insert_with(Vec::new)
-            .push(itin.clone());
+            .or_default()
+            .push(itin);
     }
 
-    let itinerary_list: Vec<String> = itins_btreemap.keys().cloned().collect();
-    let itinerary_list_clone = itinerary_list.clone();
+    let itinerary_list_clone: Vec<String> = itins_btreemap.keys().cloned().collect();
 
-    // Task A: Meta Data
-    let mut conn1 = conn; // Reuse first connection
+    // Task A: Direction, route and agency metadata. The itinerary metadata
+    // has already been loaded using the same snapshot as the stop occurrences.
     let chateau_id_clone = chateau_id.clone();
-    let direction_pattern_ids_clone = direction_pattern_ids.clone();
     let meta_task = async {
-        // V2 OPTIMIZATION: If we have direction_pattern_ids, filter by those first
-        // This dramatically reduces the result set in dense areas
-        let itin_meta = if let Some(ref dir_ids) = direction_pattern_ids_clone {
-            crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(
-                    crate::schema::gtfs::itinerary_pattern_meta::chateau
-                        .eq(chateau_id_clone.clone()),
-                )
-                .filter(
-                    crate::schema::gtfs::itinerary_pattern_meta::direction_pattern_id
-                        .eq_any(dir_ids),
-                )
-                .select(crate::models::ItineraryPatternMeta::as_select())
-                .load::<crate::models::ItineraryPatternMeta>(&mut conn1)
-                .await
-                .unwrap_or_default()
-        } else {
-            crate::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta
-                .filter(
-                    crate::schema::gtfs::itinerary_pattern_meta::chateau
-                        .eq(chateau_id_clone.clone()),
-                )
-                .filter(
-                    crate::schema::gtfs::itinerary_pattern_meta::itinerary_pattern_id
-                        .eq_any(&itinerary_list),
-                )
-                .select(crate::models::ItineraryPatternMeta::as_select())
-                .load::<crate::models::ItineraryPatternMeta>(&mut conn1)
-                .await
-                .unwrap_or_default()
-        };
-        // println!(
-        //     "PERF: itinerary_pattern_meta fetch took {}ms (count: {})",
-        //     t_section.elapsed().as_millis(),
-        //     itin_meta.len()
-        // );
-        let t_section = std::time::Instant::now();
-
         let mut itin_meta_btreemap = BTreeMap::<String, crate::models::ItineraryPatternMeta>::new();
         for itin in &itin_meta {
             itin_meta_btreemap.insert(itin.itinerary_pattern_id.clone(), itin.clone());
@@ -122,12 +186,7 @@ pub async fn fetch_stop_data_for_chateau(
 
         let route_ids: Vec<CompactString> = itin_meta.iter().map(|x| x.route_id.clone()).collect();
 
-        // Prepare parallel fetches
-        // We need separate connections for concurrent execution or use a pool inside the join
-        // Since we only have 'conn1', we must rely on the pool to get new connections for parallel tasks
-        // or just accept valid parallelisation if we can clone the pool.
-
-        // However, 'pool' is passed to the function.
+        // Separate connections for concurrent direction/route lookups.
         let pool_for_join = pool.clone();
 
         let direction_ids_clone1 = direction_ids_to_search.clone();
@@ -232,11 +291,6 @@ pub async fn fetch_stop_data_for_chateau(
         };
 
         let (agencies_ret, shapes_result) = tokio::join!(agencies_task, shapes_task);
-
-        // println!(
-        //     "PERF: parallel meta fetch block took {}ms",
-        //     t_section.elapsed().as_millis()
-        // );
 
         let mut shape_polyline_for_chateau: BTreeMap<EcoString, String> = BTreeMap::new();
         for db_shape in shapes_result {
@@ -520,11 +574,6 @@ pub async fn fetch_stop_data_for_chateau(
         (trip_compressed_btreemap, calendar, calendar_dates),
     ) = tokio::join!(meta_task, schedule_task);
 
-    // println!(
-    //     "PERF: TOTAL fetch_stop_data_for_chateau took {}ms",
-    //     global_start.elapsed().as_millis()
-    // );
-
     (
         chateau_id,
         itins_btreemap,
@@ -737,5 +786,114 @@ pub fn estimate_service_date(
             }
         }
         None => false,
+    }
+}
+
+#[cfg(test)]
+mod stop_itinerary_query_tests {
+    use super::*;
+
+    #[test]
+    fn stop_first_query_uses_complete_metadata_keys() {
+        for name in ["stop_rows", "pattern_keys", "metadata"] {
+            assert!(STOP_ITINERARY_SQL.contains(&format!("{name} AS MATERIALIZED")));
+        }
+        assert!(STOP_ITINERARY_SQL.contains("ip.stop_id = ANY($2)"));
+        assert!(STOP_ITINERARY_SQL.contains("im.onestop_feed_id = k.onestop_feed_id"));
+        assert!(STOP_ITINERARY_SQL.contains("im.attempt_id = k.attempt_id"));
+        assert!(STOP_ITINERARY_SQL.contains("im.itinerary_pattern_id = k.itinerary_pattern_id"));
+        assert!(STOP_ITINERARY_SQL.contains("OFFSET 0"));
+        assert!(!STOP_ITINERARY_SQL.contains("im.trip_ids"));
+        assert!(!STOP_ITINERARY_SQL.contains("gtfs.routes"));
+    }
+
+    #[tokio::test]
+    #[ignore = "requires PostgreSQL DATABASE_URL and temporary table permission"]
+    async fn stop_first_query_preserves_loop_occurrences_and_metadata() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+        let mut conn = AsyncPgConnection::establish(
+            &std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        )
+        .await
+        .unwrap();
+        conn.batch_execute(r#"
+CREATE TEMP TABLE itinerary_pattern (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, stop_sequence integer NOT NULL,
+    arrival_time_since_start integer, departure_time_since_start integer,
+    interpolated_time_since_start integer, stop_id text NOT NULL,
+    chateau text NOT NULL, gtfs_stop_sequence oid NOT NULL, timepoint boolean,
+    stop_headsign_idx smallint, pickup_type smallint NOT NULL,
+    drop_off_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence)
+);
+CREATE TEMP TABLE itinerary_pattern_meta (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, chateau text NOT NULL,
+    trip_headsign text, trip_headsign_translations jsonb, shape_id text,
+    timezone text NOT NULL, route_id text NOT NULL, direction_pattern_id text,
+    row_count integer NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id)
+);
+INSERT INTO itinerary_pattern_meta VALUES
+    ('f1','a1','p','test','first','{"en":"first"}','shape','UTC','coach','d1',3),
+    ('f2','a1','p','test','second',NULL,NULL,'UTC','rail','d2',1),
+    ('f1','a2','p','test','third',NULL,NULL,'UTC','bus',NULL,1),
+    ('f3','a1','p','other','foreign',NULL,NULL,'UTC','other','d1',1);
+INSERT INTO itinerary_pattern
+    (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+     stop_id, chateau, gtfs_stop_sequence, pickup_type, drop_off_type)
+SELECT onestop_feed_id, attempt_id, itinerary_pattern_id, 0,
+       'near', chateau, 1::oid, 0, 0
+FROM itinerary_pattern_meta;
+INSERT INTO itinerary_pattern
+    (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+     stop_id, chateau, gtfs_stop_sequence, pickup_type, drop_off_type)
+VALUES
+    ('f1','a1','p',1,'far','test',2::oid,0,0),
+    ('f1','a1','p',2,'near','test',3::oid,0,0),
+    ('f1','a1','orphan',0,'near','test',1::oid,0,0);
+"#).await.unwrap();
+        let statement = STOP_ITINERARY_SQL.replace("gtfs.", "pg_temp.");
+        let stops = vec!["near".to_string()];
+        let direction = vec!["d1".to_string()];
+        let empty: Vec<String> = Vec::new();
+
+        for (filter, expected_count) in [
+            (None, 4),
+            (Some(direction.as_slice()), 2),
+            (Some(empty.as_slice()), 0),
+        ] {
+            let matches = query_stop_itinerary_matches(
+                &mut conn, &statement, "test", &stops, filter,
+            ).await.unwrap();
+            assert_eq!(matches.len(), expected_count);
+            for matched in &matches {
+                assert_eq!(matched.stop_row.stop_id.as_str(), "near");
+                assert_eq!(matched.stop_row.chateau, "test");
+                assert_eq!(matched.stop_row.onestop_feed_id, matched.metadata.onestop_feed_id);
+                assert_eq!(matched.stop_row.attempt_id, matched.metadata.attempt_id);
+                assert!(matched.metadata.trip_ids.is_empty());
+                let expected = match (
+                    matched.stop_row.onestop_feed_id.as_str(),
+                    matched.stop_row.attempt_id.as_str(),
+                ) {
+                    ("f1", "a1") => "first",
+                    ("f2", "a1") => "second",
+                    ("f1", "a2") => "third",
+                    _ => panic!("unexpected feed/attempt"),
+                };
+                assert_eq!(matched.metadata.trip_headsign.as_deref(), Some(expected));
+            }
+            if expected_count > 0 {
+                let mut loop_sequences: Vec<_> = matches.iter()
+                    .filter(|m| m.metadata.route_id.as_str() == "coach")
+                    .map(|m| m.stop_row.stop_sequence)
+                    .collect();
+                loop_sequences.sort_unstable();
+                assert_eq!(loop_sequences, vec![0, 2]);
+            }
+        }
     }
 }

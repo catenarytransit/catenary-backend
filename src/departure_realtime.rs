@@ -4,7 +4,7 @@ use crate::departures_shared::MovedStopData;
 use chrono::NaiveDate;
 use compact_str::CompactString;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Serialize, Clone, Debug)]
 pub struct StopEvent {
@@ -393,12 +393,42 @@ pub fn stop_display_name(stop: &AspenisedStop) -> Option<String> {
         .map(|t| t.text.clone())
 }
 
+fn scheduled_time(event: &AspenStopTimeEvent) -> Option<u64> {
+    positive_time(
+        event.time.zip(event.delay)
+            .and_then(|(time, delay)| time.checked_sub(i64::from(delay))),
+    )
+}
+
+// Return a match only if it is unique; stop after the second candidate.
+fn unique_match<T>(mut candidates: impl Iterator<Item = T>) -> Option<T> {
+    let first = candidates.next()?;
+    candidates.next().is_none().then_some(first)
+}
+
 pub fn overlay_updates(
     events: &mut Vec<StopEvent>,
     chateau: &str,
     stops: &HashSet<String>,
     updates: &[AspenisedTripUpdate],
 ) {
+    if updates.is_empty() {
+        return;
+    }
+
+    // The vector is append-only during this overlay. Existing events keep
+    // their chateau/trip identity, so indices remain valid even when a call
+    // changes sequence, platform or instance metadata.
+    let mut events_by_trip: HashMap<String, Vec<usize>> = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        if event.chateau == chateau {
+            events_by_trip
+                .entry(event.trip_id.clone())
+                .or_default()
+                .push(index);
+        }
+    }
+
     for update in updates {
         let relationship = update.trip.schedule_relationship.as_ref();
         let is_replacement = relationship == Some(&AspenisedTripScheduleRelationship::Replacement);
@@ -420,50 +450,57 @@ pub fn overlay_updates(
             .as_ref()
             .and_then(|p| p.start_date)
             .or(update.trip.effective_start_date());
-        // Without a service date, only match an existing call by its absolute
-        // scheduled timestamp. Do not apply an undated update to every day.
-        let instance_matches =
-            |event: &StopEvent| {
-                event.chateau == chateau
-                    && event.trip_id == trip_id
-                    && (!event.trip_modified
-                        || modified.is_some()
-                        || is_replacement
-                        || matches!(
-                            relationship,
-                            Some(
-                                AspenisedTripScheduleRelationship::Deleted
-                                    | AspenisedTripScheduleRelationship::Cancelled
-                            )
-                        ))
-                    && update
-                        .trip
-                        .effective_start_time()
-                        .and_then(parse_start_time)
-                        .is_none_or(|start| event.trip_start_time == Some(start))
-                    && match date {
-                        Some(date) => event.service_date == Some(date),
-                        None => update.stop_time_update.iter().any(|stu| {
-                            stu.arrival
-                                .as_ref()
-                                .and_then(|e| {
-                                    positive_time(e.time.zip(e.delay).and_then(|(time, delay)| {
-                                        time.checked_sub(i64::from(delay))
-                                    }))
-                                })
-                                .is_some_and(|time| event.scheduled_arrival == Some(time))
-                                || stu
-                                    .departure
-                                    .as_ref()
-                                    .and_then(|e| {
-                                        positive_time(e.time.zip(e.delay).and_then(
-                                            |(time, delay)| time.checked_sub(i64::from(delay)),
-                                        ))
-                                    })
-                                    .is_some_and(|time| event.scheduled_departure == Some(time))
-                        }),
+        let realtime_only = matches!(
+            relationship,
+            Some(
+                AspenisedTripScheduleRelationship::Added
+                    | AspenisedTripScheduleRelationship::Unscheduled
+                    | AspenisedTripScheduleRelationship::Duplicated
+                    | AspenisedTripScheduleRelationship::Replacement
+            )
+        ) || modified.is_some();
+        // Ordinary updates for trips absent from this board cannot create calls.
+        if !realtime_only && !events_by_trip.contains_key(trip_id) {
+            continue;
+        }
+        let trip_events = events_by_trip.entry(trip_id.to_owned()).or_default();
+
+        let start_time = update.trip.effective_start_time().and_then(parse_start_time);
+        // Undated updates can only match by absolute scheduled timestamps.
+        // Calculate these once instead of scanning the stop updates for every
+        // candidate event, keeping arrival and departure identities separate.
+        let mut undated_arrivals = HashSet::new();
+        let mut undated_departures = HashSet::new();
+        if date.is_none() {
+            for stu in &update.stop_time_update {
+                if let Some(time) = stu.arrival.as_ref().and_then(scheduled_time) {
+                    undated_arrivals.insert(time);
+                }
+                if let Some(time) = stu.departure.as_ref().and_then(scheduled_time) {
+                    undated_departures.insert(time);
+                }
+            }
+        }
+        let instance_matches = |event: &StopEvent| {
+            (!event.trip_modified
+                || modified.is_some()
+                || is_replacement
+                || matches!(
+                    relationship,
+                    Some(
+                        AspenisedTripScheduleRelationship::Deleted
+                            | AspenisedTripScheduleRelationship::Cancelled
+                    )
+                ))
+                && start_time.is_none_or(|start| event.trip_start_time == Some(start))
+                && match date {
+                    Some(date) => event.service_date == Some(date),
+                    None => {
+                        event.scheduled_arrival.is_some_and(|time| undated_arrivals.contains(&time))
+                            || event.scheduled_departure.is_some_and(|time| undated_departures.contains(&time))
                     }
-            };
+                }
+        };
         if matches!(
             relationship,
             Some(
@@ -471,30 +508,32 @@ pub fn overlay_updates(
                     | AspenisedTripScheduleRelationship::Cancelled
             )
         ) {
-            for event in events.iter_mut().filter(|event| instance_matches(event)) {
-                event.trip_deleted =
-                    relationship == Some(&AspenisedTripScheduleRelationship::Deleted);
-                event.trip_cancelled =
-                    relationship == Some(&AspenisedTripScheduleRelationship::Cancelled);
+            for &i in trip_events.iter() {
+                let event = &mut events[i];
+                if instance_matches(event) {
+                    event.trip_deleted =
+                        relationship == Some(&AspenisedTripScheduleRelationship::Deleted);
+                    event.trip_cancelled =
+                        relationship == Some(&AspenisedTripScheduleRelationship::Cancelled);
+                }
             }
         }
         if is_replacement && date.is_some() {
-            for event in events.iter_mut().filter(|event| instance_matches(event)) {
-                event.trip_modified = true;
-                event.stop_cancelled = true;
+            for &i in trip_events.iter() {
+                let event = &mut events[i];
+                if instance_matches(event) {
+                    event.trip_modified = true;
+                    event.stop_cancelled = true;
+                }
             }
         }
         for (index, stu) in update.stop_time_update.iter().enumerate() {
             let stop_id = stu.stop_id.as_deref().map(str::to_owned).or_else(|| {
-                let candidates: Vec<_> = events
-                    .iter()
-                    .filter(|event| {
-                        instance_matches(event)
-                            && stu.stop_sequence.is_some()
-                            && event.stop_sequence == stu.stop_sequence.map(u32::from)
-                    })
-                    .collect();
-                (candidates.len() == 1).then(|| candidates[0].stop_id.clone())
+                let sequence = u32::from(stu.stop_sequence?);
+                unique_match(trip_events.iter().map(|&i| &events[i]).filter(|event| {
+                    instance_matches(event) && event.stop_sequence == Some(sequence)
+                }))
+                .map(|event| event.stop_id.clone())
             });
             let Some(stop_id) = stop_id else {
                 continue;
@@ -516,49 +555,19 @@ pub fn overlay_updates(
                 .as_ref()
                 .and_then(|event| positive_time(event.time));
             // Match repeated stop visits by their scheduled timestamps when present.
-            let scheduled_arrival = stu.arrival.as_ref().and_then(|e| {
-                positive_time(
-                    e.time
-                        .zip(e.delay)
-                        .and_then(|(time, delay)| time.checked_sub(i64::from(delay))),
-                )
-            });
-            let scheduled_departure = stu.departure.as_ref().and_then(|e| {
-                positive_time(
-                    e.time
-                        .zip(e.delay)
-                        .and_then(|(time, delay)| time.checked_sub(i64::from(delay))),
-                )
-            });
-            let candidates: Vec<_> = events
-                .iter()
-                .enumerate()
-                .filter(|(_, event)| {
-                    instance_matches(event)
-                        && event.stop_id == assigned
-                        && (stu.stop_sequence.is_none()
-                            || event.stop_sequence == stu.stop_sequence.map(u32::from))
-                        && (scheduled_arrival.is_none()
-                            || event.scheduled_arrival == scheduled_arrival)
-                        && (scheduled_departure.is_none()
-                            || event.scheduled_departure == scheduled_departure)
-                })
-                .map(|(i, _)| i)
-                .collect();
-            let existing = if candidates.len() == 1 {
-                candidates.first().copied()
-            } else {
-                None
-            };
-            let realtime_only = matches!(
-                relationship,
-                Some(
-                    AspenisedTripScheduleRelationship::Added
-                        | AspenisedTripScheduleRelationship::Unscheduled
-                        | AspenisedTripScheduleRelationship::Duplicated
-                        | AspenisedTripScheduleRelationship::Replacement
-                )
-            ) || modified.is_some();
+            let scheduled_arrival = stu.arrival.as_ref().and_then(scheduled_time);
+            let scheduled_departure = stu.departure.as_ref().and_then(scheduled_time);
+            let existing = unique_match(trip_events.iter().copied().filter(|&i| {
+                let event = &events[i];
+                instance_matches(event)
+                    && event.stop_id == assigned
+                    && (stu.stop_sequence.is_none()
+                        || event.stop_sequence == stu.stop_sequence.map(u32::from))
+                    && (scheduled_arrival.is_none()
+                        || event.scheduled_arrival == scheduled_arrival)
+                    && (scheduled_departure.is_none()
+                        || event.scheduled_departure == scheduled_departure)
+            }));
             if existing.is_none() && (!realtime_only || (arrival.is_none() && departure.is_none()))
             {
                 continue;
@@ -575,11 +584,7 @@ pub fn overlay_updates(
                 event
             });
             event.stop_sequence = stu.stop_sequence.map(u32::from).or(event.stop_sequence);
-            event.trip_start_time = update
-                .trip
-                .effective_start_time()
-                .and_then(parse_start_time)
-                .or(event.trip_start_time);
+            event.trip_start_time = start_time.or(event.trip_start_time);
             event.realtime_arrival = arrival
                 .or_else(|| {
                     stu.arrival.as_ref().and_then(|rt| {
@@ -635,6 +640,7 @@ pub fn overlay_updates(
             if let Some(i) = existing {
                 events[i] = event;
             } else {
+                trip_events.push(events.len());
                 events.push(event);
             }
         }
@@ -948,6 +954,51 @@ mod tests {
     }
 
     #[test]
+    fn nearby_departures_require_trip_updates_for_cancellation() {
+        // Route 93 has a detour advisory at specific stops. Without an
+        // authoritative trip update, scheduled calls remain departures.
+        let date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        let stops = HashSet::from([
+            "17123".to_owned(),
+            "20177".to_owned(),
+            "unaffected".to_owned(),
+        ]);
+        let mut events: Vec<_> = ["17123", "20177", "unaffected"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, stop)| {
+                let mut event = empty_event("feed", "trip", "93", stop);
+                event.service_date = date;
+                event.stop_sequence = Some(index as u32 + 1);
+                event.scheduled_departure = Some(100 + index as u64 * 100);
+                event
+            })
+            .collect();
+
+        overlay_updates(&mut events, "feed", &stops, &[]);
+        assert!(events.iter().all(|event| {
+            !event.trip_cancelled && !event.stop_cancelled && nearby_event_time(event, 0).is_some()
+        }));
+
+        // A SKIPPED stop-time update affects only its matched stop.
+        let mut scheduled = update(AspenisedTripScheduleRelationship::Scheduled);
+        scheduled.trip.route_id = Some("93".into());
+        let mut skipped = stu("17123", 1, 100);
+        skipped.schedule_relationship = Some(AspenisedStopTimeScheduleRelationship::Skipped);
+        scheduled.stop_time_update = vec![skipped];
+        overlay_updates(&mut events, "feed", &stops, &[scheduled]);
+        assert!(events[0].stop_cancelled);
+        assert!(events.iter().all(|event| !event.trip_cancelled));
+        assert!(events[1..].iter().all(|event| !event.stop_cancelled));
+
+        // A matching CANCELED trip update still cancels all of its calls.
+        let mut cancelled = update(AspenisedTripScheduleRelationship::Cancelled);
+        cancelled.trip.route_id = Some("93".into());
+        overlay_updates(&mut events, "feed", &stops, &[cancelled]);
+        assert!(events.iter().all(|event| event.trip_cancelled));
+    }
+
+    #[test]
     fn trip_level_deletion_without_stop_updates_is_instance_scoped() {
         for relationship in [
             AspenisedTripScheduleRelationship::Deleted,
@@ -1020,6 +1071,113 @@ mod tests {
         assert_eq!(events[1].realtime_departure, Some(300));
         assert!(events.iter().all(|e| e.unscheduled_trip));
     }
+    #[test]
+    fn appended_calls_are_indexed_for_later_updates_and_cancellation() {
+        let mut added = update(AspenisedTripScheduleRelationship::Added);
+        added.stop_time_update = vec![stu("a", 1, 100), stu("a", 3, 300)];
+        let mut scheduled = update(AspenisedTripScheduleRelationship::Scheduled);
+        let mut sequence_only = stu("a", 3, 350);
+        sequence_only.stop_id = None;
+        scheduled.stop_time_update = vec![sequence_only];
+        let cancelled = update(AspenisedTripScheduleRelationship::Cancelled);
+
+        let mut other_chateau = empty_event("other", "trip", "route", "a");
+        other_chateau.service_date = added.trip.start_date;
+        other_chateau.stop_sequence = Some(3);
+        let mut events = vec![other_chateau];
+        overlay_updates(
+            &mut events,
+            "feed",
+            &HashSet::from(["a".into()]),
+            &[added, scheduled, cancelled],
+        );
+        assert_eq!(events.len(), 3);
+        assert!(!events[0].trip_cancelled);
+        assert_eq!(events[0].realtime_departure, None);
+        assert_eq!(events[1].realtime_departure, Some(100));
+        assert_eq!(events[2].realtime_departure, Some(350));
+        assert!(events[1..].iter().all(|event| event.trip_cancelled));
+    }
+
+    #[test]
+    fn ambiguous_sequence_only_update_does_not_select_a_loop_call() {
+        let mut u = update(AspenisedTripScheduleRelationship::Scheduled);
+        let mut sequence_only = stu("a", 1, 200);
+        sequence_only.stop_id = None;
+        u.stop_time_update = vec![sequence_only];
+        let mut event = empty_event("feed", "trip", "route", "a");
+        event.service_date = u.trip.start_date;
+        event.stop_sequence = Some(1);
+        let mut other = event.clone();
+        other.stop_id = "b".into();
+        let mut events = vec![event, other];
+        overlay_updates(
+            &mut events,
+            "feed",
+            &HashSet::from(["a".into(), "b".into()]),
+            &[u],
+        );
+        assert!(events.iter().all(|event| event.realtime_departure.is_none()));
+    }
+
+    #[test]
+    fn undated_updates_match_absolute_scheduled_times_only() {
+        let mut u = update(AspenisedTripScheduleRelationship::Scheduled);
+        u.trip.start_date = None;
+        let mut stop = stu("a", 1, 200);
+        stop.departure = Some(AspenStopTimeEvent {
+            time: Some(200),
+            delay: Some(20),
+            uncertainty: None,
+        });
+        u.stop_time_update = vec![stop];
+
+        let mut event = empty_event("feed", "trip", "route", "a");
+        event.service_date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        event.stop_sequence = Some(1);
+        event.scheduled_departure = Some(180);
+        let mut other_day = event.clone();
+        other_day.service_date = NaiveDate::from_ymd_opt(2026, 11, 15);
+        other_day.scheduled_departure = Some(180 + 86400);
+        let mut wrong_time_kind = event.clone();
+        wrong_time_kind.scheduled_departure = None;
+        wrong_time_kind.scheduled_arrival = Some(180);
+        let mut events = vec![event, other_day, wrong_time_kind];
+
+        overlay_updates(&mut events, "feed", &HashSet::from(["a".into()]), &[u]);
+        assert_eq!(events[0].realtime_departure, Some(200));
+        assert!(events[1..].iter().all(|event| event.realtime_departure.is_none()));
+    }
+
+    #[test]
+    fn large_board_updates_only_matching_trips() {
+        let date = NaiveDate::from_ymd_opt(2026, 11, 14);
+        let mut events: Vec<_> = (0..16_384)
+            .map(|i| {
+                let mut event = empty_event("feed", &format!("trip-{i}"), "route", "a");
+                event.service_date = date;
+                event.stop_sequence = Some(1);
+                event
+            })
+            .collect();
+        let updates: Vec<_> = (0..512)
+            .map(|i| {
+                let mut u = update(AspenisedTripScheduleRelationship::Scheduled);
+                u.trip.trip_id = Some(format!("trip-{}", i * 16).into());
+                u.stop_time_update = vec![stu("a", 1, 200)];
+                u
+            })
+            .collect();
+        overlay_updates(&mut events, "feed", &HashSet::from(["a".into()]), &updates);
+        assert_eq!(events.len(), 16_384);
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(
+                event.realtime_departure,
+                (i < 512 * 16 && i % 16 == 0).then_some(200)
+            );
+        }
+    }
+
     #[test]
     fn replacement_cancels_removed_static_calls() {
         let mut u = update(AspenisedTripScheduleRelationship::Replacement);

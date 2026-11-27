@@ -8,6 +8,7 @@ use ahash::AHashSet;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
 use catenary::postgres_tools::CatenaryPostgresPool;
+use catenary::nearby_departures::{dense_nearby_bus_radius, is_bus_route_type};
 use chrono::NaiveDate;
 use chrono::TimeZone;
 use compact_str::CompactString;
@@ -28,11 +29,10 @@ use std::time::Instant;
 
 // Import logic from shared modules
 use crate::departures_shared::{
-    AlertIndex, ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
     fetch_stop_data_for_chateau,
 };
 use catenary::aspen::lib::AspenRpcClient;
-use catenary::aspen_dataset::{AspenisedAlert, AspenisedTripUpdate};
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use catenary::make_calendar_structure_from_pg;
 
@@ -299,6 +299,7 @@ pub async fn nearby_from_coords_v3(
     let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
 
     let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+    let dense_bus_radius = dense_nearby_bus_radius(input_point, &stops);
 
     for stop in &stops {
         let stop_point = geo::Point::new(
@@ -308,6 +309,12 @@ pub async fn nearby_from_coords_v3(
         let dist = Haversine.distance(input_point, stop_point);
 
         // Distance filtering
+        if dense_bus_radius.is_some_and(|limit| dist > limit)
+            && stop.primary_route_type.is_some_and(is_bus_route_type)
+            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+        {
+            continue;
+        }
         if stop.primary_route_type == Some(3) {
             if stops.len() > 100 && dist > 4000.0 {
                 continue;
@@ -398,6 +405,7 @@ pub async fn nearby_from_coords_v3(
         db_connection_time,
         stops_fetch_time,
         start,
+        dense_bus_radius,
     )
     .await;
 
@@ -436,6 +444,7 @@ async fn fetch_chateau_intermediate(
     stop_full_info_map: HashMap<String, catenary::models::Stop>,
     stop_dist_map: HashMap<String, f64>,
     query_point: geo::Point<f64>,
+    dense_bus_radius: Option<f64>,
 ) -> Option<ChateauIntermediate> {
     // 1. Determine Date Window
     let lookback_days = match chateau.as_str() {
@@ -600,6 +609,25 @@ async fn fetch_chateau_intermediate(
         }
     );
 
+    // Keep mixed-mode stops available to rail but drop distant bus calls
+    // before loading compressed trips or calendars.
+    let mut itins_result = itins_result;
+    if let Some(limit) = dense_bus_radius {
+        let modes: HashMap<_, _> = routes_result
+            .iter()
+            .map(|route| (route.route_id.as_str(), route.route_type))
+            .collect();
+        let bus_patterns: HashSet<_> = itin_meta_list
+            .iter()
+            .filter(|meta| modes.get(meta.route_id.as_str()).is_some_and(|mode| is_bus_route_type(*mode)))
+            .map(|meta| meta.itinerary_pattern_id.as_str())
+            .collect();
+        itins_result.retain(|row| {
+            !bus_patterns.contains(row.itinerary_pattern_id.as_str())
+                || stop_dist_map.get(row.stop_id.as_str()).is_some_and(|distance| *distance <= limit)
+        });
+    }
+
     let actual_itinerary_ids: Vec<String> = itins_result
         .iter()
         .map(|r| r.itinerary_pattern_id.clone())
@@ -607,6 +635,12 @@ async fn fetch_chateau_intermediate(
         .into_iter()
         .collect();
 
+    let route_ids: Vec<CompactString> = if dense_bus_radius.is_some() {
+        let approved: HashSet<_> = actual_itinerary_ids.iter().map(String::as_str).collect();
+        itin_meta_list.iter().filter(|meta| approved.contains(meta.itinerary_pattern_id.as_str())).map(|meta| meta.route_id.clone()).collect()
+    } else {
+        route_ids
+    };
     let trips_compressed_raw: Vec<catenary::models::CompressedTrip> = {
         let chateau_clone_trips = chateau.clone();
         let mut conn = pool.get().await.unwrap();
@@ -1000,6 +1034,7 @@ pub async fn get_nearby_departures_stream(
     let mut stop_full_info_map: HashMap<String, catenary::models::Stop> = HashMap::new();
 
     let number_of_osm_stations = stops.iter().filter(|s| s.osm_station_id.is_some()).count();
+    let dense_bus_radius = dense_nearby_bus_radius(input_point, &stops);
 
     for stop in &stops {
         let stop_point = geo::Point::new(
@@ -1009,6 +1044,12 @@ pub async fn get_nearby_departures_stream(
         let dist = Haversine.distance(input_point, stop_point);
 
         // Distance filtering (reused)
+        if dense_bus_radius.is_some_and(|limit| dist > limit)
+            && stop.primary_route_type.is_some_and(is_bus_route_type)
+            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+        {
+            continue;
+        }
         if stop.primary_route_type == Some(3) {
             if stops.len() > 100 && dist > 4000.0 {
                 continue;
@@ -1120,6 +1161,7 @@ pub async fn get_nearby_departures_stream(
                     db_connection_time,
                     stops_fetch_time,
                     start,
+                    dense_bus_radius,
                 )
                 .await;
 
@@ -1199,6 +1241,7 @@ async fn fetch_chunk_intermediates(
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
     total_start_time: Instant,
+    dense_bus_radius: Option<f64>,
 ) -> Vec<Option<ChateauIntermediate>> {
     if station_groups.is_empty() {
         return Vec::new();
@@ -1303,6 +1346,7 @@ async fn fetch_chunk_intermediates(
                 full_info_map_unwrap,
                 stop_dist_map_unwrap,
                 input_point_clone,
+                dense_bus_radius,
             )
             .await
         });
@@ -1334,7 +1378,6 @@ async fn render_chateau_response(
     HashMap<String, StopOutputV3>,
 ) {
     let mut rt_data: Option<catenary::aspen::lib::TripsSelectionResponse> = None;
-    let mut rt_alerts: BTreeMap<String, catenary::aspen_dataset::AspenisedAlert> = BTreeMap::new();
     let chateau = intermediate.chateau.clone();
 
     if !skip_realtime {
@@ -1360,20 +1403,15 @@ async fn render_chateau_response(
                             if let Ok(client) =
                                 catenary::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
                             {
-                                let (t, a) = tokio::join!(
-                                    client.get_all_trips_with_route_ids(
+                                let t = client
+                                    .get_all_trips_with_route_ids(
                                         tarpc::context::current(),
                                         chateau.clone(),
-                                        route_ids.into_iter().map(|x| x.into()).collect()
-                                    ),
-                                    client
-                                        .get_all_alerts(tarpc::context::current(), chateau.clone())
-                                );
+                                        route_ids.into_iter().map(|x| x.into()).collect(),
+                                    )
+                                    .await;
                                 if let Ok(Some(tr)) = t {
                                     rt_data = Some(tr);
-                                }
-                                if let Ok(Some(al)) = a {
-                                    rt_alerts = al.into_iter().collect();
                                 }
                             }
                         }
@@ -1392,7 +1430,6 @@ async fn render_chateau_response(
     let mut route_info_map: HashMap<String, RouteInfoExport> = HashMap::new();
     let mut stop_output_map: HashMap<String, StopOutputV3> = HashMap::new();
 
-    let alert_index = AlertIndex::new(&rt_alerts);
     let relevant_stop_ids: HashSet<String> = intermediate
         .stop_to_key_map
         .keys()
@@ -1479,22 +1516,8 @@ async fn render_chateau_response(
                     let mut is_cancelled = false;
                     let mut is_delayed = false;
 
-                    // Alerts
-                    let relevant_alerts = alert_index.search(route_id.as_str(), trip_id.as_str());
-                    for alert in relevant_alerts {
-                        if alert.effect == Some(1) {
-                            let is_active = alert.active_period.iter().any(|ap| {
-                                let start = ap.start.unwrap_or(0);
-                                let end = ap.end.unwrap_or(u64::MAX);
-                                (departure_ts as u64) >= start && (departure_ts as u64) <= end
-                            });
-                            if is_active {
-                                // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-                            }
-                        }
-                    }
-
-                    // Trip Updates
+                    // Service alerts are advisory; only matching trip updates can
+                    // cancel a departure or mark its stop as skipped.
                     let mut active_update: Option<&catenary::aspen_dataset::AspenisedTripUpdate> =
                         None;
                     if let Some(data) = &rt_data {

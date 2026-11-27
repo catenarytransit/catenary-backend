@@ -21,9 +21,8 @@ use std::time::Instant;
 
 // Import logic from shared modules
 use crate::aspen::lib::AspenRpcClient;
-use crate::aspen_dataset::{AspenisedAlert, AspenisedTripUpdate};
 use crate::departures_shared::{
-    AlertIndex, ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
     fetch_stop_data_for_chateau,
 };
 use crate::gtfs_schedule_protobuf::protobuf_to_frequencies;
@@ -32,6 +31,10 @@ use crate::make_calendar_structure_from_pg;
 // Keep large ANY predicates small while bounding the total database fan-out per chateau.
 const PATTERN_QUERY_BATCH_SIZE: usize = 128;
 const PATTERN_QUERY_CONCURRENCY: usize = 4;
+const COACH_ROUTE_TYPE: i16 = 200;
+const INTERMEDIATE_ROUTE_LIMIT: usize = 10;
+const DENSE_BUS_RADIUS_M: f64 = 1500.0;
+const DENSE_BUS_STOP_THRESHOLD: usize = 200;
 
 const LONG_DISTANCE_CHATEAUX: &[&str] = &[
     "sncf",
@@ -56,7 +59,7 @@ const LONG_DISTANCE_CHATEAUX: &[&str] = &[
 // This endpoint reads its trips from trips_compressed, so it never uses the
 // potentially large itinerary_pattern_meta.trip_ids array. Explicitly select
 // only the metadata needed to construct nearby departures.
-#[derive(Debug, Queryable, Selectable)]
+#[derive(Debug, Queryable, Selectable, QueryableByName)]
 #[diesel(table_name = crate::schema::gtfs::itinerary_pattern_meta)]
 struct NearbyItineraryPatternMeta {
     itinerary_pattern_id: String,
@@ -64,6 +67,95 @@ struct NearbyItineraryPatternMeta {
     direction_pattern_id: Option<String>,
     timezone: String,
     row_count: i32,
+}
+
+// A stop-first optimization fence is intentional: the unrestricted three-way
+// join can start from routes, repeatedly scan all metadata for a feed/attempt,
+// then read entire itinerary patterns just to discard non-nearby occurrences.
+// Materialize the selected stop rows, deduplicate complete metadata/route keys,
+// and keep the LATERAL lookups parameterized (OFFSET 0 prevents pull-up).
+// All stages run in one statement on the same snapshot. Do not change global
+// planner settings or introduce additional indexes to enforce this order.
+const NEARBY_ITINERARY_SQL: &str = r#"
+WITH stop_rows AS MATERIALIZED (
+    SELECT
+        ip.onestop_feed_id,
+        ip.attempt_id,
+        ip.itinerary_pattern_id,
+        ip.stop_sequence,
+        ip.arrival_time_since_start,
+        ip.departure_time_since_start,
+        ip.interpolated_time_since_start,
+        ip.stop_id,
+        ip.chateau,
+        ip.gtfs_stop_sequence,
+        ip.timepoint,
+        ip.stop_headsign_idx,
+        ip.pickup_type,
+        ip.drop_off_type
+    FROM gtfs.itinerary_pattern ip
+    WHERE ip.chateau = $1
+      AND ip.stop_id = ANY($2)
+),
+pattern_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, itinerary_pattern_id
+    FROM stop_rows
+),
+metadata AS MATERIALIZED (
+    SELECT k.onestop_feed_id, k.attempt_id, k.itinerary_pattern_id,
+           m.route_id, m.direction_pattern_id, m.timezone, m.row_count
+    FROM pattern_keys k
+    CROSS JOIN LATERAL (
+        SELECT im.route_id, im.direction_pattern_id, im.timezone, im.row_count
+        FROM gtfs.itinerary_pattern_meta im
+        WHERE im.onestop_feed_id = k.onestop_feed_id
+          AND im.attempt_id = k.attempt_id
+          AND im.itinerary_pattern_id = k.itinerary_pattern_id
+          AND im.chateau = $1
+          AND im.direction_pattern_id = ANY($3)
+          AND ($4::text[] IS NULL OR im.route_id = ANY($4))
+        OFFSET 0
+    ) m
+),
+route_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, route_id
+    FROM metadata
+),
+eligible_routes AS MATERIALIZED (
+    SELECT k.onestop_feed_id, k.attempt_id, k.route_id
+    FROM route_keys k
+    CROSS JOIN LATERAL (
+        SELECT 1
+        FROM gtfs.routes r
+        WHERE r.onestop_feed_id = k.onestop_feed_id
+          AND r.attempt_id = k.attempt_id
+          AND r.route_id = k.route_id
+          AND r.chateau = $1
+          AND r.route_type <> $6
+          AND (r.route_type <> ALL(ARRAY[0, 1, 3]::smallint[])
+               OR r.route_id <> ALL($5))
+        OFFSET 0
+    ) r
+)
+SELECT s.*, m.route_id, m.direction_pattern_id, m.timezone, m.row_count
+FROM stop_rows s
+JOIN metadata m USING (onestop_feed_id, attempt_id, itinerary_pattern_id)
+JOIN eligible_routes r
+    ON r.onestop_feed_id = m.onestop_feed_id
+    AND r.attempt_id = m.attempt_id
+    AND r.route_id = m.route_id
+"#;
+
+// Both embedded structs read the same itinerary_pattern_id column; the
+// complete-key join above guarantees the two IDs would be identical.
+#[derive(QueryableByName)]
+struct NearbyItineraryMatch {
+    #[diesel(embed)]
+    // Diesel's QueryableByName derive uses a parameter named row.
+    // Avoid shadowing it before deserializing the second embedded struct.
+    stop_row: crate::models::ItineraryPatternRow,
+    #[diesel(embed)]
+    metadata: NearbyItineraryPatternMeta,
 }
 
 // Each HTTP/WS load has its own trace; concurrent chateaux and batches add
@@ -212,7 +304,12 @@ struct DepartureDistanceLimits {
 }
 
 impl DepartureDistanceLimits {
-    fn new(radius_m: f64, stop_count: usize, station_count: usize) -> Self {
+    fn new(
+        radius_m: f64,
+        stop_count: usize,
+        station_count: usize,
+        dense_bus_radius: Option<f64>,
+    ) -> Self {
         let other_m = radius_m.min(match station_count {
             201.. => 1000.0,
             101.. => 2000.0,
@@ -231,13 +328,17 @@ impl DepartureDistanceLimits {
                 101.. => 1000.0,
                 1.. => 2000.0,
                 _ => radius_m,
-            });
+            })
+            .min(dense_bus_radius.unwrap_or(radius_m));
         Self { bus_m, other_m }
     }
 
     fn allows(self, route_type: i16, distance_m: f64) -> bool {
-        // Include GTFS extended bus, coach and trolleybus route types.
-        let is_bus = matches!(route_type, 3 | 11 | 200..=209 | 700..=799 | 800);
+        // Coaches are not part of the nearby local departure board.
+        if route_type == COACH_ROUTE_TYPE {
+            return false;
+        }
+        let is_bus = is_bus_route_type(route_type);
         distance_m.is_finite() && distance_m <= if is_bus { self.bus_m } else { self.other_m }
     }
 
@@ -262,6 +363,53 @@ impl DepartureDistanceLimits {
         }
         modes.any(|mode| self.allows(mode, distance_m))
     }
+}
+
+pub fn is_bus_route_type(route_type: i16) -> bool {
+    matches!(route_type, 3 | 11 | 201..=209 | 700..=799 | 800)
+}
+
+fn dense_stop_bus_radius(distances: impl Iterator<Item = f64>) -> Option<f64> {
+    (distances
+        .filter(|distance| *distance <= DENSE_BUS_RADIUS_M)
+        .take(DENSE_BUS_STOP_THRESHOLD + 1)
+        .count()
+        > DENSE_BUS_STOP_THRESHOLD)
+        .then_some(DENSE_BUS_RADIUS_M)
+}
+
+/// Use the existing spatial stop snapshot and the same metric distance as the
+/// departure filters. Coach-only stops do not contribute to density.
+pub fn dense_nearby_bus_radius(
+    point: geo::Point<f64>,
+    stops: &[crate::models::Stop],
+) -> Option<f64> {
+    dense_stop_bus_radius(stops.iter().filter_map(|stop| {
+        let p = stop.point.as_ref()?;
+        has_non_coach_mode(
+            stop.primary_route_type,
+            &stop.route_types,
+            &stop.children_route_types,
+        )
+        .then(|| Haversine.distance(point, geo::Point::new(p.x, p.y)))
+    }))
+}
+
+// A stop with no known modes must remain eligible (for example, a station
+// parent or realtime-only stop). Exclude only explicitly coach-only stops.
+fn has_non_coach_mode(
+    primary: Option<i16>,
+    route_types: &[Option<i16>],
+    children_route_types: &[Option<i16>],
+) -> bool {
+    let mut modes = route_types
+        .iter()
+        .chain(children_route_types)
+        .flatten()
+        .copied()
+        .chain(primary)
+        .peekable();
+    modes.peek().is_none() || modes.any(|mode| mode != COACH_ROUTE_TYPE)
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -295,6 +443,50 @@ pub struct NearbyDeparturesV3Response {
     pub debug: NearbyDeparturesDebug,
 }
 
+/// Durations are cumulative across chateaux, not critical-path wall time.
+/// Event construction includes service-date and legacy realtime matching.
+/// Output grouping includes both per-chateau grouping and final assembly.
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct NearbyProcessingDebug {
+    pub realtime_connection_ms: f64,
+    pub realtime_rpc_ms: f64,
+    pub realtime_overlay_ms: f64,
+    pub realtime_additional_sql_ms: f64,
+    pub service_date_processing_ms: f64,
+    pub event_construction_ms: f64,
+    pub output_grouping_ms: f64,
+    pub legacy_realtime_matching_ms: f64,
+    pub realtime_loader_total_ms: f64,
+    pub compressed_trip_count: usize,
+    pub events_before_overlay: usize,
+    pub realtime_update_count: usize,
+    pub events_after_time_filter: usize,
+    pub legacy_realtime_update_count: usize,
+    pub realtime_modification_count: usize,
+    pub events_after_overlay: usize,
+}
+
+impl NearbyProcessingDebug {
+    fn accumulate(&mut self, other: &Self) {
+        self.realtime_connection_ms += other.realtime_connection_ms;
+        self.realtime_rpc_ms += other.realtime_rpc_ms;
+        self.realtime_overlay_ms += other.realtime_overlay_ms;
+        self.realtime_additional_sql_ms += other.realtime_additional_sql_ms;
+        self.service_date_processing_ms += other.service_date_processing_ms;
+        self.event_construction_ms += other.event_construction_ms;
+        self.output_grouping_ms += other.output_grouping_ms;
+        self.legacy_realtime_matching_ms += other.legacy_realtime_matching_ms;
+        self.realtime_loader_total_ms += other.realtime_loader_total_ms;
+        self.compressed_trip_count += other.compressed_trip_count;
+        self.events_before_overlay += other.events_before_overlay;
+        self.realtime_update_count += other.realtime_update_count;
+        self.events_after_time_filter += other.events_after_time_filter;
+        self.legacy_realtime_update_count += other.legacy_realtime_update_count;
+        self.realtime_modification_count += other.realtime_modification_count;
+        self.events_after_overlay += other.events_after_overlay;
+    }
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct NearbyDeparturesDebug {
     pub total_time_ms: u128,
@@ -305,6 +497,9 @@ pub struct NearbyDeparturesDebug {
     pub initial_stop_count: Option<usize>,
     pub initial_osm_station_count: Option<usize>,
     pub sql_queries: Vec<NearbySqlTiming>,
+    #[serde(flatten)]
+    pub processing: NearbyProcessingDebug,
+    pub processing_by_chateau: BTreeMap<String, NearbyProcessingDebug>,
 }
 
 // --- Long Distance Structs ---
@@ -427,10 +622,36 @@ pub async fn prepare_nearby(
         stops_start,
         &stops_result,
     );
-    let stops = stops_result.map_err(|e| e.to_string())?;
+    let mut stops = stops_result.map_err(|e| e.to_string())?;
+    // Coach-only stops must not inflate the density thresholds or trigger
+    // direction, calendar, trip or realtime requests in any phase.
+    stops.retain(|stop| {
+        has_non_coach_mode(
+            stop.primary_route_type,
+            &stop.route_types,
+            &stop.children_route_types,
+        )
+    });
+    let number_of_unique_osm_stations = stops
+        .iter()
+        .filter_map(|s| s.osm_station_id)
+        .collect::<AHashSet<_>>()
+        .len();
+    let distance_limits = DepartureDistanceLimits::new(
+        radius,
+        stops.len(),
+        number_of_unique_osm_stations,
+        if radius > DENSE_BUS_RADIUS_M {
+            dense_nearby_bus_radius(input_point, &stops)
+        } else {
+            None
+        },
+    );
     Ok(PreparedNearby {
         query,
         stops,
+        distance_limits,
+        number_of_unique_osm_stations,
         start,
         db_connection_time,
         stops_fetch_time: stops_start.elapsed(),
@@ -442,6 +663,8 @@ pub async fn prepare_nearby(
 pub struct PreparedNearby {
     query: NearbyFromCoordsV3,
     stops: Vec<crate::models::Stop>,
+    distance_limits: DepartureDistanceLimits,
+    number_of_unique_osm_stations: usize,
     start: Instant,
     db_connection_time: std::time::Duration,
     stops_fetch_time: std::time::Duration,
@@ -524,12 +747,17 @@ pub struct PrioritySelection {
     local_routes: HashSet<(String, String)>,
     station: Option<PriorityStation>,
     station_routes: HashSet<(String, String)>,
+    next_routes: HashSet<(String, String)>,
 }
 
 impl PrioritySelection {
     fn contains_route(&self, chateau: &str, route: &str) -> bool {
         let key = (chateau.to_owned(), route.to_owned());
         self.local_routes.contains(&key) || self.station_routes.contains(&key)
+    }
+
+    fn contains_next(&self, chateau: &str, route: &str) -> bool {
+        self.next_routes.contains(&(chateau.to_owned(), route.to_owned()))
     }
 
     fn contains_departure(
@@ -555,6 +783,8 @@ pub enum RouteSelection {
     All,
     Only(Arc<PrioritySelection>),
     Except(Arc<PrioritySelection>),
+    Next(Arc<PrioritySelection>),
+    ExceptBoth(Arc<PrioritySelection>),
 }
 
 impl RouteSelection {
@@ -563,7 +793,39 @@ impl RouteSelection {
     fn may_include_route(&self, chateau: &str, route: &str) -> bool {
         match self {
             Self::Only(priority) => priority.contains_route(chateau, route),
+            Self::Next(priority) => priority.contains_next(chateau, route),
             _ => true,
+        }
+    }
+
+    // Limit the first two loads to the selected routes/chateaux. The final
+    // phase cannot exclude whole rail routes: they may serve other stations.
+    fn included_route_ids(&self, chateau: &str) -> Option<Vec<String>> {
+        let ids: HashSet<_> = match self {
+            Self::Only(priority) => priority.local_routes.iter().chain(&priority.station_routes)
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            Self::Next(priority) => priority.next_routes.iter()
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            _ => return None,
+        };
+        Some(ids.into_iter().collect())
+    }
+
+    fn excluded_local_route_ids(&self, chateau: &str) -> Vec<String> {
+        match self {
+            Self::Except(priority) => priority.local_routes.iter()
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            Self::ExceptBoth(priority) => priority.local_routes.iter().chain(&priority.next_routes)
+                .filter(|(feed, _)| feed == chateau)
+                .map(|(_, route)| route.clone())
+                .collect(),
+            _ => Vec::new(),
         }
     }
 
@@ -578,6 +840,11 @@ impl RouteSelection {
             Self::All => true,
             Self::Only(priority) => priority.contains_departure(chateau, route, station_key, station_group),
             Self::Except(priority) => !priority.contains_departure(chateau, route, station_key, station_group),
+            Self::Next(priority) => !station_group && priority.contains_next(chateau, route),
+            Self::ExceptBoth(priority) => {
+                !priority.contains_departure(chateau, route, station_key, station_group)
+                    && (station_group || !priority.contains_next(chateau, route))
+            }
         }
     }
 }
@@ -611,7 +878,6 @@ impl PreparedNearby {
         let long_distance_chateaux_arc = Arc::new(long_distance_chateaux);
 
         let input_point = geo::Point::new(query.lon, query.lat);
-        let radius = query.radius.unwrap_or(5000.0);
         let stops = &self.stops;
         let stops_fetch_time = self.stops_fetch_time;
         if stops.is_empty() {
@@ -629,6 +895,8 @@ impl PreparedNearby {
                     initial_stop_count: Some(0),
                     initial_osm_station_count: Some(0),
                     sql_queries: snapshot_sql_timings(&sql_timings),
+                    processing: NearbyProcessingDebug::default(),
+                    processing_by_chateau: BTreeMap::new(),
                 },
             });
         }
@@ -641,14 +909,7 @@ impl PreparedNearby {
         let mut stop_dist_map: HashMap<(String, String), f64> = HashMap::new();
         let mut stop_full_info_map: HashMap<(String, String), crate::models::Stop> = HashMap::new();
 
-        let number_of_unique_osm_stations = stops
-            .iter()
-            .filter_map(|s| s.osm_station_id)
-            .collect::<AHashSet<_>>()
-            .len();
-
-        let distance_limits =
-            DepartureDistanceLimits::new(radius, stops.len(), number_of_unique_osm_stations);
+        let distance_limits = self.distance_limits;
 
         for stop in stops {
             let Some(point) = &stop.point else {
@@ -726,12 +987,8 @@ impl PreparedNearby {
 
         let mut chateau_futures = Vec::new();
         for (chateau, stop_ids) in chateau_stops {
-            if let RouteSelection::Only(priority) = &selection {
-                if !priority.local_routes.iter().chain(&priority.station_routes)
-                    .any(|(feed, _)| feed == &chateau)
-                {
-                    continue;
-                }
+            if selection.included_route_ids(&chateau).is_some_and(|ids| ids.is_empty()) {
+                continue;
             }
             let pool = pool.clone();
             let stop_ids_vec: Vec<String> = stop_ids.into_iter().collect();
@@ -807,9 +1064,14 @@ impl PreparedNearby {
         let mut routes_output: HashMap<String, HashMap<String, RouteInfoExport>> = HashMap::new();
         let mut stops_output: HashMap<String, HashMap<String, StopOutputV3>> = HashMap::new();
 
+        let mut processing = NearbyProcessingDebug::default();
+        let mut processing_by_chateau = BTreeMap::new();
         let mut chateau_stream = futures::stream::iter(chateau_futures).buffer_unordered(3);
         while let Some(res) = chateau_stream.next().await {
-            if let Some((ld_part, local_part, route_part, stop_part)) = res {
+            if let Some((ld_part, local_part, route_part, stop_part, debug_chateau, chateau_debug)) = res {
+                processing.accumulate(&chateau_debug);
+                processing_by_chateau.insert(debug_chateau, chateau_debug);
+                let grouping_started = Instant::now();
                 let mut chateau_opt = None;
                 if let Some((c, _)) = ld_part.keys().next() {
                     chateau_opt = Some(c.clone());
@@ -842,10 +1104,12 @@ impl PreparedNearby {
                         .extend(route_part);
                     stops_output.entry(c).or_default().extend(stop_part);
                 }
+                processing.output_grouping_ms += grouping_started.elapsed().as_secs_f64() * 1000.0;
             }
         }
 
         let pipeline_processing_time = pipeline_start.elapsed();
+        let final_grouping_started = Instant::now();
 
         // A. Long Distance Output Generation
         let mut ld_output: Vec<StationDepartureGroupExport> = Vec::new();
@@ -886,6 +1150,7 @@ impl PreparedNearby {
             ld_output.iter().filter_map(|g| g.osm_station_id).collect();
         let mut osm_station_info_map: HashMap<i64, crate::models::OsmStation> = HashMap::new();
 
+        processing.output_grouping_ms += final_grouping_started.elapsed().as_secs_f64() * 1000.0;
         if !osm_ids_to_fetch.is_empty() {
             let osm_stations_data: Vec<crate::models::OsmStation> = timed_nearby_sql!(
                 sql_timings,
@@ -904,6 +1169,7 @@ impl PreparedNearby {
             }
         }
 
+        let final_grouping_started = Instant::now();
         let mut merged_ld_output: Vec<StationDepartureGroupExport> =
             Vec::with_capacity(ld_output.len());
         let mut osm_station_map: HashMap<i64, usize> = HashMap::new();
@@ -994,6 +1260,7 @@ impl PreparedNearby {
         }
         local_output.sort_by(|a, b| a.closest_distance.partial_cmp(&b.closest_distance).unwrap());
 
+        processing.output_grouping_ms += final_grouping_started.elapsed().as_secs_f64() * 1000.0;
         Ok(NearbyDeparturesV3Response {
             long_distance: ld_output,
             local: local_output,
@@ -1006,8 +1273,10 @@ impl PreparedNearby {
                 etcd_connection_time_ms: etcd_connection_time.as_millis(),
                 pipeline_processing_time_ms: pipeline_processing_time.as_millis(),
                 initial_stop_count: Some(stops.len()),
-                initial_osm_station_count: Some(number_of_unique_osm_stations),
+                initial_osm_station_count: Some(self.number_of_unique_osm_stations),
                 sql_queries: snapshot_sql_timings(&sql_timings),
+                processing,
+                processing_by_chateau,
             },
         })
     }
@@ -1043,19 +1312,13 @@ async fn fetch_chateau_data(
     >,
     HashMap<String, RouteInfoExport>,
     HashMap<String, StopOutputV3>,
+    String,
+    NearbyProcessingDebug,
 )> {
+    let mut processing = NearbyProcessingDebug::default();
     let query_slots = tokio::sync::Semaphore::new(PATTERN_QUERY_CONCURRENCY);
-    let priority_route_ids: Option<Vec<String>> = match &selection {
-        RouteSelection::Only(priority) => Some(
-            priority.local_routes.iter().chain(&priority.station_routes)
-                .filter(|(feed, _)| feed == &chateau)
-                .map(|(_, route)| route.clone())
-                .collect::<HashSet<_>>()
-                .into_iter()
-                .collect(),
-        ),
-        _ => None,
-    };
+    let priority_route_ids = selection.included_route_ids(&chateau);
+    let excluded_local_route_ids = selection.excluded_local_route_ids(&chateau);
 
     // 1. Determine Date Window
     let lookback_days = match chateau.as_str() {
@@ -1176,58 +1439,52 @@ async fn fetch_chateau_data(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let matching_rows_and_metadata: Vec<(
-        crate::models::ItineraryPatternRow,
-        NearbyItineraryPatternMeta,
-    )> = load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| async {
-        use crate::schema::gtfs::{itinerary_pattern as ip, itinerary_pattern_meta as im};
-        let input_ids = stop_batch.len();
-        let mut query = ip::table
-            .inner_join(
-                im::table.on(ip::onestop_feed_id
-                    .eq(im::onestop_feed_id)
-                    .and(ip::attempt_id.eq(im::attempt_id))
-                    .and(ip::itinerary_pattern_id.eq(im::itinerary_pattern_id)))
-            )
-            .filter(ip::chateau.eq(&chateau))
-            .filter(im::chateau.eq(&chateau))
-            .filter(ip::stop_id.eq_any(stop_batch))
-            .filter(im::direction_pattern_id.eq_any(&direction_pattern_ids))
-            .select((
-                crate::models::ItineraryPatternRow::as_select(),
-                NearbyItineraryPatternMeta::as_select(),
-            ))
-            .into_boxed();
-        if let Some(ids) = &priority_route_ids {
-            query = query.filter(im::route_id.eq_any(ids));
-        }
-        timed_nearby_sql!(
-            sql_timings,
-            request_started,
-            &chateau,
-            "itinerary_rows_by_selected_stops",
-            input_ids,
-            pool,
-            query,
-            (
-                crate::models::ItineraryPatternRow,
-                NearbyItineraryPatternMeta
-            )
-        )
-    })
-    .await
-    .unwrap_or_default();
+    let matching_rows_and_metadata: Vec<NearbyItineraryMatch> =
+        load_pattern_batches(&direction_stop_ids, &query_slots, |stop_batch| {
+            // The returned future owns this batch and borrows shared request
+            // state. Keep the loader an Fn so it can run concurrent batches.
+            let chateau = &chateau;
+            let direction_pattern_ids = &direction_pattern_ids;
+            let priority_route_ids = priority_route_ids.as_deref();
+            let excluded_local_route_ids = &excluded_local_route_ids;
+            let sql_timings = &sql_timings;
+            let pool = &pool;
+            async move {
+                let input_ids = stop_batch.len();
+                // NULL priority means unrestricted; an empty priority array
+                // matches nothing. Earlier phases exclude only local modes.
+                let query = sql_query(NEARBY_ITINERARY_SQL)
+                    .bind::<Text, _>(chateau)
+                    .bind::<Array<Text>, _>(stop_batch)
+                    .bind::<Array<Text>, _>(direction_pattern_ids)
+                    .bind::<Nullable<Array<Text>>, _>(priority_route_ids)
+                    .bind::<Array<Text>, _>(excluded_local_route_ids)
+                    .bind::<SmallInt, _>(COACH_ROUTE_TYPE);
+                timed_nearby_sql!(
+                    sql_timings,
+                    request_started,
+                    chateau,
+                    "itinerary_rows_by_selected_stops",
+                    input_ids,
+                    pool,
+                    query,
+                    NearbyItineraryMatch
+                )
+            }
+        })
+        .await
+        .unwrap_or_default();
 
     // Only materialize one copy of a pattern's metadata. Multiple stops and
     // repeated occurrences of the same stop must remain distinct row entries.
     let mut itin_meta_list = Vec::new();
     let mut itins_result = Vec::with_capacity(matching_rows_and_metadata.len());
     let mut seen_itinerary_ids = HashSet::new();
-    for (row, meta) in matching_rows_and_metadata {
+    for NearbyItineraryMatch { stop_row, metadata: meta } in matching_rows_and_metadata {
         if seen_itinerary_ids.insert(meta.itinerary_pattern_id.clone()) {
             itin_meta_list.push(meta);
         }
-        itins_result.push(row);
+        itins_result.push(stop_row);
     }
 
     // Keep the coarse route restriction before loading the route dictionaries.
@@ -1404,6 +1661,8 @@ async fn fetch_chateau_data(
     //     actual_itinerary_ids.len()
     // );
 
+    processing.compressed_trip_count = trips_compressed_result.len();
+
     // Fetch Calendar (Moved here to optimize performance)
     let mut service_ids_to_fetch = HashSet::new();
     for trip in &trips_compressed_result {
@@ -1464,9 +1723,11 @@ async fn fetch_chateau_data(
         (vec![], vec![])
     };
 
+    let service_date_started = Instant::now();
     let calendar_struct =
         crate::make_calendar_structure_from_pg(vec![calendar], vec![calendar_dates])
             .unwrap_or_default();
+    processing.service_date_processing_ms += service_date_started.elapsed().as_secs_f64() * 1000.0;
     let service_map = calendar_struct.get(&chateau);
 
     // Build Maps
@@ -1534,36 +1795,32 @@ async fn fetch_chateau_data(
     let trip_ids: Vec<String> = trips_compressed.keys().cloned().collect();
 
     let mut rt_data: Option<crate::aspen::lib::TripsSelectionResponse> = None;
-    let mut rt_alerts: BTreeMap<String, crate::aspen_dataset::AspenisedAlert> = BTreeMap::new();
 
     if !skip_realtime {
         if let Some(meta) = aspen_chateau_cache.get(&chateau) {
             if !trip_ids.is_empty() {
                 let timer_to_connect_to_aspen = std::time::Instant::now();
-                if let Ok(client) =
-                    crate::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await
-                {
-                    let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+                let client = crate::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await;
+                let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
+                processing.realtime_connection_ms += time_to_connect_to_aspen.as_secs_f64() * 1000.0;
+                if let Ok(client) = client {
 
                     let timer_get_trips = std::time::Instant::now();
                     let timeout_result = tokio::time::timeout(
                         std::time::Duration::from_millis(rt_timeout_ms),
-                        async {
-                            tokio::join!(
-                                client.get_all_trips_with_ids(
-                                    tarpc::context::current(),
-                                    chateau.clone(),
-                                    trip_ids.clone()
-                                ),
-                                client.get_all_alerts(tarpc::context::current(), chateau.clone()),
-                            )
-                        },
+                        // Service alerts are advisory; only trip updates affect departures.
+                        client.get_all_trips_with_ids(
+                            tarpc::context::current(),
+                            chateau.clone(),
+                            trip_ids.clone(),
+                        ),
                     )
                     .await;
                     let time_get_trips = timer_get_trips.elapsed();
+                    processing.realtime_rpc_ms += time_get_trips.as_secs_f64() * 1000.0;
 
                     match timeout_result {
-                        Ok((t, a)) => {
+                        Ok(t) => {
                             println!(
                                 "nearby deps realtime data fetch chateau {}, aspen connect time {:?}, get trips time {:?}",
                                 chateau.as_str(),
@@ -1580,10 +1837,8 @@ async fn fetch_chateau_data(
                                     tr.stop_id_to_parent_id.len()
                                 );
 
+                                processing.legacy_realtime_update_count = tr.trip_updates.len();
                                 rt_data = Some(tr);
-                            }
-                            if let Ok(Some(al)) = a {
-                                rt_alerts = al.into_iter().collect();
                             }
                         }
                         Err(_) => {
@@ -1694,13 +1949,7 @@ async fn fetch_chateau_data(
         }
     }
 
-    let alerts_idx_timer = std::time::Instant::now();
-    let alert_index = AlertIndex::new(&rt_alerts);
-    println!(
-        "alerts index formation time: {:?}",
-        alerts_idx_timer.elapsed()
-    );
-
+    let event_construction_started = Instant::now();
     let relevant_stop_ids: HashSet<String> = stop_to_key_map
         .keys()
         .filter(|(c, _)| c == &chateau)
@@ -1708,7 +1957,6 @@ async fn fetch_chateau_data(
         .collect();
 
     let mut total_time_added_looking_at_rt_trips = std::time::Duration::new(0, 0);
-    let mut total_time_added_looking_at_rt_alerts = std::time::Duration::new(0, 0);
 
     for trip_id in trip_ids {
         let trip = trips_compressed.get(&trip_id);
@@ -1725,6 +1973,7 @@ async fn fetch_chateau_data(
             };
 
             // Service Date Check
+            let service_date_started = Instant::now();
             let mut valid_service_dates = Vec::new();
             if let Some(services) = service_map {
                 if let Some(service) = services.get(trip.service_id.as_str()) {
@@ -1737,6 +1986,8 @@ async fn fetch_chateau_data(
                     }
                 }
             }
+
+            processing.service_date_processing_ms += service_date_started.elapsed().as_secs_f64() * 1000.0;
 
             let rows = match itins.get(&trip.itinerary_pattern_id) {
                 Some(r) => r,
@@ -1796,44 +2047,8 @@ async fn fetch_chateau_data(
                         let mut rt_platform = None;
                         let mut is_cancelled = false;
 
-                        let timer_looking_at_rt_alerts = std::time::Instant::now();
-                        let relevant_alerts =
-                            alert_index.search(route_id.as_str(), trip_id.as_str());
-                        for alert in relevant_alerts {
-                            if alert.effect == Some(1) {
-                                // NO_SERVICE
-                                let is_active = alert.active_period.iter().any(|ap| {
-                                    let start = ap.start.unwrap_or(0);
-                                    let end = ap.end.unwrap_or(u64::MAX);
-                                    (departure_ts as u64) >= start && (departure_ts as u64) <= end
-                                });
-
-                                let applies_to_trip_without_a_referenced_stop = alert
-                                    .informed_entity
-                                    .iter()
-                                    .filter(|e| e.stop_id.is_none())
-                                    .any(|e| {
-                                        let route_match = e
-                                            .route_id
-                                            .as_ref()
-                                            .is_some_and(|r_id| *r_id == trip.route_id);
-                                        let trip_match = e.trip.as_ref().is_some_and(|t| {
-                                            t.trip_id
-                                                .as_ref()
-                                                .is_some_and(|t_id| *t_id == trip.trip_id)
-                                        });
-
-                                        route_match || trip_match
-                                    });
-
-                                if is_active && applies_to_trip_without_a_referenced_stop {
-                                    // Under the GTFS specification, this is not allowed to mark the trip as cancelled
-                                }
-                            }
-                        }
-                        total_time_added_looking_at_rt_alerts +=
-                            timer_looking_at_rt_alerts.elapsed();
-
+                        // Cancellation is determined by the matching trip/stop update,
+                        // never by a service alert (including NO_SERVICE or DETOUR).
                         let mut active_update: Option<&crate::aspen_dataset::AspenisedTripUpdate> =
                             None;
                         if let Some(data) = &rt_data {
@@ -1901,7 +2116,7 @@ async fn fetch_chateau_data(
                         }
 
                         if let Some(update) = active_update {
-                            let timer_looking_at_rt_alerts = std::time::Instant::now();
+                            let timer_applying_rt_trip_update = std::time::Instant::now();
                             if let Some(stu) = crate::stop_matching::find_stop_time_update(
                                 &update.stop_time_update,
                                 row.gtfs_stop_sequence,
@@ -1928,8 +2143,8 @@ async fn fetch_chateau_data(
                                 if stu.schedule_relationship == Some(crate::aspen_dataset::AspenisedStopTimeScheduleRelationship::Skipped) { is_cancelled = true; }
                             }
                             if update.trip.schedule_relationship == Some(crate::aspen_dataset::AspenisedTripScheduleRelationship::Cancelled) { is_cancelled = true; }
-                            total_time_added_looking_at_rt_alerts +=
-                                timer_looking_at_rt_alerts.elapsed();
+                            total_time_added_looking_at_rt_trips +=
+                                timer_applying_rt_trip_update.elapsed();
                         }
 
                         let display_platform = rt_platform.or_else(|| {
@@ -1975,13 +2190,14 @@ async fn fetch_chateau_data(
     }
 
     println!(
-        "Total time added looking at rt alerts: {} ms",
-        total_time_added_looking_at_rt_alerts.as_millis()
-    );
-    println!(
         "Total time added looking at rt trips: {} ms",
         total_time_added_looking_at_rt_trips.as_millis()
     );
+
+    processing.event_construction_ms = event_construction_started.elapsed().as_secs_f64() * 1000.0;
+    processing.legacy_realtime_matching_ms =
+        total_time_added_looking_at_rt_trips.as_secs_f64() * 1000.0;
+    processing.events_before_overlay = board_events.len();
 
     // Use the same indexed overlay as station boards, before time filtering and
     // limits. Query every nearby stop: static direction pruning cannot predict
@@ -1990,7 +2206,9 @@ async fn fetch_chateau_data(
     let mut agency_dictionaries = BTreeMap::from([(chateau.clone(), agencies)]);
     let mut realtime_stops = BTreeMap::new();
     if !skip_realtime {
-        realtime_stops = crate::departure_realtime_loader::apply_departure_realtime(
+        let mut realtime_timings = crate::departure_realtime_loader::DepartureRealtimeTimings::default();
+        let realtime_loader_started = Instant::now();
+        realtime_stops = crate::departure_realtime_loader::apply_departure_realtime_timed(
             &mut board_events,
             &BTreeMap::from([(chateau.clone(), stop_ids.iter().cloned().collect())]),
             &pool,
@@ -1999,9 +2217,19 @@ async fn fetch_chateau_data(
             &mut agency_dictionaries,
             &mut BTreeMap::new(),
             false,
+            &mut realtime_timings,
         )
         .await;
+        processing.realtime_loader_total_ms = realtime_loader_started.elapsed().as_secs_f64() * 1000.0;
+        processing.realtime_connection_ms += realtime_timings.connection_ms;
+        processing.realtime_rpc_ms += realtime_timings.rpc_ms;
+        processing.realtime_overlay_ms = realtime_timings.overlay_ms;
+        processing.realtime_additional_sql_ms = realtime_timings.additional_sql_ms;
+        processing.realtime_update_count = realtime_timings.update_count;
+        processing.realtime_modification_count = realtime_timings.modification_count;
     }
+    processing.events_after_overlay = board_events.len();
+    let grouping_started = Instant::now();
     let routes = route_dictionaries.remove(&chateau).unwrap_or_default();
     let agencies = agency_dictionaries.remove(&chateau).unwrap_or_default();
     for event in board_events {
@@ -2043,6 +2271,7 @@ async fn fetch_chateau_data(
         ) else {
             continue;
         };
+        processing.events_after_time_filter += 1;
         let Some(datetime) = chrono::Utc.timestamp_opt(time as i64, 0).single() else {
             continue;
         };
@@ -2196,6 +2425,7 @@ async fn fetch_chateau_data(
         }
     }
 
+    processing.output_grouping_ms = grouping_started.elapsed().as_secs_f64() * 1000.0;
     Some((
         ld_departures_by_group,
         local_departures
@@ -2207,6 +2437,8 @@ async fn fetch_chateau_data(
             .collect(),
         route_info_map,
         stop_output_map,
+        chateau,
+        processing,
     ))
 }
 
@@ -2289,11 +2521,11 @@ mod pattern_batch_tests {
 
 #[cfg(test)]
 mod distance_limit_tests {
-    use super::DepartureDistanceLimits;
+    use super::{DepartureDistanceLimits, dense_stop_bus_radius, has_non_coach_mode};
 
     #[test]
     fn mixed_stop_keeps_metro_but_rejects_bus_beyond_dense_bus_radius() {
-        let limits = DepartureDistanceLimits::new(5000.0, 801, 10);
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 10, None);
         assert!(limits.allows_stop(Some(1), &[Some(1), Some(3)], &[], 1500.0));
         assert!(limits.allows(1, 1500.0));
         assert!(!limits.allows(3, 1500.0));
@@ -2314,7 +2546,7 @@ mod distance_limit_tests {
             (1, 100, 2000.0),
             (1, 101, 1000.0),
         ] {
-            let limits = DepartureDistanceLimits::new(5000.0, stops, stations);
+            let limits = DepartureDistanceLimits::new(5000.0, stops, stations, None);
             assert!(
                 limits.allows(3, cutoff),
                 "{stops} stops, {stations} stations"
@@ -2324,9 +2556,46 @@ mod distance_limit_tests {
     }
 
     #[test]
+    fn dense_bus_radius_counts_only_stops_within_1500_metres() {
+        let distances = std::iter::repeat_n(1500.0, 200)
+            .chain(std::iter::repeat_n(1500.1, 100))
+            .chain([f64::NAN, f64::INFINITY]);
+        let sparse_radius = dense_stop_bus_radius(distances.clone());
+        assert_eq!(sparse_radius, None);
+        let dense_radius = dense_stop_bus_radius(distances.chain([1499.0]));
+        assert_eq!(dense_radius, Some(1500.0));
+
+        let sparse = DepartureDistanceLimits::new(5000.0, 302, 0, sparse_radius);
+        let dense = DepartureDistanceLimits::new(5000.0, 303, 0, dense_radius);
+        assert!(sparse.allows(3, 1500.1));
+        for mode in [3, 11, 209, 700, 799, 800] {
+            assert!(dense.allows(mode, 1500.0));
+            assert!(!dense.allows(mode, 1500.1));
+        }
+        for mode in [0, 1, 2] {
+            assert!(dense.allows(mode, 5000.0));
+        }
+        assert!(dense.allows_stop(Some(3), &[Some(3), Some(2)], &[], 2000.0));
+        assert!(!dense.allows_stop(Some(3), &[Some(3)], &[], 2000.0));
+    }
+
+    #[test]
+    fn dense_bus_radius_never_relaxes_existing_limits() {
+        for (radius, stops, stations, expected) in [
+            (500.0, 201, 0, 500.0),
+            (5000.0, 801, 0, 1000.0),
+            (5000.0, 201, 101, 1000.0),
+        ] {
+            let limits = DepartureDistanceLimits::new(radius, stops, stations, Some(1500.0));
+            assert!(limits.allows(3, expected));
+            assert!(!limits.allows(3, expected + 0.1));
+        }
+    }
+
+    #[test]
     fn extended_bus_modes_use_the_same_cutoff() {
-        let limits = DepartureDistanceLimits::new(5000.0, 801, 0);
-        for mode in [3, 11, 200, 209, 700, 701, 799, 800] {
+        let limits = DepartureDistanceLimits::new(5000.0, 801, 0, None);
+        for mode in [3, 11, 209, 700, 701, 799, 800] {
             assert!(limits.allows(mode, 1000.0));
             assert!(!limits.allows(mode, 1000.1));
         }
@@ -2336,8 +2605,21 @@ mod distance_limit_tests {
     }
 
     #[test]
+    fn coaches_are_excluded_but_shared_bus_stops_are_retained() {
+        let limits = DepartureDistanceLimits::new(5000.0, 10, 1, None);
+        assert!(!limits.allows(200, 0.0));
+        assert!(!limits.allows_stop(Some(200), &[Some(200)], &[], 10.0));
+        assert!(limits.allows_stop(Some(200), &[Some(200), Some(3)], &[], 10.0));
+        assert!(!has_non_coach_mode(Some(200), &[Some(200)], &[Some(200)]));
+        assert!(has_non_coach_mode(Some(200), &[Some(3)], &[]));
+        assert!(has_non_coach_mode(Some(200), &[], &[Some(2)]));
+        assert!(has_non_coach_mode(None, &[None], &[]));
+        assert!(has_non_coach_mode(Some(201), &[], &[]));
+    }
+
+    #[test]
     fn requested_radius_caps_every_mode_including_unknown_stops() {
-        let limits = DepartureDistanceLimits::new(500.0, 1000, 300);
+        let limits = DepartureDistanceLimits::new(500.0, 1000, 300, None);
         for mode in [0, 1, 2, 3, 700] {
             assert!(limits.allows(mode, 500.0));
             assert!(!limits.allows(mode, 500.1));
@@ -2351,7 +2633,7 @@ mod distance_limit_tests {
     #[test]
     fn station_density_tightens_the_non_bus_radius_at_existing_boundaries() {
         for (stations, cutoff) in [(100, 5000.0), (101, 2000.0), (200, 2000.0), (201, 1000.0)] {
-            let limits = DepartureDistanceLimits::new(5000.0, 1, stations);
+            let limits = DepartureDistanceLimits::new(5000.0, 1, stations, None);
             assert!(limits.allows(1, cutoff));
             assert!(!limits.allows(1, cutoff + 0.1));
         }
@@ -2371,6 +2653,7 @@ fn priority_routes(
     mut candidates: Vec<RouteCandidate>,
     station_distances: &HashMap<PriorityStation, f64>,
 ) -> PrioritySelection {
+    candidates.retain(|candidate| candidate.mode != COACH_ROUTE_TYPE);
     // Both Compose and web hoist only the closest station strictly within 1 km.
     // Use the station-group distance, not a route's nearest platform.
     let station = candidates.iter()
@@ -2412,13 +2695,15 @@ fn priority_routes(
         if !seen.insert(key.clone()) {
             continue;
         }
-        let is_bus = matches!(candidate.mode, 3 | 11 | 200..=209 | 700..=799 | 800);
+        let is_bus = matches!(candidate.mode, 3 | 11 | 201..=209 | 700..=799 | 800);
         let is_metro = matches!(candidate.mode, 1 | 7 | 12 | 400..=499);
         let is_tram = matches!(candidate.mode, 0 | 5 | 900..=999);
         let hoisted = (is_metro && (!metro || candidate.distance < 500.0))
             || (is_tram && candidate.distance < 400.0);
         if hoisted || (is_bus && buses < bus_limit) {
             selected.local_routes.insert(key);
+        } else if selected.next_routes.len() < INTERMEDIATE_ROUTE_LIMIT {
+            selected.next_routes.insert(key);
         }
         if is_bus {
             buses += 1;
@@ -2436,15 +2721,7 @@ impl PreparedNearby {
         pool: Arc<CatenaryPostgresPool>,
     ) -> Result<Arc<PrioritySelection>, String> {
         let point = geo::Point::new(self.query.lon, self.query.lat);
-        let limits = DepartureDistanceLimits::new(
-            self.query.radius.unwrap_or(5000.0),
-            self.stops.len(),
-            self.stops
-                .iter()
-                .filter_map(|s| s.osm_station_id)
-                .collect::<HashSet<_>>()
-                .len(),
-        );
+        let limits = self.distance_limits;
         let mut by_chateau: HashMap<String, HashMap<String, (f64, StationKey)>> = HashMap::new();
         let mut station_distances: HashMap<PriorityStation, f64> = HashMap::new();
         for stop in &self.stops {
@@ -2499,6 +2776,7 @@ impl PreparedNearby {
                         ))
                         .filter(rows::chateau.eq(&chateau))
                         .filter(rows::stop_id.eq_any(ids))
+                        .filter(routes::route_type.ne(COACH_ROUTE_TYPE))
                         .select((rows::stop_id, routes::route_id, routes::route_type, routes::agency_id))
                         .load::<(CompactString, CompactString, i16, Option<String>)>(&mut conn)
                         .await;
@@ -2669,6 +2947,49 @@ mod progressive_tests {
     }
 
     #[test]
+    fn intermediate_phase_takes_next_ten_local_routes_and_preserves_remaining() {
+        let mut candidates = vec![
+            candidate("bus", "coach", 200, 1.0),
+            station_candidate("rail", "train", 1, 250.0),
+            station_candidate("rail", "train", 2, 500.0),
+        ];
+        for i in 0..18 {
+            candidates.push(candidate("bus", &i.to_string(), 3, 20.0 + i as f64));
+        }
+        // Duplicate stops on a route do not consume the intermediate budget.
+        candidates.push(candidate("bus", "4", 3, 25.0));
+        let priority = Arc::new(priority_routes(candidates, &HashMap::from([
+            (PriorityStation::Osm(1), 250.0),
+            (PriorityStation::Osm(2), 500.0),
+        ])));
+        assert_eq!(priority.local_routes.len(), 4);
+        assert_eq!(priority.next_routes.len(), 10);
+        assert!(!priority.contains_route("bus", "coach"));
+        assert!(!priority.contains_next("bus", "coach"));
+        let first = RouteSelection::Only(priority.clone());
+        let next = RouteSelection::Next(priority.clone());
+        let last = RouteSelection::ExceptBoth(priority.clone());
+        let legacy = RouteSelection::Except(priority);
+        assert_eq!(first.included_route_ids("bus").unwrap().len(), 4);
+        assert_eq!(next.included_route_ids("bus").unwrap().len(), 10);
+        assert_eq!(last.excluded_local_route_ids("bus").len(), 14);
+        assert_eq!(legacy.excluded_local_route_ids("bus").len(), 4);
+        assert!(last.excluded_local_route_ids("rail").is_empty());
+        let stop = StationKey::Stop("stop".into());
+        for i in 0..18 {
+            let route = i.to_string();
+            assert_eq!(first.allows("bus", &route, &stop, false), i < 4);
+            assert_eq!(next.allows("bus", &route, &stop, false), (4..14).contains(&i));
+            assert_eq!(last.allows("bus", &route, &stop, false), i >= 14);
+            assert_eq!(legacy.allows("bus", &route, &stop, false), i >= 4);
+        }
+        assert!(first.allows("rail", "train", &StationKey::Osm(1), true));
+        assert!(!next.allows("rail", "train", &StationKey::Osm(2), true));
+        assert!(last.allows("rail", "train", &StationKey::Osm(2), true));
+        assert!(!last.allows("rail", "train", &StationKey::Osm(1), true));
+    }
+
+    #[test]
     fn nearest_metro_is_included_even_outside_hoist_threshold() {
         let selected = priority_routes(vec![
             candidate("a", "metro", 1, 700.0),
@@ -2826,6 +3147,162 @@ mod nearby_sql_timing_tests {
 #[cfg(test)]
 mod nearby_metadata_projection_tests {
     use super::*;
+
+    #[test]
+    fn processing_debug_accumulates_and_serializes() {
+        let mut total = NearbyProcessingDebug::default();
+        let one = NearbyProcessingDebug {
+            realtime_overlay_ms: 12.5,
+            events_before_overlay: 100,
+            realtime_update_count: 3,
+            ..Default::default()
+        };
+        total.accumulate(&one);
+        total.accumulate(&one);
+        let json = serde_json::to_value(total).unwrap();
+        assert_eq!(json["realtime_overlay_ms"], 25.0);
+        assert_eq!(json["events_before_overlay"], 200);
+        assert_eq!(json["realtime_update_count"], 6);
+        assert_eq!(json["realtime_rpc_ms"], 0.0);
+    }
+
+    #[test]
+    fn stop_first_itinerary_sql_has_materialization_fences() {
+        let sql = NEARBY_ITINERARY_SQL;
+        for cte in ["stop_rows", "pattern_keys", "metadata", "route_keys", "eligible_routes"] {
+            assert!(sql.contains(&format!("{cte} AS MATERIALIZED")));
+        }
+        assert_eq!(sql.matches("OFFSET 0").count(), 2);
+        assert!(!sql.contains("trip_ids"));
+        assert!(sql.contains("ip.stop_id = ANY($2)"));
+        assert!(sql.contains("im.direction_pattern_id = ANY($3)"));
+        assert!(sql.contains("$4::text[] IS NULL"));
+        assert!(sql.contains("r.route_type <> ALL(ARRAY[0, 1, 3]::smallint[])"));
+    }
+
+    // Opt-in integration test: all fixture tables are connection-local
+    // temporary tables; no changes to the real GTFS schema or persistent data.
+    #[tokio::test]
+    #[ignore = "requires a PostgreSQL DATABASE_URL and permission to create temporary tables"]
+    async fn stop_first_itinerary_query_preserves_rows_and_phase_filters() {
+        use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
+
+        let mut conn = AsyncPgConnection::establish(
+            &std::env::var("DATABASE_URL").expect("DATABASE_URL"),
+        )
+        .await
+        .unwrap();
+        conn.batch_execute(
+            r#"
+CREATE TEMP TABLE itinerary_pattern (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, stop_sequence integer NOT NULL,
+    arrival_time_since_start integer, departure_time_since_start integer,
+    interpolated_time_since_start integer, stop_id text NOT NULL,
+    chateau text NOT NULL, gtfs_stop_sequence oid NOT NULL,
+    timepoint boolean, stop_headsign_idx smallint,
+    pickup_type smallint NOT NULL, drop_off_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence)
+);
+CREATE TEMP TABLE itinerary_pattern_meta (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    itinerary_pattern_id text NOT NULL, chateau text NOT NULL,
+    route_id text NOT NULL, direction_pattern_id text,
+    timezone text NOT NULL, row_count integer NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id)
+);
+CREATE TEMP TABLE routes (
+    onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+    route_id text NOT NULL, chateau text NOT NULL, route_type smallint NOT NULL,
+    PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
+);
+INSERT INTO routes VALUES
+    ('f1', 'a1', 'shared', 'test', 3),
+    ('f1', 'a2', 'shared', 'test', 2),
+    ('f2', 'a1', 'shared', 'test', 200),
+    ('f1', 'a1', 'other', 'test', 3),
+    ('f1', 'a1', 'missing-direction', 'test', 3),
+    ('f1', 'a1', 'foreign', 'another', 3);
+INSERT INTO itinerary_pattern_meta VALUES
+    ('f1', 'a1', 'same', 'test', 'shared', 'd', 'UTC', 3),
+    ('f1', 'a2', 'same', 'test', 'shared', 'd', 'UTC', 1),
+    ('f2', 'a1', 'same', 'test', 'shared', 'd', 'UTC', 1),
+    ('f1', 'a1', 'other', 'test', 'other', 'd', 'UTC', 1),
+    ('f1', 'a1', 'wrong-dir', 'test', 'missing-direction', 'x', 'UTC', 1),
+    ('f1', 'a1', 'foreign', 'another', 'foreign', 'd', 'UTC', 1),
+    ('f1', 'a1', 'no-route', 'test', 'absent', 'd', 'UTC', 1);
+INSERT INTO itinerary_pattern (
+    onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+    arrival_time_since_start, departure_time_since_start, stop_id,
+    chateau, gtfs_stop_sequence, pickup_type, drop_off_type
+)
+SELECT onestop_feed_id, attempt_id, itinerary_pattern_id, 0, 10, 20,
+       'near', chateau, 1::oid, 0, 0
+FROM itinerary_pattern_meta;
+-- A loop revisits the nearby stop; the intervening distant stop must not be read out.
+INSERT INTO itinerary_pattern (
+    onestop_feed_id, attempt_id, itinerary_pattern_id, stop_sequence,
+    arrival_time_since_start, departure_time_since_start, stop_id,
+    chateau, gtfs_stop_sequence, pickup_type, drop_off_type
+) VALUES
+    ('f1', 'a1', 'same', 1, 30, 40, 'far', 'test', 2::oid, 0, 0),
+    ('f1', 'a1', 'same', 2, 50, 60, 'near', 'test', 3::oid, 0, 0);
+"#,
+        )
+        .await
+        .unwrap();
+
+        // The production query is schema-qualified. Redirect only the
+        // fixture query to this connection's temporary schema.
+        let fixture_sql = NEARBY_ITINERARY_SQL.replace("gtfs.", "pg_temp.");
+        let stops = vec!["near".to_string()];
+        let directions = vec!["d".to_string()];
+        let shared = vec!["shared".to_string()];
+        let empty: Vec<String> = Vec::new();
+        type Key = (String, String, String, i32);
+        let key = |attempt: &str, pattern: &str, sequence: i32| -> Key {
+            ("f1".into(), attempt.into(), pattern.into(), sequence)
+        };
+        let bus_loop = [key("a1", "same", 0), key("a1", "same", 2)];
+        let rail = key("a2", "same", 0);
+        let other = key("a1", "other", 0);
+        for (priority, excluded, expected) in [
+            (None, empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone(), other.clone()]),
+            (Some(shared.as_slice()), empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone()]),
+            (None, shared.as_slice(), vec![rail.clone(), other.clone()]),
+            (Some(empty.as_slice()), empty.as_slice(), vec![]),
+        ] {
+            let rows: Vec<NearbyItineraryMatch> = sql_query(&fixture_sql)
+                .bind::<Text, _>("test")
+                .bind::<Array<Text>, _>(&stops)
+                .bind::<Array<Text>, _>(&directions)
+                .bind::<Nullable<Array<Text>>, _>(priority)
+                .bind::<Array<Text>, _>(excluded)
+                .bind::<SmallInt, _>(COACH_ROUTE_TYPE)
+                .load(&mut conn)
+                .await
+                .unwrap();
+            let mut actual: Vec<Key> = rows
+                .into_iter()
+                .map(|matched| {
+                    assert_eq!(matched.stop_row.itinerary_pattern_id, matched.metadata.itinerary_pattern_id);
+                    assert_eq!(matched.metadata.direction_pattern_id.as_deref(), Some("d"));
+                    assert_eq!(matched.metadata.timezone, "UTC");
+                    assert_eq!(matched.stop_row.stop_id.as_str(), "near");
+                    (
+                        matched.stop_row.onestop_feed_id,
+                        matched.stop_row.attempt_id,
+                        matched.stop_row.itinerary_pattern_id,
+                        matched.stop_row.stop_sequence,
+                    )
+                })
+                .collect();
+            let mut expected = expected;
+            actual.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(actual, expected);
+        }
+    }
 
     #[test]
     fn nearby_metadata_sql_omits_trip_ids() {

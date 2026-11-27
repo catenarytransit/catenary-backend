@@ -4,7 +4,6 @@
 
 use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::naive::NaiveDate;
-use chrono::offset::Utc;
 use diesel::SelectableHelper;
 use diesel::query_dsl::methods::FilterDsl;
 use diesel::query_dsl::methods::SelectDsl;
@@ -41,6 +40,7 @@ fn date_is_within_feed_time_range(date: NaiveDate, feed_time_range: &FeedTimeRan
 const SINGLE_INGEST_FEEDS: &[&str] = &[
     "f-9-amtrak~amtrakcalifornia~amtrakcharteredvehicle",
     "f-networkrail",
+    "f-sncf~fr",
 ];
 
 fn retain_only_latest_ingest(feed_id: &str) -> bool {
@@ -79,6 +79,86 @@ fn single_ingest_retention(
         },
         drop_attempt_ids,
     ))
+}
+
+// Share the date-range policy between production assignment and standalone cleanup.
+fn dated_ingest_retention(
+    all_feeds: &[catenary::models::IngestedStatic],
+    now: NaiveDate,
+) -> (Vec<FeedTimeRange>, Vec<String>) {
+    let mut sorted_feeds = all_feeds
+        .iter()
+        .filter(|a| a.ingestion_successfully_finished && !a.deleted)
+        .collect::<Vec<_>>();
+    sorted_feeds.sort_by(|a, b| {
+        a.ingest_start_unix_time_ms.cmp(&b.ingest_start_unix_time_ms)
+            .then_with(|| a.ingest_end_unix_time_ms.cmp(&b.ingest_end_unix_time_ms))
+            .then_with(|| a.attempt_id.cmp(&b.attempt_id))
+    });
+    let mut retained: Vec<FeedTimeRange> = Vec::new();
+    let mut obsolete = Vec::new();
+    for attempt in sorted_feeds.into_iter().rev() {
+        let expiration_date = match retained.last() {
+            None => attempt.feed_expiration_date,
+            Some(newer) => match newer.start_date {
+                None => {
+                    obsolete.push(attempt.attempt_id.clone());
+                    continue;
+                }
+                Some(start) => {
+                    let end = start.sub(chrono::Days::new(1));
+                    let end = attempt.feed_expiration_date.map_or(end, |date| date.min(end));
+                    if end < now.sub(chrono::Days::new(5)) {
+                        obsolete.push(attempt.attempt_id.clone());
+                        continue;
+                    }
+                    Some(end)
+                }
+            },
+        };
+        retained.push(FeedTimeRange {
+            attempt_id: attempt.attempt_id.clone(),
+            start_date: attempt.feed_start_date,
+            expiration_date,
+        });
+    }
+    (retained, obsolete)
+}
+
+pub(crate) struct SuccessfulCleanupPlan {
+    pub(crate) obsolete_attempts: Vec<String>,
+    pub(crate) current_attempt: Option<String>,
+}
+
+/// Only completed production attempts qualify for standalone cleanup.
+pub(crate) fn successful_cleanup_plan(
+    feed_id: &str,
+    all_feeds: &[catenary::models::IngestedStatic],
+    now: NaiveDate,
+) -> Option<SuccessfulCleanupPlan> {
+    // An unfinished production assignment must not be mistaken for retirement.
+    if all_feeds.iter().any(|a| !a.deleted
+        && (a.ingesting_in_progress || (a.ingestion_successfully_finished && !a.production)))
+    {
+        return None;
+    }
+    let production = all_feeds.iter().filter(|a| {
+        a.production && !a.deleted && a.ingestion_successfully_finished
+            && !a.ingestion_errored && !a.ingesting_in_progress
+    }).cloned().collect::<Vec<_>>();
+    let (retained, obsolete_attempts) = if retain_only_latest_ingest(feed_id) {
+        let (latest, obsolete) = single_ingest_retention(&production)?;
+        (vec![latest], obsolete)
+    } else {
+        dated_ingest_retention(&production, now)
+    };
+    if retained.is_empty() {
+        return None;
+    }
+    let current_attempt = retained.iter()
+        .find(|range| date_is_within_feed_time_range(now, range))
+        .map(|range| range.attempt_id.clone());
+    Some(SuccessfulCleanupPlan { obsolete_attempts, current_attempt })
 }
 
 pub async fn assign_production_tables(
@@ -170,99 +250,21 @@ pub async fn assign_production_tables(
         .load::<catenary::models::IngestedStatic>(conn)
         .await?;
 
-    //filter only successful ingests
-    let mut sorted_feeds: Vec<catenary::models::IngestedStatic> = all_feeds
-        .clone()
-        .into_iter()
-        .filter(|ingested| ingested.ingestion_successfully_finished && !ingested.deleted)
-        .collect();
-
-    //sort all feeds by ingest_start_unix_time_ms
-
-    sorted_feeds.sort_by(|a, b| {
-        a.ingest_start_unix_time_ms
-            .cmp(&b.ingest_start_unix_time_ms)
-    });
-
-    let mut feed_time_ranges: Vec<FeedTimeRange> = Vec::new();
-
-    let mut drop_attempt_list: Vec<String> = Vec::new();
-
-    //drop feeds older than 1 day and are not successfully ingested
-
-    for to_drop_feed in all_feeds.clone().into_iter().filter(|ingested| {
-        !ingested.ingestion_successfully_finished
-            && ingested.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
-    }) {
-        drop_attempt_list.push(to_drop_feed.attempt_id);
-    }
-
-    if retain_only_latest_ingest(feed_id) {
-        // This feed must have exactly one retained successful ingest, even
-        // when old and new feed_info date ranges do not overlap.
+    let (feed_time_ranges, mut drop_attempt_list) = if retain_only_latest_ingest(feed_id) {
         let (latest, old_attempts) = single_ingest_retention(&all_feeds)
             .ok_or_else(|| format!("No successful ingest to retain for {}", feed_id))?;
-        feed_time_ranges.push(latest);
-        drop_attempt_list = old_attempts;
+        (vec![latest], old_attempts)
     } else {
-        let mut last_claimed_start_time: Option<Option<NaiveDate>> = None;
-
-        // go from latest ingest feed to earliest ingest feed
-        for (i, ingested_item) in sorted_feeds.into_iter().rev().enumerate() {
-            //i = 0 is latest, followed by earlier and earlier data
-            match last_claimed_start_time {
-                None => {
-                    last_claimed_start_time = Some(ingested_item.feed_start_date);
-
-                    feed_time_ranges.push(FeedTimeRange {
-                        attempt_id: ingested_item.attempt_id.clone(),
-                        start_date: ingested_item.feed_start_date,
-                        expiration_date: ingested_item.feed_expiration_date,
-                    });
-                }
-                Some(last_claimed_start_time_prev) => {
-                    //if the last claimed time is none, drop this attempt because the newer feed claims all timestamp_millis
-
-                    match last_claimed_start_time_prev {
-                        None => {
-                            drop_attempt_list.push(ingested_item.attempt_id.clone());
-                        }
-                        Some(last_claimed_start_time_prev) => {
-                            // calculate new expiration date
-
-                            //does this feed have an expiration date
-                            let new_expiration_date = match ingested_item.feed_expiration_date {
-                                Some(this_feed_expiration) => last_claimed_start_time_prev
-                                    .sub(chrono::Days::new(1))
-                                    .min(this_feed_expiration),
-                                // look at the previous feed's start date and subtract 1 as the expiration date
-                                None => last_claimed_start_time_prev.sub(chrono::Days::new(1)),
-                            };
-
-                            // if the new expiration date is more than 5 days ago, then drop it
-
-                            if new_expiration_date < now.sub(chrono::Days::new(5)) {
-                                //drop the feed
-                                drop_attempt_list.push(ingested_item.attempt_id.clone());
-                            } else {
-                                // add to the feed time range, claim the time range
-                                last_claimed_start_time = Some(ingested_item.feed_start_date);
-
-                                // Store the effective expiration date instead of the feed's original
-                                // expiration date. This prevents an older feed from remaining current
-                                // after a newer, future-dated feed reaches its feed_start_date.
-                                feed_time_ranges.push(FeedTimeRange {
-                                    attempt_id: ingested_item.attempt_id.clone(),
-                                    start_date: ingested_item.feed_start_date,
-                                    expiration_date: Some(new_expiration_date),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
+        let (retained, mut obsolete) = dated_ingest_retention(&all_feeds, now);
+        // Failed attempts are handled only on the normal ingestion path.
+        obsolete.extend(all_feeds.iter().filter(|a| {
+            !a.ingestion_successfully_finished && !a.ingesting_in_progress
+                && a.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
+        }).map(|a| a.attempt_id.clone()));
+        (retained, obsolete)
+    };
+    drop_attempt_list.sort();
+    drop_attempt_list.dedup();
 
     //prepare data for the commit
     let drop_attempt_list_transaction = drop_attempt_list.clone();
@@ -513,4 +515,67 @@ mod tests {
             .is_none()
         );
     }
+    fn england_attempts() -> Vec<catenary::models::IngestedStatic> {
+        let mut october = attempt("october", 100, true, false, false);
+        october.feed_start_date = NaiveDate::from_ymd_opt(2026, 10, 5);
+        october.feed_expiration_date = NaiveDate::from_ymd_opt(2027, 12, 1);
+        let mut november = attempt("november", 200, true, false, false);
+        november.feed_start_date = NaiveDate::from_ymd_opt(2026, 11, 16);
+        november.feed_expiration_date = NaiveDate::from_ymd_opt(2027, 12, 27);
+        vec![october, november]
+    }
+
+    #[test]
+    fn standalone_cleanup_retires_england_october_after_grace_period() {
+        let attempts = england_attempts();
+        let feed = "f-bus~dft~gov~uk~england";
+        for day in [15, 16, 20] {
+            let plan = successful_cleanup_plan(
+                feed, &attempts, NaiveDate::from_ymd_opt(2026, 11, day).unwrap(),
+            ).unwrap();
+            assert!(plan.obsolete_attempts.is_empty());
+            assert_eq!(plan.current_attempt.as_deref(), Some(if day == 15 { "october" } else { "november" }));
+        }
+        let plan = successful_cleanup_plan(
+            feed, &attempts, NaiveDate::from_ymd_opt(2026, 11, 26).unwrap(),
+        ).unwrap();
+        assert_eq!(plan.obsolete_attempts, vec!["october"]);
+        assert_eq!(plan.current_attempt.as_deref(), Some("november"));
+    }
+
+    #[test]
+    fn standalone_cleanup_does_not_remove_failed_or_active_ingests() {
+        let mut attempts = england_attempts();
+        let now = NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
+        let feed = "f-bus~dft~gov~uk~england";
+        attempts.push(attempt("failed", 300, false, false, false));
+        let plan = successful_cleanup_plan(feed, &attempts, now).unwrap();
+        assert_eq!(plan.obsolete_attempts, vec!["october"]);
+        attempts.push(attempt("active", 400, false, true, false));
+        assert!(successful_cleanup_plan(feed, &attempts, now).is_none());
+        attempts.pop();
+        let mut pending = attempt("pending", 500, true, false, false);
+        pending.production = false;
+        attempts.push(pending);
+        assert!(successful_cleanup_plan(feed, &attempts, now).is_none());
+    }
+
+    #[test]
+    fn standalone_cleanup_never_removes_last_successful_attempt() {
+        let attempts = england_attempts();
+        let now = NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
+        let plan = successful_cleanup_plan("f-bus~dft~gov~uk~england", &attempts[1..], now).unwrap();
+        assert!(plan.obsolete_attempts.is_empty());
+        assert_eq!(plan.current_attempt.as_deref(), Some("november"));
+    }
+
+    #[test]
+    fn standalone_cleanup_preserves_single_ingest_policy() {
+        let attempts = england_attempts();
+        let now = NaiveDate::from_ymd_opt(2026, 11, 16).unwrap();
+        let plan = successful_cleanup_plan("f-networkrail", &attempts, now).unwrap();
+        assert_eq!(plan.obsolete_attempts, vec!["october"]);
+        assert_eq!(plan.current_attempt.as_deref(), Some("november"));
+    }
+
 }

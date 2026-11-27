@@ -50,6 +50,7 @@ impl RamondaWebSocket {
         request_id: String,
         params: NearbyFromCoordsV3,
         progressive: Option<bool>,
+        three_phase: bool,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         catenary::observability::count(
@@ -86,8 +87,22 @@ impl RamondaWebSocket {
                         complete: false,
                         result: Ok(data),
                     });
+                    let remaining_selection = if three_phase {
+                        let data = prepared.load(pool.clone(), cache.clone(), RouteSelection::Next(routes.clone())).await?;
+                        seen.extend(catenary::observability::nearby_chateaus(&data));
+                        address.do_send(NearbyFrame {
+                            generation,
+                            request_id: request_id.clone(),
+                            phase: "intermediate",
+                            complete: false,
+                            result: Ok(data),
+                        });
+                        RouteSelection::ExceptBoth(routes)
+                    } else {
+                        RouteSelection::Except(routes)
+                    };
                     let remaining = prepared
-                        .load(pool, cache, RouteSelection::Except(routes))
+                        .load(pool, cache, remaining_selection)
                         .await;
                     if let Ok(ref result) = remaining {
                         seen.extend(catenary::observability::nearby_chateaus(result));
@@ -126,7 +141,7 @@ mod tests {
     fn nearby_request_parameters_do_not_interfere_with_envelope_fields() {
         let message: ClientMessage = serde_json::from_str(
             r#"{
-            "type":"nearby_departures", "request_id":"r1", "progressive":false,
+            "type":"nearby_departures", "request_id":"r1", "progressive":false, "three_phase":true,
             "lat":34.05, "lon":-118.25, "departure_time":1794355200
         }"#,
         )
@@ -136,9 +151,11 @@ mod tests {
                 request_id,
                 params,
                 progressive,
+                three_phase,
             } => {
                 assert_eq!(request_id, "r1");
                 assert_eq!(progressive, Some(false));
+                assert_eq!(three_phase, Some(true));
                 assert_eq!(params.departure_time, Some(1794355200));
                 assert!(params.validate().is_ok());
             }

@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .expect("failed to load gtfs file");
 
     let start = std::time::Instant::now();
-    let response = catenary::maple_syrup::reduce(&gtfs);
+    let response = catenary::maple_syrup::reduce(&gtfs, "standalone-benchmark")?;
     let duration = start.elapsed();
 
     let route_count = gtfs.routes.len();
