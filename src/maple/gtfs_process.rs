@@ -202,6 +202,110 @@ async fn execute_pfaedle_rs(
     Ok(())
 }
 
+// Filter the extracted CSVs, not the parsed GTFS: Pfaedle reads these files directly.
+fn filter_dft_csv(
+    path: &Path,
+    mut keep: impl FnMut(&csv::StringRecord, &csv::StringRecord) -> Result<bool, Box<dyn Error + Send + Sync>>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut reader = csv::ReaderBuilder::new().flexible(true).from_path(path)?;
+    let headers = reader.headers()?.clone();
+    let temporary = path.with_extension("txt.flixbus.tmp");
+    let mut writer = csv::WriterBuilder::new().flexible(true).from_path(&temporary)?;
+    writer.write_record(&headers)?;
+    for row in reader.records() {
+        let row = row?;
+        if keep(&headers, &row)? {
+            writer.write_record(&row)?;
+        }
+    }
+    writer.flush()?;
+    drop(writer);
+    drop(reader);
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn dft_csv_field<'a>(
+    headers: &csv::StringRecord,
+    row: &'a csv::StringRecord,
+    field: &str,
+) -> Result<&'a str, Box<dyn Error + Send + Sync>> {
+    headers.iter().position(|h| h == field)
+        .and_then(|i| row.get(i))
+        .ok_or_else(|| format!("Missing GTFS field {field}").into())
+}
+
+fn is_flixbus_agency(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    name == "flixbus" || name.starts_with("flixbus-") || name.starts_with("flixbus ")
+}
+
+fn remove_dft_flixbus(gtfs_path: &Path) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut reader = csv::ReaderBuilder::new().flexible(true)
+        .from_path(gtfs_path.join("agency.txt"))?;
+    let headers = reader.headers()?.clone();
+    let mut agencies = HashSet::new();
+    for row in reader.records() {
+        let row = row?;
+        if is_flixbus_agency(dft_csv_field(&headers, &row, "agency_name")?) {
+            agencies.insert(dft_csv_field(&headers, &row, "agency_id")?.to_owned());
+        }
+    }
+    drop(reader);
+    if agencies.is_empty() {
+        return Ok(());
+    }
+
+    let mut routes = HashSet::new();
+    filter_dft_csv(&gtfs_path.join("routes.txt"), |headers, row| {
+        if agencies.contains(dft_csv_field(headers, row, "agency_id")?) {
+            routes.insert(dft_csv_field(headers, row, "route_id")?.to_owned());
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    })?;
+    let mut trips = HashSet::new();
+    filter_dft_csv(&gtfs_path.join("trips.txt"), |headers, row| {
+        if routes.contains(dft_csv_field(headers, row, "route_id")?) {
+            trips.insert(dft_csv_field(headers, row, "trip_id")?.to_owned());
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    })?;
+    for file in ["stop_times.txt", "frequencies.txt"] {
+        let path = gtfs_path.join(file);
+        if file == "stop_times.txt" || path.exists() {
+            filter_dft_csv(&path, |headers, row| {
+                Ok(!trips.contains(dft_csv_field(headers, row, "trip_id")?))
+            })?;
+        }
+    }
+    // Optional route/trip-specific transfers must not reference removed services.
+    let transfers = gtfs_path.join("transfers.txt");
+    if transfers.exists() {
+        filter_dft_csv(&transfers, |headers, row| {
+            for (field, ids) in [
+                ("from_route_id", &routes), ("to_route_id", &routes),
+                ("from_trip_id", &trips), ("to_trip_id", &trips),
+            ] {
+                if let Some(i) = headers.iter().position(|h| h == field) {
+                    if row.get(i).is_some_and(|id| ids.contains(id)) {
+                        return Ok(false);
+                    }
+                }
+            }
+            Ok(true)
+        })?;
+    }
+    filter_dft_csv(&gtfs_path.join("agency.txt"), |headers, row| {
+        Ok(!agencies.contains(dft_csv_field(headers, row, "agency_id")?))
+    })?;
+    println!("Removed FlixBus from DfT feed: {} agencies, {} routes, {} trips", agencies.len(), routes.len(), trips.len());
+    Ok(())
+}
+
 // Correct the raw route types before Pfaedle selects a transport network.
 fn normalize_bayern_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut agencies = csv::Reader::from_path(Path::new(gtfs_path).join("agency.txt"))?;
@@ -428,6 +532,10 @@ pub async fn gtfs_process_feed(
 
     if feed_id == "f-gtfs~de~bayern" {
         normalize_bayern_bus_routes(&path)?;
+    }
+
+    if is_dft_uk_static_feed(feed_id) {
+        remove_dft_flixbus(Path::new(&path))?;
     }
 
     // Fix route colors before processing
@@ -1860,10 +1968,6 @@ pub async fn gtfs_process_feed(
         }
         //"f-gtfs~de" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_de_cleanup(gtfs),
         "f-u0-switzerland" => crate::gtfs_handlers::gtfs_de_cleanup::gtfs_ch_cleanup(gtfs),
-        "f-bus~dft~gov~uk~england" => crate::gtfs_handlers::remove_agencies::remove_agencies(
-            gtfs,
-            &Vec::from([String::from("FlixBus")]),
-        ),
         /*
             "f-nvbw" => crate::gtfs_handlers::remove_agencies::remove_agencies(
             gtfs,
@@ -3530,7 +3634,17 @@ mod skip_pfaedle_tests {
 
 #[cfg(test)]
 mod dft_uk_static_feed_tests {
-    use super::is_dft_uk_static_feed;
+    use super::{is_dft_uk_static_feed, is_flixbus_agency};
+
+    #[test]
+    fn matches_flixbus_agency_variants_only() {
+        for name in ["FlixBus", "flixbus", " FlixBus-de ", "FlixBus UK"] {
+            assert!(is_flixbus_agency(name));
+        }
+        for name in ["FlixTrain", "National Express", "Arriva London"] {
+            assert!(!is_flixbus_agency(name));
+        }
+    }
 
     #[test]
     fn matches_legacy_and_split_static_feeds() {
