@@ -82,6 +82,12 @@ const METRA_MINI_IDS: &[&str] = &[
     "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
 ];
 
+fn is_dft_uk_static_feed(feed_id: &str) -> bool {
+    feed_id
+        .strip_prefix("f-bus~dft~gov~uk~")
+        .is_some_and(|suffix| !suffix.is_empty() && suffix != "rt")
+}
+
 // Keep the default Maple import unchanged. Benchmark environments can opt out
 // of *both* external pfaedle implementations without requiring their binaries
 // or OSM extracts; all other GTFS preprocessing and ingestion still runs.
@@ -900,7 +906,7 @@ pub async fn gtfs_process_feed(
             )
             .await?;
         }
-        "f-bus~dft~gov~uk~england" | "f-bus~dft~gov~uk~scotland" | "f-bus~dft~gov~uk~wales" => {
+        id if is_dft_uk_static_feed(id) => {
             let _ = execute_pfaedle_rs(
                 path.as_str(),
                 "./pfaedle-filtered-great-britain-latest.osm.pbf",
@@ -3518,6 +3524,40 @@ mod skip_pfaedle_tests {
                 !pfaedle_skip_enabled(disabled),
                 "{disabled} must not enable the skip"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod dft_uk_static_feed_tests {
+    use super::is_dft_uk_static_feed;
+
+    #[test]
+    fn matches_legacy_and_split_static_feeds() {
+        for feed_id in [
+            "f-bus~dft~gov~uk~england",
+            "f-bus~dft~gov~uk~scotland",
+            "f-bus~dft~gov~uk~wales",
+            "f-bus~dft~gov~uk~greater~london",
+            "f-bus~dft~gov~uk~greater~manchester",
+            "f-bus~dft~gov~uk~hertfordshire",
+            "f-bus~dft~gov~uk~other",
+            "f-bus~dft~gov~uk~future~county",
+        ] {
+            assert!(is_dft_uk_static_feed(feed_id), "{feed_id}");
+        }
+    }
+
+    #[test]
+    fn excludes_realtime_and_unrelated_feeds() {
+        for feed_id in [
+            "f-bus~dft~gov~uk~rt",
+            "f-bus~dft~gov~uk",
+            "f-bus~dft~gov~uk~",
+            "f-bus~dft~gov~ukraine~county",
+            "f-nationalrail~uk",
+        ] {
+            assert!(!is_dft_uk_static_feed(feed_id), "{feed_id}");
         }
     }
 }
