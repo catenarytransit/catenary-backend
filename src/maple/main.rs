@@ -90,7 +90,7 @@ use gtfs_process::gtfs_process_feed;
 use chateau::chateau;
 use dmfr_dataset_reader::read_folders;
 
-use crate::gtfs_handlers::MAPLE_INGESTION_VERSION;
+use crate::gtfs_handlers::ingestion_version_for_feed;
 use crate::transitland_download::DownloadedFeedsInformation;
 use catenary::catenaryconfig;
 
@@ -692,7 +692,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             failed: !eligible_feed.operation_success,
                             http_response_code: eligible_feed.http_response_code.clone(),
                             mark_for_redo: false,
-                            ingestion_version: MAPLE_INGESTION_VERSION,
+                            ingestion_version: ingestion_version_for_feed(&eligible_feed.feed_id),
                         };
 
                         diesel::insert_into(static_download_attempts)
@@ -952,7 +952,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                             .filter(catenary::schema::gtfs::ingested_static::dsl::deleted.eq(false))
                             .filter(
                                 catenary::schema::gtfs::ingested_static::dsl::ingestion_version
-                                    .eq(MAPLE_INGESTION_VERSION),
+                                    .eq(ingestion_version_for_feed(&feed_id)),
                             )
                             .select(catenary::models::IngestedStatic::as_select())
                             .load::<catenary::models::IngestedStatic>(&mut conn)
@@ -1046,7 +1046,7 @@ async fn run_ingest() -> Result<(), Box<dyn Error + std::marker::Send + Sync>> {
                                     .as_ref()
                                     .unwrap()
                                     .feed_start_date,
-                                ingestion_version: MAPLE_INGESTION_VERSION,
+                                ingestion_version: ingestion_version_for_feed(&feed_id),
                                 hash_of_file_contents: hash_of_file_contents_string.clone(),
                             };
 
@@ -1522,7 +1522,7 @@ async fn run_match_only(feed_id: String) -> Result<(), Box<dyn Error + std::mark
             .filter(onestop_feed_id.eq(&feed_id))
             .filter(ingestion_successfully_finished.eq(true))
             .filter(deleted.eq(false))
-            .filter(ingestion_version.eq(MAPLE_INGESTION_VERSION))
+            .filter(ingestion_version.eq(ingestion_version_for_feed(&feed_id)))
             .order(ingest_end_unix_time_ms.desc())
             .select(catenary::models::IngestedStatic::as_select())
             .first::<catenary::models::IngestedStatic>(&mut conn)
