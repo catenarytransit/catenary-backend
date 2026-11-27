@@ -99,11 +99,7 @@ pub fn reduce(gtfs: &gtfs_structures::Gtfs, feed_id: &str) -> anyhow::Result<Res
         .map(|(id, route)| {
             (
                 id.as_str(),
-                route_group_prefix(
-                    route.agency_id.as_deref(),
-                    route.short_name.as_deref(),
-                    id,
-                ),
+                route_group_prefix(route.agency_id.as_deref(), route.short_name.as_deref(), id),
             )
         })
         .collect();
@@ -959,5 +955,4 @@ mod pickup_drop_off_tests {
         assert_eq!(a >> 48, b >> 48);
         assert_ne!(a, b);
     }
-
 }

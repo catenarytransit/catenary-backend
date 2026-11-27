@@ -3,7 +3,7 @@
 
 use crate::{assign_production_tables, cleanup, feed_lock};
 use catenary::models::IngestedStatic;
-use catenary::schema::gtfs::{ingested_static, in_progress_static_ingests, shapes, stops};
+use catenary::schema::gtfs::{in_progress_static_ingests, ingested_static, shapes, stops};
 use diesel::dsl::exists;
 use diesel::prelude::*;
 use diesel::sql_types::Text;
@@ -37,7 +37,10 @@ pub(crate) async fn run(feed_id: Option<&str>, dry_run: bool) -> Result<(), Clea
         .map(|row| row.onestop_feed_id)
         .collect()
     };
-    println!("Maple cleanup: {} candidate feeds, dry_run={dry_run}", feeds.len());
+    println!(
+        "Maple cleanup: {} candidate feeds, dry_run={dry_run}",
+        feeds.len()
+    );
     let mut retired = 0usize;
     let mut failures = 0usize;
     // Process sequentially to limit database I/O and WAL pressure.
@@ -50,8 +53,10 @@ pub(crate) async fn run(feed_id: Option<&str>, dry_run: bool) -> Result<(), Clea
             }
         }
     }
-    println!("Maple cleanup finished: {retired} attempts {}, {failures} failed feeds",
-        if dry_run { "eligible" } else { "retired" });
+    println!(
+        "Maple cleanup finished: {retired} attempts {}, {failures} failed feeds",
+        if dry_run { "eligible" } else { "retired" }
+    );
     if failures != 0 {
         return Err(format!("Cleanup failed for {failures} feeds").into());
     }
@@ -66,7 +71,10 @@ async fn cleanup_feed(feed_id: &str, dry_run: bool) -> Result<usize, CleanupErro
     if diesel::select(exists(
         in_progress_static_ingests::table
             .filter(in_progress_static_ingests::onestop_feed_id.eq(feed_id)),
-    )).get_result::<bool>(&mut conn).await? {
+    ))
+    .get_result::<bool>(&mut conn)
+    .await?
+    {
         println!("Skipping {feed_id}: in-progress ingest marker");
         return Ok(0);
     }
@@ -76,7 +84,8 @@ async fn cleanup_feed(feed_id: &str, dry_run: bool) -> Result<usize, CleanupErro
         .filter(ingested_static::onestop_feed_id.eq(feed_id))
         .filter(ingested_static::deleted.eq(false))
         .select(IngestedStatic::as_select())
-        .load::<IngestedStatic>(&mut conn).await?;
+        .load::<IngestedStatic>(&mut conn)
+        .await?;
     let today = catenary_time::utc_now().naive_utc().date();
     let Some(plan) = assign_production_tables::successful_cleanup_plan(feed_id, &attempts, today)
     else {
@@ -105,14 +114,18 @@ async fn cleanup_feed(feed_id: &str, dry_run: bool) -> Result<usize, CleanupErro
                     .filter(shapes::onestop_feed_id.eq(feed_id))
                     .filter(shapes::attempt_id.eq(obsolete))
                     .filter(shapes::allowed_spatial_query.eq(true)),
-            )).get_result::<bool>(&mut conn).await?
+            ))
+            .get_result::<bool>(&mut conn)
+            .await?
         {
             println!("Skipping {feed_id} / {obsolete}: obsolete attempt is still spatially active");
             continue;
         }
 
-        println!("{} {feed_id} / {obsolete}; retaining {current}",
-            if dry_run { "Would retire" } else { "Retiring" });
+        println!(
+            "{} {feed_id} / {obsolete}; retaining {current}",
+            if dry_run { "Would retire" } else { "Retiring" }
+        );
         if !dry_run {
             let current = current.as_str();
             let obsolete = obsolete.as_str();
@@ -123,8 +136,10 @@ async fn cleanup_feed(feed_id: &str, dry_run: bool) -> Result<usize, CleanupErro
                     require_completed_production(conn, feed_id, current).await?;
                     require_completed_production(conn, feed_id, obsolete).await?;
                     cleanup::delete_attempt_objects_on_connection(conn, feed_id, obsolete).await
-                }.scope_boxed()
-            }).await?;
+                }
+                .scope_boxed()
+            })
+            .await?;
         }
         retired += 1;
     }
@@ -146,7 +161,8 @@ async fn require_completed_production(
         .filter(ingested_static::ingesting_in_progress.eq(false))
         .select(ingested_static::attempt_id)
         .for_update()
-        .first::<String>(conn).await?;
+        .first::<String>(conn)
+        .await?;
     Ok(())
 }
 
@@ -160,5 +176,7 @@ async fn has_active_stops(
             .filter(stops::onestop_feed_id.eq(feed_id))
             .filter(stops::attempt_id.eq(attempt_id))
             .filter(stops::allowed_spatial_query.eq(true)),
-    )).get_result::<bool>(conn).await
+    ))
+    .get_result::<bool>(conn)
+    .await
 }

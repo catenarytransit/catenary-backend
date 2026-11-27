@@ -812,12 +812,12 @@ mod stop_itinerary_query_tests {
     async fn stop_first_query_preserves_loop_occurrences_and_metadata() {
         use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
 
-        let mut conn = AsyncPgConnection::establish(
-            &std::env::var("DATABASE_URL").expect("DATABASE_URL"),
-        )
-        .await
-        .unwrap();
-        conn.batch_execute(r#"
+        let mut conn =
+            AsyncPgConnection::establish(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+                .await
+                .unwrap();
+        conn.batch_execute(
+            r#"
 CREATE TEMP TABLE itinerary_pattern (
     onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
     itinerary_pattern_id text NOT NULL, stop_sequence integer NOT NULL,
@@ -854,7 +854,10 @@ VALUES
     ('f1','a1','p',1,'far','test',2::oid,0,0),
     ('f1','a1','p',2,'near','test',3::oid,0,0),
     ('f1','a1','orphan',0,'near','test',1::oid,0,0);
-"#).await.unwrap();
+"#,
+        )
+        .await
+        .unwrap();
         let statement = STOP_ITINERARY_SQL.replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let direction = vec!["d1".to_string()];
@@ -865,14 +868,18 @@ VALUES
             (Some(direction.as_slice()), 2),
             (Some(empty.as_slice()), 0),
         ] {
-            let matches = query_stop_itinerary_matches(
-                &mut conn, &statement, "test", &stops, filter,
-            ).await.unwrap();
+            let matches =
+                query_stop_itinerary_matches(&mut conn, &statement, "test", &stops, filter)
+                    .await
+                    .unwrap();
             assert_eq!(matches.len(), expected_count);
             for matched in &matches {
                 assert_eq!(matched.stop_row.stop_id.as_str(), "near");
                 assert_eq!(matched.stop_row.chateau, "test");
-                assert_eq!(matched.stop_row.onestop_feed_id, matched.metadata.onestop_feed_id);
+                assert_eq!(
+                    matched.stop_row.onestop_feed_id,
+                    matched.metadata.onestop_feed_id
+                );
                 assert_eq!(matched.stop_row.attempt_id, matched.metadata.attempt_id);
                 assert!(matched.metadata.trip_ids.is_empty());
                 let expected = match (
@@ -887,7 +894,8 @@ VALUES
                 assert_eq!(matched.metadata.trip_headsign.as_deref(), Some(expected));
             }
             if expected_count > 0 {
-                let mut loop_sequences: Vec<_> = matches.iter()
+                let mut loop_sequences: Vec<_> = matches
+                    .iter()
                     .filter(|m| m.metadata.route_id.as_str() == "coach")
                     .map(|m| m.stop_row.stop_sequence)
                     .collect();

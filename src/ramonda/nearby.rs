@@ -88,7 +88,13 @@ impl RamondaWebSocket {
                         result: Ok(data),
                     });
                     let remaining_selection = if three_phase {
-                        let data = prepared.load(pool.clone(), cache.clone(), RouteSelection::Next(routes.clone())).await?;
+                        let data = prepared
+                            .load(
+                                pool.clone(),
+                                cache.clone(),
+                                RouteSelection::Next(routes.clone()),
+                            )
+                            .await?;
                         seen.extend(catenary::observability::nearby_chateaus(&data));
                         address.do_send(NearbyFrame {
                             generation,
@@ -101,9 +107,7 @@ impl RamondaWebSocket {
                     } else {
                         RouteSelection::Except(routes)
                     };
-                    let remaining = prepared
-                        .load(pool, cache, remaining_selection)
-                        .await;
+                    let remaining = prepared.load(pool, cache, remaining_selection).await;
                     if let Ok(ref result) = remaining {
                         seen.extend(catenary::observability::nearby_chateaus(result));
                     }

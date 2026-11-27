@@ -28,7 +28,9 @@ fn parse_invalid_positions(text: &str) -> anyhow::Result<Vec<(f32, f32)>> {
         .map(|line| line.split('#').next().unwrap_or_default().trim())
         .filter(|line| !line.is_empty())
         .map(|line| {
-            let (lat, lon) = line.split_once(',').context("expected latitude,longitude")?;
+            let (lat, lon) = line
+                .split_once(',')
+                .context("expected latitude,longitude")?;
             let (lat, lon) = (lat.trim().parse::<f32>()?, lon.trim().parse::<f32>()?);
             anyhow::ensure!(
                 (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon),
@@ -42,7 +44,10 @@ fn parse_invalid_positions(text: &str) -> anyhow::Result<Vec<(f32, f32)>> {
 fn clear_invalid_positions(feed: &mut FeedMessage, rules: &[(f32, f32)]) {
     for entity in &mut feed.entity {
         if let Some(vehicle) = &mut entity.vehicle
-            && vehicle.position.as_ref().is_some_and(|p| rules.contains(&(p.latitude, p.longitude)))
+            && vehicle
+                .position
+                .as_ref()
+                .is_some_and(|p| rules.contains(&(p.latitude, p.longitude)))
         {
             vehicle.position = None;
         }
@@ -152,8 +157,8 @@ mod tests {
     ];
 
     fn shipped_rules() -> Vec<(f32, f32)> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(DEFAULT_INVALID_POSITIONS_FILE);
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(DEFAULT_INVALID_POSITIONS_FILE);
         parse_invalid_positions(&std::fs::read_to_string(path).unwrap()).unwrap()
     }
 
@@ -190,9 +195,14 @@ mod tests {
 
     #[test]
     fn parses_external_coordinates_and_comments() {
-        let rules = parse_invalid_positions("# comment\r\n\r\n33.5539, -117.675 # depot\r\n1,2\n").unwrap();
+        let rules =
+            parse_invalid_positions("# comment\r\n\r\n33.5539, -117.675 # depot\r\n1,2\n").unwrap();
         assert_eq!(rules, vec![(33.5539, -117.675), (1.0, 2.0)]);
-        assert!(parse_invalid_positions("# intentionally empty").unwrap().is_empty());
+        assert!(
+            parse_invalid_positions("# intentionally empty")
+                .unwrap()
+                .is_empty()
+        );
         for invalid in ["1", "1,2,3", "bad,0", "NaN,0", "91,0", "0,-181", "0,inf"] {
             assert!(parse_invalid_positions(invalid).is_err(), "{invalid}");
         }
@@ -236,11 +246,8 @@ mod tests {
             clear_invalid_positions(&mut feed, &rules);
             assert!(feed.entity[0].vehicle.as_ref().unwrap().position.is_none());
 
-            let result = vehicle_pos_supplement(
-                vehicle(None),
-                &supplemental(lat, lon),
-                "metrolinktrains",
-            );
+            let result =
+                vehicle_pos_supplement(vehicle(None), &supplemental(lat, lon), "metrolinktrains");
             let pos = result.position.unwrap();
             assert_eq!((pos.latitude, pos.longitude), (lat, lon));
             assert_eq!(pos.speed, Some(4.0));

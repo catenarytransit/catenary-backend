@@ -34,9 +34,17 @@ pub async fn apply_departure_realtime(
     std::collections::BTreeMap<String, crate::aspen_dataset::AspenisedStop>,
 > {
     apply_departure_realtime_timed(
-        events, stops, pool, cache, routes, agencies, shapes, include_shapes,
+        events,
+        stops,
+        pool,
+        cache,
+        routes,
+        agencies,
+        shapes,
+        include_shapes,
         &mut DepartureRealtimeTimings::default(),
-    ).await
+    )
+    .await
 }
 
 pub async fn apply_departure_realtime_timed(
@@ -89,8 +97,10 @@ pub async fn apply_departure_realtime_timed(
                 let response = tokio::time::timeout(std::time::Duration::from_secs(3), async {
                     let metadata = metadata?;
                     connection_started = Some(std::time::Instant::now());
-                    let result = crate::aspen::lib::spawn_aspen_client_from_ip(&metadata.socket).await;
-                    connection_ms = connection_started.take().unwrap().elapsed().as_secs_f64() * 1000.0;
+                    let result =
+                        crate::aspen::lib::spawn_aspen_client_from_ip(&metadata.socket).await;
+                    connection_ms =
+                        connection_started.take().unwrap().elapsed().as_secs_f64() * 1000.0;
                     let client = result.ok()?;
                     rpc_started = Some(std::time::Instant::now());
                     let result = client

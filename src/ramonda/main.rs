@@ -379,7 +379,13 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RamondaWebSocket 
                         progressive,
                         three_phase,
                     }) => {
-                        self.fetch_nearby(request_id, params, progressive, three_phase.unwrap_or(false), ctx);
+                        self.fetch_nearby(
+                            request_id,
+                            params,
+                            progressive,
+                            three_phase.unwrap_or(false),
+                            ctx,
+                        );
                     }
                     Ok(ClientMessage::CancelNearbyDepartures) => self.cancel_nearby(ctx),
                     Ok(ClientMessage::UnsubscribeTrip { chateau, params }) => {

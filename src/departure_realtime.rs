@@ -395,7 +395,9 @@ pub fn stop_display_name(stop: &AspenisedStop) -> Option<String> {
 
 fn scheduled_time(event: &AspenStopTimeEvent) -> Option<u64> {
     positive_time(
-        event.time.zip(event.delay)
+        event
+            .time
+            .zip(event.delay)
             .and_then(|(time, delay)| time.checked_sub(i64::from(delay))),
     )
 }
@@ -465,7 +467,10 @@ pub fn overlay_updates(
         }
         let trip_events = events_by_trip.entry(trip_id.to_owned()).or_default();
 
-        let start_time = update.trip.effective_start_time().and_then(parse_start_time);
+        let start_time = update
+            .trip
+            .effective_start_time()
+            .and_then(parse_start_time);
         // Undated updates can only match by absolute scheduled timestamps.
         // Calculate these once instead of scanning the stop updates for every
         // candidate event, keeping arrival and departure identities separate.
@@ -496,8 +501,12 @@ pub fn overlay_updates(
                 && match date {
                     Some(date) => event.service_date == Some(date),
                     None => {
-                        event.scheduled_arrival.is_some_and(|time| undated_arrivals.contains(&time))
-                            || event.scheduled_departure.is_some_and(|time| undated_departures.contains(&time))
+                        event
+                            .scheduled_arrival
+                            .is_some_and(|time| undated_arrivals.contains(&time))
+                            || event
+                                .scheduled_departure
+                                .is_some_and(|time| undated_departures.contains(&time))
                     }
                 }
         };
@@ -563,8 +572,7 @@ pub fn overlay_updates(
                     && event.stop_id == assigned
                     && (stu.stop_sequence.is_none()
                         || event.stop_sequence == stu.stop_sequence.map(u32::from))
-                    && (scheduled_arrival.is_none()
-                        || event.scheduled_arrival == scheduled_arrival)
+                    && (scheduled_arrival.is_none() || event.scheduled_arrival == scheduled_arrival)
                     && (scheduled_departure.is_none()
                         || event.scheduled_departure == scheduled_departure)
             }));
@@ -1117,7 +1125,11 @@ mod tests {
             &HashSet::from(["a".into(), "b".into()]),
             &[u],
         );
-        assert!(events.iter().all(|event| event.realtime_departure.is_none()));
+        assert!(
+            events
+                .iter()
+                .all(|event| event.realtime_departure.is_none())
+        );
     }
 
     #[test]
@@ -1146,7 +1158,11 @@ mod tests {
 
         overlay_updates(&mut events, "feed", &HashSet::from(["a".into()]), &[u]);
         assert_eq!(events[0].realtime_departure, Some(200));
-        assert!(events[1..].iter().all(|event| event.realtime_departure.is_none()));
+        assert!(
+            events[1..]
+                .iter()
+                .all(|event| event.realtime_departure.is_none())
+        );
     }
 
     #[test]

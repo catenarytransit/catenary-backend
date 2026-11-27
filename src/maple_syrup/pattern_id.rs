@@ -46,10 +46,8 @@ fn content_digest<T: serde::Serialize>(
 ) -> anyhow::Result<[u8; 32]> {
     // Fixed-width, little-endian integers; serde struct field order and
     // length-prefixed strings/sequences; no map iteration or native Hash.
-    let bytes = bincode::serde::encode_to_vec(
-        (domain, feed_id, content),
-        bincode::config::legacy(),
-    )?;
+    let bytes =
+        bincode::serde::encode_to_vec((domain, feed_id, content), bincode::config::legacy())?;
     Ok(*blake3::hash(&bytes).as_bytes())
 }
 
@@ -77,21 +75,12 @@ impl<'a> PatternIds<'a> {
     ) -> anyhow::Result<u64> {
         // Preserve the existing direction identity: route + ordered stop
         // sequence. Parent-normalised sequences use the very same scheme.
-        let digest = content_digest(
-            "catenary-direction-v1",
-            self.feed_id,
-            &(route_id, stops),
-        )?;
+        let digest = content_digest("catenary-direction-v1", self.feed_id, &(route_id, stops))?;
         self.register_direction(route_prefix, digest)
     }
 
-    fn register_direction(
-        &mut self,
-        route_prefix: u16,
-        digest: [u8; 32],
-    ) -> anyhow::Result<u64> {
-        let suffix = u64::from_be_bytes(digest[..8].try_into().unwrap())
-            & 0x0000_ffff_ffff_ffff;
+    fn register_direction(&mut self, route_prefix: u16, digest: [u8; 32]) -> anyhow::Result<u64> {
+        let suffix = u64::from_be_bytes(digest[..8].try_into().unwrap()) & 0x0000_ffff_ffff_ffff;
         let id = (u64::from(route_prefix) << 48) | suffix;
         match self.direction_digests.entry(id) {
             Entry::Occupied(entry) => {
@@ -143,8 +132,12 @@ mod tests {
         );
         let mut ids = PatternIds::new("test-feed");
         let stops = vec!["a".into(), "b".into()];
-        let a = ids.direction(prefix, "long-route-a", stops.clone()).unwrap();
-        let b = ids.direction(prefix, "long-route-b", stops.clone()).unwrap();
+        let a = ids
+            .direction(prefix, "long-route-a", stops.clone())
+            .unwrap();
+        let b = ids
+            .direction(prefix, "long-route-b", stops.clone())
+            .unwrap();
         assert_eq!(a >> 48, u64::from(prefix));
         assert_eq!(b >> 48, u64::from(prefix));
         assert_ne!(a, b);

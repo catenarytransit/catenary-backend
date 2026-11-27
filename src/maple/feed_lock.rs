@@ -41,7 +41,9 @@ async fn lock(feed_id: &str, wait: bool) -> Result<Option<AsyncPgConnection>, Lo
 
 /// Ingestion waits only for maintenance of the same feed.
 pub(crate) async fn acquire(feed_id: &str) -> Result<AsyncPgConnection, LockError> {
-    lock(feed_id, true).await?.ok_or_else(|| "Failed to acquire feed lock".into())
+    lock(feed_id, true)
+        .await?
+        .ok_or_else(|| "Failed to acquire feed lock".into())
 }
 
 /// Maintenance skips feeds already locked by another Maple process.
@@ -69,7 +71,8 @@ mod tests {
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(25)).await;
             }
-        }).await;
+        })
+        .await;
         assert!(released.is_ok());
     }
 }

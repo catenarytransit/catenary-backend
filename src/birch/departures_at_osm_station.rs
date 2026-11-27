@@ -1235,13 +1235,9 @@ async fn fetch_chateau_data_optimized(
     date_filter: Option<(NaiveDate, NaiveDate)>,
     trip_batch_limiter: Arc<tokio::sync::Semaphore>,
 ) -> crate::departures_shared::StopDataResult {
-    let (selected_rows, itin_meta_list) = catenary::departures_shared::load_stop_itineraries(
-        &pool,
-        &chateau_id,
-        &stop_ids,
-        None,
-    )
-    .await;
+    let (selected_rows, itin_meta_list) =
+        catenary::departures_shared::load_stop_itineraries(&pool, &chateau_id, &stop_ids, None)
+            .await;
 
     let direction_pattern_ids: Vec<String> = itin_meta_list
         .iter()

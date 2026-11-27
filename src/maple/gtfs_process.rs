@@ -16,7 +16,6 @@ use crate::gtfs_handlers::shape_colour_calculator::shape_to_colour;
 use crate::gtfs_handlers::stops_associated_items::*;
 use crate::gtfs_ingestion_sequence::calendar_into_postgres::calendar_into_postgres;
 use crate::gtfs_ingestion_sequence::extra_stop_to_stop_shapes_into_postgres::insert_stop_to_stop_geometry;
-use catenary::maple_syrup::pattern_id::encode_pattern_id;
 use crate::gtfs_ingestion_sequence::shapes_into_postgres::shapes_into_postgres;
 use crate::gtfs_ingestion_sequence::stops_into_postgres::stops_into_postgres_and_elastic;
 use crate::gtfs_ingestion_sequence::transfers_into_postgres::transfers_into_postgres;
@@ -25,6 +24,7 @@ use anyhow::Context;
 use catenary::enum_to_int::*;
 use catenary::gtfs_schedule_protobuf::frequencies_to_protobuf;
 use catenary::maple_syrup;
+use catenary::maple_syrup::pattern_id::encode_pattern_id;
 use catenary::models::{
     DirectionPatternMeta, DirectionPatternRow, ItineraryPatternMeta, ItineraryPatternRow,
     Route as RoutePgModel,
@@ -251,7 +251,9 @@ fn normalize_bayern_bus_routes(gtfs_path: &str) -> Result<(), Box<dyn Error + Se
         };
         if matches_agency {
             let mut fields: Vec<&str> = record.iter().collect();
-            *fields.get_mut(type_index).ok_or("route missing route_type")? = "3";
+            *fields
+                .get_mut(type_index)
+                .ok_or("route missing route_type")? = "3";
             writer.write_record(&fields)?;
         } else {
             writer.write_record(&record)?;
@@ -2478,7 +2480,8 @@ pub async fn gtfs_process_feed(
         .direction_patterns
         .iter()
         .sorted_unstable_by_key(|(id, _)| **id)
-        .chunks(5000) {
+        .chunks(5000)
+    {
         let mut d_final: Vec<DirectionPatternMeta> = vec![];
 
         let mut d_rows: Vec<Vec<DirectionPatternRow>> = vec![];
@@ -2674,7 +2677,8 @@ pub async fn gtfs_process_feed(
         .itineraries
         .iter()
         .sorted_unstable_by_key(|(id, _)| **id)
-        .chunks(5000) {
+        .chunks(5000)
+    {
         let mut t_final: Vec<catenary::models::ItineraryPatternMeta> = vec![];
         let mut t_rows: Vec<Vec<catenary::models::ItineraryPatternRow>> = vec![];
 
@@ -2794,7 +2798,8 @@ pub async fn gtfs_process_feed(
         .itineraries_to_trips
         .iter()
         .sorted_unstable_by_key(|(id, _)| **id)
-        .chunks(5000) {
+        .chunks(5000)
+    {
         let mut t_final: Vec<Vec<catenary::models::CompressedTrip>> = vec![];
         for (itinerary_id, compressed_trip_list) in group {
             let trip_pg = compressed_trip_list

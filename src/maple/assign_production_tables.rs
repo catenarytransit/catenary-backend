@@ -91,7 +91,8 @@ fn dated_ingest_retention(
         .filter(|a| a.ingestion_successfully_finished && !a.deleted)
         .collect::<Vec<_>>();
     sorted_feeds.sort_by(|a, b| {
-        a.ingest_start_unix_time_ms.cmp(&b.ingest_start_unix_time_ms)
+        a.ingest_start_unix_time_ms
+            .cmp(&b.ingest_start_unix_time_ms)
             .then_with(|| a.ingest_end_unix_time_ms.cmp(&b.ingest_end_unix_time_ms))
             .then_with(|| a.attempt_id.cmp(&b.attempt_id))
     });
@@ -107,7 +108,9 @@ fn dated_ingest_retention(
                 }
                 Some(start) => {
                     let end = start.sub(chrono::Days::new(1));
-                    let end = attempt.feed_expiration_date.map_or(end, |date| date.min(end));
+                    let end = attempt
+                        .feed_expiration_date
+                        .map_or(end, |date| date.min(end));
                     if end < now.sub(chrono::Days::new(5)) {
                         obsolete.push(attempt.attempt_id.clone());
                         continue;
@@ -137,15 +140,23 @@ pub(crate) fn successful_cleanup_plan(
     now: NaiveDate,
 ) -> Option<SuccessfulCleanupPlan> {
     // An unfinished production assignment must not be mistaken for retirement.
-    if all_feeds.iter().any(|a| !a.deleted
-        && (a.ingesting_in_progress || (a.ingestion_successfully_finished && !a.production)))
-    {
+    if all_feeds.iter().any(|a| {
+        !a.deleted
+            && (a.ingesting_in_progress || (a.ingestion_successfully_finished && !a.production))
+    }) {
         return None;
     }
-    let production = all_feeds.iter().filter(|a| {
-        a.production && !a.deleted && a.ingestion_successfully_finished
-            && !a.ingestion_errored && !a.ingesting_in_progress
-    }).cloned().collect::<Vec<_>>();
+    let production = all_feeds
+        .iter()
+        .filter(|a| {
+            a.production
+                && !a.deleted
+                && a.ingestion_successfully_finished
+                && !a.ingestion_errored
+                && !a.ingesting_in_progress
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let (retained, obsolete_attempts) = if retain_only_latest_ingest(feed_id) {
         let (latest, obsolete) = single_ingest_retention(&production)?;
         (vec![latest], obsolete)
@@ -155,10 +166,14 @@ pub(crate) fn successful_cleanup_plan(
     if retained.is_empty() {
         return None;
     }
-    let current_attempt = retained.iter()
+    let current_attempt = retained
+        .iter()
         .find(|range| date_is_within_feed_time_range(now, range))
         .map(|range| range.attempt_id.clone());
-    Some(SuccessfulCleanupPlan { obsolete_attempts, current_attempt })
+    Some(SuccessfulCleanupPlan {
+        obsolete_attempts,
+        current_attempt,
+    })
 }
 
 pub async fn assign_production_tables(
@@ -257,10 +272,16 @@ pub async fn assign_production_tables(
     } else {
         let (retained, mut obsolete) = dated_ingest_retention(&all_feeds, now);
         // Failed attempts are handled only on the normal ingestion path.
-        obsolete.extend(all_feeds.iter().filter(|a| {
-            !a.ingestion_successfully_finished && !a.ingesting_in_progress
-                && a.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
-        }).map(|a| a.attempt_id.clone()));
+        obsolete.extend(
+            all_feeds
+                .iter()
+                .filter(|a| {
+                    !a.ingestion_successfully_finished
+                        && !a.ingesting_in_progress
+                        && a.ingest_start_unix_time_ms < (now_ms as i64 - (1000 * 86400))
+                })
+                .map(|a| a.attempt_id.clone()),
+        );
         (retained, obsolete)
     };
     drop_attempt_list.sort();
@@ -531,14 +552,23 @@ mod tests {
         let feed = "f-bus~dft~gov~uk~england";
         for day in [15, 16, 20] {
             let plan = successful_cleanup_plan(
-                feed, &attempts, NaiveDate::from_ymd_opt(2026, 11, day).unwrap(),
-            ).unwrap();
+                feed,
+                &attempts,
+                NaiveDate::from_ymd_opt(2026, 11, day).unwrap(),
+            )
+            .unwrap();
             assert!(plan.obsolete_attempts.is_empty());
-            assert_eq!(plan.current_attempt.as_deref(), Some(if day == 15 { "october" } else { "november" }));
+            assert_eq!(
+                plan.current_attempt.as_deref(),
+                Some(if day == 15 { "october" } else { "november" })
+            );
         }
         let plan = successful_cleanup_plan(
-            feed, &attempts, NaiveDate::from_ymd_opt(2026, 11, 26).unwrap(),
-        ).unwrap();
+            feed,
+            &attempts,
+            NaiveDate::from_ymd_opt(2026, 11, 26).unwrap(),
+        )
+        .unwrap();
         assert_eq!(plan.obsolete_attempts, vec!["october"]);
         assert_eq!(plan.current_attempt.as_deref(), Some("november"));
     }
@@ -564,7 +594,8 @@ mod tests {
     fn standalone_cleanup_never_removes_last_successful_attempt() {
         let attempts = england_attempts();
         let now = NaiveDate::from_ymd_opt(2026, 11, 26).unwrap();
-        let plan = successful_cleanup_plan("f-bus~dft~gov~uk~england", &attempts[1..], now).unwrap();
+        let plan =
+            successful_cleanup_plan("f-bus~dft~gov~uk~england", &attempts[1..], now).unwrap();
         assert!(plan.obsolete_attempts.is_empty());
         assert_eq!(plan.current_attempt.as_deref(), Some("november"));
     }
@@ -577,5 +608,4 @@ mod tests {
         assert_eq!(plan.obsolete_attempts, vec!["october"]);
         assert_eq!(plan.current_attempt.as_deref(), Some("november"));
     }
-
 }

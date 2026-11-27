@@ -22,8 +22,7 @@ use std::time::Instant;
 // Import logic from shared modules
 use crate::aspen::lib::AspenRpcClient;
 use crate::departures_shared::{
-    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
-    fetch_stop_data_for_chateau,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date, fetch_stop_data_for_chateau,
 };
 use crate::gtfs_schedule_protobuf::protobuf_to_frequencies;
 use crate::make_calendar_structure_from_pg;
@@ -757,7 +756,8 @@ impl PrioritySelection {
     }
 
     fn contains_next(&self, chateau: &str, route: &str) -> bool {
-        self.next_routes.contains(&(chateau.to_owned(), route.to_owned()))
+        self.next_routes
+            .contains(&(chateau.to_owned(), route.to_owned()))
     }
 
     fn contains_departure(
@@ -802,11 +802,16 @@ impl RouteSelection {
     // phase cannot exclude whole rail routes: they may serve other stations.
     fn included_route_ids(&self, chateau: &str) -> Option<Vec<String>> {
         let ids: HashSet<_> = match self {
-            Self::Only(priority) => priority.local_routes.iter().chain(&priority.station_routes)
+            Self::Only(priority) => priority
+                .local_routes
+                .iter()
+                .chain(&priority.station_routes)
                 .filter(|(feed, _)| feed == chateau)
                 .map(|(_, route)| route.clone())
                 .collect(),
-            Self::Next(priority) => priority.next_routes.iter()
+            Self::Next(priority) => priority
+                .next_routes
+                .iter()
                 .filter(|(feed, _)| feed == chateau)
                 .map(|(_, route)| route.clone())
                 .collect(),
@@ -817,11 +822,16 @@ impl RouteSelection {
 
     fn excluded_local_route_ids(&self, chateau: &str) -> Vec<String> {
         match self {
-            Self::Except(priority) => priority.local_routes.iter()
+            Self::Except(priority) => priority
+                .local_routes
+                .iter()
                 .filter(|(feed, _)| feed == chateau)
                 .map(|(_, route)| route.clone())
                 .collect(),
-            Self::ExceptBoth(priority) => priority.local_routes.iter().chain(&priority.next_routes)
+            Self::ExceptBoth(priority) => priority
+                .local_routes
+                .iter()
+                .chain(&priority.next_routes)
                 .filter(|(feed, _)| feed == chateau)
                 .map(|(_, route)| route.clone())
                 .collect(),
@@ -838,8 +848,12 @@ impl RouteSelection {
     ) -> bool {
         match self {
             Self::All => true,
-            Self::Only(priority) => priority.contains_departure(chateau, route, station_key, station_group),
-            Self::Except(priority) => !priority.contains_departure(chateau, route, station_key, station_group),
+            Self::Only(priority) => {
+                priority.contains_departure(chateau, route, station_key, station_group)
+            }
+            Self::Except(priority) => {
+                !priority.contains_departure(chateau, route, station_key, station_group)
+            }
             Self::Next(priority) => !station_group && priority.contains_next(chateau, route),
             Self::ExceptBoth(priority) => {
                 !priority.contains_departure(chateau, route, station_key, station_group)
@@ -873,7 +887,8 @@ impl PreparedNearby {
             .unwrap_or_else(|| crate::duration_since_unix_epoch().as_secs());
         let departure_time_chrono = chrono::Utc.timestamp_opt(departure_time as i64, 0).unwrap();
 
-        let long_distance_chateaux: HashSet<&str> = LONG_DISTANCE_CHATEAUX.iter().copied().collect();
+        let long_distance_chateaux: HashSet<&str> =
+            LONG_DISTANCE_CHATEAUX.iter().copied().collect();
 
         let long_distance_chateaux_arc = Arc::new(long_distance_chateaux);
 
@@ -987,7 +1002,10 @@ impl PreparedNearby {
 
         let mut chateau_futures = Vec::new();
         for (chateau, stop_ids) in chateau_stops {
-            if selection.included_route_ids(&chateau).is_some_and(|ids| ids.is_empty()) {
+            if selection
+                .included_route_ids(&chateau)
+                .is_some_and(|ids| ids.is_empty())
+            {
                 continue;
             }
             let pool = pool.clone();
@@ -1068,7 +1086,15 @@ impl PreparedNearby {
         let mut processing_by_chateau = BTreeMap::new();
         let mut chateau_stream = futures::stream::iter(chateau_futures).buffer_unordered(3);
         while let Some(res) = chateau_stream.next().await {
-            if let Some((ld_part, local_part, route_part, stop_part, debug_chateau, chateau_debug)) = res {
+            if let Some((
+                ld_part,
+                local_part,
+                route_part,
+                stop_part,
+                debug_chateau,
+                chateau_debug,
+            )) = res
+            {
                 processing.accumulate(&chateau_debug);
                 processing_by_chateau.insert(debug_chateau, chateau_debug);
                 let grouping_started = Instant::now();
@@ -1480,7 +1506,11 @@ async fn fetch_chateau_data(
     let mut itin_meta_list = Vec::new();
     let mut itins_result = Vec::with_capacity(matching_rows_and_metadata.len());
     let mut seen_itinerary_ids = HashSet::new();
-    for NearbyItineraryMatch { stop_row, metadata: meta } in matching_rows_and_metadata {
+    for NearbyItineraryMatch {
+        stop_row,
+        metadata: meta,
+    } in matching_rows_and_metadata
+    {
         if seen_itinerary_ids.insert(meta.itinerary_pattern_id.clone()) {
             itin_meta_list.push(meta);
         }
@@ -1596,7 +1626,8 @@ async fn fetch_chateau_data(
         let Some(distance) = stop_dist_map.get(row.stop_id.as_str()) else {
             return false;
         };
-        let Some(station_key) = stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string())) else {
+        let Some(station_key) = stop_to_key_map.get(&(chateau.clone(), row.stop_id.to_string()))
+        else {
             return false;
         };
         distance_limits.allows(route.route_type, *distance)
@@ -1604,7 +1635,13 @@ async fn fetch_chateau_data(
                 &chateau,
                 route.route_id.as_str(),
                 station_key,
-                is_station_group(&chateau, route.route_type, route.agency_id.as_deref(), is_ld_chateau, station_key),
+                is_station_group(
+                    &chateau,
+                    route.route_type,
+                    route.agency_id.as_deref(),
+                    is_ld_chateau,
+                    station_key,
+                ),
             )
     });
 
@@ -1802,9 +1839,9 @@ async fn fetch_chateau_data(
                 let timer_to_connect_to_aspen = std::time::Instant::now();
                 let client = crate::aspen::lib::spawn_aspen_client_from_ip(&meta.socket).await;
                 let time_to_connect_to_aspen = timer_to_connect_to_aspen.elapsed();
-                processing.realtime_connection_ms += time_to_connect_to_aspen.as_secs_f64() * 1000.0;
+                processing.realtime_connection_ms +=
+                    time_to_connect_to_aspen.as_secs_f64() * 1000.0;
                 if let Ok(client) = client {
-
                     let timer_get_trips = std::time::Instant::now();
                     let timeout_result = tokio::time::timeout(
                         std::time::Duration::from_millis(rt_timeout_ms),
@@ -1987,7 +2024,8 @@ async fn fetch_chateau_data(
                 }
             }
 
-            processing.service_date_processing_ms += service_date_started.elapsed().as_secs_f64() * 1000.0;
+            processing.service_date_processing_ms +=
+                service_date_started.elapsed().as_secs_f64() * 1000.0;
 
             let rows = match itins.get(&trip.itinerary_pattern_id) {
                 Some(r) => r,
@@ -2206,7 +2244,8 @@ async fn fetch_chateau_data(
     let mut agency_dictionaries = BTreeMap::from([(chateau.clone(), agencies)]);
     let mut realtime_stops = BTreeMap::new();
     if !skip_realtime {
-        let mut realtime_timings = crate::departure_realtime_loader::DepartureRealtimeTimings::default();
+        let mut realtime_timings =
+            crate::departure_realtime_loader::DepartureRealtimeTimings::default();
         let realtime_loader_started = Instant::now();
         realtime_stops = crate::departure_realtime_loader::apply_departure_realtime_timed(
             &mut board_events,
@@ -2220,7 +2259,8 @@ async fn fetch_chateau_data(
             &mut realtime_timings,
         )
         .await;
-        processing.realtime_loader_total_ms = realtime_loader_started.elapsed().as_secs_f64() * 1000.0;
+        processing.realtime_loader_total_ms =
+            realtime_loader_started.elapsed().as_secs_f64() * 1000.0;
         processing.realtime_connection_ms += realtime_timings.connection_ms;
         processing.realtime_rpc_ms += realtime_timings.rpc_ms;
         processing.realtime_overlay_ms = realtime_timings.overlay_ms;
@@ -2260,7 +2300,11 @@ async fn fetch_chateau_data(
             continue;
         };
         let station_group = is_station_group(
-            &chateau, route.route_type, route.agency_id.as_deref(), is_ld_chateau, station_key,
+            &chateau,
+            route.route_type,
+            route.agency_id.as_deref(),
+            is_ld_chateau,
+            station_key,
         );
         if !selection.allows(&chateau, &event.route_id, station_key, station_group) {
             continue;
@@ -2656,26 +2700,34 @@ fn priority_routes(
     candidates.retain(|candidate| candidate.mode != COACH_ROUTE_TYPE);
     // Both Compose and web hoist only the closest station strictly within 1 km.
     // Use the station-group distance, not a route's nearest platform.
-    let station = candidates.iter()
+    let station = candidates
+        .iter()
         .filter_map(|candidate| candidate.station.as_ref())
-        .filter_map(|station| station_distances.get(station).map(|distance| (station, *distance)))
+        .filter_map(|station| {
+            station_distances
+                .get(station)
+                .map(|distance| (station, *distance))
+        })
         .filter(|(_, distance)| *distance < 1000.0)
         .min_by(|(a, da), (b, db)| da.total_cmp(db).then_with(|| a.cmp(b)))
         .map(|(station, _)| station.clone());
     // Each hoisted display group replaces one priority bus slot.
     // Count distinct local routes, not their stops or directions.
-    let hoisted_routes: HashSet<_> = candidates.iter()
+    let hoisted_routes: HashSet<_> = candidates
+        .iter()
         .filter(|candidate| {
             candidate.station.is_none()
                 && ((matches!(candidate.mode, 1 | 7 | 12 | 400..=499)
                     && candidate.distance < 500.0)
-                    || (matches!(candidate.mode, 0 | 5 | 900..=999)
-                        && candidate.distance < 400.0))
+                    || (matches!(candidate.mode, 0 | 5 | 900..=999) && candidate.distance < 400.0))
         })
         .map(|candidate| (&candidate.chateau, &candidate.route))
         .collect();
     let bus_limit = 5usize.saturating_sub(hoisted_routes.len() + usize::from(station.is_some()));
-    let mut selected = PrioritySelection { station, ..Default::default() };
+    let mut selected = PrioritySelection {
+        station,
+        ..Default::default()
+    };
     candidates.sort_by(|a, b| {
         a.distance
             .total_cmp(&b.distance)
@@ -2768,16 +2820,22 @@ impl PreparedNearby {
                                 .and(rows::attempt_id.eq(meta::attempt_id))
                                 .and(rows::direction_pattern_id.eq(meta::direction_pattern_id))),
                         )
-                        .inner_join(routes::table.on(
-                            routes::chateau.eq(meta::chateau)
+                        .inner_join(
+                            routes::table.on(routes::chateau
+                                .eq(meta::chateau)
                                 .and(routes::onestop_feed_id.eq(meta::onestop_feed_id))
                                 .and(routes::attempt_id.eq(meta::attempt_id))
-                                .and(routes::route_id.nullable().eq(meta::route_id)),
-                        ))
+                                .and(routes::route_id.nullable().eq(meta::route_id))),
+                        )
                         .filter(rows::chateau.eq(&chateau))
                         .filter(rows::stop_id.eq_any(ids))
                         .filter(routes::route_type.ne(COACH_ROUTE_TYPE))
-                        .select((rows::stop_id, routes::route_id, routes::route_type, routes::agency_id))
+                        .select((
+                            rows::stop_id,
+                            routes::route_id,
+                            routes::route_type,
+                            routes::agency_id,
+                        ))
                         .load::<(CompactString, CompactString, i16, Option<String>)>(&mut conn)
                         .await;
                     record_sql_timing(
@@ -2799,9 +2857,13 @@ impl PreparedNearby {
                                     return None;
                                 }
                                 let station = is_station_group(
-                                    &chateau, mode, agency_id.as_deref(),
-                                    LONG_DISTANCE_CHATEAUX.contains(&chateau.as_str()), key,
-                                ).then(|| PriorityStation::new(&chateau, key));
+                                    &chateau,
+                                    mode,
+                                    agency_id.as_deref(),
+                                    LONG_DISTANCE_CHATEAUX.contains(&chateau.as_str()),
+                                    key,
+                                )
+                                .then(|| PriorityStation::new(&chateau, key));
                                 Some(RouteCandidate {
                                     chateau: chateau.clone(),
                                     route: route.to_string(),
@@ -2820,7 +2882,8 @@ impl PreparedNearby {
         let candidates: Vec<_> = parts.into_iter().flatten().collect();
         // The response uses the OSM station point rather than the closest
         // platform when available. Use the same distance for the hoist decision.
-        let osm_ids: Vec<_> = candidates.iter()
+        let osm_ids: Vec<_> = candidates
+            .iter()
             .filter_map(|candidate| match &candidate.station {
                 Some(PriorityStation::Osm(id)) => Some(*id),
                 _ => None,
@@ -2840,9 +2903,11 @@ impl PreparedNearby {
                     .filter(crate::schema::gtfs::osm_stations::osm_id.eq_any(&osm_ids))
                     .select(crate::models::OsmStation::as_select()),
                 crate::models::OsmStation
-            ).unwrap_or_default();
+            )
+            .unwrap_or_default();
             for station in stations {
-                let distance = Haversine.distance(point, geo::Point::new(station.point.x, station.point.y));
+                let distance =
+                    Haversine.distance(point, geo::Point::new(station.point.x, station.point.y));
                 station_distances.insert(PriorityStation::Osm(station.osm_id), distance);
             }
         }
@@ -2887,7 +2952,10 @@ mod progressive_tests {
         }
         // Opposite directions of a bus route do not consume two priority slots.
         candidates.push(candidate("bus", "0", 3, 10.5));
-        let selected = priority_routes(candidates, &HashMap::from([(PriorityStation::Osm(1), 900.0)]));
+        let selected = priority_routes(
+            candidates,
+            &HashMap::from([(PriorityStation::Osm(1), 900.0)]),
+        );
         for key in [
             ("rail", "train"),
             ("city", "metro"),
@@ -2897,10 +2965,19 @@ mod progressive_tests {
         ] {
             assert!(selected.contains_route(key.0, key.1));
         }
-        for key in [("city", "metro-far"), ("city", "tram-far"), ("bus", "0"), ("bus", "3"), ("bus", "4")] {
+        for key in [
+            ("city", "metro-far"),
+            ("city", "tram-far"),
+            ("bus", "0"),
+            ("bus", "3"),
+            ("bus", "4"),
+        ] {
             assert!(!selected.contains_route(key.0, key.1));
         }
-        assert_eq!(selected.local_routes.len() + selected.station_routes.len(), 5);
+        assert_eq!(
+            selected.local_routes.len() + selected.station_routes.len(),
+            5
+        );
     }
 
     #[test]
@@ -2910,22 +2987,40 @@ mod progressive_tests {
         for (extra, station_distance, expected_buses) in [
             (vec![], 1000.0, 5),
             (vec![station_candidate("rail", "train", 1, 999.0)], 999.0, 4),
-            (vec![station_candidate("rail", "train", 1, 1000.0)], 1000.0, 5),
+            (
+                vec![station_candidate("rail", "train", 1, 1000.0)],
+                1000.0,
+                5,
+            ),
             (vec![candidate("city", "metro", 1, 499.0)], 1000.0, 4),
             (vec![candidate("city", "metro", 1, 500.0)], 1000.0, 5),
             (vec![candidate("city", "tram", 900, 399.0)], 1000.0, 4),
             (vec![candidate("city", "tram", 900, 400.0)], 1000.0, 5),
-            (vec![
-                station_candidate("rail", "train", 1, 999.0),
-                candidate("city", "metro", 1, 499.0),
-                candidate("city", "tram", 900, 399.0),
-            ], 999.0, 2),
-            (vec![
-                candidate("city", "metro", 1, 100.0),
-                candidate("city", "metro", 1, 200.0),
-                candidate("city", "metro-2", 1, 300.0),
-            ], 1000.0, 3),
-            ((0..6).map(|i| candidate("city", &i.to_string(), 1, 100.0)).collect(), 1000.0, 0),
+            (
+                vec![
+                    station_candidate("rail", "train", 1, 999.0),
+                    candidate("city", "metro", 1, 499.0),
+                    candidate("city", "tram", 900, 399.0),
+                ],
+                999.0,
+                2,
+            ),
+            (
+                vec![
+                    candidate("city", "metro", 1, 100.0),
+                    candidate("city", "metro", 1, 200.0),
+                    candidate("city", "metro-2", 1, 300.0),
+                ],
+                1000.0,
+                3,
+            ),
+            (
+                (0..6)
+                    .map(|i| candidate("city", &i.to_string(), 1, 100.0))
+                    .collect(),
+                1000.0,
+                0,
+            ),
         ] {
             let mut candidates: Vec<_> = (0..7)
                 .map(|i| candidate("bus", &i.to_string(), 3, 10.0 + i as f64))
@@ -2940,8 +3035,14 @@ mod progressive_tests {
             let stop = StationKey::Stop("stop".into());
             for i in 0..7 {
                 let route = i.to_string();
-                assert_eq!(first.allows("bus", &route, &stop, false), i < expected_buses);
-                assert_eq!(second.allows("bus", &route, &stop, false), i >= expected_buses);
+                assert_eq!(
+                    first.allows("bus", &route, &stop, false),
+                    i < expected_buses
+                );
+                assert_eq!(
+                    second.allows("bus", &route, &stop, false),
+                    i >= expected_buses
+                );
             }
         }
     }
@@ -2958,10 +3059,13 @@ mod progressive_tests {
         }
         // Duplicate stops on a route do not consume the intermediate budget.
         candidates.push(candidate("bus", "4", 3, 25.0));
-        let priority = Arc::new(priority_routes(candidates, &HashMap::from([
-            (PriorityStation::Osm(1), 250.0),
-            (PriorityStation::Osm(2), 500.0),
-        ])));
+        let priority = Arc::new(priority_routes(
+            candidates,
+            &HashMap::from([
+                (PriorityStation::Osm(1), 250.0),
+                (PriorityStation::Osm(2), 500.0),
+            ]),
+        ));
         assert_eq!(priority.local_routes.len(), 4);
         assert_eq!(priority.next_routes.len(), 10);
         assert!(!priority.contains_route("bus", "coach"));
@@ -2979,7 +3083,10 @@ mod progressive_tests {
         for i in 0..18 {
             let route = i.to_string();
             assert_eq!(first.allows("bus", &route, &stop, false), i < 4);
-            assert_eq!(next.allows("bus", &route, &stop, false), (4..14).contains(&i));
+            assert_eq!(
+                next.allows("bus", &route, &stop, false),
+                (4..14).contains(&i)
+            );
             assert_eq!(last.allows("bus", &route, &stop, false), i >= 14);
             assert_eq!(legacy.allows("bus", &route, &stop, false), i >= 4);
         }
@@ -2991,10 +3098,13 @@ mod progressive_tests {
 
     #[test]
     fn nearest_metro_is_included_even_outside_hoist_threshold() {
-        let selected = priority_routes(vec![
-            candidate("a", "metro", 1, 700.0),
-            candidate("b", "metro", 1, 800.0),
-        ], &HashMap::new());
+        let selected = priority_routes(
+            vec![
+                candidate("a", "metro", 1, 700.0),
+                candidate("b", "metro", 1, 800.0),
+            ],
+            &HashMap::new(),
+        );
         assert!(selected.contains_route("a", "metro"));
         assert!(!selected.contains_route("b", "metro"));
     }
@@ -3009,7 +3119,10 @@ mod progressive_tests {
         let second = RouteSelection::Except(keys);
         let stop = StationKey::Stop("stop".into());
         for (feed, route) in [("a", "1"), ("b", "1"), ("a", "2")] {
-            assert_ne!(first.allows(feed, route, &stop, false), second.allows(feed, route, &stop, false));
+            assert_ne!(
+                first.allows(feed, route, &stop, false),
+                second.allows(feed, route, &stop, false)
+            );
             assert!(RouteSelection::All.allows(feed, route, &stop, false));
         }
     }
@@ -3021,13 +3134,16 @@ mod progressive_tests {
             (PriorityStation::Osm(2), 600.0),
             (PriorityStation::Osm(3), 1000.0),
         ]);
-        let priority = Arc::new(priority_routes(vec![
-            station_candidate("a", "train", 1, 700.0),
-            station_candidate("a", "train", 2, 100.0),
-            station_candidate("b", "other-train", 1, 800.0),
-            station_candidate("c", "far", 3, 50.0),
-            candidate("a", "local-train", 2, 10.0),
-        ], &distances));
+        let priority = Arc::new(priority_routes(
+            vec![
+                station_candidate("a", "train", 1, 700.0),
+                station_candidate("a", "train", 2, 100.0),
+                station_candidate("b", "other-train", 1, 800.0),
+                station_candidate("c", "far", 3, 50.0),
+                candidate("a", "local-train", 2, 10.0),
+            ],
+            &distances,
+        ));
         assert_eq!(priority.station, Some(PriorityStation::Osm(1)));
         let first = RouteSelection::Only(priority.clone());
         let second = RouteSelection::Except(priority);
@@ -3062,10 +3178,19 @@ mod progressive_tests {
         let a = PriorityStation::new("a", &key);
         let b = PriorityStation::new("b", &key);
         assert_ne!(a, b);
-        let priority = priority_routes(vec![
-            RouteCandidate { station: Some(a.clone()), ..candidate("a", "train", 2, 300.0) },
-            RouteCandidate { station: Some(b.clone()), ..candidate("b", "train", 2, 400.0) },
-        ], &HashMap::from([(a.clone(), 300.0), (b, 400.0)]));
+        let priority = priority_routes(
+            vec![
+                RouteCandidate {
+                    station: Some(a.clone()),
+                    ..candidate("a", "train", 2, 300.0)
+                },
+                RouteCandidate {
+                    station: Some(b.clone()),
+                    ..candidate("b", "train", 2, 400.0)
+                },
+            ],
+            &HashMap::from([(a.clone(), 300.0), (b, 400.0)]),
+        );
         assert_eq!(priority.station, Some(a));
         assert!(priority.contains_departure("a", "train", &key, true));
         assert!(!priority.contains_departure("b", "train", &key, true));
@@ -3169,7 +3294,13 @@ mod nearby_metadata_projection_tests {
     #[test]
     fn stop_first_itinerary_sql_has_materialization_fences() {
         let sql = NEARBY_ITINERARY_SQL;
-        for cte in ["stop_rows", "pattern_keys", "metadata", "route_keys", "eligible_routes"] {
+        for cte in [
+            "stop_rows",
+            "pattern_keys",
+            "metadata",
+            "route_keys",
+            "eligible_routes",
+        ] {
             assert!(sql.contains(&format!("{cte} AS MATERIALIZED")));
         }
         assert_eq!(sql.matches("OFFSET 0").count(), 2);
@@ -3187,11 +3318,10 @@ mod nearby_metadata_projection_tests {
     async fn stop_first_itinerary_query_preserves_rows_and_phase_filters() {
         use diesel_async::{AsyncConnection, AsyncPgConnection, SimpleAsyncConnection};
 
-        let mut conn = AsyncPgConnection::establish(
-            &std::env::var("DATABASE_URL").expect("DATABASE_URL"),
-        )
-        .await
-        .unwrap();
+        let mut conn =
+            AsyncPgConnection::establish(&std::env::var("DATABASE_URL").expect("DATABASE_URL"))
+                .await
+                .unwrap();
         conn.batch_execute(
             r#"
 CREATE TEMP TABLE itinerary_pattern (
@@ -3267,8 +3397,21 @@ INSERT INTO itinerary_pattern (
         let rail = key("a2", "same", 0);
         let other = key("a1", "other", 0);
         for (priority, excluded, expected) in [
-            (None, empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone(), other.clone()]),
-            (Some(shared.as_slice()), empty.as_slice(), vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone()]),
+            (
+                None,
+                empty.as_slice(),
+                vec![
+                    bus_loop[0].clone(),
+                    bus_loop[1].clone(),
+                    rail.clone(),
+                    other.clone(),
+                ],
+            ),
+            (
+                Some(shared.as_slice()),
+                empty.as_slice(),
+                vec![bus_loop[0].clone(), bus_loop[1].clone(), rail.clone()],
+            ),
             (None, shared.as_slice(), vec![rail.clone(), other.clone()]),
             (Some(empty.as_slice()), empty.as_slice(), vec![]),
         ] {
@@ -3285,7 +3428,10 @@ INSERT INTO itinerary_pattern (
             let mut actual: Vec<Key> = rows
                 .into_iter()
                 .map(|matched| {
-                    assert_eq!(matched.stop_row.itinerary_pattern_id, matched.metadata.itinerary_pattern_id);
+                    assert_eq!(
+                        matched.stop_row.itinerary_pattern_id,
+                        matched.metadata.itinerary_pattern_id
+                    );
                     assert_eq!(matched.metadata.direction_pattern_id.as_deref(), Some("d"));
                     assert_eq!(matched.metadata.timezone, "UTC");
                     assert_eq!(matched.stop_row.stop_id.as_str(), "near");

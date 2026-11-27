@@ -7,8 +7,8 @@ use ahash::AHashMap;
 use ahash::AHashSet;
 use catenary::EtcdConnectionIps;
 use catenary::aspen::lib::ChateauMetadataEtcd;
-use catenary::postgres_tools::CatenaryPostgresPool;
 use catenary::nearby_departures::{dense_nearby_bus_radius, is_bus_route_type};
+use catenary::postgres_tools::CatenaryPostgresPool;
 use chrono::NaiveDate;
 use chrono::TimeZone;
 use compact_str::CompactString;
@@ -29,8 +29,7 @@ use std::time::Instant;
 
 // Import logic from shared modules
 use crate::departures_shared::{
-    ItinOption, StopDataResult, ValidTripSet, estimate_service_date,
-    fetch_stop_data_for_chateau,
+    ItinOption, StopDataResult, ValidTripSet, estimate_service_date, fetch_stop_data_for_chateau,
 };
 use catenary::aspen::lib::AspenRpcClient;
 use catenary::gtfs_schedule_protobuf::protobuf_to_frequencies;
@@ -311,7 +310,13 @@ pub async fn nearby_from_coords_v3(
         // Distance filtering
         if dense_bus_radius.is_some_and(|limit| dist > limit)
             && stop.primary_route_type.is_some_and(is_bus_route_type)
-            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+            && stop
+                .route_types
+                .iter()
+                .chain(&stop.children_route_types)
+                .flatten()
+                .copied()
+                .all(is_bus_route_type)
         {
             continue;
         }
@@ -619,12 +624,18 @@ async fn fetch_chateau_intermediate(
             .collect();
         let bus_patterns: HashSet<_> = itin_meta_list
             .iter()
-            .filter(|meta| modes.get(meta.route_id.as_str()).is_some_and(|mode| is_bus_route_type(*mode)))
+            .filter(|meta| {
+                modes
+                    .get(meta.route_id.as_str())
+                    .is_some_and(|mode| is_bus_route_type(*mode))
+            })
             .map(|meta| meta.itinerary_pattern_id.as_str())
             .collect();
         itins_result.retain(|row| {
             !bus_patterns.contains(row.itinerary_pattern_id.as_str())
-                || stop_dist_map.get(row.stop_id.as_str()).is_some_and(|distance| *distance <= limit)
+                || stop_dist_map
+                    .get(row.stop_id.as_str())
+                    .is_some_and(|distance| *distance <= limit)
         });
     }
 
@@ -637,7 +648,11 @@ async fn fetch_chateau_intermediate(
 
     let route_ids: Vec<CompactString> = if dense_bus_radius.is_some() {
         let approved: HashSet<_> = actual_itinerary_ids.iter().map(String::as_str).collect();
-        itin_meta_list.iter().filter(|meta| approved.contains(meta.itinerary_pattern_id.as_str())).map(|meta| meta.route_id.clone()).collect()
+        itin_meta_list
+            .iter()
+            .filter(|meta| approved.contains(meta.itinerary_pattern_id.as_str()))
+            .map(|meta| meta.route_id.clone())
+            .collect()
     } else {
         route_ids
     };
@@ -1046,7 +1061,13 @@ pub async fn get_nearby_departures_stream(
         // Distance filtering (reused)
         if dense_bus_radius.is_some_and(|limit| dist > limit)
             && stop.primary_route_type.is_some_and(is_bus_route_type)
-            && stop.route_types.iter().chain(&stop.children_route_types).flatten().copied().all(is_bus_route_type)
+            && stop
+                .route_types
+                .iter()
+                .chain(&stop.children_route_types)
+                .flatten()
+                .copied()
+                .all(is_bus_route_type)
         {
             continue;
         }
