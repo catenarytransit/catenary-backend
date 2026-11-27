@@ -205,12 +205,17 @@ async fn execute_pfaedle_rs(
 // Filter the extracted CSVs, not the parsed GTFS: Pfaedle reads these files directly.
 fn filter_dft_csv(
     path: &Path,
-    mut keep: impl FnMut(&csv::StringRecord, &csv::StringRecord) -> Result<bool, Box<dyn Error + Send + Sync>>,
+    mut keep: impl FnMut(
+        &csv::StringRecord,
+        &csv::StringRecord,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_path(path)?;
     let headers = reader.headers()?.clone();
     let temporary = path.with_extension("txt.dft-filter.tmp");
-    let mut writer = csv::WriterBuilder::new().flexible(true).from_path(&temporary)?;
+    let mut writer = csv::WriterBuilder::new()
+        .flexible(true)
+        .from_path(&temporary)?;
     writer.write_record(&headers)?;
     for row in reader.records() {
         let row = row?;
@@ -230,7 +235,9 @@ fn dft_csv_field<'a>(
     row: &'a csv::StringRecord,
     field: &str,
 ) -> Result<&'a str, Box<dyn Error + Send + Sync>> {
-    headers.iter().position(|h| h == field)
+    headers
+        .iter()
+        .position(|h| h == field)
         .and_then(|i| row.get(i))
         .ok_or_else(|| format!("Missing GTFS field {field}").into())
 }
@@ -247,8 +254,12 @@ fn is_dft_excluded_agency(feed_id: &str, name: &str) -> bool {
                 && name.trim().eq_ignore_ascii_case("National Express")))
 }
 
-fn remove_dft_excluded_agencies(gtfs_path: &Path, feed_id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut reader = csv::ReaderBuilder::new().flexible(true)
+fn remove_dft_excluded_agencies(
+    gtfs_path: &Path,
+    feed_id: &str,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .flexible(true)
         .from_path(gtfs_path.join("agency.txt"))?;
     let headers = reader.headers()?.clone();
     let mut agencies = HashSet::new();
@@ -294,8 +305,10 @@ fn remove_dft_excluded_agencies(gtfs_path: &Path, feed_id: &str) -> Result<(), B
     if transfers.exists() {
         filter_dft_csv(&transfers, |headers, row| {
             for (field, ids) in [
-                ("from_route_id", &routes), ("to_route_id", &routes),
-                ("from_trip_id", &trips), ("to_trip_id", &trips),
+                ("from_route_id", &routes),
+                ("to_route_id", &routes),
+                ("from_trip_id", &trips),
+                ("to_trip_id", &trips),
             ] {
                 if let Some(i) = headers.iter().position(|h| h == field) {
                     if row.get(i).is_some_and(|id| ids.contains(id)) {
@@ -309,7 +322,12 @@ fn remove_dft_excluded_agencies(gtfs_path: &Path, feed_id: &str) -> Result<(), B
     filter_dft_csv(&gtfs_path.join("agency.txt"), |headers, row| {
         Ok(!agencies.contains(dft_csv_field(headers, row, "agency_id")?))
     })?;
-    println!("Removed excluded agencies from DfT feed {feed_id}: {} agencies, {} routes, {} trips", agencies.len(), routes.len(), trips.len());
+    println!(
+        "Removed excluded agencies from DfT feed {feed_id}: {} agencies, {} routes, {} trips",
+        agencies.len(),
+        routes.len(),
+        trips.len()
+    );
     Ok(())
 }
 
@@ -3651,7 +3669,11 @@ mod dft_uk_static_feed_tests {
             assert!(is_dft_excluded_agency(london, name));
             assert!(!is_dft_excluded_agency(other, name));
         }
-        for name in ["National Express West Midlands", "Arriva London", "FlixTrain"] {
+        for name in [
+            "National Express West Midlands",
+            "Arriva London",
+            "FlixTrain",
+        ] {
             assert!(!is_dft_excluded_agency(london, name));
         }
         for feed in [london, other] {
