@@ -82,8 +82,8 @@ const METRA_MINI_IDS: &[&str] = &[
     "UW", "BN", "SW", "RI", "ME", "HC", "MW", "MN", "NC", "UNW", "UN",
 ];
 
-fn is_dft_uk_static_feed(feed_id: &str) -> bool {
-    feed_id
+pub(crate) fn is_dft_uk_static_feed(feed_id: &str) -> bool {
+    feed_id == "f-bus~dft~gov~uk" || feed_id
         .strip_prefix("f-bus~dft~gov~uk~")
         .is_some_and(|suffix| !suffix.is_empty() && suffix != "rt")
 }
@@ -3535,6 +3535,8 @@ mod dft_uk_static_feed_tests {
     #[test]
     fn matches_legacy_and_split_static_feeds() {
         for feed_id in [
+            "f-bus~dft~gov~uk",
+            "f-bus~dft~gov~uk~kent",
             "f-bus~dft~gov~uk~england",
             "f-bus~dft~gov~uk~scotland",
             "f-bus~dft~gov~uk~wales",
@@ -3552,7 +3554,6 @@ mod dft_uk_static_feed_tests {
     fn excludes_realtime_and_unrelated_feeds() {
         for feed_id in [
             "f-bus~dft~gov~uk~rt",
-            "f-bus~dft~gov~uk",
             "f-bus~dft~gov~uk~",
             "f-bus~dft~gov~ukraine~county",
             "f-nationalrail~uk",
