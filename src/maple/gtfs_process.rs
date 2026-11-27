@@ -209,7 +209,7 @@ fn filter_dft_csv(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut reader = csv::ReaderBuilder::new().flexible(true).from_path(path)?;
     let headers = reader.headers()?.clone();
-    let temporary = path.with_extension("txt.flixbus.tmp");
+    let temporary = path.with_extension("txt.dft-filter.tmp");
     let mut writer = csv::WriterBuilder::new().flexible(true).from_path(&temporary)?;
     writer.write_record(&headers)?;
     for row in reader.records() {
@@ -240,14 +240,21 @@ fn is_flixbus_agency(name: &str) -> bool {
     name == "flixbus" || name.starts_with("flixbus-") || name.starts_with("flixbus ")
 }
 
-fn remove_dft_flixbus(gtfs_path: &Path) -> Result<(), Box<dyn Error + Send + Sync>> {
+fn is_dft_excluded_agency(feed_id: &str, name: &str) -> bool {
+    is_dft_uk_static_feed(feed_id)
+        && (is_flixbus_agency(name)
+            || (feed_id == "f-bus~dft~gov~uk~greater~london"
+                && name.trim().eq_ignore_ascii_case("National Express")))
+}
+
+fn remove_dft_excluded_agencies(gtfs_path: &Path, feed_id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut reader = csv::ReaderBuilder::new().flexible(true)
         .from_path(gtfs_path.join("agency.txt"))?;
     let headers = reader.headers()?.clone();
     let mut agencies = HashSet::new();
     for row in reader.records() {
         let row = row?;
-        if is_flixbus_agency(dft_csv_field(&headers, &row, "agency_name")?) {
+        if is_dft_excluded_agency(feed_id, dft_csv_field(&headers, &row, "agency_name")?) {
             agencies.insert(dft_csv_field(&headers, &row, "agency_id")?.to_owned());
         }
     }
@@ -302,7 +309,7 @@ fn remove_dft_flixbus(gtfs_path: &Path) -> Result<(), Box<dyn Error + Send + Syn
     filter_dft_csv(&gtfs_path.join("agency.txt"), |headers, row| {
         Ok(!agencies.contains(dft_csv_field(headers, row, "agency_id")?))
     })?;
-    println!("Removed FlixBus from DfT feed: {} agencies, {} routes, {} trips", agencies.len(), routes.len(), trips.len());
+    println!("Removed excluded agencies from DfT feed {feed_id}: {} agencies, {} routes, {} trips", agencies.len(), routes.len(), trips.len());
     Ok(())
 }
 
@@ -535,7 +542,7 @@ pub async fn gtfs_process_feed(
     }
 
     if is_dft_uk_static_feed(feed_id) {
-        remove_dft_flixbus(Path::new(&path))?;
+        remove_dft_excluded_agencies(Path::new(&path), feed_id)?;
     }
 
     // Fix route colors before processing
@@ -3634,7 +3641,24 @@ mod skip_pfaedle_tests {
 
 #[cfg(test)]
 mod dft_uk_static_feed_tests {
-    use super::{is_dft_uk_static_feed, is_flixbus_agency};
+    use super::{is_dft_excluded_agency, is_dft_uk_static_feed, is_flixbus_agency};
+
+    #[test]
+    fn national_express_excluded_only_from_greater_london() {
+        let london = "f-bus~dft~gov~uk~greater~london";
+        let other = "f-bus~dft~gov~uk~hertfordshire";
+        for name in ["National Express", " national EXPRESS "] {
+            assert!(is_dft_excluded_agency(london, name));
+            assert!(!is_dft_excluded_agency(other, name));
+        }
+        for name in ["National Express West Midlands", "Arriva London", "FlixTrain"] {
+            assert!(!is_dft_excluded_agency(london, name));
+        }
+        for feed in [london, other] {
+            assert!(is_dft_excluded_agency(feed, "FlixBus UK"));
+        }
+        assert!(!is_dft_excluded_agency("f-bus~dft~gov~uk~rt", "FlixBus"));
+    }
 
     #[test]
     fn matches_flixbus_agency_variants_only() {
