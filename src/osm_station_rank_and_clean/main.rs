@@ -667,7 +667,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                           UNION \
                           SELECT DISTINCT s.osm_station_id, ipm.onestop_feed_id, ipm.attempt_id, ipm.shape_id \
                           FROM gtfs.itinerary_pattern_meta ipm \
-                          JOIN gtfs.itinerary_pattern ip \
+                          JOIN gtfs.itinerary_pattern_stop_reader ip \
                             ON ipm.onestop_feed_id = ip.onestop_feed_id \
                            AND ipm.attempt_id = ip.attempt_id \
                            AND ip.itinerary_pattern_id = ipm.itinerary_pattern_id \

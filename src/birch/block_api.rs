@@ -92,17 +92,16 @@ pub async fn block_api(
         .map(|x| x.clone())
         .collect::<BTreeSet<String>>();
 
-    let itin_rows: Vec<catenary::models::ItineraryPatternRow> =
-        catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-            .filter(
-                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
-                    .eq_any(&itin_id_list),
-            )
-            .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&query.chateau))
-            .select(catenary::models::ItineraryPatternRow::as_select())
-            .load(conn)
-            .await
-            .unwrap();
+    let itin_ids: Vec<String> = itin_id_list.iter().cloned().collect();
+    let itin_rows: Vec<catenary::models::ItineraryPatternRow> = diesel::sql_query(
+        "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
+    )
+    .bind::<diesel::sql_types::Text, _>(&query.chateau)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&itin_ids)
+    .load(conn)
+    .await
+    .unwrap();
 
     let itin_metas: Vec<catenary::models::ItineraryPatternMeta> =
         catenary::schema::gtfs::itinerary_pattern_meta::dsl::itinerary_pattern_meta

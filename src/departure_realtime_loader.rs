@@ -159,7 +159,7 @@ pub async fn apply_departure_realtime_timed(
             let sql_started = std::time::Instant::now();
             if let Ok(mut conn) = pool.get().await {
                 use crate::schema::gtfs::{
-                    itinerary_pattern as ip, itinerary_pattern_meta as im, trips_compressed as tc,
+                    itinerary_pattern_meta as im, trips_compressed as tc,
                 };
                 let trips = tc::table
                     .filter(tc::chateau.eq(chateau))
@@ -172,14 +172,16 @@ pub async fn apply_departure_realtime_timed(
                     .iter()
                     .map(|trip| trip.itinerary_pattern_id.clone())
                     .collect();
-                let rows = ip::table
-                    .filter(ip::chateau.eq(chateau))
-                    .filter(ip::itinerary_pattern_id.eq_any(&patterns))
-                    .order(ip::stop_sequence.asc())
-                    .select(crate::models::ItineraryPatternRow::as_select())
-                    .load::<crate::models::ItineraryPatternRow>(&mut conn)
-                    .await
-                    .unwrap_or_default();
+                let rows = diesel::sql_query(
+                    "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+                     WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
+                     ORDER BY stop_sequence",
+                )
+                .bind::<diesel::sql_types::Text, _>(chateau)
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&patterns)
+                .load::<crate::models::ItineraryPatternRow>(&mut conn)
+                .await
+                .unwrap_or_default();
                 let timezones = im::table
                     .filter(im::chateau.eq(chateau))
                     .filter(im::itinerary_pattern_id.eq_any(&patterns))
