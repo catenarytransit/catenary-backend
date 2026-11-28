@@ -31,7 +31,7 @@ fn invalid(message: &'static str) -> diesel::result::Error {
 
 #[derive(Debug)]
 struct Exceptions<'a> {
-    exception_indices: &'a [i32],
+    exception_indices: &'a [Option<i32>],
     exception_arrivals: &'a [Option<i32>],
     exception_departures: &'a [Option<i32>],
     exception_interpolated: &'a [Option<i32>],
@@ -39,14 +39,18 @@ struct Exceptions<'a> {
 
 macro_rules! exceptions_from {
     ($model:ty) => {
-        impl<'a> From<&'a $model> for Exceptions<'a> {
-            fn from(value: &'a $model) -> Self {
-                Self {
+        impl<'a> TryFrom<&'a $model> for Exceptions<'a> {
+            type Error = diesel::result::Error;
+
+            fn try_from(value: &'a $model) -> QueryResult<Self> {
+                let exceptions = Self {
                     exception_indices: &value.exception_indices,
                     exception_arrivals: &value.exception_arrivals,
                     exception_departures: &value.exception_departures,
                     exception_interpolated: &value.exception_interpolated,
-                }
+                };
+                exceptions.validate()?;
+                Ok(exceptions)
             }
         }
     };
@@ -55,8 +59,30 @@ exceptions_from!(MapleV2TripMajor);
 exceptions_from!(MapleV2StopMajor);
 
 impl Exceptions<'_> {
+    // The encoder guarantees nonnegative, strictly increasing indices.
+    // Diesel's generated schema correctly permits NULL array elements, but
+    // accepting a NULL index or dropping it would corrupt exception alignment.
+    fn validate(&self) -> QueryResult<()> {
+        let n = self.exception_indices.len();
+        if self.exception_arrivals.len() != n
+            || self.exception_departures.len() != n
+            || self.exception_interpolated.len() != n
+        {
+            return Err(invalid("v2 exception array length mismatch"));
+        }
+        let mut previous = None;
+        for &index in self.exception_indices {
+            let index = index.ok_or_else(|| invalid("v2 null exception index"))?;
+            if index < 0 || previous.is_some_and(|p| p >= index) {
+                return Err(invalid("v2 invalid exception index order"));
+            }
+            previous = Some(index);
+        }
+        Ok(())
+    }
+
     fn times(&self, idx: i32, primary: impl FnOnce() -> QueryResult<i32>) -> QueryResult<Times> {
-        if let Ok(pos) = self.exception_indices.binary_search(&idx) {
+        if let Ok(pos) = self.exception_indices.binary_search(&Some(idx)) {
             let a = self.exception_arrivals.get(pos).ok_or_else(|| invalid("v2 arrival exception"))?;
             let d = self.exception_departures.get(pos).ok_or_else(|| invalid("v2 departure exception"))?;
             let i = self.exception_interpolated.get(pos).ok_or_else(|| invalid("v2 interpolation exception"))?;
@@ -458,7 +484,7 @@ async fn load_v2_stops_inner(
         let structure = (timing.onestop_feed_id.clone(), timing.attempt_id.clone(), timing.structure_id.clone());
         let Some(mappings) = by_structure.get(&structure) else { continue; };
         let stop = Stop::try_from(c.stop)?;
-        let exceptions = Exceptions::from(&timing);
+        let exceptions = Exceptions::try_from(&timing)?;
         for &(idx, m) in mappings {
             let times = exceptions.times(idx, || column(&timing.payload, timing.base, timing.unit, timing.bit_width, idx))?;
             let row = make_row(&timing.onestop_feed_id, &timing.attempt_id, &m.itinerary_pattern_id, chateau, &stop, times);
@@ -547,7 +573,7 @@ pub async fn load_trip_rows_scoped(
     for t in trips {
         let stops = decoded.get(&(t.onestop_feed_id.clone(),t.attempt_id.clone(),t.structure_id.clone()))
             .ok_or_else(|| invalid("v2 missing structure"))?;
-        let exceptions = Exceptions::from(&t);
+        let exceptions = Exceptions::try_from(&t)?;
         for stop in stops {
             let times = exceptions.times(stop.stop_index, || fixed(&t.payload,t.byte_width,stop.stop_index))?;
             native.push(make_row(&t.onestop_feed_id,&t.attempt_id,&t.itinerary_pattern_id,chateau,stop,times));
@@ -709,9 +735,35 @@ mod tests {
         assert_eq!(column(&data,0,1,32,1).unwrap(),0x12345678);
     }
     #[test]
+    fn rejects_malformed_exception_indices() {
+        for indices in [
+            [None, Some(3)],
+            [Some(-1), Some(3)],
+            [Some(3), Some(3)],
+            [Some(4), Some(3)],
+        ] {
+            let e = Exceptions {
+                exception_indices: &indices,
+                exception_arrivals: &[None, Some(8)],
+                exception_departures: &[None, Some(9)],
+                exception_interpolated: &[None, None],
+            };
+            assert!(e.validate().is_err());
+        }
+        let mismatched = Exceptions {
+            exception_indices: &[Some(1)],
+            exception_arrivals: &[],
+            exception_departures: &[None],
+            exception_interpolated: &[None],
+        };
+        assert!(mismatched.validate().is_err());
+    }
+
+    #[test]
     fn nullable_signed_and_interpolated_exceptions() {
-        let e = Exceptions { exception_indices: &[1,3], exception_arrivals: &[None,Some(-8)],
+        let e = Exceptions { exception_indices: &[Some(1),Some(3)], exception_arrivals: &[None,Some(-8)],
             exception_departures: &[None,Some(7)], exception_interpolated: &[Some(4),None] };
+        e.validate().unwrap();
         assert_eq!(e.times(1, || panic!("exception must bypass primary")).unwrap(),(None,None,Some(4)));
         assert_eq!(e.times(3, || panic!("exception must bypass primary")).unwrap(),(Some(-8),Some(7),None));
         assert_eq!(e.times(2, || Ok(42)).unwrap(),(Some(42),Some(42),None));
