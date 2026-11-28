@@ -2925,6 +2925,28 @@ pub async fn gtfs_process_feed(
 
     println!("Itineraries inserted for {}", feed_id);
 
+    // The v2 tables reference legacy itinerary metadata. Persist both
+    // compressed layouts after those rows exist, before publishing trips.
+    if maple_syrup::v2::enabled_for(feed_id)? {
+        let start_v2_timer = Instant::now();
+        println!("Writing Maple Syrup v2 for {}", feed_id);
+        let mut conn = conn_pool.get().await?;
+        conn.build_transaction()
+            .run::<(), anyhow::Error, _>(|conn| {
+                Box::pin(async {
+                    maple_syrup::v2::persist(conn, feed_id, attempt_id, &reduction).await
+                })
+            })
+            .await?;
+        println!(
+            "Maple Syrup v2 written for {} in {:?}",
+            feed_id,
+            start_v2_timer.elapsed()
+        );
+    } else {
+        println!("Maple Syrup v2 disabled for {}", feed_id);
+    }
+
     //insert trips
 
     println!("Inserting trips for {}", feed_id);
