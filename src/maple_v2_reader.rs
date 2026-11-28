@@ -1,10 +1,11 @@
 //! Native Maple Syrup v2 readers. Fetch each packed payload once per selected
 //! stop column / timing variant; decode in Rust, not in compatibility views.
-use crate::models::{ItineraryPatternMeta, ItineraryPatternRow, MapleV2Stop, MapleV2StopColumn, MapleV2StopMajor, MapleV2TimingMapping, MapleV2TripMajor};
+use crate::models::{ItineraryPatternMeta, ItineraryPatternRow, MapleV2Stop, MapleV2StopColumn, MapleV2StopMajor, MapleV2TimingKey, MapleV2TripMajor};
 use diesel::{QueryResult, prelude::*, sql_types::*};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 type Times = (Option<i32>, Option<i32>, Option<i32>);
 type Key = (String, String, String);
@@ -144,73 +145,223 @@ fn from_json<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> QueryR
 }
 
 
-// Anchor on indexed stop IDs before touching payloads. Filter metadata and
-// route phase policy inside the lateral mapping lookup. Do not select t.payload
-// (trip-major) on a stop read, and do not read im.trip_ids.
+// Keep the index anchor and the exact payload lookup in a small statement.
+// Resolve the feed/attempt from the actual stop table, not the v2 allowlist.
+// Include child stops even when allowed_spatial_query is false: that flag is
+// applied by the caller when selecting the station, not its children.
 const STOP_SQL: &str = r#"
-WITH selected AS MATERIALIZED (
-    SELECT s.* FROM gtfs.maple_v2_stop s
-    WHERE s.stop_id = ANY($2)
-), mappings AS MATERIALIZED (
-    SELECT k.onestop_feed_id, k.attempt_id, k.structure_id, a.mappings
-    FROM (SELECT DISTINCT onestop_feed_id, attempt_id, structure_id FROM selected) k
+WITH stop_keys AS MATERIALIZED (
+    SELECT DISTINCT onestop_feed_id, attempt_id, gtfs_id
+    FROM gtfs.stops
+    WHERE chateau = $1 AND gtfs_id = ANY($2)
+), selected AS MATERIALIZED (
+    SELECT s.*
+    FROM stop_keys k
     CROSS JOIN LATERAL (
-        SELECT jsonb_agg(jsonb_build_object('timing_index', t.timing_index,
-            'metadata', jsonb_build_object(
-                'onestop_feed_id', im.onestop_feed_id, 'attempt_id', im.attempt_id,
-                'itinerary_pattern_id', im.itinerary_pattern_id, 'chateau', im.chateau,
-                'trip_ids', '[]'::jsonb, 'trip_headsign', im.trip_headsign,
-                'trip_headsign_translations', im.trip_headsign_translations,
-                'shape_id', im.shape_id, 'timezone', im.timezone, 'route_id', im.route_id,
-                'direction_pattern_id', im.direction_pattern_id, 'row_count', im.row_count
-            ))) AS mappings
-        FROM gtfs.maple_v2_trip_major t
-        JOIN gtfs.itinerary_pattern_meta im USING (onestop_feed_id, attempt_id, itinerary_pattern_id)
-        WHERE t.onestop_feed_id = k.onestop_feed_id AND t.attempt_id = k.attempt_id
-          AND t.structure_id = k.structure_id AND im.chateau = $1
-          AND ($3::text[] IS NULL OR im.itinerary_pattern_id = ANY($3))
-          AND ($4::text[] IS NULL OR im.direction_pattern_id = ANY($4))
-          AND ($5::text[] IS NULL OR im.route_id = ANY($5))
-          AND (NOT $7 OR EXISTS (
-              SELECT 1 FROM gtfs.routes r
-              WHERE r.onestop_feed_id = im.onestop_feed_id AND r.attempt_id = im.attempt_id
-                AND r.route_id = im.route_id AND r.chateau = $1 AND r.route_type <> 200
-                AND (r.route_type <> ALL(ARRAY[0,1,3]::smallint[]) OR r.route_id <> ALL($6))
-          ))
-    ) a
-    WHERE a.mappings IS NOT NULL
+        SELECT s.* FROM gtfs.maple_v2_stop s
+        WHERE s.stop_id = k.gtfs_id
+          AND s.onestop_feed_id = k.onestop_feed_id
+          AND s.attempt_id = k.attempt_id
+        OFFSET 0
+    ) s
 )
-SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata, m.mappings
+SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata
 FROM selected s
-JOIN mappings m USING (onestop_feed_id, attempt_id, structure_id)
-JOIN gtfs.maple_v2_stop_major c USING (onestop_feed_id, attempt_id, structure_id, stop_index)
+CROSS JOIN LATERAL (
+    SELECT c.* FROM gtfs.maple_v2_stop_major c
+    WHERE c.onestop_feed_id = s.onestop_feed_id
+      AND c.attempt_id = s.attempt_id
+      AND c.structure_id = s.structure_id
+      AND c.stop_index = s.stop_index
+    OFFSET 0
+) c
 "#;
+
+// Only the mapping columns are read. The primary key prefix is
+// (onestop_feed_id, attempt_id, structure_id), so each lateral lookup can
+// use the same small range scan regardless of the size of the whole feed.
+const TIMING_KEYS_SQL: &str = r#"
+SELECT t.*
+FROM unnest($1::text[], $2::text[], $3::text[])
+    AS k(onestop_feed_id, attempt_id, structure_id)
+CROSS JOIN LATERAL (
+    SELECT t.onestop_feed_id, t.attempt_id, t.structure_id,
+           t.timing_index, t.itinerary_pattern_id
+    FROM gtfs.maple_v2_trip_major t
+    WHERE t.onestop_feed_id = k.onestop_feed_id
+      AND t.attempt_id = k.attempt_id
+      AND t.structure_id = k.structure_id
+    OFFSET 0
+) t
+"#;
+
+// Fetch metadata once per exact pattern key. No trip_ids, no JSONB
+// aggregation, no planner freedom to start from all metadata in a chateau.
+// Keep the existing direction, priority and local-mode/coach filters.
+const METADATA_SQL: &str = r#"
+SELECT m.*
+FROM unnest($1::text[], $2::text[], $3::text[])
+    AS k(onestop_feed_id, attempt_id, itinerary_pattern_id)
+CROSS JOIN LATERAL (
+    SELECT im.onestop_feed_id, im.attempt_id, im.itinerary_pattern_id,
+           im.chateau, ARRAY[]::text[] AS trip_ids, im.trip_headsign,
+           im.trip_headsign_translations, im.shape_id, im.timezone,
+           im.route_id, im.direction_pattern_id, im.row_count
+    FROM gtfs.itinerary_pattern_meta im
+    WHERE im.onestop_feed_id = k.onestop_feed_id
+      AND im.attempt_id = k.attempt_id
+      AND im.itinerary_pattern_id = k.itinerary_pattern_id
+      AND im.chateau = $4
+      AND ($5::text[] IS NULL OR im.direction_pattern_id = ANY($5))
+      AND ($6::text[] IS NULL OR im.route_id = ANY($6))
+      AND (NOT $8 OR EXISTS (
+          SELECT 1 FROM gtfs.routes r
+          WHERE r.onestop_feed_id = im.onestop_feed_id
+            AND r.attempt_id = im.attempt_id
+            AND r.route_id = im.route_id
+            AND r.chateau = $4 AND r.route_type <> 200
+            AND (r.route_type <> ALL(ARRAY[0,1,3]::smallint[]) OR r.route_id <> ALL($7))
+      ))
+    OFFSET 0
+) m
+"#;
+
+const LOOKUP_BATCH_SIZE: usize = 512;
+
+fn key_arrays(keys: &[Key]) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
+    let mut feeds = Vec::with_capacity(keys.len());
+    let mut attempts = Vec::with_capacity(keys.len());
+    let mut ids = Vec::with_capacity(keys.len());
+    for (feed, attempt, id) in keys {
+        feeds.push(feed.as_str());
+        attempts.push(attempt.as_str());
+        ids.push(id.as_str());
+    }
+    (feeds, attempts, ids)
+}
+
+fn log_stage(chateau: &str, stage: &str, started: Instant, rows: usize) {
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    if elapsed_ms >= 500 {
+        tracing::warn!(chateau, stage, elapsed_ms, rows, "slow Maple v2 stop fetch");
+    } else {
+        tracing::debug!(chateau, stage, elapsed_ms, rows, "Maple v2 stop fetch");
+    }
+}
 
 pub async fn load_v2_stops(
     conn: &mut AsyncPgConnection, chateau: &str, stops: &[String],
     patterns: Option<&[String]>, directions: Option<&[String]>, routes: Option<&[String]>,
     excluded_local: &[String], nearby: bool,
 ) -> QueryResult<Vec<(ItineraryPatternRow, ItineraryPatternMeta)>> {
-    if stops.is_empty() { return Ok(Vec::new()); }
+    if stops.is_empty()
+        || patterns.is_some_and(|p| p.is_empty())
+        || directions.is_some_and(|d| d.is_empty())
+        || routes.is_some_and(|r| r.is_empty())
+    {
+        return Ok(Vec::new());
+    }
+
+    // All three SQL stages see the same ingestion snapshot. A server-side
+    // statement timeout cancels the SQL even if the client disconnects.
+    // SET LOCAL is scoped to this transaction and never leaks into the pool.
+    conn.build_transaction()
+        .repeatable_read()
+        .read_only()
+        .run::<_, diesel::result::Error, _>(|conn| {
+            Box::pin(async move {
+                diesel::sql_query("SET LOCAL statement_timeout = '10s'")
+                    .execute(conn).await?;
+                load_v2_stops_inner(conn, chateau, stops, patterns, directions, routes, excluded_local, nearby).await
+            })
+        })
+        .await
+}
+
+async fn load_v2_stops_inner(
+    conn: &mut AsyncPgConnection, chateau: &str, stops: &[String],
+    patterns: Option<&[String]>, directions: Option<&[String]>, routes: Option<&[String]>,
+    excluded_local: &[String], nearby: bool,
+) -> QueryResult<Vec<(ItineraryPatternRow, ItineraryPatternMeta)>> {
+    let started = Instant::now();
     let columns = diesel::sql_query(STOP_SQL)
-        .bind::<Text,_>(chateau).bind::<Array<Text>,_>(stops)
-        .bind::<Nullable<Array<Text>>,_>(patterns)
-        .bind::<Nullable<Array<Text>>,_>(directions)
-        .bind::<Nullable<Array<Text>>,_>(routes)
-        .bind::<Array<Text>,_>(excluded_local).bind::<Bool,_>(nearby)
+        .bind::<Text,_>(chateau)
+        .bind::<Array<Text>,_>(stops)
         .load::<MapleV2StopColumn>(conn).await?;
-    let mut out = Vec::new();
-    for c in columns {
-        let stop = Stop::try_from(c.stop)?;
-        let mappings: Vec<MapleV2TimingMapping> = from_json(c.mappings)?;
-        let timing = c.timing;
-        let exceptions = Exceptions::from(&timing);
-        for m in mappings {
-            let times = exceptions.times(m.timing_index, || column(&timing.payload, timing.base, timing.unit, timing.bit_width, m.timing_index))?;
-            let row = make_row(&timing.onestop_feed_id, &timing.attempt_id, &m.metadata.itinerary_pattern_id, chateau, &stop, times);
-            out.push((row, m.metadata));
+    log_stage(chateau, "stop_columns", started, columns.len());
+    let payload_bytes: usize = columns.iter().map(|c| c.timing.payload.len()).sum();
+    tracing::debug!(chateau, payload_bytes, "Maple v2 stop-major packed bytes");
+    if columns.is_empty() { return Ok(Vec::new()); }
+
+    let mut structure_keys: Vec<Key> = columns.iter().map(|c| (
+        c.stop.onestop_feed_id.clone(), c.stop.attempt_id.clone(), c.stop.structure_id.clone()
+    )).collect::<HashSet<_>>().into_iter().collect();
+    structure_keys.sort_unstable();
+    let allowed_patterns = patterns.map(|p| p.iter().map(String::as_str).collect::<HashSet<_>>());
+    let mut timing_keys = Vec::new();
+    let started = Instant::now();
+    for batch in structure_keys.chunks(LOOKUP_BATCH_SIZE) {
+        let (feeds, attempts, ids) = key_arrays(batch);
+        let mut rows = diesel::sql_query(TIMING_KEYS_SQL)
+            .bind::<Array<Text>,_>(&feeds)
+            .bind::<Array<Text>,_>(&attempts)
+            .bind::<Array<Text>,_>(&ids)
+            .load::<MapleV2TimingKey>(conn).await?;
+        rows.retain(|t| allowed_patterns.as_ref()
+            .is_none_or(|p| p.contains(t.itinerary_pattern_id.as_str())));
+        timing_keys.extend(rows);
+    }
+    log_stage(chateau, "timing_keys", started, timing_keys.len());
+
+    let mut pattern_keys: Vec<Key> = timing_keys.iter().map(|t| (
+        t.onestop_feed_id.clone(), t.attempt_id.clone(), t.itinerary_pattern_id.clone()
+    )).collect::<HashSet<_>>().into_iter().collect();
+    pattern_keys.sort_unstable();
+    let mut metadata = HashMap::new();
+    let started = Instant::now();
+    for batch in pattern_keys.chunks(LOOKUP_BATCH_SIZE) {
+        let (feeds, attempts, ids) = key_arrays(batch);
+        let rows = diesel::sql_query(METADATA_SQL)
+            .bind::<Array<Text>,_>(&feeds)
+            .bind::<Array<Text>,_>(&attempts)
+            .bind::<Array<Text>,_>(&ids)
+            .bind::<Text,_>(chateau)
+            .bind::<Nullable<Array<Text>>,_>(directions)
+            .bind::<Nullable<Array<Text>>,_>(routes)
+            .bind::<Array<Text>,_>(excluded_local)
+            .bind::<Bool,_>(nearby)
+            .load::<ItineraryPatternMeta>(conn).await?;
+        for row in rows {
+            metadata.insert((row.onestop_feed_id.clone(), row.attempt_id.clone(), row.itinerary_pattern_id.clone()), row);
         }
     }
+    log_stage(chateau, "pattern_metadata", started, metadata.len());
+
+    // Join mappings to metadata once per structure, not once per stop.
+    // Every column still uses the original timing_index, including gaps
+    // created by filtering out unrelated patterns or routes.
+    let started = Instant::now();
+    let mut by_structure: HashMap<Key, Vec<(i32, &ItineraryPatternMeta)>> = HashMap::new();
+    for t in timing_keys {
+        if let Some(m) = metadata.get(&(t.onestop_feed_id.clone(), t.attempt_id.clone(), t.itinerary_pattern_id)) {
+            by_structure.entry((t.onestop_feed_id, t.attempt_id, t.structure_id))
+                .or_default().push((t.timing_index, m));
+        }
+    }
+    let mut out = Vec::new();
+    for c in columns {
+        let timing = c.timing;
+        let structure = (timing.onestop_feed_id.clone(), timing.attempt_id.clone(), timing.structure_id.clone());
+        let Some(mappings) = by_structure.get(&structure) else { continue; };
+        let stop = Stop::try_from(c.stop)?;
+        let exceptions = Exceptions::from(&timing);
+        for &(idx, m) in mappings {
+            let times = exceptions.times(idx, || column(&timing.payload, timing.base, timing.unit, timing.bit_width, idx))?;
+            let row = make_row(&timing.onestop_feed_id, &timing.attempt_id, &m.itinerary_pattern_id, chateau, &stop, times);
+            out.push((row, m.clone()));
+        }
+    }
+    log_stage(chateau, "decode_and_join", started, out.len());
     Ok(out)
 }
 
@@ -307,6 +458,33 @@ pub async fn load_trip_rows_scoped(
 mod tests {
     use super::*;
     #[test]
+    fn staged_queries_keep_composite_index_anchors() {
+        assert!(STOP_SQL.contains("s.stop_id = k.gtfs_id"));
+        assert!(STOP_SQL.contains("s.onestop_feed_id = k.onestop_feed_id"));
+        assert!(STOP_SQL.contains("s.attempt_id = k.attempt_id"));
+        assert!(STOP_SQL.contains("c.stop_index = s.stop_index"));
+        assert_eq!(STOP_SQL.matches("OFFSET 0").count(), 2);
+        assert!(!STOP_SQL.contains("maple_v2_trip_major"));
+        assert!(!STOP_SQL.contains("jsonb_agg"));
+        assert!(TIMING_KEYS_SQL.contains("t.structure_id = k.structure_id"));
+        assert!(!TIMING_KEYS_SQL.contains("payload"));
+        assert!(METADATA_SQL.contains("im.itinerary_pattern_id = k.itinerary_pattern_id"));
+        assert!(METADATA_SQL.contains("im.attempt_id = k.attempt_id"));
+        assert!(METADATA_SQL.contains("ARRAY[]::text[] AS trip_ids"));
+        assert!(METADATA_SQL.contains("r.route_type <> 200"));
+        assert!(!METADATA_SQL.contains("jsonb_agg"));
+    }
+
+    #[test]
+    fn batched_keys_preserve_feed_attempt_identity() {
+        let keys = vec![("feed1".into(), "old".into(), "same".into()),
+                        ("feed2".into(), "new".into(), "same".into())];
+        let (feeds, attempts, ids) = key_arrays(&keys);
+        assert_eq!(feeds, vec!["feed1", "feed2"]);
+        assert_eq!(attempts, vec!["old", "new"]);
+        assert_eq!(ids, vec!["same", "same"]);
+    }
+    #[test]
     fn fixed_and_packed_boundaries() {
         assert_eq!(fixed(&[0xff,0xff,1,0],2,0).unwrap(),65535);
         assert_eq!(fixed(&[0,0,1,0],4,0).unwrap(),65536);
@@ -318,8 +496,8 @@ mod tests {
         assert_eq!(column(&data,10,2,5,2).unwrap(),44);
         assert!(column(&[],0,1,5,1).is_err());
         assert!(fixed(&[0],2,0).is_err());
-        let data = (0x12345678u64 << 1).to_le_bytes();
-        assert_eq!(column(&data,0,1,32,0).unwrap(),0x2468acf0);
+        let data = [0xff, 0xff, 0xff, 0x7f, 0x78, 0x56, 0x34, 0x12];
+        assert_eq!(column(&data,0,1,32,1).unwrap(),0x12345678);
     }
     #[test]
     fn nullable_signed_and_interpolated_exceptions() {

@@ -704,19 +704,24 @@ pub struct MapleV2StopMajor {
     pub max_departure_offset: Option<i32>,
 }
 
-/// Stop-major payload joined to the structural stop and eligible timing mappings.
+/// A selected structural stop and its compressed timing column, fetched once.
 #[derive(QueryableByName)]
 pub struct MapleV2StopColumn {
     #[diesel(embed)]
     pub stop: MapleV2Stop,
     #[diesel(embed)]
     pub timing: MapleV2StopMajor,
-    #[diesel(sql_type = Jsonb)]
-    pub mappings: Value,
 }
 
-#[derive(Deserialize)]
-pub struct MapleV2TimingMapping {
+/// The stop-major decoder needs only the index-to-pattern mapping, not a
+/// trip-major payload. Explicitly select these fields on the hot path.
+#[derive(Queryable, Selectable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::maple_v2_trip_major)]
+#[diesel(check_for_backend(Pg))]
+pub struct MapleV2TimingKey {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub structure_id: String,
     pub timing_index: i32,
-    pub metadata: ItineraryPatternMeta,
+    pub itinerary_pattern_id: String,
 }
