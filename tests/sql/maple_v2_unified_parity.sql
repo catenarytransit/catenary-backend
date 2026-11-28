@@ -1,4 +1,7 @@
 \set ON_ERROR_STOP on
+SELECT to_regclass('gtfs.maple_v2_stop_unified_attempt') IS NOT NULL AS dual_storage \gset
+\if :dual_storage
+\set ON_ERROR_STOP on
 BEGIN ISOLATION LEVEL REPEATABLE READ;
 CREATE TEMP TABLE unified_scope ON COMMIT DROP AS
 SELECT :'feed'::text AS onestop_feed_id, :'attempt'::text AS attempt_id;
@@ -39,3 +42,31 @@ BEGIN
 END
 $$;
 ROLLBACK;
+\else
+\echo 'Legacy storage retired; validating unified structure coverage instead.'
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+CREATE TEMP TABLE unified_scope ON COMMIT DROP AS
+SELECT :'feed'::text AS onestop_feed_id, :'attempt'::text AS attempt_id;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM gtfs.maple_v2_structure s
+        JOIN unified_scope q USING (onestop_feed_id, attempt_id)
+    ) THEN RAISE EXCEPTION 'Attempt has no structures'; END IF;
+    IF EXISTS (
+        SELECT 1 FROM gtfs.maple_v2_structure s
+        JOIN unified_scope q USING (onestop_feed_id, attempt_id)
+        LEFT JOIN (
+            SELECT u.onestop_feed_id, u.attempt_id, u.structure_id,
+                   count(*) AS n, min(stop_index) AS lo, max(stop_index) AS hi
+            FROM gtfs.maple_v2_stop_unified u
+            JOIN unified_scope q USING (onestop_feed_id, attempt_id)
+            GROUP BY 1,2,3
+        ) u USING (onestop_feed_id, attempt_id, structure_id)
+        WHERE u.n IS DISTINCT FROM s.stop_count::bigint
+           OR u.lo IS DISTINCT FROM 0 OR u.hi IS DISTINCT FROM s.stop_count - 1
+    ) THEN RAISE EXCEPTION 'Unified structure coverage mismatch'; END IF;
+END
+$$;
+ROLLBACK;
+\endif
