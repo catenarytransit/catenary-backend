@@ -6,7 +6,7 @@ use crate::routing_common::profile_compact::{CsrGraph, LowerBoundTopology};
 use crate::routing_common::timetable::ZeroCopyTimetable;
 use crate::routing_common::timetable_mmap::MappedTimetable;
 use crate::routing_common::transfer_optimizer::StationImportance;
-use crate::routing_common::transport_index::{TransportChain, TransportIndex};
+use crate::routing_common::transport_index::{TransportChain, TransportIndex, pack_offsets, validate_packed};
 use anyhow::{Context, Result, bail, ensure};
 use bytemuck::{Pod, Zeroable};
 use memmap2::{Mmap, MmapOptions};
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const MAGIC: u32 = 0x5844_4952; // RIDX
-const VERSION: u32 = 1;
+const VERSION: u32 = 2; // benchmark branch only; regenerate companion files
 
 #[repr(C)]
 #[derive(Clone, Copy, Default, Pod, Zeroable)]
@@ -41,6 +41,7 @@ struct ChainRecord {
     first_departures: Section,
     patterns: Section,
     offsets: Section,
+    packed_offsets: Section,
     calendars: Section,
     event_days: Section,
     n_patterns: u64,
@@ -265,14 +266,23 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
         out.write_all(&vec![0u8; std::mem::size_of::<Header>()])?;
         let mut route_offsets = Vec::with_capacity(index.transports.routes.len() + 1);
         let mut chains = Vec::new();
+        let use_packed = std::env::var("GENTIAN_BENCH_PACKED_OFFSETS").is_ok_and(|s| s == "1");
+        let mut packed_count = 0usize;
+        let mut raw_words = 0usize;
+        let mut stored_words = 0usize;
         route_offsets.push(0u64);
         for route in &index.transports.routes {
             for chain in route {
+                let packed = if use_packed { pack_offsets(&chain.offsets, chain.n_patterns) } else { None };
+                raw_words += chain.offsets.len();
+                stored_words += packed.as_ref().map_or(chain.offsets.len(), Vec::len);
+                if packed.is_some() { packed_count += 1; }
                 chains.push(ChainRecord {
                     transports: write_slice(&mut out, &chain.transports)?,
                     first_departures: write_slice(&mut out, &chain.first_departures)?,
                     patterns: write_slice(&mut out, &chain.patterns)?,
-                    offsets: write_slice(&mut out, &chain.offsets)?,
+                    offsets: write_slice(&mut out, if packed.is_some() { &[] } else { &chain.offsets[..] })?,
+                    packed_offsets: write_slice(&mut out, packed.as_deref().unwrap_or(&[]))?,
                     calendars: write_slice(&mut out, &chain.calendars)?,
                     event_days: write_slice(&mut out, &chain.event_days)?,
                     n_patterns: chain.n_patterns as u64,
@@ -280,6 +290,7 @@ pub fn build_at(timetable_path: &Path, index_path: &Path) -> Result<()> {
             }
             route_offsets.push(chains.len() as u64);
         }
+        eprintln!("Swiss benchmark: packed_chains={packed_count} raw_event_words={raw_words} stored_event_words={stored_words}");
         let mut h = Header {
             magic: MAGIC,
             version: VERSION,
@@ -385,6 +396,7 @@ fn validate(bytes: &[u8], tt: &ZeroCopyTimetable<'_>, identity: [u8; 32]) -> Res
         let calendars =
             read_slice::<crate::routing_common::timetable::BitfieldIdx>(bytes, chain.calendars)?;
         let offsets = read_slice::<u32>(bytes, chain.offsets)?;
+        let packed = read_slice::<u32>(bytes, chain.packed_offsets)?;
         read_slice::<u64>(bytes, chain.event_days)?;
         ensure!(
             first.len() == transports.len()
@@ -400,10 +412,15 @@ fn validate(bytes: &[u8], tt: &ZeroCopyTimetable<'_>, identity: [u8; 32]) -> Res
             patterns.iter().all(|&p| p < chain.n_patterns as usize),
             "timing pattern outside chain"
         );
-        ensure!(
-            offsets.len() % chain.n_patterns as usize == 0,
-            "timing offset table length mismatch"
-        );
+        let first_transport = transports.first().context("empty transport chain")?;
+        let slots = tt.events_for_transport(*first_transport).context("invalid chain timing profile")?.len();
+        if packed.is_empty() {
+            ensure!(slots.checked_mul(chain.n_patterns as usize) == Some(offsets.len()),
+                "timing offset table length mismatch");
+        } else {
+            ensure!(offsets.is_empty() && validate_packed(packed, chain.n_patterns as usize, slots),
+                "invalid packed timing columns");
+        }
         ensure!(
             transports
                 .iter()
@@ -464,6 +481,8 @@ pub(crate) fn load(
     let h = validate(&bytes, tt, source_identity(timetable_path, tt)?)?;
     let route_offsets = read_slice::<u64>(&bytes, h.route_chain_offsets)?;
     let descriptors = read_slice::<ChainRecord>(&bytes, h.chains)?;
+    let packed_count = descriptors.iter().filter(|d| d.packed_offsets.count != 0).count();
+    eprintln!("Edelweiss: mapped packed_chains={packed_count}");
     let mut routes = Vec::with_capacity(tt.route_transport_ranges().len());
     for row in route_offsets.windows(2) {
         let mut chains = Vec::with_capacity((row[1] - row[0]) as usize);
@@ -476,6 +495,9 @@ pub(crate) fn load(
                 )?,
                 patterns: IndexArray::mapped(Arc::clone(&bytes), descriptor.patterns)?,
                 offsets: IndexArray::mapped(Arc::clone(&bytes), descriptor.offsets)?,
+                packed_offsets: if descriptor.packed_offsets.count == 0 { None } else {
+                    Some(IndexArray::mapped(Arc::clone(&bytes), descriptor.packed_offsets)?)
+                },
                 n_patterns: descriptor.n_patterns as usize,
                 calendars: IndexArray::mapped(Arc::clone(&bytes), descriptor.calendars)?,
                 event_days: IndexArray::mapped(Arc::clone(&bytes), descriptor.event_days)?,

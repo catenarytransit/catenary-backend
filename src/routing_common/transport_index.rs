@@ -10,6 +10,113 @@ use std::collections::HashMap;
 
 const DAY: i64 = 86_400;
 
+// Four u32 words per event column: base, GCD unit, bit width, payload word
+// offset. Each column is word-aligned. Identical offsets cost zero payload.
+// A chain retains the original representation if packing would enlarge it.
+fn gcd(mut a: u32, mut b: u32) -> u32 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+pub(crate) fn pack_offsets(values: &[u32], patterns: usize) -> Option<Vec<u32>> {
+    if patterns == 0 || values.is_empty() || values.len() % patterns != 0 {
+        return None;
+    }
+    let slots = values.len() / patterns;
+    let mut words = vec![0; slots.checked_mul(4)?];
+    if words.len() >= values.len() {
+        return None;
+    }
+    for (slot, column) in values.chunks_exact(patterns).enumerate() {
+        let base = *column.iter().min()?;
+        let unit = column.iter().fold(0, |g, &x| gcd(g, x - base)).max(1);
+        let width = 32 - ((*column.iter().max()? - base) / unit).leading_zeros();
+        let start = words.len();
+        let count = patterns.checked_mul(width as usize)?.div_ceil(32);
+        if start.checked_add(count)? >= values.len() {
+            return None;
+        }
+        words[slot * 4..slot * 4 + 4]
+            .copy_from_slice(&[base, unit, width, u32::try_from(start).ok()?]);
+        words.resize(start + count, 0);
+        if width == 0 {
+            continue;
+        }
+        for (pattern, &value) in column.iter().enumerate() {
+            let bit = pattern * width as usize;
+            let at = start + bit / 32;
+            let shift = bit % 32;
+            let scaled = u64::from((value - base) / unit) << shift;
+            words[at] |= scaled as u32;
+            if shift + width as usize > 32 {
+                words[at + 1] |= (scaled >> 32) as u32;
+            }
+        }
+    }
+    Some(words)
+}
+
+pub(crate) fn packed_offset(words: &[u32], patterns: usize, slot: usize, pattern: usize) -> u32 {
+    debug_assert!(pattern < patterns);
+    let header = &words[slot * 4..slot * 4 + 4];
+    let (base, unit, width, start) = (header[0], header[1], header[2] as usize, header[3] as usize);
+    if width == 0 {
+        return base;
+    }
+    let bit = pattern * width;
+    let at = start + bit / 32;
+    let shift = bit % 32;
+    let mut value = u64::from(words[at]);
+    if shift + width > 32 {
+        value |= u64::from(words[at + 1]) << 32;
+    }
+    let scaled = (value >> shift) & ((1u64 << width) - 1);
+    base + unit * scaled as u32
+}
+
+pub(crate) fn validate_packed(words: &[u32], patterns: usize, slots: usize) -> bool {
+    let Some(mut next) = slots.checked_mul(4) else { return false };
+    if patterns == 0 || next > words.len() {
+        return false;
+    }
+    for header in words[..next].chunks_exact(4) {
+        let width = header[2] as usize;
+        if width > 32 || header[1] == 0 || header[3] as usize != next {
+            return false;
+        }
+        let Some(bits) = patterns.checked_mul(width) else { return false };
+        let Some(end) = next.checked_add(bits.div_ceil(32)) else { return false };
+        if end > words.len() {
+            return false;
+        }
+        next = end;
+    }
+    if next != words.len() {
+        return false;
+    }
+    // Validate actual values using widened arithmetic before the hot path.
+    for slot in 0..slots {
+        let h = &words[slot * 4..slot * 4 + 4];
+        let width = h[2] as usize;
+        if width == 0 { continue; }
+        for pattern in 0..patterns {
+            let bit = pattern * width;
+            let at = h[3] as usize + bit / 32;
+            let shift = bit % 32;
+            let mut v = u64::from(words[at]);
+            if shift + width > 32 { v |= u64::from(words[at + 1]) << 32; }
+            let scaled = (v >> shift) & ((1u64 << width) - 1);
+            if u64::from(h[0]) + u64::from(h[1]) * scaled > u64::from(u32::MAX) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SelectedTransport {
     pub transport: TransportIdx,
@@ -25,6 +132,8 @@ pub(crate) struct TransportChain {
     pub(crate) first_departures: IndexArray<u32>,
     pub(crate) patterns: IndexArray<usize>,
     pub(crate) offsets: IndexArray<u32>,
+    // Experimental Maple v2-style base/GCD/bit-packed event columns.
+    pub(crate) packed_offsets: Option<IndexArray<u32>>,
     pub(crate) n_patterns: usize,
     pub(crate) calendars: IndexArray<BitfieldIdx>,
     /// Union of service calendars shifted to all days on which a vehicle runs.
@@ -34,8 +143,12 @@ pub(crate) struct TransportChain {
 
 impl TransportChain {
     fn event_offset(&self, column: usize, slot: usize) -> i64 {
-        i64::from(self.first_departures[column])
-            + i64::from(self.offsets[slot * self.n_patterns + self.patterns[column]])
+        let pattern = self.patterns[column];
+        let offset = match &self.packed_offsets {
+            Some(words) => packed_offset(words, self.n_patterns, slot, pattern),
+            None => self.offsets[slot * self.n_patterns + pattern],
+        };
+        i64::from(self.first_departures[column]) + i64::from(offset)
     }
 
     /// Same guard and day conversion as raptor::get_earliest_transport:
@@ -287,6 +400,7 @@ impl TransportIndex {
                     first_departures: IndexArray::owned(first_departures),
                     patterns: IndexArray::owned(patterns),
                     offsets: IndexArray::owned(offsets),
+                    packed_offsets: None,
                     n_patterns,
                     calendars: IndexArray::owned(calendars),
                     event_days: IndexArray::owned(event_days),
@@ -363,6 +477,28 @@ mod tests {
             .push(BitfieldIdx(tt.bitfields.len() as u32));
         tt.bitfields.push(union);
         tt
+    }
+
+    #[test]
+    fn maple_style_packing_preserves_every_offset() {
+        let n = 73;
+        let values: Vec<u32> = (0..5).flat_map(|slot| {
+            (0..n).map(move |i| match slot {
+                0 => 0,
+                1 => 3600 + (i % 13) as u32 * 60,
+                2 => 86400 + (i * 37 % 127) as u32,
+                3 => 172800 + (i % 9) as u32 * 7,
+                _ => 300 + (i % 3) as u32,
+            })
+        }).collect();
+        let packed = pack_offsets(&values, n).unwrap();
+        assert!(packed.len() < values.len());
+        assert!(validate_packed(&packed, n, 5));
+        for (i, &value) in values.iter().enumerate() {
+            assert_eq!(packed_offset(&packed, n, i / n, i % n), value);
+        }
+        assert!(!validate_packed(&packed[..packed.len()-1], n, 5));
+        assert!(pack_offsets(&[1, 2], 2).is_none());
     }
 
     #[test]
