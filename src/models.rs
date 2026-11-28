@@ -639,3 +639,84 @@ pub struct OsmStationsRankingRunInsert {
     pub time_end: Option<chrono::DateTime<chrono::Utc>>,
     pub allowed_spatial_query: bool,
 }
+
+// Native Maple Syrup v2 physical storage. Packed bytes remain opaque here;
+// the codec and merging policy live in maple_v2_reader.
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::maple_v2_structure)]
+#[diesel(check_for_backend(Pg))]
+pub struct MapleV2Structure {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub structure_id: String,
+    pub stop_count: i32,
+    pub timing_count: i32,
+    pub encoding_version: i16,
+}
+
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::maple_v2_stop)]
+#[diesel(check_for_backend(Pg))]
+pub struct MapleV2Stop {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub structure_id: String,
+    pub stop_index: i32,
+    pub stop_id: String,
+    pub gtfs_stop_sequence: i64,
+    pub metadata: Value,
+}
+
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::maple_v2_trip_major)]
+#[diesel(check_for_backend(Pg))]
+pub struct MapleV2TripMajor {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub structure_id: String,
+    pub timing_index: i32,
+    pub itinerary_pattern_id: String,
+    pub byte_width: i32,
+    pub payload: Vec<u8>,
+    pub exception_indices: Vec<i32>,
+    pub exception_arrivals: Vec<Option<i32>>,
+    pub exception_departures: Vec<Option<i32>>,
+    pub exception_interpolated: Vec<Option<i32>>,
+}
+
+#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
+#[diesel(table_name = crate::schema::gtfs::maple_v2_stop_major)]
+#[diesel(check_for_backend(Pg))]
+pub struct MapleV2StopMajor {
+    pub onestop_feed_id: String,
+    pub attempt_id: String,
+    pub structure_id: String,
+    pub stop_index: i32,
+    pub base: i64,
+    pub unit: i64,
+    pub bit_width: i32,
+    pub payload: Vec<u8>,
+    pub exception_indices: Vec<i32>,
+    pub exception_arrivals: Vec<Option<i32>>,
+    pub exception_departures: Vec<Option<i32>>,
+    pub exception_interpolated: Vec<Option<i32>>,
+    pub min_departure_offset: Option<i32>,
+    pub max_departure_offset: Option<i32>,
+}
+
+/// Stop-major payload joined to the structural stop and eligible timing mappings.
+#[derive(QueryableByName)]
+pub struct MapleV2StopColumn {
+    #[diesel(embed)]
+    pub stop: MapleV2Stop,
+    #[diesel(embed)]
+    pub timing: MapleV2StopMajor,
+    #[diesel(sql_type = Jsonb)]
+    pub mappings: Value,
+}
+
+#[derive(Deserialize)]
+pub struct MapleV2TimingMapping {
+    pub timing_index: i32,
+    pub metadata: ItineraryPatternMeta,
+}
