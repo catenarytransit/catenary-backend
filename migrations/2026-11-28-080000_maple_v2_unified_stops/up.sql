@@ -25,7 +25,9 @@ CREATE TABLE gtfs.maple_v2_stop_unified_attempt (
 -- Legacy writers can still ingest new attempts. Invalidate readiness in
 -- the same transaction as any insertion or update to either source table.
 -- The upsert also serializes mutations with a concurrent rebuild of the
--- same attempt. Deletes are mirrored by the FK cascade above.
+-- same attempt. Deletes are mirrored by the FK cascade above and also
+-- invalidate readiness. Always update the marker, even when already false,
+-- so repeatable-read rebuilds detect concurrent source mutations.
 CREATE FUNCTION gtfs.maple_v2_unified_invalidate() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -37,16 +39,14 @@ BEGIN
             SELECT onestop_feed_id, attempt_id FROM old_rows
         ) keys ORDER BY onestop_feed_id, attempt_id
         ON CONFLICT (onestop_feed_id, attempt_id) DO UPDATE
-        SET ready = false, migrated_at = NULL
-        WHERE maple_v2_stop_unified_attempt.ready;
+        SET ready = false, migrated_at = NULL;
     ELSIF TG_OP = 'DELETE' THEN
         -- Cascades remove unified rows, but a partial source deletion also
         -- invalidates completeness. Status rows are intentionally independent.
         UPDATE gtfs.maple_v2_stop_unified_attempt a
         SET ready = false, migrated_at = NULL
         FROM (SELECT DISTINCT onestop_feed_id, attempt_id FROM old_rows) k
-        WHERE a.onestop_feed_id = k.onestop_feed_id AND a.attempt_id = k.attempt_id
-          AND a.ready;
+        WHERE a.onestop_feed_id = k.onestop_feed_id AND a.attempt_id = k.attempt_id;
     ELSE
         INSERT INTO gtfs.maple_v2_stop_unified_attempt (onestop_feed_id, attempt_id)
         SELECT DISTINCT onestop_feed_id, attempt_id FROM new_rows
