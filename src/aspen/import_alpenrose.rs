@@ -49,6 +49,19 @@ fn is_nyct_subway_feed(chateau_id: &str, realtime_feed_id: &str) -> bool {
         )
 }
 
+// Long Beach Transit publishes non-display text as a realtime trip short name.
+fn normalize_rt_trip_properties(
+    realtime_feed_id: &str,
+    mut properties: Option<AspenTripProperties>,
+) -> Option<AspenTripProperties> {
+    if realtime_feed_id == "f-longbeachtransit~rt" {
+        if let Some(properties) = properties.as_mut() {
+            properties.trip_short_name = None;
+        }
+    }
+    properties
+}
+
 fn parse_gtfs_rt_date(date: &Option<String>) -> Option<chrono::NaiveDate> {
     date.as_ref()
         .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y%m%d").ok())
@@ -3692,10 +3705,10 @@ pub async fn new_rt_data(
                             stop_time_update: stop_time_update,
                             timestamp: trip_update.timestamp,
                             delay: delay,
-                            trip_properties: trip_update
-                                .trip_properties
-                                .clone()
-                                .map(|x| (*x).into()),
+                            trip_properties: normalize_rt_trip_properties(
+                                realtime_feed_id.as_str(),
+                                trip_update.trip_properties.clone().map(|x| (*x).into()),
+                            ),
                             last_seen: catenary::duration_since_unix_epoch().as_millis() as u64,
                             consist: consist.map(Box::new),
                         };
@@ -4623,6 +4636,53 @@ pub async fn new_rt_data(
     //println!("Updated Chateau {}", chateau_id);
 
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_trip_properties() -> AspenTripProperties {
+        AspenTripProperties {
+            trip_id: Some("trip-1".into()),
+            start_date: chrono::NaiveDate::from_ymd_opt(2026, 11, 28),
+            start_time: Some("09:00:00".into()),
+            shape_id: Some("shape-1".into()),
+            trip_headsign: Some("Downtown".into()),
+            trip_short_name: Some("1234".into()),
+        }
+    }
+
+    #[test]
+    fn long_beach_drops_only_realtime_trip_short_name() {
+        let original = sample_trip_properties();
+        let normalized =
+            normalize_rt_trip_properties("f-longbeachtransit~rt", Some(original.clone()))
+                .unwrap();
+
+        assert_eq!(normalized.trip_short_name, None);
+        assert_eq!(normalized.trip_id, original.trip_id);
+        assert_eq!(normalized.start_date, original.start_date);
+        assert_eq!(normalized.start_time, original.start_time);
+        assert_eq!(normalized.shape_id, original.shape_id);
+        assert_eq!(normalized.trip_headsign, original.trip_headsign);
+    }
+
+    #[test]
+    fn other_feeds_keep_realtime_trip_short_name() {
+        for feed_id in ["f-metrolinktrains~rt", "f-longbeachtransit~rt~other"] {
+            let original = sample_trip_properties();
+            let normalized =
+                normalize_rt_trip_properties(feed_id, Some(original.clone())).unwrap();
+            assert_eq!(normalized.trip_short_name, original.trip_short_name);
+        }
+    }
+
+    #[test]
+    fn absent_trip_properties_remain_absent() {
+        assert!(normalize_rt_trip_properties("f-longbeachtransit~rt", None).is_none());
+        assert!(normalize_rt_trip_properties("f-metrolinktrains~rt", None).is_none());
+    }
 }
 
 //Assisted-by: Gemini 3 via Google Antigravity
