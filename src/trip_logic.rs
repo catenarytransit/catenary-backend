@@ -834,14 +834,16 @@ pub async fn fetch_trip_information(
             )
             .select(crate::models::ItineraryPatternMeta::as_select())
             .load(conn),
-        diesel::sql_query("SELECT * FROM gtfs.itinerary_pattern_trip_reader
+        diesel::sql_query(
+            "SELECT * FROM gtfs.itinerary_pattern_trip_reader
             WHERE chateau = $1 AND onestop_feed_id = $2 AND attempt_id = $3
-              AND itinerary_pattern_id = $4 ORDER BY stop_sequence")
-            .bind::<diesel::sql_types::Text, _>(&chateau)
-            .bind::<diesel::sql_types::Text, _>(&trip_compressed.onestop_feed_id)
-            .bind::<diesel::sql_types::Text, _>(&trip_compressed.attempt_id)
-            .bind::<diesel::sql_types::Text, _>(&trip_compressed.itinerary_pattern_id)
-            .load::<crate::models::ItineraryPatternRow>(conn2),
+              AND itinerary_pattern_id = $4 ORDER BY stop_sequence"
+        )
+        .bind::<diesel::sql_types::Text, _>(&chateau)
+        .bind::<diesel::sql_types::Text, _>(&trip_compressed.onestop_feed_id)
+        .bind::<diesel::sql_types::Text, _>(&trip_compressed.attempt_id)
+        .bind::<diesel::sql_types::Text, _>(&trip_compressed.itinerary_pattern_id)
+        .load::<crate::models::ItineraryPatternRow>(conn2),
         routes_pg_schema::dsl::routes
             .filter(routes_pg_schema::dsl::chateau.eq(&chateau))
             .filter(routes_pg_schema::dsl::route_id.eq(&trip_compressed.route_id))

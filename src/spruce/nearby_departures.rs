@@ -579,12 +579,12 @@ async fn fetch_chateau_intermediate(
                  WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
                    AND stop_id = ANY($3)",
             )
-                .bind::<diesel::sql_types::Text, _>(&chateau_clone_itin)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&direction_stop_ids)
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default()
+            .bind::<diesel::sql_types::Text, _>(&chateau_clone_itin)
+            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
+            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&direction_stop_ids)
+            .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+            .await
+            .unwrap_or_default()
         },
         async {
             let mut conn = pool_clone.get().await.unwrap();
@@ -897,16 +897,15 @@ async fn fetch_chateau_intermediate(
     let mut itinerary_final_station_name = HashMap::new();
     if chateau == "île~de~france~mobilités" && !filtered_itinerary_ids.is_empty() {
         let mut conn = pool.get().await.unwrap();
-        let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
-            diesel::sql_query(
-                "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+        let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> = diesel::sql_query(
+            "SELECT * FROM gtfs.itinerary_pattern_trip_reader
                  WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
-            )
-                .bind::<diesel::sql_types::Text, _>(&chateau)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .unwrap_or_default();
+        )
+        .bind::<diesel::sql_types::Text, _>(&chateau)
+        .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
+        .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+        .await
+        .unwrap_or_default();
 
         let mut itinerary_last_stop_id = HashMap::new();
         for row in &itin_rows_all {

@@ -27,17 +27,24 @@ pub fn enabled_for(feed: &str) -> Result<bool> {
         None => include_str!("../../maple_syrup_v2.toml").to_owned(),
     };
     let config: Config = toml::from_str(&text).context("parse Maple Syrup v2 config")?;
-    ensure!(config.feeds.iter().all(|r| {
-        let prefix = r.strip_suffix('*').unwrap_or(r);
-        !prefix.is_empty() && !prefix.contains('*')
-    }), "v2 feed rules must be exact IDs or nonempty prefixes followed by *");
+    ensure!(
+        config.feeds.iter().all(|r| {
+            let prefix = r.strip_suffix('*').unwrap_or(r);
+            !prefix.is_empty() && !prefix.contains('*')
+        }),
+        "v2 feed rules must be exact IDs or nonempty prefixes followed by *"
+    );
     Ok(config.feeds.iter().any(|r| matches_feed(r, feed)))
 }
 
 type Times = (Option<i32>, Option<i32>, Option<i32>);
 
 fn times(s: &StopDifference) -> Times {
-    (s.arrival_time_since_start, s.departure_time_since_start, s.interpolated_time_since_start)
+    (
+        s.arrival_time_since_start,
+        s.departure_time_since_start,
+        s.interpolated_time_since_start,
+    )
 }
 
 fn structural_key(itinerary: &ItineraryCover) -> ItineraryCover {
@@ -83,7 +90,13 @@ impl Exceptions {
 
 fn fixed(values: &[u32]) -> (i32, Vec<u8>) {
     if values.iter().all(|&v| v <= u16::MAX as u32) {
-        (2, values.iter().flat_map(|&v| (v as u16).to_le_bytes()).collect())
+        (
+            2,
+            values
+                .iter()
+                .flat_map(|&v| (v as u16).to_le_bytes())
+                .collect(),
+        )
     } else {
         (4, values.iter().flat_map(|&v| v.to_le_bytes()).collect())
     }
@@ -142,14 +155,20 @@ SELECT $1,$2,x.* FROM jsonb_to_recordset($3) AS x(
  exception_indices integer[],exception_arrivals integer[],exception_departures integer[],
  exception_interpolated integer[],min_departure_offset integer,max_departure_offset integer)";
 
-async fn insert(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
-                sql: &str, rows: &mut Vec<Value>) -> Result<()> {
+async fn insert(
+    conn: &mut AsyncPgConnection,
+    feed: &str,
+    attempt: &str,
+    sql: &str,
+    rows: &mut Vec<Value>,
+) -> Result<()> {
     for batch in rows.chunks(512) {
         diesel::sql_query(sql)
-            .bind::<Text,_>(feed)
-            .bind::<Text,_>(attempt)
-            .bind::<Jsonb,_>(Value::Array(batch.to_vec()))
-            .execute(conn).await?;
+            .bind::<Text, _>(feed)
+            .bind::<Text, _>(attempt)
+            .bind::<Jsonb, _>(Value::Array(batch.to_vec()))
+            .execute(conn)
+            .await?;
     }
     rows.clear();
     Ok(())
@@ -158,11 +177,18 @@ async fn insert(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
 /// Called after the legacy metadata is inserted, within one transaction.
 /// The representative legacy itinerary is the structural ID, avoiding a
 /// separate ID allocator and ensuring existing cleanup cascades to v2.
-pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
-                     reduction: &ResponseFromReduce) -> Result<()> {
+pub async fn persist(
+    conn: &mut AsyncPgConnection,
+    feed: &str,
+    attempt: &str,
+    reduction: &ResponseFromReduce,
+) -> Result<()> {
     let mut groups: HashMap<ItineraryCover, Vec<u64>> = HashMap::new();
     for (&id, itinerary) in &reduction.itineraries {
-        groups.entry(structural_key(itinerary)).or_default().push(id);
+        groups
+            .entry(structural_key(itinerary))
+            .or_default()
+            .push(id);
     }
     let mut structures = Vec::new();
     let mut stops = Vec::new();
@@ -173,16 +199,24 @@ pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
         let id = encode_pattern_id(ids[0]);
         let stop_count = i32::try_from(structure.stop_sequences.len())?;
         let timing_count = i32::try_from(ids.len())?;
-        structures.push(json!({"structure_id":id,"stop_count":stop_count,"timing_count":timing_count}));
+        structures
+            .push(json!({"structure_id":id,"stop_count":stop_count,"timing_count":timing_count}));
         for (idx, s) in structure.stop_sequences.iter().enumerate() {
             let mut metadata = serde_json::to_value(s)?;
             metadata["stop_headsign_idx"] = json!(s.stop_headsign.as_ref().and_then(|headsign| {
-                structure.stop_headsigns_unique_list.as_ref().and_then(|list| {
-                    list.iter().position(|value| value == headsign).map(|i| i as i16)
-                })
+                structure
+                    .stop_headsigns_unique_list
+                    .as_ref()
+                    .and_then(|list| {
+                        list.iter()
+                            .position(|value| value == headsign)
+                            .map(|i| i as i16)
+                    })
             }));
-            stops.push(json!({"structure_id":id,"stop_index":idx,"stop_id":s.stop_id,
-                "gtfs_stop_sequence":s.gtfs_stop_sequence,"metadata":metadata}));
+            stops.push(
+                json!({"structure_id":id,"stop_index":idx,"stop_id":s.stop_id,
+                "gtfs_stop_sequence":s.gtfs_stop_sequence,"metadata":metadata}),
+            );
         }
         for (idx, &itinerary_id) in ids.iter().enumerate() {
             let itinerary = &reduction.itineraries[&itinerary_id];
@@ -190,10 +224,10 @@ pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
             let mut values = Vec::with_capacity(stop_count as usize);
             for (i, s) in itinerary.stop_sequences.iter().enumerate() {
                 let t = times(s);
-                ex.push(i,t)?;
+                ex.push(i, t)?;
                 values.push(primary(t));
             }
-            let (width,payload) = fixed(&values);
+            let (width, payload) = fixed(&values);
             let mut row = json!({"structure_id":id,"timing_index":idx,
                 "itinerary_pattern_id":encode_pattern_id(itinerary_id),
                 "byte_width":width,"payload":bytea(&payload)});
@@ -207,14 +241,14 @@ pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
             let mut max = None::<i32>;
             for (i, itinerary_id) in ids.iter().enumerate() {
                 let t = times(&reduction.itineraries[itinerary_id].stop_sequences[idx]);
-                ex.push(i,t)?;
+                ex.push(i, t)?;
                 values.push(primary(t));
                 if let Some(dep) = t.1.or(t.0).or(t.2) {
                     min = Some(min.map_or(dep, |v| v.min(dep)));
                     max = Some(max.map_or(dep, |v| v.max(dep)));
                 }
             }
-            let (base,unit,width,payload) = column(&values);
+            let (base, unit, width, payload) = column(&values);
             let mut row = json!({"structure_id":id,"stop_index":idx,"base":base,
                 "unit":unit,"bit_width":width,"payload":bytea(&payload),
                 "min_departure_offset":min,"max_departure_offset":max});
@@ -222,16 +256,16 @@ pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
             columns.push(row);
         }
         if structures.len() >= 64 || trips.len() >= 2048 || stops.len() >= 2048 {
-            insert(conn,feed,attempt,STRUCTURES,&mut structures).await?;
-            insert(conn,feed,attempt,STOPS,&mut stops).await?;
-            insert(conn,feed,attempt,TRIP_MAJOR,&mut trips).await?;
-            insert(conn,feed,attempt,STOP_MAJOR,&mut columns).await?;
+            insert(conn, feed, attempt, STRUCTURES, &mut structures).await?;
+            insert(conn, feed, attempt, STOPS, &mut stops).await?;
+            insert(conn, feed, attempt, TRIP_MAJOR, &mut trips).await?;
+            insert(conn, feed, attempt, STOP_MAJOR, &mut columns).await?;
         }
     }
-    insert(conn,feed,attempt,STRUCTURES,&mut structures).await?;
-    insert(conn,feed,attempt,STOPS,&mut stops).await?;
-    insert(conn,feed,attempt,TRIP_MAJOR,&mut trips).await?;
-    insert(conn,feed,attempt,STOP_MAJOR,&mut columns).await?;
+    insert(conn, feed, attempt, STRUCTURES, &mut structures).await?;
+    insert(conn, feed, attempt, STOPS, &mut stops).await?;
+    insert(conn, feed, attempt, TRIP_MAJOR, &mut trips).await?;
+    insert(conn, feed, attempt, STOP_MAJOR, &mut columns).await?;
     Ok(())
 }
 
@@ -240,7 +274,10 @@ mod tests {
     use super::*;
     #[test]
     fn allowlist_is_exact_or_prefix() {
-        assert!(matches_feed("f-bus~dft~gov~uk*", "f-bus~dft~gov~uk~greater~london"));
+        assert!(matches_feed(
+            "f-bus~dft~gov~uk*",
+            "f-bus~dft~gov~uk~greater~london"
+        ));
         assert!(matches_feed("f-networkrail", "f-networkrail"));
         assert!(!matches_feed("f-networkrail", "f-networkrail~rt"));
         assert!(!matches_feed("*", "anything"));
@@ -248,31 +285,35 @@ mod tests {
     }
     #[test]
     fn column_roundtrip() {
-        for values in [vec![0,0],vec![300,420,330,360,390,300],
-                       vec![0,1,65536, i32::MAX as u32],vec![42]] {
-            let (base,unit,width,data)=column(&values);
-            for (i,&expected) in values.iter().enumerate() {
-                let mut v=0u32;
+        for values in [
+            vec![0, 0],
+            vec![300, 420, 330, 360, 390, 300],
+            vec![0, 1, 65536, i32::MAX as u32],
+            vec![42],
+        ] {
+            let (base, unit, width, data) = column(&values);
+            for (i, &expected) in values.iter().enumerate() {
+                let mut v = 0u32;
                 for bit in 0..width as usize {
-                    let pos=i*width as usize+bit;
-                    v |= (((data[pos/8]>>(pos%8))&1) as u32)<<bit;
+                    let pos = i * width as usize + bit;
+                    v |= (((data[pos / 8] >> (pos % 8)) & 1) as u32) << bit;
                 }
-                assert_eq!(base+unit*v,expected);
+                assert_eq!(base + unit * v, expected);
             }
         }
     }
     #[test]
     fn fixed_and_exceptions() {
-        assert_eq!(fixed(&[0,65535]),(2,vec![0,0,255,255]));
-        assert_eq!(fixed(&[65536]),(4,vec![0,0,1,0]));
-        let mut e=Exceptions::default();
-        e.push(0,(Some(10),Some(10),None)).unwrap();
-        e.push(1,(Some(20),Some(30),None)).unwrap();
-        e.push(2,(None,None,Some(40))).unwrap();
-        e.push(3,(Some(-1),None,None)).unwrap();
-        assert_eq!(e.indices,vec![1,2,3]);
-        assert_eq!(e.arrivals,vec![Some(20),None,Some(-1)]);
-        assert_eq!(e.departures,vec![Some(30),None,None]);
-        assert_eq!(e.interpolated,vec![None,Some(40),None]);
+        assert_eq!(fixed(&[0, 65535]), (2, vec![0, 0, 255, 255]));
+        assert_eq!(fixed(&[65536]), (4, vec![0, 0, 1, 0]));
+        let mut e = Exceptions::default();
+        e.push(0, (Some(10), Some(10), None)).unwrap();
+        e.push(1, (Some(20), Some(30), None)).unwrap();
+        e.push(2, (None, None, Some(40))).unwrap();
+        e.push(3, (Some(-1), None, None)).unwrap();
+        assert_eq!(e.indices, vec![1, 2, 3]);
+        assert_eq!(e.arrivals, vec![Some(20), None, Some(-1)]);
+        assert_eq!(e.departures, vec![Some(30), None, None]);
+        assert_eq!(e.interpolated, vec![None, Some(40), None]);
     }
 }

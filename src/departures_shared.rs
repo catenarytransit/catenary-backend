@@ -858,7 +858,12 @@ VALUES
         )
         .await
         .unwrap();
-        let statement = STOP_ITINERARY_SQL.replace("gtfs.itinerary_pattern_departures", "gtfs.itinerary_pattern").replace("gtfs.", "pg_temp.");
+        let statement = STOP_ITINERARY_SQL
+            .replace(
+                "gtfs.itinerary_pattern_departures",
+                "gtfs.itinerary_pattern",
+            )
+            .replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let direction = vec!["d1".to_string()];
         let empty: Vec<String> = Vec::new();

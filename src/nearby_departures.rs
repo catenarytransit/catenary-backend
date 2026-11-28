@@ -1921,10 +1921,12 @@ async fn fetch_chateau_data(
                     "paris_terminal_itinerary_rows",
                     itinerary_batch.len(),
                     pool,
-                    diesel::sql_query("SELECT * FROM gtfs.itinerary_pattern_trip_reader
-                         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)")
-                        .bind::<diesel::sql_types::Text, _>(&chateau)
-                        .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(itinerary_batch),
+                    diesel::sql_query(
+                        "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+                         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)"
+                    )
+                    .bind::<diesel::sql_types::Text, _>(&chateau)
+                    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(itinerary_batch),
                     crate::models::ItineraryPatternRow
                 )
             },
@@ -3381,7 +3383,12 @@ INSERT INTO itinerary_pattern (
 
         // The production query is schema-qualified. Redirect only the
         // fixture query to this connection's temporary schema.
-        let fixture_sql = NEARBY_ITINERARY_SQL.replace("gtfs.itinerary_pattern_departures", "gtfs.itinerary_pattern").replace("gtfs.", "pg_temp.");
+        let fixture_sql = NEARBY_ITINERARY_SQL
+            .replace(
+                "gtfs.itinerary_pattern_departures",
+                "gtfs.itinerary_pattern",
+            )
+            .replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let directions = vec!["d".to_string()];
         let shared = vec!["shared".to_string()];

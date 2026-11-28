@@ -131,12 +131,12 @@ pub async fn fetch_stop_data_for_chateau(
          WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
            AND stop_id = ANY($3)",
     )
-        .bind::<diesel::sql_types::Text, _>(&chateau_id)
-        .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&itinerary_list)
-        .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&stop_ids)
-        .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-        .await
-        .unwrap_or_default();
+    .bind::<diesel::sql_types::Text, _>(&chateau_id)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&itinerary_list)
+    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&stop_ids)
+    .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+    .await
+    .unwrap_or_default();
 
     println!(
         "PERF: itinerary_pattern fetch took {}ms. Count: {}",

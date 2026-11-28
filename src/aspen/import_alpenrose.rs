@@ -1809,11 +1809,11 @@ pub async fn new_rt_data(
                 "SELECT * FROM gtfs.itinerary_pattern_trip_reader
                  WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
             )
-                .bind::<diesel::sql_types::Text, _>(&chateau_ipr)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&list_ip_2)
-                .load::<catenary::models::ItineraryPatternRow>(&mut conn)
-                .await
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            .bind::<diesel::sql_types::Text, _>(&chateau_ipr)
+            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&list_ip_2)
+            .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
         };
 
         // Query for stops with parent_station to build parent-child mappings
