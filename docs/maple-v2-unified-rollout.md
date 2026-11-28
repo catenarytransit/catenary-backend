@@ -62,3 +62,47 @@ the stable views and publisher intentionally still reference them. The
 contract migration must replace those definitions and remove the transitional
 FK before dropping the originals. Rollback of this phase requires deploying
 phase-1 binaries before reverting the migration.
+
+## Phase 3: retire legacy storage (final contract)
+
+**Do not apply this migration until every deployed native reader and writer is
+running phase 2 (PR #288) or newer.** Verify all instances, workers, scheduled
+jobs and external SQL clients. Phase-1 binaries cannot use the retired tables.
+
+1. Back up the database, ensure adequate disk/WAL headroom, pause static
+   ingestion and cleanup, and backfill any remaining attempts using
+   `scripts/maple_v2_backfill_unified.sql` before retirement.
+2. Review the per-attempt parity checks. The contract migration itself checks
+   every structure's contiguous stop indices, all readiness markers, both
+   original tables against unified rows using NULL-safe exact comparisons, and
+   the direct validated cascade FK. It locks writes during validation and uses
+   RESTRICT drops; unexpected dependencies or failed checks abort the entire
+   transaction. Schedule a low-traffic window for validation and DDL.
+3. Explicitly authorize retirement on a populated database:
+
+   ```sh
+   PGOPTIONS="-c catenary.maple_v2_contract=on" diesel migration run
+   ```
+
+   Preserve any other required connection options. Empty databases (CI/fresh
+   installations) do not require this opt-in. Never use it to bypass a failed
+   parity check; fix the mismatch before retrying.
+
+4. Run `tests/sql/maple_v2_unified_cutover.sql` on staging with an existing
+   v2 structure, and `tests/sql/maple_v2_unified_parity.sql` and the existing
+   production acceptance test for migrated v2-only attempts. Check fixed-time
+   nearby, stop-board, single-trip and routing results. Resume ingestion and
+   confirm that fresh attempts publish successfully and cleanup cascades.
+
+The two stable views and publisher keep their exact names, column order/types
+and signature. Existing phase-2 binaries therefore need no additional rebuild
+solely for this migration. The two original stop tables, readiness table,
+transitional FK, invalidation triggers and backfill function are removed.
+The trip-major table and GTFS v1 fallback remain unchanged.
+
+Rollback recreates both old tables and indexes from the current unified data,
+including attempts imported after retirement, reinstates the transitional
+FK, readiness state, triggers, backfill and dual-writing publisher, and restores
+the transitional views. Pause writers, reserve space for the reconstructed
+tables/indexes and WAL, and run the migration revert **before** deploying
+phase-1 binaries. This is a full data reconstruction, not a fast rollback.
