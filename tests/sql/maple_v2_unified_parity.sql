@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
-BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+BEGIN ISOLATION LEVEL REPEATABLE READ;
 CREATE TEMP TABLE unified_scope ON COMMIT DROP AS
 SELECT :'feed'::text AS onestop_feed_id, :'attempt'::text AS attempt_id;
 DO $$
