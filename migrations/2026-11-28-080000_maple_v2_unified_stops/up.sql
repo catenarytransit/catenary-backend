@@ -39,6 +39,14 @@ BEGIN
         ON CONFLICT (onestop_feed_id, attempt_id) DO UPDATE
         SET ready = false, migrated_at = NULL
         WHERE maple_v2_stop_unified_attempt.ready;
+    ELSIF TG_OP = 'DELETE' THEN
+        -- Cascades remove unified rows, but a partial source deletion also
+        -- invalidates completeness. Status rows are intentionally independent.
+        UPDATE gtfs.maple_v2_stop_unified_attempt a
+        SET ready = false, migrated_at = NULL
+        FROM (SELECT DISTINCT onestop_feed_id, attempt_id FROM old_rows) k
+        WHERE a.onestop_feed_id = k.onestop_feed_id AND a.attempt_id = k.attempt_id
+          AND a.ready;
     ELSE
         INSERT INTO gtfs.maple_v2_stop_unified_attempt (onestop_feed_id, attempt_id)
         SELECT DISTINCT onestop_feed_id, attempt_id FROM new_rows
@@ -66,6 +74,14 @@ FOR EACH STATEMENT EXECUTE FUNCTION gtfs.maple_v2_unified_invalidate();
 CREATE TRIGGER maple_v2_major_unified_update
 AFTER UPDATE ON gtfs.maple_v2_stop_major
 REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT EXECUTE FUNCTION gtfs.maple_v2_unified_invalidate();
+CREATE TRIGGER maple_v2_stop_unified_delete
+AFTER DELETE ON gtfs.maple_v2_stop
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT EXECUTE FUNCTION gtfs.maple_v2_unified_invalidate();
+CREATE TRIGGER maple_v2_major_unified_delete
+AFTER DELETE ON gtfs.maple_v2_stop_major
+REFERENCING OLD TABLE AS old_rows
 FOR EACH STATEMENT EXECUTE FUNCTION gtfs.maple_v2_unified_invalidate();
 
 -- Rebuild one attempt atomically. No new GTFS decode or extra Rust buffer.
