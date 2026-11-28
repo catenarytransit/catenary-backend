@@ -447,16 +447,10 @@ pub async fn departures_at_osm_station(
         let filtered_itinerary_ids: Vec<String> = itin_meta.keys().cloned().collect();
         if !filtered_itinerary_ids.is_empty() {
             let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
-                catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern::chateau
-                            .eq("île~de~france~mobilités".to_string()),
-                    )
-                    .filter(
-                        catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                            .eq_any(&filtered_itinerary_ids),
-                    )
-                    .select(catenary::models::ItineraryPatternRow::as_select())
+                diesel::sql_query("SELECT * FROM gtfs.itinerary_pattern_trip_reader
+                    WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)")
+                    .bind::<diesel::sql_types::Text, _>("île~de~france~mobilités")
+                    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
                     .load::<catenary::models::ItineraryPatternRow>(&mut *conn)
                     .await
                     .unwrap_or_default();

@@ -42,7 +42,7 @@ WITH stop_rows AS MATERIALIZED (
         ip.departure_time_since_start, ip.interpolated_time_since_start,
         ip.stop_id, ip.chateau, ip.gtfs_stop_sequence,
         ip.timepoint, ip.stop_headsign_idx, ip.pickup_type, ip.drop_off_type
-    FROM gtfs.itinerary_pattern ip
+    FROM gtfs.itinerary_pattern_departures ip
     WHERE ip.chateau = $1 AND ip.stop_id = ANY($2)
 ),
 pattern_keys AS MATERIALIZED (
@@ -858,7 +858,7 @@ VALUES
         )
         .await
         .unwrap();
-        let statement = STOP_ITINERARY_SQL.replace("gtfs.", "pg_temp.");
+        let statement = STOP_ITINERARY_SQL.replace("gtfs.itinerary_pattern_departures", "gtfs.itinerary_pattern").replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let direction = vec!["d1".to_string()];
         let empty: Vec<String> = Vec::new();

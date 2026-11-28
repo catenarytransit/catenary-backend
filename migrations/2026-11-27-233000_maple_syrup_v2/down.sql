@@ -1,3 +1,6 @@
+DROP VIEW gtfs.itinerary_pattern_trip_reader;
+DROP VIEW gtfs.itinerary_pattern_departures;
+DROP FUNCTION gtfs.maple_v2_column_primary(bytea,bigint,bigint,integer,integer);
 DROP VIEW gtfs.itinerary_pattern_gentian;
 DROP VIEW gtfs.maple_v2_itinerary_lookup;
 DROP FUNCTION gtfs.maple_v2_primary(bytea,integer,integer);

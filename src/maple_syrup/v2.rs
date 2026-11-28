@@ -175,8 +175,14 @@ pub async fn persist(conn: &mut AsyncPgConnection, feed: &str, attempt: &str,
         let timing_count = i32::try_from(ids.len())?;
         structures.push(json!({"structure_id":id,"stop_count":stop_count,"timing_count":timing_count}));
         for (idx, s) in structure.stop_sequences.iter().enumerate() {
+            let mut metadata = serde_json::to_value(s)?;
+            metadata["stop_headsign_idx"] = json!(s.stop_headsign.as_ref().and_then(|headsign| {
+                structure.stop_headsigns_unique_list.as_ref().and_then(|list| {
+                    list.iter().position(|value| value == headsign).map(|i| i as i16)
+                })
+            }));
             stops.push(json!({"structure_id":id,"stop_index":idx,"stop_id":s.stop_id,
-                "gtfs_stop_sequence":s.gtfs_stop_sequence,"metadata":s}));
+                "gtfs_stop_sequence":s.gtfs_stop_sequence,"metadata":metadata}));
         }
         for (idx, &itinerary_id) in ids.iter().enumerate() {
             let itinerary = &reduction.itineraries[&itinerary_id];
