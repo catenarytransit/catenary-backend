@@ -281,6 +281,15 @@ pub async fn persist(
     insert(conn, feed, attempt, STOPS, &mut stops).await?;
     insert(conn, feed, attempt, TRIP_MAJOR, &mut trips).await?;
     insert(conn, feed, attempt, STOP_MAJOR, &mut columns).await?;
+    // Build the ordered stop-major copy only after the entire attempt has
+    // been written. PostgreSQL sorts the persisted rows, so Maple does not
+    // have to retain a second feed-sized buffer. Publication of the ready
+    // marker is atomic with the original ingest transaction.
+    diesel::sql_query("SELECT gtfs.maple_v2_backfill_unified($1, $2)")
+        .bind::<Text, _>(feed)
+        .bind::<Text, _>(attempt)
+        .execute(conn)
+        .await?;
     Ok(())
 }
 
