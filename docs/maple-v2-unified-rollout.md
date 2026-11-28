@@ -78,15 +78,16 @@ jobs and external SQL clients. Phase-1 binaries cannot use the retired tables.
    the direct validated cascade FK. It locks writes during validation and uses
    RESTRICT drops; unexpected dependencies or failed checks abort the entire
    transaction. Schedule a low-traffic window for validation and DDL.
-3. Explicitly authorize retirement on a populated database:
+3. After confirming all deployed binaries are compatible, run the normal
+   migration command:
 
    ```sh
-   PGOPTIONS="-c catenary.maple_v2_contract=on" diesel migration run
+   diesel migration run
    ```
 
-   Preserve any other required connection options. Empty databases (CI/fresh
-   installations) do not require this opt-in. Never use it to bypass a failed
-   parity check; fix the mismatch before retrying.
+   No special PGOPTIONS setting is required. All readiness, coverage, parity
+   and dependency checks remain mandatory. If any check fails, fix the
+   underlying mismatch before retrying.
 
 4. Run `tests/sql/maple_v2_unified_cutover.sql` on staging with an existing
    v2 structure, and `tests/sql/maple_v2_unified_parity.sql` and the existing
