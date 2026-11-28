@@ -177,6 +177,56 @@ CROSS JOIN LATERAL (
 ) c
 "#;
 
+// Choose the representation per complete feed attempt in the same
+// repeatable-read snapshot. Unbackfilled attempts and older ingesters
+// must never lose stops. Only the legacy branch performs the second lookup.
+const UNIFIED_STOP_SQL: &str = r#"
+WITH stop_keys AS MATERIALIZED (
+    SELECT DISTINCT s.onestop_feed_id, s.attempt_id, s.gtfs_id,
+           COALESCE(a.ready, false) AS ready
+    FROM gtfs.stops s
+    LEFT JOIN gtfs.maple_v2_stop_unified_attempt a
+      USING (onestop_feed_id, attempt_id)
+    WHERE s.chateau = $1 AND s.gtfs_id = ANY($2)
+)
+SELECT u.onestop_feed_id, u.attempt_id, u.structure_id, u.stop_index,
+       u.base, u.unit, u.bit_width, u.payload, u.exception_indices,
+       u.exception_arrivals, u.exception_departures, u.exception_interpolated,
+       u.min_departure_offset, u.max_departure_offset,
+       u.stop_id, u.gtfs_stop_sequence, u.metadata
+FROM (SELECT * FROM stop_keys WHERE ready) k
+CROSS JOIN LATERAL (
+    SELECT u.* FROM gtfs.maple_v2_stop_unified u
+    WHERE u.stop_id = k.gtfs_id
+      AND u.onestop_feed_id = k.onestop_feed_id
+      AND u.attempt_id = k.attempt_id
+    OFFSET 0
+) u
+UNION ALL
+SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata
+FROM (SELECT * FROM stop_keys WHERE NOT ready) k
+CROSS JOIN LATERAL (
+    SELECT s.* FROM gtfs.maple_v2_stop s
+    WHERE s.stop_id = k.gtfs_id
+      AND s.onestop_feed_id = k.onestop_feed_id
+      AND s.attempt_id = k.attempt_id
+    OFFSET 0
+) s
+CROSS JOIN LATERAL (
+    SELECT c.* FROM gtfs.maple_v2_stop_major c
+    WHERE c.onestop_feed_id = s.onestop_feed_id
+      AND c.attempt_id = s.attempt_id
+      AND c.structure_id = s.structure_id
+      AND c.stop_index = s.stop_index
+    OFFSET 0
+) c
+"#;
+
+fn unified_stops_enabled() -> bool {
+    std::env::var("MAPLE_V2_USE_UNIFIED_STOPS")
+        .is_ok_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
+}
+
 // Only the mapping columns are read. The primary key prefix is
 // (onestop_feed_id, attempt_id, structure_id), so each lateral lookup can
 // use the same small range scan regardless of the size of the whole feed.
@@ -315,11 +365,12 @@ async fn load_v2_stops_inner(
     excluded_local: &[String], nearby: bool,
 ) -> QueryResult<Vec<(ItineraryPatternRow, ItineraryPatternMeta)>> {
     let started = Instant::now();
-    let columns = diesel::sql_query(STOP_SQL)
+    let unified = unified_stops_enabled();
+    let columns = diesel::sql_query(if unified { UNIFIED_STOP_SQL } else { STOP_SQL })
         .bind::<Text,_>(chateau)
         .bind::<Array<Text>,_>(stops)
         .load::<MapleV2StopColumn>(conn).await?;
-    log_stage(chateau, "stop_columns", started, columns.len());
+    log_stage(chateau, if unified { "stop_columns_unified" } else { "stop_columns" }, started, columns.len());
     let payload_bytes: usize = columns.iter().map(|c| c.timing.payload.len()).sum();
     tracing::debug!(chateau, payload_bytes, "Maple v2 stop-major packed bytes");
     if columns.is_empty() { return Ok(Vec::new()); }
@@ -510,6 +561,17 @@ pub async fn load_trip_rows_scoped(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unified_query_preserves_attempt_scoped_fallback() {
+        assert!(UNIFIED_STOP_SQL.contains("COALESCE(a.ready, false)"));
+        assert!(UNIFIED_STOP_SQL.contains("WHERE ready"));
+        assert!(UNIFIED_STOP_SQL.contains("WHERE NOT ready"));
+        assert!(UNIFIED_STOP_SQL.contains("u.onestop_feed_id = k.onestop_feed_id"));
+        assert!(UNIFIED_STOP_SQL.contains("u.attempt_id = k.attempt_id"));
+        assert!(UNIFIED_STOP_SQL.contains("u.stop_id = k.gtfs_id"));
+        assert!(UNIFIED_STOP_SQL.contains("UNION ALL"));
+    }
+
     #[test]
     fn staged_queries_keep_composite_index_anchors() {
         assert!(STOP_SQL.contains("s.stop_id = k.gtfs_id"));
