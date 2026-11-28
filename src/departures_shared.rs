@@ -42,7 +42,7 @@ WITH stop_rows AS MATERIALIZED (
         ip.departure_time_since_start, ip.interpolated_time_since_start,
         ip.stop_id, ip.chateau, ip.gtfs_stop_sequence,
         ip.timepoint, ip.stop_headsign_idx, ip.pickup_type, ip.drop_off_type
-    FROM gtfs.itinerary_pattern_departures ip
+    FROM gtfs.itinerary_pattern ip
     WHERE ip.chateau = $1 AND ip.stop_id = ANY($2)
 ),
 pattern_keys AS MATERIALIZED (
@@ -116,15 +116,26 @@ pub async fn load_stop_itineraries(
         return (Vec::new(), Vec::new());
     }
     let mut conn = pool.get().await.unwrap();
-    let matching = query_stop_itinerary_matches(
+    let legacy = query_stop_itinerary_matches(
         &mut conn,
         STOP_ITINERARY_SQL,
         chateau_id,
         stop_ids,
         direction_pattern_ids,
     )
-    .await
-    .unwrap_or_default();
+    .await;
+    let native = crate::maple_v2_reader::load_v2_stops(
+        &mut conn, chateau_id, stop_ids, None, direction_pattern_ids, None, &[], false,
+    ).await;
+    let legacy = legacy.unwrap_or_else(|e| {
+        eprintln!("legacy stop itinerary query failed for {chateau_id}: {e}");
+        Vec::new()
+    });
+    let native = native.unwrap_or_else(|e| {
+        eprintln!("native v2 stop itinerary query failed for {chateau_id}: {e}");
+        Vec::new()
+    }).into_iter().map(|(stop_row, metadata)| StopItineraryMatch { stop_row, metadata }).collect();
+    let matching = crate::maple_v2_reader::merge(legacy, native, |m| &m.stop_row);
 
     let mut rows = Vec::with_capacity(matching.len());
     let mut metadata = BTreeMap::new();
@@ -859,10 +870,6 @@ VALUES
         .await
         .unwrap();
         let statement = STOP_ITINERARY_SQL
-            .replace(
-                "gtfs.itinerary_pattern_departures",
-                "gtfs.itinerary_pattern",
-            )
             .replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let direction = vec!["d1".to_string()];

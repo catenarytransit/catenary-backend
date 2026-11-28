@@ -221,13 +221,7 @@ pub async fn assign_trips_for_dresden(
         .map(|m| m.itinerary_pattern_id.clone())
         .collect();
 
-    let ip_rows = diesel::sql_query(
-        "SELECT * FROM gtfs.itinerary_pattern_trip_reader
-         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
-    )
-    .bind::<diesel::sql_types::Text, _>("deutschland")
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&meta_ids)
-    .load::<ItineraryPatternRow>(conn)
+    let ip_rows = catenary::maple_v2_reader::load_trip_rows(conn, "deutschland", &meta_ids)
     .await?;
 
     debug!("Loaded {} itinerary pattern rows", ip_rows.len());

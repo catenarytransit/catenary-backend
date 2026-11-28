@@ -93,13 +93,7 @@ pub async fn block_api(
         .collect::<BTreeSet<String>>();
 
     let itin_ids: Vec<String> = itin_id_list.iter().cloned().collect();
-    let itin_rows: Vec<catenary::models::ItineraryPatternRow> = diesel::sql_query(
-        "SELECT * FROM gtfs.itinerary_pattern_trip_reader
-         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
-    )
-    .bind::<diesel::sql_types::Text, _>(&query.chateau)
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&itin_ids)
-    .load(conn)
+    let itin_rows: Vec<catenary::models::ItineraryPatternRow> = catenary::maple_v2_reader::load_trip_rows(conn, &query.chateau, &itin_ids)
     .await
     .unwrap();
 

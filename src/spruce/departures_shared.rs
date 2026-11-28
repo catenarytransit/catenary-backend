@@ -126,15 +126,7 @@ pub async fn fetch_stop_data_for_chateau(
     // 2. Fetch Itinerary Pattern Rows (filtered by both ID and Stop)
     // CRITICAL: We filter by stop_id_any(&stop_ids) to only fetch the rows for the stops we care about.
     // This dramatically reduces the amount of data fetched compared to fetching the whole itinerary.
-    let itins = diesel::sql_query(
-        "SELECT * FROM gtfs.itinerary_pattern_departures
-         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
-           AND stop_id = ANY($3)",
-    )
-    .bind::<diesel::sql_types::Text, _>(&chateau_id)
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&itinerary_list)
-    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&stop_ids)
-    .load::<catenary::models::ItineraryPatternRow>(&mut conn)
+    let itins = catenary::maple_v2_reader::load_stop_rows(&mut conn, &chateau_id, &itinerary_list, &stop_ids)
     .await
     .unwrap_or_default();
 

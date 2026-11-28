@@ -92,7 +92,7 @@ WITH stop_rows AS MATERIALIZED (
         ip.stop_headsign_idx,
         ip.pickup_type,
         ip.drop_off_type
-    FROM gtfs.itinerary_pattern_departures ip
+    FROM gtfs.itinerary_pattern ip
     WHERE ip.chateau = $1
       AND ip.stop_id = ANY($2)
 ),
@@ -1481,21 +1481,48 @@ async fn fetch_chateau_data(
                 // matches nothing. Earlier phases exclude only local modes.
                 let query = sql_query(NEARBY_ITINERARY_SQL)
                     .bind::<Text, _>(chateau)
-                    .bind::<Array<Text>, _>(stop_batch)
+                    .bind::<Array<Text>, _>(&stop_batch)
                     .bind::<Array<Text>, _>(direction_pattern_ids)
                     .bind::<Nullable<Array<Text>>, _>(priority_route_ids)
                     .bind::<Array<Text>, _>(excluded_local_route_ids)
                     .bind::<SmallInt, _>(COACH_ROUTE_TYPE);
-                timed_nearby_sql!(
-                    sql_timings,
-                    request_started,
-                    chateau,
-                    "itinerary_rows_by_selected_stops",
-                    input_ids,
-                    pool,
-                    query,
-                    NearbyItineraryMatch
-                )
+                let checkout_started = Instant::now();
+                let mut conn = pool.get().await.unwrap();
+                let sql_started = Instant::now();
+                let legacy = query.load::<NearbyItineraryMatch>(&mut conn).await;
+                record_sql_timing(
+                    sql_timings, request_started, Some(chateau.to_string()),
+                    "itinerary_rows_by_selected_stops", input_ids, checkout_started,
+                    sql_started, &legacy,
+                );
+                let native_started = Instant::now();
+                let native = crate::maple_v2_reader::load_v2_stops(
+                    &mut conn, chateau, &stop_batch, None, Some(direction_pattern_ids),
+                    priority_route_ids, excluded_local_route_ids, true,
+                ).await;
+                record_sql_timing(
+                    sql_timings, request_started, Some(chateau.to_string()),
+                    "native_v2_itinerary_rows_by_selected_stops", input_ids,
+                    native_started, native_started, &native,
+                );
+                let legacy = legacy.unwrap_or_else(|e| {
+                    eprintln!("legacy nearby itinerary query failed for {chateau}: {e}");
+                    Vec::new()
+                });
+                let native = native.unwrap_or_else(|e| {
+                    eprintln!("native v2 nearby itinerary query failed for {chateau}: {e}");
+                    Vec::new()
+                }).into_iter().map(|(stop_row, m)| NearbyItineraryMatch {
+                    stop_row,
+                    metadata: NearbyItineraryPatternMeta {
+                        itinerary_pattern_id: m.itinerary_pattern_id,
+                        route_id: m.route_id,
+                        direction_pattern_id: m.direction_pattern_id,
+                        timezone: m.timezone,
+                        row_count: m.row_count,
+                    },
+                }).collect();
+                Ok::<_, diesel::result::Error>(crate::maple_v2_reader::merge(legacy, native, |m| &m.stop_row))
             }
         })
         .await
@@ -1914,21 +1941,16 @@ async fn fetch_chateau_data(
             &filtered_itinerary_ids,
             &query_slots,
             |itinerary_batch| async {
-                timed_nearby_sql!(
-                    sql_timings,
-                    request_started,
-                    &chateau,
-                    "paris_terminal_itinerary_rows",
-                    itinerary_batch.len(),
-                    pool,
-                    diesel::sql_query(
-                        "SELECT * FROM gtfs.itinerary_pattern_trip_reader
-                         WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)"
-                    )
-                    .bind::<diesel::sql_types::Text, _>(&chateau)
-                    .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(itinerary_batch),
-                    crate::models::ItineraryPatternRow
-                )
+                let checkout_started = Instant::now();
+                let mut conn = pool.get().await.unwrap();
+                let sql_started = Instant::now();
+                let result = crate::maple_v2_reader::load_trip_rows(&mut conn, &chateau, &itinerary_batch).await;
+                record_sql_timing(
+                    &sql_timings, request_started, Some(chateau.to_string()),
+                    "paris_terminal_itinerary_rows", itinerary_batch.len(),
+                    checkout_started, sql_started, &result,
+                );
+                result
             },
         )
         .await
@@ -3384,10 +3406,6 @@ INSERT INTO itinerary_pattern (
         // The production query is schema-qualified. Redirect only the
         // fixture query to this connection's temporary schema.
         let fixture_sql = NEARBY_ITINERARY_SQL
-            .replace(
-                "gtfs.itinerary_pattern_departures",
-                "gtfs.itinerary_pattern",
-            )
             .replace("gtfs.", "pg_temp.");
         let stops = vec!["near".to_string()];
         let directions = vec!["d".to_string()];

@@ -55,6 +55,7 @@ pub mod gtfs_rt_rough_hash;
 pub mod id_cleanup;
 pub mod ip_to_location;
 pub mod maple_syrup;
+pub mod maple_v2_reader;
 pub mod models;
 pub mod mta_gtfs_rt;
 pub mod pasque;
