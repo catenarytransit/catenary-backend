@@ -1,4 +1,7 @@
 \set ON_ERROR_STOP on
+SELECT to_regclass('gtfs.maple_v2_stop_unified_attempt') IS NOT NULL AS dual_storage \gset
+\if :dual_storage
+\set ON_ERROR_STOP on
 \timing on
 -- Run with psql -v feed=f-networkrail -f scripts/maple_v2_backfill_unified.sql
 -- Each attempt commits separately; rerunning skips ready attempts.
@@ -27,3 +30,6 @@ FROM (SELECT onestop_feed_id, attempt_id, sum(stop_count) AS expected
 LEFT JOIN gtfs.maple_v2_stop_unified_attempt a USING (onestop_feed_id, attempt_id)
 WHERE :'feed' = '' OR s.onestop_feed_id = :'feed'
 ORDER BY 1,2;
+\else
+\echo 'Legacy tables retired; no backfill is required.'
+\endif
