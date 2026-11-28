@@ -78,10 +78,10 @@ SELECT t.feed, t.attempt, t.trip,
        END,
        s.color, s.text_color, ds.color, ds.text_color,
        m.timezone, t.start_time::bigint, t.has_frequencies, t.frequencies,
-       ARRAY(SELECT p.gtfs_stop_sequence::bigint FROM gtfs.itinerary_pattern p
+       ARRAY(SELECT p.gtfs_stop_sequence::bigint FROM gtfs.itinerary_pattern_gentian p
              WHERE p.onestop_feed_id = t.trip_feed AND p.attempt_id = t.trip_attempt
                AND p.itinerary_pattern_id = t.itinerary_pattern_id ORDER BY p.stop_sequence),
-       (SELECT p.departure_time_since_start FROM gtfs.itinerary_pattern p
+       (SELECT p.departure_time_since_start FROM gtfs.itinerary_pattern_gentian p
         WHERE p.onestop_feed_id = t.trip_feed AND p.attempt_id = t.trip_attempt
           AND p.itinerary_pattern_id = t.itinerary_pattern_id ORDER BY p.stop_sequence LIMIT 1)
 FROM selected_trips t

@@ -551,6 +551,13 @@ pub async fn gtfs_process_feed(
 
     println!("Begin feed {} processing", feed_id);
     let start = Instant::now();
+    // Choose one timing storage format for the entire ingest attempt.
+    let use_maple_v2 = maple_syrup::v2::enabled_for(feed_id)?;
+    println!(
+        "Itinerary timing storage for {}: {}",
+        feed_id,
+        if use_maple_v2 { "v2 only" } else { "v1" }
+    );
 
     //read the GTFS zip file
     let path = format!("{}/{}", gtfs_unzipped_path, feed_id);
@@ -2859,7 +2866,12 @@ pub async fn gtfs_process_feed(
                 row_count: itinerary.stop_sequences.len() as i32,
             };
 
+            // Metadata is authoritative for both formats. V2 does not need
+            // the legacy per-stop rows or their temporary allocation.
             t_final.push(itinerary_pg_meta);
+            if use_maple_v2 {
+                continue;
+            }
 
             let itinerary_pg = itinerary
                 .stop_sequences
@@ -2925,9 +2937,9 @@ pub async fn gtfs_process_feed(
 
     println!("Itineraries inserted for {}", feed_id);
 
-    // The v2 tables reference legacy itinerary metadata. Persist both
-    // compressed layouts after those rows exist, before publishing trips.
-    if maple_syrup::v2::enabled_for(feed_id)? {
+    // V2 references the canonical itinerary metadata, not legacy timing
+    // rows. Commit both binary layouts before inserting trips.
+    if use_maple_v2 {
         let start_v2_timer = Instant::now();
         println!("Writing Maple Syrup v2 for {}", feed_id);
         let mut conn = conn_pool.get().await?;
@@ -2943,8 +2955,6 @@ pub async fn gtfs_process_feed(
             feed_id,
             start_v2_timer.elapsed()
         );
-    } else {
-        println!("Maple Syrup v2 disabled for {}", feed_id);
     }
 
     //insert trips

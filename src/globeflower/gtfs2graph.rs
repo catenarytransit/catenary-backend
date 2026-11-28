@@ -38,7 +38,7 @@ struct PatternStopRow {
 /// Catenary's current schema does not keep a raw `stop_times` table.  The
 /// equivalent ordered stop sequence is:
 ///
-///   itinerary_pattern_meta -> itinerary_pattern
+///   itinerary_pattern_meta -> itinerary_pattern_stop_reader
 ///
 /// Shapes are already stored as PostGIS LineStrings, so no reconstruction from
 /// shape_pt rows is required.
@@ -209,7 +209,7 @@ pub fn build(conn: &mut PgConnection) -> Result<Graph> {
             ip.chateau,
             meta.route_id,
             meta.shape_id
-        FROM gtfs.itinerary_pattern AS ip
+        FROM gtfs.itinerary_pattern_stop_reader AS ip
         INNER JOIN gtfs.itinerary_pattern_meta AS meta
             ON meta.onestop_feed_id = ip.onestop_feed_id
            AND meta.attempt_id = ip.attempt_id
