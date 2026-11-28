@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Three layouts, one Swiss GTFS snapshot, one OSR graph, one runner.
-Only the experimental RAPTOR routing-index sidecar changes in mode three.
+"""Compare unmodified main against experimental Maple v2 + packed RAPTOR.
+Both use one Swiss GTFS snapshot, one OSR graph, and one runner.
 """
 import csv
 from datetime import date, datetime, timedelta
@@ -24,9 +24,14 @@ FEED = "f-u0-switzerland"
 URL = "https://tulip.catenarymaps.org/debug/schedule/f-u0-switzerland"
 GEOFABRIK = "https://download.geofabrik.de/europe/switzerland.poly"
 OSR = ROOT / "temp/osr-data/regions/europe/switzerland"
-VARIANTS = ("legacy", "maple-v2", "maple-v2-packed")
+VARIANTS = ("main", "maple-v2-experimental")
 BASE_URL = os.environ["DATABASE_URL"]
 BIN = ROOT / "target/release"
+MAIN_BIN = ROOT / "benchmark-bin/main"
+
+def binaries(mode):
+    return MAIN_BIN if mode == "main" else BIN
+
 sys.path.insert(0, str(ROOT / "src/routing_regions"))
 from prepare_socal_test import geojson_from_poly
 from run_timed_query import TIMING_FIELDS
@@ -120,11 +125,12 @@ geojson = ["{WORK / 'switzerland.geojson'}"]
     return target
 
 def database(mode):
-    return BASE_URL.rsplit("/", 1)[0] + "/" + ("catenary" if mode == "legacy" else "catenary_v2")
+    return BASE_URL.rsplit("/", 1)[0] + "/" + ("catenary" if mode == "main" else "catenary_v2")
 
 def env_for(mode):
-    return dict(os.environ, DATABASE_URL=database(mode), GENTIAN_BENCH_PACKED_OFFSETS="0",
-                MAPLE_SYRUP_V2_CONFIG=str(WORK / ("legacy.toml" if mode == "legacy" else "v2.toml")))
+    return dict(os.environ, DATABASE_URL=database(mode),
+                GENTIAN_BENCH_PACKED_OFFSETS="0" if mode == "main" else "1",
+                MAPLE_SYRUP_V2_CONFIG=str(MAIN_BIN / "maple_syrup_v2.toml" if mode == "main" else WORK / "v2.toml"))
 
 def table_counts(mode):
     url = database(mode)
@@ -134,7 +140,7 @@ def table_counts(mode):
         result[table] = int(sql(url, f"SELECT count(*) FROM gtfs.{table} WHERE onestop_feed_id = '{FEED}'"))
     result["database_bytes"] = int(sql(url, "SELECT pg_database_size(current_database())"))
     assert result["trips_compressed"] > 0 and result["stops"] > 0
-    if mode == "legacy":
+    if mode == "main":
         assert result["itinerary_pattern"] > 0 and result["maple_v2_trip_major"] == 0
     else:
         assert result["itinerary_pattern"] == 0 and result["maple_v2_trip_major"] > 0
@@ -149,46 +155,34 @@ def compile_mode(mode, first_day):
     rc = region_config(mode)
     dest = rc.parent / "switzerland.bin"
     started = time.perf_counter()
-    run([BIN / "maple"], f"{mode}-maple.log", env=env, timeout=7200)
+    run([binaries(mode) / "maple"], f"{mode}-maple.log", env=env, timeout=7200)
     ingestion = time.perf_counter() - started
     counts = table_counts(mode)
     run(["psql", url, "-v", "ON_ERROR_STOP=1", "-c", "ANALYZE"], f"{mode}-analyze.log")
-    raw = subprocess.check_output([BIN / "gentian", "--region", "switzerland",
+    raw = subprocess.check_output([binaries(mode) / "gentian", "--region", "switzerland",
                                    "--regions-config", rc, "--list-chateaux"], env=env, text=True)
     selection = json.loads(raw)
     dump(OUT / f"{mode}-selection.json", selection)
     assert {s["onestop_feed_id"] for s in selection["sources"]} == {FEED}, selection
     started = time.perf_counter()
-    run([BIN / "gentian", "--region", "switzerland", "--regions-config", rc,
+    run([binaries(mode) / "gentian", "--region", "switzerland", "--regions-config", rc,
          "--first-utc-day", first_day, "--day-count", "35",
          "--osr-dir", OSR, "--max-seconds", "900", "--candidate-meters", "1200",
          "--schedule-memory-mib", "128", "--scratch-dir", WORK / "scratch",
          "--build", "--output", dest], f"{mode}-gentian.log", env=env, timeout=7200)
     compile_seconds = time.perf_counter() - started
-    info = json.loads(subprocess.check_output([BIN / "gentian", "--inspect-timetable", dest], text=True))
+    info = json.loads(subprocess.check_output([binaries(mode) / "gentian", "--inspect-timetable", dest], text=True))
     assert info["route_count"] > 0 and {x["feed_id"] for x in info["sources"]} == {FEED}
     dump(OUT / f"{mode}-timetable.json", info)
-    return {"ingest_seconds": ingestion, "compile_seconds": compile_seconds,
-            "database_bytes": counts["database_bytes"]}
-
-def packed_mode():
-    rc = region_config("maple-v2-packed")
-    src = WORK / "maple-v2"
-    # Same inode, bytes and timetable identity, including all sidecars except
-    # the routing index. Avoid doubling the large main timetable on disk.
-    for path in src.glob("switzerland.*"):
-        if path.name != "switzerland.routing-index.bin":
-            os.link(path, rc.parent / path.name)
-    env = dict(env_for("maple-v2"), GENTIAN_BENCH_PACKED_OFFSETS="1")
-    started = time.perf_counter()
-    run([BIN / "gentian", "--precompute-routing-index", rc.parent / "switzerland.bin"],
-        "maple-v2-packed-index.log", env=env, timeout=3600)
-    duration = time.perf_counter() - started
-    log = (OUT / "maple-v2-packed-index.log").read_text()
-    match = re.search(r"packed_chains=(\d+) raw_event_words=(\d+) stored_event_words=(\d+)", log)
-    assert match and int(match[1]) > 0 and int(match[3]) < int(match[2]), log[-3000:]
-    return {"index_rebuild_seconds": duration, "packed_chains": int(match[1]),
-            "raw_event_words": int(match[2]), "stored_event_words": int(match[3])}
+    result = {"ingest_seconds": ingestion, "compile_seconds": compile_seconds,
+              "database_bytes": counts["database_bytes"]}
+    if mode == "maple-v2-experimental":
+        log = (OUT / f"{mode}-gentian.log").read_text()
+        match = re.search(r"packed_chains=(\d+) raw_event_words=(\d+) stored_event_words=(\d+)", log)
+        assert match and int(match[1]) > 0 and int(match[3]) < int(match[2]), log[-3000:]
+        result.update(packed_chains=int(match[1]), raw_event_words=int(match[2]),
+                      stored_event_words=int(match[3]))
+    return result
 
 def sizes(mode):
     folder = WORK / mode
@@ -234,7 +228,7 @@ def query(mode, name, request, iteration):
     cfg = config(database(mode))
     rc = WORK / mode / "regions.toml"
     env = env_for(mode)
-    cmd = [BIN / "edelweiss", "--regions-config", rc, "--catenary-config", cfg,
+    cmd = [binaries(mode) / "edelweiss", "--regions-config", rc, "--catenary-config", cfg,
            "--query", request, "--query-timings", timing_path, "--database-url", database(mode)]
     start = time.perf_counter_ns()
     with prefix.with_suffix(".response.json").open("w") as stdout, prefix.with_suffix(".log").open("w") as stderr:
@@ -242,8 +236,10 @@ def query(mode, name, request, iteration):
     wall = (time.perf_counter_ns() - start) / 1e6
     assert p.returncode == 0, f"{prefix} failed"
     log = prefix.with_suffix(".log").read_text()
-    m = re.search(r"mapped packed_chains=(\d+)", log)
-    assert m and (int(m[1]) > 0) == (mode == "maple-v2-packed"), f"wrong routing index: {prefix}"
+    assert "precompiled routing index mapped" in log, f"routing index not mapped: {prefix}"
+    if mode == "maple-v2-experimental":
+        m = re.search(r"mapped packed_chains=(\d+)", log)
+        assert m and int(m[1]) > 0, f"packed routing index not used: {prefix}"
     response = json.loads(prefix.with_suffix(".response.json").read_text())
     timing = json.loads(timing_path.read_text())
     for key in TIMING_FIELDS:
@@ -269,24 +265,29 @@ def report(rows, builds, parity_errors):
     lines = ["## Swiss RAPTOR compression benchmark", "",
              "All latencies in ms. One excluded warm-up per route/variant; each sample starts a fresh CLI process.",
              "RAPTOR is the engine phase, not OSR or process startup. P95 is nearest-rank (small samples).", "",
-             "| Variant | Main timetable bytes | Routing index bytes | All timetable .bin bytes | DB bytes | Maple s | Gentian s | Packed index rebuild s |",
-             "|---|---:|---:|---:|---:|---:|---:|---:|"]
+             "| Variant | Main timetable bytes | Routing index bytes | All timetable .bin bytes | DB bytes | Maple s | Gentian s |",
+             "|---|---:|---:|---:|---:|---:|---:|"]
     for mode in VARIANTS:
         b = builds[mode]
         s = b["sizes"]
-        lines.append(f"| {mode} | {s['switzerland.bin']:,} | {s['switzerland.routing-index.bin']:,} | {s['total_binary_bytes']:,} | {b['database_bytes']:,} | {b['ingest_seconds']:.1f} | {b['compile_seconds']:.1f} | {b.get('index_rebuild_seconds', 0):.1f} |")
-    lines += ["", "Packed mode reuses the V2 main binary and database; Maple/Gentian timings above are shared, not independent rebuilds.",
-              "", "| Route | Variant | N | RAPTOR median | RAPTOR p95 | Query median | CLI median | Speedup vs legacy |",
+        lines.append(f"| {mode} | {s['switzerland.bin']:,} | {s['switzerland.routing-index.bin']:,} | {s['total_binary_bytes']:,} | {b['database_bytes']:,} | {b['ingest_seconds']:.1f} | {b['compile_seconds']:.1f} |")
+    lines += ["", "| Binary metric | Main bytes | Experimental bytes | Reduction | Main / experimental |",
+              "|---|---:|---:|---:|---:|"]
+    for key in ("switzerland.bin", "switzerland.routing-index.bin", "total_binary_bytes"):
+        a = builds["main"]["sizes"][key]
+        b = builds["maple-v2-experimental"]["sizes"][key]
+        lines.append(f"| {key} | {a:,} | {b:,} | {(1-b/a)*100:.2f}% | {a/b:.3f}x |")
+    lines += ["", "| Route | Variant | N | RAPTOR median | RAPTOR p95 | Query median | CLI median | Speedup vs main |",
               "|---|---|---:|---:|---:|---:|---:|---:|"]
     for route in dict.fromkeys(r["route"] for r in rows):
-        base = statistics.median(r["raptor_ms"] for r in rows if r["route"] == route and r["variant"] == "legacy")
+        base = statistics.median(r["raptor_ms"] for r in rows if r["route"] == route and r["variant"] == "main")
         for mode in VARIANTS:
             samples = [r for r in rows if r["route"] == route and r["variant"] == mode]
             median = statistics.median(r["raptor_ms"] for r in samples)
             speedup = base / median if median else float("inf")
             lines.append(f"| {route} | {mode} | {len(samples)} | {median:.3f} | {percentile([r['raptor_ms'] for r in samples], .95):.3f} | {statistics.median(r['query_total_ms'] for r in samples):.3f} | {statistics.median(r['cli_wall_ms'] for r in samples):.3f} | {speedup:.2f}x |")
     lines += ["", f"Pareto objective parity mismatches: {len(parity_errors)}.",
-              f"Packed chains: {builds['maple-v2-packed']['packed_chains']:,}.",
+              f"Packed chains: {builds['maple-v2-experimental']['packed_chains']:,}.",
               "See builds-and-sizes.json for every binary size and packed event-word counts."]
     text = "\n".join(lines) + "\n"
     (OUT / "summary.md").write_text(text)
@@ -323,7 +324,6 @@ def main():
     assert (OSR / "routing.bin").stat().st_size > 0
     graph_files = {p.name: p.stat().st_size for p in OSR.iterdir() if p.is_file()}
     dump(OUT / "osr-sizes.json", graph_files)
-    (WORK / "legacy.toml").write_text("feeds = []\n")
     (WORK / "v2.toml").write_text('feeds = ["f-u0-switzerland"]\n')
     run(["diesel", "migration", "run"], "migration.log")
     # Empty migrated database cloned before ingest: no stale attempts or
@@ -344,12 +344,9 @@ def main():
             raise RuntimeError("local snapshot HTTP server did not start")
         patch_atlas("http://127.0.0.1:8765/switzerland.zip")
         builds = {}
-        for mode in VARIANTS[:2]:
-            builds[mode] = compile_mode(mode, first_day)
-        builds["maple-v2-packed"] = {**builds["maple-v2"], **packed_mode()}
         for mode in VARIANTS:
+            builds[mode] = compile_mode(mode, first_day)
             builds[mode]["sizes"] = sizes(mode)
-        assert builds["maple-v2"]["sizes"]["switzerland.bin"] == builds["maple-v2-packed"]["sizes"]["switzerland.bin"]
         dump(OUT / "builds-and-sizes.json", builds)
         rows = []
         parity_errors = []
@@ -358,7 +355,7 @@ def main():
             # Rotate execution order each repetition to reduce systematic
             # cache/thermal advantage. Round zero is excluded from timing.
             for iteration in range(rounds + 1):
-                order = VARIANTS[iteration % 3:] + VARIANTS[:iteration % 3]
+                order = VARIANTS[iteration % len(VARIANTS):] + VARIANTS[:iteration % len(VARIANTS)]
                 for mode in order:
                     signature, sample = query(mode, name, request, iteration)
                     if baseline is None:

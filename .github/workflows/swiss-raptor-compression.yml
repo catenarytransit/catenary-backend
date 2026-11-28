@@ -84,11 +84,27 @@ jobs:
           if ! command -v diesel >/dev/null 2>&1; then
             cargo install diesel_cli --no-default-features --features postgres --locked
           fi
-      - name: Build release binaries and test packed RAPTOR index
+      - name: Build unmodified main baseline at the pinned revision
+        env:
+          MAIN_BASELINE_SHA: '869afe17e095f64b5a9eb6d4160c405781ac32dd'
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results benchmark-bin/main
+          git fetch --no-tags --depth 1 origin "$MAIN_BASELINE_SHA"
+          git worktree add --detach "$RUNNER_TEMP/swiss-main" "$MAIN_BASELINE_SHA"
+          git -C "$RUNNER_TEMP/swiss-main" rev-parse HEAD | tee benchmark-results/main-revision.txt
+          test "$(cat benchmark-results/main-revision.txt)" = "$MAIN_BASELINE_SHA"
+          cp "$RUNNER_TEMP/swiss-main/maple_syrup_v2.toml" benchmark-bin/main/maple_syrup_v2.toml
+          (
+            cd "$RUNNER_TEMP/swiss-main"
+            CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target" cargo build --release --bin maple --bin gentian --bin edelweiss
+          )
+          cp target/release/{maple,gentian,edelweiss} benchmark-bin/main/
+      - name: Build experimental release binaries and test packed RAPTOR index
         run: |
           set -euo pipefail
           mkdir -p benchmark-results
-          git rev-parse HEAD > benchmark-results/backend-revision.txt
+          git rev-parse HEAD > benchmark-results/experimental-revision.txt
           git -C transitland-atlas rev-parse HEAD > benchmark-results/atlas-revision.txt
           lscpu > benchmark-results/runner-cpu.txt
           free -h > benchmark-results/runner-memory.txt

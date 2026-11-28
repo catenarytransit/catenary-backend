@@ -1,34 +1,35 @@
 # Swiss timetable and RAPTOR compression experiment
 
-This branch is intentionally isolated from production. The workflow runs on pushes
-to `benchmark/switzerland-raptor-compression` (manual dispatch is also defined;
-GitHub requires a workflow on the default branch to dispatch it).
+Two modes on the same runner, using the same downloaded Swiss GTFS snapshot,
+Geofabrik OSR graph, service horizon and queries:
 
-Three modes use the same source checkout, GTFS bytes, Swiss Geofabrik OSR graph,
-service horizon, route queries and runner:
+1. **main:** unmodified Maple, Gentian and Edelweiss compiled from main
+   revision `869afe17e095f64b5a9eb6d4160c405781ac32dd`, pinned at benchmark setup. The original main
+   allowlist is preserved (Switzerland is not enabled for v2), along with
+   its V6 timetable and original routing-index format.
+2. **maple-v2-experimental:** enable Swiss Maple Syrup v2 and Gentian's
+   experimental base/GCD/bit-packed event-major routing-index columns during
+   the initial build. RAPTOR's FIFO transport selection reads the packed
+   values directly from mmap with O(1) random access and exact seconds.
+   Chains that would grow are stored raw. Reconstruction still reads the
+   existing V6 timing profiles; the main timetable is not itself bit-packed.
 
-1. **legacy:** empty Maple v2 allowlist, existing Gentian V6 timing profiles and
-   ordinary u32 event-major routing index.
-2. **maple-v2:** Swiss feed allowlisted, Gentian reads its compatibility view,
-   writes the same V6 layout and ordinary routing index. This measures database
-   and compile differences, not a new RAPTOR timetable encoding.
-3. **maple-v2-packed:** same V2 database and main binary, but Gentian rebuilds
-   the routing-index companion with `GENTIAN_BENCH_PACKED_OFFSETS=1`. It uses
-   base/GCD/bit-width packing per event-major FIFO chain slot with O(1) random
-   access, exact seconds and raw fallback when compression is not beneficial.
-   RAPTOR's FIFO transport selection reads packed words directly from mmap.
-   Reconstruction still uses V6 profiles; no claim of a fully compressed main
-   timetable is made. The experimental companion version is 2; regenerate
-   indexes before running this branch against an existing timetable.
+The workflow builds both source revisions independently and records them.
+Both modes run independent Maple imports and Gentian builds into separate
+local PostgreSQL databases and output directories. There is no third
+compatibility-only configuration or redundant index rebuild.
 
-The Actions summary and artifact include the main .bin, index .bin, all
-timetable binary sizes, database size, ingest/compile/reindex durations,
-per-query RAPTOR median/p95 and speedup, end-to-end timings and raw results.
-All queries must return transit and preserve the set of Pareto departure,
-arrival and transfer objectives; raw journey JSON is saved for further
-inspection. A run fails rather than silently benchmarking an empty feed or
-unpacked fallback. No live realtime data, pfaedle, or production DB is used.
-The default query date is the next Swiss weekday and can be overridden.
-The benchmark uses repeated fresh processes (one excluded warm-up per query
-and variant), not persistent server latency. The GTFS SHA-256 and revisions
-are recorded; later runs may use different upstream data.
+The Actions summary and artifact report the main .bin, routing-index .bin,
+all timetable binary sizes, relative size reduction, database size,
+ingest/compile durations, per-route RAPTOR median/p95 and speedup, end-to-end
+timings and raw results. Each of 11 routes has one excluded warm-up and five
+measured repetitions per variant by default (110 measured queries).
+Execution order alternates between variants. The experiment fails if the
+packed index is not mapped, transit results are empty, or Pareto departure,
+arrival and transfer objectives differ. Raw responses are retained.
+No production database or live realtime data is used. Each query starts a
+fresh CLI process; RAPTOR phase timings exclude OSR and startup.
+The baseline is pinned rather than silently tracking a moving main branch.
+The benchmark runs on pushes to the isolated branch; manual dispatch requires
+GitHub's normal default-branch workflow availability. The experimental
+routing-index format is version 2; do not deploy its companion to main.
