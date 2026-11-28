@@ -1,5 +1,5 @@
 \set ON_ERROR_STOP on
--- Run on an isolated/staging database after the cutover migration.
+-- Run on an isolated/staging database after the retirement migration.
 -- Synthetic fixtures use an existing v2 metadata row only as a template.
 -- No fixture changes survive this transaction.
 BEGIN;
@@ -64,8 +64,6 @@ BEGIN
         WHERE attempt_id='__unified_cutover_test__') <> 2
        OR (SELECT count(*) FROM gtfs.maple_v2_stop_metadata_reader
         WHERE attempt_id='__unified_cutover_test__') <> 2
-       OR NOT EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_unified_attempt
-        WHERE attempt_id='__unified_cutover_test__' AND ready)
     THEN RAISE EXCEPTION 'Published attempt missing or duplicated'; END IF;
     IF EXISTS (
         WITH a AS (SELECT * FROM gtfs.itinerary_pattern_trip_reader
@@ -85,32 +83,21 @@ BEGIN
 END
 $$;
 
--- Simulate an old writer changing metadata: readiness must be invalidated
--- atomically, and both compatibility views must use the original rows.
-UPDATE gtfs.maple_v2_stop
-SET metadata=jsonb_set(metadata,'{pickup_type}','1'::jsonb)
-WHERE attempt_id='__unified_cutover_test__' AND stop_index=0;
+-- The final schema no longer depends on the old tables or readiness.
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_unified_attempt
-               WHERE attempt_id='__unified_cutover_test__' AND ready)
-       OR NOT EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_columns_reader
-               WHERE attempt_id='__unified_cutover_test__' AND stop_index=0
-                 AND metadata->>'pickup_type'='1')
-       OR NOT EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_metadata_reader
-               WHERE attempt_id='__unified_cutover_test__' AND stop_index=0
-                 AND metadata->>'pickup_type'='1')
-    THEN RAISE EXCEPTION 'Legacy fallback failure'; END IF;
+    IF to_regclass('gtfs.maple_v2_stop') IS NOT NULL
+       OR to_regclass('gtfs.maple_v2_stop_major') IS NOT NULL
+       OR to_regclass('gtfs.maple_v2_stop_unified_attempt') IS NOT NULL
+    THEN RAISE EXCEPTION 'Retired storage still exists'; END IF;
 END
 $$;
 
-SELECT gtfs.maple_v2_backfill_unified(onestop_feed_id, attempt_id) FROM cutover_source;
 DELETE FROM gtfs.maple_v2_structure WHERE attempt_id='__unified_cutover_test__';
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_unified WHERE attempt_id='__unified_cutover_test__')
-       OR EXISTS (SELECT 1 FROM gtfs.maple_v2_stop WHERE attempt_id='__unified_cutover_test__')
-       OR EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_major WHERE attempt_id='__unified_cutover_test__')
+       OR EXISTS (SELECT 1 FROM gtfs.maple_v2_trip_major WHERE attempt_id='__unified_cutover_test__')
     THEN RAISE EXCEPTION 'Structure cleanup did not cascade'; END IF;
 END
 $$;
