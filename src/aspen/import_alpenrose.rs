@@ -1803,13 +1803,14 @@ pub async fn new_rt_data(
                 .get()
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::dsl::chateau.eq(&chateau_ipr))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern_id
-                        .eq_any(&list_ip_2),
-                )
-                .select(catenary::models::ItineraryPatternRow::as_select())
+            // Full itinerary timing is needed for realtime stop matching.
+            // The reader prefers v2 trip-major data and falls back per itinerary.
+            diesel::sql_query(
+                "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+                 WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
+            )
+                .bind::<diesel::sql_types::Text, _>(&chateau_ipr)
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&list_ip_2)
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
                 .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)

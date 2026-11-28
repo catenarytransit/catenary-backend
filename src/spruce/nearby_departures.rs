@@ -573,16 +573,15 @@ async fn fetch_chateau_intermediate(
     let (itins_result, direction_meta_result, routes_result) = tokio::join!(
         async {
             let mut conn = pool_clone.get().await.unwrap();
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau_clone_itin))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids),
-                )
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::stop_id.eq_any(&direction_stop_ids),
-                )
-                .select(catenary::models::ItineraryPatternRow::as_select())
+            // Read only matched stop occurrences, including loop stops.
+            diesel::sql_query(
+                "SELECT * FROM gtfs.itinerary_pattern_departures
+                 WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
+                   AND stop_id = ANY($3)",
+            )
+                .bind::<diesel::sql_types::Text, _>(&chateau_clone_itin)
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&direction_stop_ids)
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
                 .unwrap_or_default()
@@ -899,13 +898,12 @@ async fn fetch_chateau_intermediate(
     if chateau == "île~de~france~mobilités" && !filtered_itinerary_ids.is_empty() {
         let mut conn = pool.get().await.unwrap();
         let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> =
-            catenary::schema::gtfs::itinerary_pattern::dsl::itinerary_pattern
-                .filter(catenary::schema::gtfs::itinerary_pattern::chateau.eq(chateau.clone()))
-                .filter(
-                    catenary::schema::gtfs::itinerary_pattern::itinerary_pattern_id
-                        .eq_any(&filtered_itinerary_ids),
-                )
-                .select(catenary::models::ItineraryPatternRow::as_select())
+            diesel::sql_query(
+                "SELECT * FROM gtfs.itinerary_pattern_trip_reader
+                 WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
+            )
+                .bind::<diesel::sql_types::Text, _>(&chateau)
+                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
                 .load::<catenary::models::ItineraryPatternRow>(&mut conn)
                 .await
                 .unwrap_or_default();
