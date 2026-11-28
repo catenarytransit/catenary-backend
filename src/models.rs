@@ -678,7 +678,8 @@ pub struct MapleV2TripMajor {
     pub itinerary_pattern_id: String,
     pub byte_width: i32,
     pub payload: Vec<u8>,
-    pub exception_indices: Vec<i32>,
+    // PostgreSQL integer[] can contain NULL elements even when the array is NOT NULL.
+    pub exception_indices: Vec<Option<i32>>,
     pub exception_arrivals: Vec<Option<i32>>,
     pub exception_departures: Vec<Option<i32>>,
     pub exception_interpolated: Vec<Option<i32>>,
@@ -696,7 +697,8 @@ pub struct MapleV2StopMajor {
     pub unit: i64,
     pub bit_width: i32,
     pub payload: Vec<u8>,
-    pub exception_indices: Vec<i32>,
+    // PostgreSQL integer[] can contain NULL elements even when the array is NOT NULL.
+    pub exception_indices: Vec<Option<i32>>,
     pub exception_arrivals: Vec<Option<i32>>,
     pub exception_departures: Vec<Option<i32>>,
     pub exception_interpolated: Vec<Option<i32>>,
