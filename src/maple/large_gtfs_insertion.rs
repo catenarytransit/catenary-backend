@@ -1255,6 +1255,17 @@ pub async fn gtfs_process_large_feed(
                     .await?;
         }
 
+        if maple_syrup::v2::enabled_for(feed_id)? {
+            let mut conn = conn_pool.get().await?;
+            conn.build_transaction()
+                .run::<(), anyhow::Error, _>(|conn| {
+                    Box::pin(async {
+                        maple_syrup::v2::persist(conn, feed_id, attempt_id, &reduction).await
+                    })
+                })
+                .await?;
+        }
+
         for group in &reduction
             .itineraries_to_trips
             .iter()

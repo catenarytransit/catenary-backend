@@ -14,6 +14,7 @@ use std::hash::Hash;
 use tzf_rs::DefaultFinder;
 pub mod pattern_id;
 pub mod service_optimisation;
+pub mod v2;
 
 use pattern_id::{PatternIds, route_group_prefix};
 

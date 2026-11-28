@@ -1,0 +1,2 @@
+# Exact feed IDs or a trailing * for prefix matching.
+feeds = ["f-bus~dft~gov~uk*", "f-networkrail"]
