@@ -16,16 +16,18 @@ import sys
 import time
 from zoneinfo import ZoneInfo
 import zipfile
+from urllib.parse import urlsplit
 
 ROOT = Path.cwd()
 OUT = ROOT / "benchmark-results"
 WORK = ROOT / "temp" / "swiss-raptor"
 FEED = "f-u0-switzerland"
-URL = "https://tulip.catenarymaps.org/debug/schedule/f-u0-switzerland"
+ATLAS = ROOT / "catenary-atlas"
+ATLAS_FEED = Path("feeds/opentransportdata.swiss.dmfr.json")
 GEOFABRIK = "https://download.geofabrik.de/europe/switzerland.poly"
 OSR = ROOT / "temp/osr-data/regions/europe/switzerland"
 VARIANTS = ("main", "maple-v2-experimental")
-BASE_URL = os.environ["DATABASE_URL"]
+BASE_URL = os.environ.get("DATABASE_URL", "")
 BIN = ROOT / "target/release"
 MAIN_BIN = ROOT / "benchmark-bin/main"
 
@@ -49,7 +51,7 @@ def sql(url, statement):
                                     "-Atc", statement], text=True).strip()
 
 def download(url, target):
-    subprocess.run(["curl", "-fL", "--retry", "5", "--retry-all-errors",
+    subprocess.run(["curl", "-fL", "--retry", "5",
                     "--connect-timeout", "180", "--max-time", "2400",
                     "-o", str(target), url], check=True)
 
@@ -60,36 +62,57 @@ def digest(path):
     with path.open("rb") as f:
         return hashlib.file_digest(f, "sha256").hexdigest()
 
+def swiss_atlas_entry(atlas):
+    path = atlas / ATLAS_FEED
+    document = json.loads(path.read_text(encoding="utf-8"))
+    feeds = [f for f in document["feeds"] if f["id"] == FEED and f["spec"] == "gtfs"]
+    if len(feeds) != 1:
+        raise ValueError(f"expected exactly one static {FEED} entry in {path}")
+    urls = feeds[0]["urls"]
+    url = urls["static_current"]
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError(f"invalid static_current for {FEED}")
+    return path, document, urls
+
+def validate_gtfs(path):
+    with zipfile.ZipFile(path) as archive:
+        required = {"agency.txt", "stops.txt", "routes.txt", "trips.txt", "stop_times.txt"}
+        names = set(archive.namelist())
+        if not required.issubset(names) or not names.intersection({"calendar.txt", "calendar_dates.txt"}):
+            raise ValueError(f"not a complete GTFS archive: {path}")
+        bad = archive.testzip()
+        if bad is not None:
+            raise ValueError(f"corrupt GTFS member: {bad}")
+
+def download_snapshot(atlas, archive):
+    path, _, urls = swiss_atlas_entry(atlas)
+    source = urls["static_current"]
+    print(f"Downloading {FEED} from Catenary Atlas: {source}", flush=True)
+    partial = archive.with_name(archive.name + ".part")
+    partial.unlink(missing_ok=True)
+    try:
+        download(source, partial)
+        validate_gtfs(partial)
+        partial.replace(archive)
+    finally:
+        partial.unlink(missing_ok=True)
+    return {"url": source, "atlas_file": str(path.relative_to(atlas)),
+            "gtfs_sha256": digest(archive), "gtfs_bytes": archive.stat().st_size,
+            "attribution": "https://opentransportdata.swiss"}
+
 def patch_atlas(local_url):
-    # Preserve the genuine feed/operator/chateau metadata; alter only the
-    # static URL in the isolated checkout. No production catalog is changed.
-    found = 0
-    def visit(node):
-        nonlocal found
-        if isinstance(node, dict):
-            if node.get("id") == FEED and isinstance(node.get("urls"), dict):
-                assert "static_current" in node["urls"], "missing static URL"
-                node["urls"]["static_current"] = local_url
-                found += 1
-            for value in node.values():
-                visit(value)
-        elif isinstance(node, list):
-            for value in node:
-                visit(value)
-    for path in (ROOT / "transitland-atlas").rglob("*.dmfr.json"):
-        if FEED not in path.read_text():
-            continue
-        doc = json.loads(path.read_text())
-        before = found
-        visit(doc)
-        if found != before:
-            dump(path, doc)
-    assert found == 1, f"expected one Swiss feed in catalog, found {found}"
+    # Preserve the real feed metadata and share exactly one snapshot between
+    # both Maple imports. Only this isolated checkout is modified.
+    path, document, urls = swiss_atlas_entry(ATLAS)
+    urls["static_current"] = local_url
+    dump(path, document)
+
 
 def config(url):
     path = ROOT / "catenaryconfig.toml"
     path.write_text(f"""[maple]
-transitland = "./transitland-atlas"
+transitland = "./catenary-atlas"
 use_girolle = false
 no_elastic = true
 delete_before_ingest = false
@@ -264,7 +287,8 @@ def report(rows, builds, parity_errors):
     dump(OUT / "builds-and-sizes.json", builds)
     lines = ["## Swiss RAPTOR compression benchmark", "",
              "All latencies in ms. One excluded warm-up per route/variant; each sample starts a fresh CLI process.",
-             "RAPTOR is the engine phase, not OSR or process startup. P95 is nearest-rank (small samples).", "",
+             "RAPTOR is the engine phase, not OSR or process startup. P95 is nearest-rank (small samples).",
+             "GTFS source: https://opentransportdata.swiss (via Catenary Atlas).", "",
              "| Variant | Main timetable bytes | Routing index bytes | All timetable .bin bytes | DB bytes | Maple s | Gentian s |",
              "|---|---:|---:|---:|---:|---:|---:|"]
     for mode in VARIANTS:
@@ -298,6 +322,8 @@ def report(rows, builds, parity_errors):
     dump(OUT / "parity-errors.json", parity_errors)
 
 def main():
+    if not BASE_URL:
+        raise ValueError("DATABASE_URL is required")
     WORK.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(exist_ok=True)
     for folder in ("temp/gtfs_zip", "temp/gtfs_uncompressed"):
@@ -311,10 +337,8 @@ def main():
             day += timedelta(days=1)
     first_day = (day - date(1970, 1, 1)).days - 7
     archive = WORK / "switzerland.zip"
-    download(URL, archive)
-    with zipfile.ZipFile(archive) as z:
-        assert {"stops.txt", "trips.txt", "stop_times.txt"}.issubset(set(z.namelist())), "not a GTFS archive"
-    dump(OUT / "inputs.json", {"feed": FEED, "url": URL, "gtfs_sha256": digest(archive),
+    snapshot = download_snapshot(ATLAS, archive)
+    dump(OUT / "inputs.json", {"feed": FEED, **snapshot,
                                "service_date": day.isoformat(), "first_utc_day": first_day, "days": 35, "rounds": rounds})
     download(GEOFABRIK, WORK / "switzerland.poly")
     geojson_from_poly(WORK / "switzerland.poly", WORK / "switzerland.geojson")

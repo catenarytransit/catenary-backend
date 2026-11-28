@@ -64,8 +64,8 @@ jobs:
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/checkout@v4
         with:
-          repository: catenarytransit/transitland-atlas
-          path: transitland-atlas
+          repository: catenarytransit/catenary-atlas
+          path: catenary-atlas
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -105,7 +105,7 @@ jobs:
           set -euo pipefail
           mkdir -p benchmark-results
           git rev-parse HEAD > benchmark-results/experimental-revision.txt
-          git -C transitland-atlas rev-parse HEAD > benchmark-results/atlas-revision.txt
+          git -C catenary-atlas rev-parse HEAD > benchmark-results/atlas-revision.txt
           lscpu > benchmark-results/runner-cpu.txt
           free -h > benchmark-results/runner-memory.txt
           df -h > benchmark-results/runner-disk.txt
@@ -114,6 +114,8 @@ jobs:
           bash src/osm_manager/build_matched_extractor.sh
           cargo test --release --lib routing_common::transport_index
           cargo test --release --lib routing_common::routing_index
+      - name: Verify Atlas snapshot resolution and archive validation
+        run: python3 -m unittest discover -s benchmarks -p test_swiss_raptor_download.py -v
       - name: Download one GTFS snapshot, build Swiss OSR, ingest, compile and benchmark
         run: python3 benchmarks/swiss_raptor_compression.py
       - name: Upload raw timings, journeys, sizes and logs

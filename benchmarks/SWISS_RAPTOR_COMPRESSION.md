@@ -33,3 +33,13 @@ The baseline is pinned rather than silently tracking a moving main branch.
 The benchmark runs on pushes to the isolated branch; manual dispatch requires
 GitHub's normal default-branch workflow availability. The experimental
 routing-index format is version 2; do not deploy its companion to main.
+
+## GTFS source
+
+The workflow checks out [Catenary Atlas](https://github.com/catenarytransit/catenary-atlas)
+and reads `feeds/opentransportdata.swiss.dmfr.json`, selecting exactly
+`f-u0-switzerland` with spec `gtfs`. It downloads the feed's
+`urls.static_current` directly, verifies the ZIP and its required GTFS files,
+then serves the same archive locally for both Maple imports. No alternative
+source is selected. The source URL, Atlas revision, file size and SHA-256
+are recorded. Raw timetable data attribution: https://opentransportdata.swiss.
