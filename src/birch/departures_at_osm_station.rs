@@ -446,13 +446,7 @@ pub async fn departures_at_osm_station(
     if let Some(itin_meta) = itin_meta_btreemap_by_chateau.get("île~de~france~mobilités") {
         let filtered_itinerary_ids: Vec<String> = itin_meta.keys().cloned().collect();
         if !filtered_itinerary_ids.is_empty() {
-            let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> = diesel::sql_query(
-                "SELECT * FROM gtfs.itinerary_pattern_trip_reader
-                    WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)",
-            )
-            .bind::<diesel::sql_types::Text, _>("île~de~france~mobilités")
-            .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&filtered_itinerary_ids)
-            .load::<catenary::models::ItineraryPatternRow>(&mut *conn)
+            let itin_rows_all: Vec<catenary::models::ItineraryPatternRow> = catenary::maple_v2_reader::load_trip_rows(&mut *conn, "île~de~france~mobilités", &filtered_itinerary_ids)
             .await
             .unwrap_or_default();
 

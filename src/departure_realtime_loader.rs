@@ -172,14 +172,7 @@ pub async fn apply_departure_realtime_timed(
                     .iter()
                     .map(|trip| trip.itinerary_pattern_id.clone())
                     .collect();
-                let rows = diesel::sql_query(
-                    "SELECT * FROM gtfs.itinerary_pattern_trip_reader
-                     WHERE chateau = $1 AND itinerary_pattern_id = ANY($2)
-                     ORDER BY stop_sequence",
-                )
-                .bind::<diesel::sql_types::Text, _>(chateau)
-                .bind::<diesel::sql_types::Array<diesel::sql_types::Text>, _>(&patterns)
-                .load::<crate::models::ItineraryPatternRow>(&mut conn)
+                let rows = crate::maple_v2_reader::load_trip_rows(&mut conn, chateau, &patterns)
                 .await
                 .unwrap_or_default();
                 let timezones = im::table
