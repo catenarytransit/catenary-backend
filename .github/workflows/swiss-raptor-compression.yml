@@ -1,0 +1,110 @@
+name: Switzerland RAPTOR compression comparison
+
+on:
+  push:
+    branches: [benchmark/switzerland-raptor-compression]
+  workflow_dispatch:
+    inputs:
+      rounds:
+        description: Measured repetitions per route and variant (1-20)
+        type: string
+        default: '5'
+      service_date:
+        description: 'Swiss local date YYYY-MM-DD (empty: next weekday)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swiss-raptor-compression-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/catenary
+      PGPASSWORD: postgres
+      CC: gcc-14
+      CXX: g++-14
+      OSR_BUILD_JOBS: '2'
+      SKIP_PFAEDLE: '1'
+      EDELWEISS_ENABLE_REALTIME_ROUTING: '0'
+      EDELWEISS_ENABLE_REALTIME_SOURCE_SYNC: '0'
+      EDELWEISS_ALLOW_ROUTING_INDEX_REBUILD: '0'
+      CATENARY_GEOFABRIK_CONNECT_TIMEOUT_SECONDS: '180'
+      CATENARY_GEOFABRIK_READ_TIMEOUT_SECONDS: '600'
+      BENCH_ROUNDS: ${{ inputs.rounds || '5' }}
+      BENCH_SERVICE_DATE: ${{ inputs.service_date || '' }}
+    services:
+      postgres:
+        image: postgis/postgis:15-3.3
+        env:
+          POSTGRES_DB: catenary
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d catenary"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 15
+    steps:
+      # Avoid initializing the repository's unused pfaedle gitlink.
+      - name: Checkout exact benchmark revision
+        run: |
+          set -euo pipefail
+          git init .
+          git remote add origin https://github.com/catenarytransit/catenary-backend.git
+          git fetch --no-tags --depth 1 origin "$GITHUB_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/checkout@v4
+        with:
+          repository: catenarytransit/transitland-atlas
+          path: transitland-atlas
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: swiss-raptor-gcc14
+          cache-on-failure: true
+          workspaces: |
+            . -> target
+            src/osm_manager -> target
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 build-essential binutils lld libtbb-dev protobuf-compiler libpq-dev libssl-dev pkg-config cmake ninja-build libcoinutils-dev coinor-libcbc-dev postgresql-client libboost-all-dev libzstd-dev liblz4-dev jq
+          if ! command -v diesel >/dev/null 2>&1; then
+            cargo install diesel_cli --no-default-features --features postgres --locked
+          fi
+      - name: Build release binaries and test packed RAPTOR index
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          git rev-parse HEAD > benchmark-results/backend-revision.txt
+          git -C transitland-atlas rev-parse HEAD > benchmark-results/atlas-revision.txt
+          lscpu > benchmark-results/runner-cpu.txt
+          free -h > benchmark-results/runner-memory.txt
+          df -h > benchmark-results/runner-disk.txt
+          cargo build --release --bin maple --bin gentian --bin edelweiss --bin osr_worker
+          cargo build --release --manifest-path src/osm_manager/Cargo.toml --bin osm_manager
+          bash src/osm_manager/build_matched_extractor.sh
+          cargo test --release --lib routing_common::transport_index
+          cargo test --release --lib routing_common::routing_index
+      - name: Download one GTFS snapshot, build Swiss OSR, ingest, compile and benchmark
+        run: python3 benchmarks/swiss_raptor_compression.py
+      - name: Upload raw timings, journeys, sizes and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: swiss-raptor-compression
+          path: benchmark-results/
+          if-no-files-found: warn
+          retention-days: 14
