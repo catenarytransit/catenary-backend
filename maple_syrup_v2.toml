@@ -3,4 +3,5 @@ feeds = [
   "f-bus~dft~gov~uk*",
   "f-networkrail",
   "f-9q5-metro~losangeles~rail",
+  "f-9q5-metro~losangeles",
 ]
