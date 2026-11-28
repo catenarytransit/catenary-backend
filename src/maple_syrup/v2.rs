@@ -21,18 +21,33 @@ fn matches_feed(rule: &str, feed: &str) -> bool {
     }
 }
 
+const DEFAULT_CONFIG_PATH: &str = "maple_syrup_v2.toml";
+
+fn config_path(override_path: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    override_path
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_CONFIG_PATH))
+}
+
 pub fn enabled_for(feed: &str) -> Result<bool> {
-    let text = match std::env::var_os("MAPLE_SYRUP_V2_CONFIG") {
-        Some(path) => std::fs::read_to_string(path).context("read Maple Syrup v2 config")?,
-        None => include_str!("../../maple_syrup_v2.toml").to_owned(),
-    };
-    let config: Config = toml::from_str(&text).context("parse Maple Syrup v2 config")?;
+    let path = config_path(std::env::var_os("MAPLE_SYRUP_V2_CONFIG"));
+    enabled_for_path(feed, &path)
+}
+
+fn enabled_for_path(feed: &str, path: &std::path::Path) -> Result<bool> {
+    // Read on each feed selection so edits apply to subsequent ingest attempts.
+    // Missing or invalid configuration must not silently select v1.
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read Maple Syrup v2 config at {}", path.display()))?;
+    let config: Config = toml::from_str(&text)
+        .with_context(|| format!("parse Maple Syrup v2 config at {}", path.display()))?;
     ensure!(
         config.feeds.iter().all(|r| {
             let prefix = r.strip_suffix('*').unwrap_or(r);
             !prefix.is_empty() && !prefix.contains('*')
         }),
-        "v2 feed rules must be exact IDs or nonempty prefixes followed by *"
+        "v2 feed rules in {} must be exact IDs or nonempty prefixes followed by *",
+        path.display()
     );
     Ok(config.feeds.iter().any(|r| matches_feed(r, feed)))
 }
@@ -283,6 +298,45 @@ mod tests {
         assert!(!matches_feed("*", "anything"));
         assert!(!matches_feed("f-bus~dft~gov~uk*", "f-other"));
     }
+    #[test]
+    fn runtime_config_path_defaults_to_working_directory_and_honors_override() {
+        assert_eq!(
+            config_path(None),
+            std::path::PathBuf::from("maple_syrup_v2.toml")
+        );
+        assert_eq!(
+            config_path(Some("custom/allowlist.toml".into())),
+            std::path::PathBuf::from("custom/allowlist.toml")
+        );
+    }
+
+    #[test]
+    fn runtime_config_edits_are_visible_without_recompiling() {
+        let path = std::env::temp_dir().join(format!(
+            "maple-syrup-v2-{}.toml",
+            uuid::Uuid::new_v4()
+        ));
+        let feed = "f-9q5-metro~losangeles";
+        std::fs::write(&path, "feeds = [\"f-9q5-metro~losangeles~rail\"]").unwrap();
+        let before = enabled_for_path(feed, &path);
+        std::fs::write(&path, "feeds = [\"f-9q5-metro~losangeles\"]").unwrap();
+        let after = enabled_for_path(feed, &path);
+        std::fs::write(&path, "feeds = [\"*\"]").unwrap();
+        let invalid_rule = enabled_for_path(feed, &path);
+        std::fs::write(&path, "not valid TOML").unwrap();
+        let invalid_toml = enabled_for_path(feed, &path);
+        std::fs::remove_file(&path).unwrap();
+        let missing = enabled_for_path(feed, &path);
+
+        assert!(!before.unwrap());
+        assert!(after.unwrap());
+        assert!(invalid_rule.is_err());
+        assert!(invalid_toml.is_err());
+        let error = missing.unwrap_err().to_string();
+        assert!(error.contains("read Maple Syrup v2 config"));
+        assert!(error.contains(&path.display().to_string()));
+    }
+
     #[test]
     fn column_roundtrip() {
         for values in [

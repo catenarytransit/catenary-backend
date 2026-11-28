@@ -1,3 +1,5 @@
+# Read by Maple at runtime from the working directory.
+# Override the location with MAPLE_SYRUP_V2_CONFIG; a missing file is an error.
 # Exact feed IDs or a trailing * for prefix matching.
 feeds = [
   "f-bus~dft~gov~uk*",
