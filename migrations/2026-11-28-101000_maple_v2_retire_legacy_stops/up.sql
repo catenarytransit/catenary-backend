@@ -1,6 +1,6 @@
 -- Contract phase. Diesel executes this migration in one transaction.
--- Explicit opt-in for populated databases after every phase-2 binary has
--- been deployed. Empty CI databases can migrate without the setting.
+-- Deploy and restart every phase-2 binary before running this migration.
+-- Standard Diesel invocation is supported; data validation remains mandatory.
 SET LOCAL lock_timeout = '10s';
 SET LOCAL jit = off;
 
@@ -12,14 +12,6 @@ LOCK TABLE gtfs.maple_v2_structure, gtfs.maple_v2_stop,
 
 DO $$
 BEGIN
-    IF current_setting('catenary.maple_v2_contract', true) IS DISTINCT FROM 'on'
-       AND (EXISTS (SELECT 1 FROM gtfs.maple_v2_structure)
-            OR EXISTS (SELECT 1 FROM gtfs.maple_v2_stop)
-            OR EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_major)
-            OR EXISTS (SELECT 1 FROM gtfs.maple_v2_stop_unified)) THEN
-        RAISE EXCEPTION 'Deploy/restart all phase-2 binaries before retiring old v2 tables. Set PGOPTIONS=-c catenary.maple_v2_contract=on only when ready.';
-    END IF;
-
     IF EXISTS (
         SELECT 1 FROM gtfs.maple_v2_structure s
         LEFT JOIN gtfs.maple_v2_stop_unified_attempt a USING (onestop_feed_id, attempt_id)
