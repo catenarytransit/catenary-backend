@@ -150,10 +150,6 @@ const STRUCTURES: &str = "INSERT INTO gtfs.maple_v2_structure
 (onestop_feed_id,attempt_id,structure_id,stop_count,timing_count)
 SELECT $1,$2,x.* FROM jsonb_to_recordset($3) AS x(
  structure_id text,stop_count integer,timing_count integer)";
-const STOPS: &str = "INSERT INTO gtfs.maple_v2_stop
-(onestop_feed_id,attempt_id,structure_id,stop_index,stop_id,gtfs_stop_sequence,metadata)
-SELECT $1,$2,x.* FROM jsonb_to_recordset($3) AS x(
- structure_id text,stop_index integer,stop_id text,gtfs_stop_sequence bigint,metadata jsonb)";
 const TRIP_MAJOR: &str = "INSERT INTO gtfs.maple_v2_trip_major
 (onestop_feed_id,attempt_id,structure_id,timing_index,itinerary_pattern_id,byte_width,payload,
  exception_indices,exception_arrivals,exception_departures,exception_interpolated)
@@ -161,14 +157,18 @@ SELECT $1,$2,x.* FROM jsonb_to_recordset($3) AS x(
  structure_id text,timing_index integer,itinerary_pattern_id text,byte_width integer,payload bytea,
  exception_indices integer[],exception_arrivals integer[],exception_departures integer[],
  exception_interpolated integer[])";
-const STOP_MAJOR: &str = "INSERT INTO gtfs.maple_v2_stop_major
+const CREATE_STAGE: &str = "CREATE TEMP TABLE maple_v2_unified_stage
+    (LIKE gtfs.maple_v2_stop_unified INCLUDING DEFAULTS INCLUDING CONSTRAINTS)
+    ON COMMIT DROP";
+const STOP_STAGE: &str = "INSERT INTO pg_temp.maple_v2_unified_stage
 (onestop_feed_id,attempt_id,structure_id,stop_index,base,unit,bit_width,payload,
  exception_indices,exception_arrivals,exception_departures,exception_interpolated,
- min_departure_offset,max_departure_offset)
+ min_departure_offset,max_departure_offset,stop_id,gtfs_stop_sequence,metadata)
 SELECT $1,$2,x.* FROM jsonb_to_recordset($3) AS x(
  structure_id text,stop_index integer,base bigint,unit bigint,bit_width integer,payload bytea,
  exception_indices integer[],exception_arrivals integer[],exception_departures integer[],
- exception_interpolated integer[],min_departure_offset integer,max_departure_offset integer)";
+ exception_interpolated integer[],min_departure_offset integer,max_departure_offset integer,
+ stop_id text,gtfs_stop_sequence bigint,metadata jsonb)";
 
 async fn insert(
     conn: &mut AsyncPgConnection,
@@ -198,6 +198,9 @@ pub async fn persist(
     attempt: &str,
     reduction: &ResponseFromReduce,
 ) -> Result<()> {
+    // Persist is called inside the ingest transaction. Stage in bounded
+    // batches, then publish in stop-ID order without a feed-sized Rust buffer.
+    diesel::sql_query(CREATE_STAGE).execute(conn).await?;
     let mut groups: HashMap<ItineraryCover, Vec<u64>> = HashMap::new();
     for (&id, itinerary) in &reduction.itineraries {
         groups
@@ -206,7 +209,6 @@ pub async fn persist(
             .push(id);
     }
     let mut structures = Vec::new();
-    let mut stops = Vec::new();
     let mut trips = Vec::new();
     let mut columns = Vec::new();
     for (structure, mut ids) in groups {
@@ -216,23 +218,6 @@ pub async fn persist(
         let timing_count = i32::try_from(ids.len())?;
         structures
             .push(json!({"structure_id":id,"stop_count":stop_count,"timing_count":timing_count}));
-        for (idx, s) in structure.stop_sequences.iter().enumerate() {
-            let mut metadata = serde_json::to_value(s)?;
-            metadata["stop_headsign_idx"] = json!(s.stop_headsign.as_ref().and_then(|headsign| {
-                structure
-                    .stop_headsigns_unique_list
-                    .as_ref()
-                    .and_then(|list| {
-                        list.iter()
-                            .position(|value| value == headsign)
-                            .map(|i| i as i16)
-                    })
-            }));
-            stops.push(
-                json!({"structure_id":id,"stop_index":idx,"stop_id":s.stop_id,
-                "gtfs_stop_sequence":s.gtfs_stop_sequence,"metadata":metadata}),
-            );
-        }
         for (idx, &itinerary_id) in ids.iter().enumerate() {
             let itinerary = &reduction.itineraries[&itinerary_id];
             let mut ex = Exceptions::default();
@@ -249,7 +234,18 @@ pub async fn persist(
             ex.add_to(&mut row);
             trips.push(row);
         }
-        for idx in 0..stop_count as usize {
+        for (idx, s) in structure.stop_sequences.iter().enumerate() {
+            let mut metadata = serde_json::to_value(s)?;
+            metadata["stop_headsign_idx"] = json!(s.stop_headsign.as_ref().and_then(|headsign| {
+                structure
+                    .stop_headsigns_unique_list
+                    .as_ref()
+                    .and_then(|list| {
+                        list.iter()
+                            .position(|value| value == headsign)
+                            .map(|i| i as i16)
+                    })
+            }));
             let mut ex = Exceptions::default();
             let mut values = Vec::with_capacity(ids.len());
             let mut min = None::<i32>;
@@ -266,30 +262,30 @@ pub async fn persist(
             let (base, unit, width, payload) = column(&values);
             let mut row = json!({"structure_id":id,"stop_index":idx,"base":base,
                 "unit":unit,"bit_width":width,"payload":bytea(&payload),
-                "min_departure_offset":min,"max_departure_offset":max});
+                "min_departure_offset":min,"max_departure_offset":max,
+                "stop_id":s.stop_id,"gtfs_stop_sequence":s.gtfs_stop_sequence,
+                "metadata":metadata});
             ex.add_to(&mut row);
             columns.push(row);
         }
-        if structures.len() >= 64 || trips.len() >= 2048 || stops.len() >= 2048 {
+        if structures.len() >= 64 || trips.len() >= 2048 || columns.len() >= 2048 {
             insert(conn, feed, attempt, STRUCTURES, &mut structures).await?;
-            insert(conn, feed, attempt, STOPS, &mut stops).await?;
             insert(conn, feed, attempt, TRIP_MAJOR, &mut trips).await?;
-            insert(conn, feed, attempt, STOP_MAJOR, &mut columns).await?;
+            insert(conn, feed, attempt, STOP_STAGE, &mut columns).await?;
         }
     }
     insert(conn, feed, attempt, STRUCTURES, &mut structures).await?;
-    insert(conn, feed, attempt, STOPS, &mut stops).await?;
     insert(conn, feed, attempt, TRIP_MAJOR, &mut trips).await?;
-    insert(conn, feed, attempt, STOP_MAJOR, &mut columns).await?;
-    // Build the ordered stop-major copy only after the entire attempt has
-    // been written. PostgreSQL sorts the persisted rows, so Maple does not
-    // have to retain a second feed-sized buffer. Publication of the ready
-    // marker is atomic with the original ingest transaction.
-    diesel::sql_query("SELECT gtfs.maple_v2_backfill_unified($1, $2)")
+    insert(conn, feed, attempt, STOP_STAGE, &mut columns).await?;
+    // The database publication interface mirrors the old layout for rollback
+    // during cutover, then writes the unified rows in global stop-ID order.
+    diesel::sql_query("SELECT gtfs.maple_v2_publish_unified($1, $2)")
         .bind::<Text, _>(feed)
         .bind::<Text, _>(attempt)
         .execute(conn)
         .await?;
+    diesel::sql_query("DROP TABLE pg_temp.maple_v2_unified_stage")
+        .execute(conn).await?;
     Ok(())
 }
 
