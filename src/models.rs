@@ -654,16 +654,22 @@ pub struct MapleV2Structure {
     pub encoding_version: i16,
 }
 
-#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
-#[diesel(table_name = crate::schema::gtfs::maple_v2_stop)]
-#[diesel(check_for_backend(Pg))]
+// Named projection of the stable v2 reader view; independent of retired tables.
+#[derive(QueryableByName, Debug, Clone)]
 pub struct MapleV2Stop {
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub onestop_feed_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub attempt_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub structure_id: String,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
     pub stop_index: i32,
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub stop_id: String,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub gtfs_stop_sequence: i64,
+    #[diesel(sql_type = diesel::sql_types::Jsonb)]
     pub metadata: Value,
 }
 
@@ -685,24 +691,37 @@ pub struct MapleV2TripMajor {
     pub exception_interpolated: Vec<Option<i32>>,
 }
 
-#[derive(Queryable, Selectable, Insertable, QueryableByName, Debug, Clone)]
-#[diesel(table_name = crate::schema::gtfs::maple_v2_stop_major)]
-#[diesel(check_for_backend(Pg))]
+// Named projection of the stable v2 reader view; independent of retired tables.
+#[derive(QueryableByName, Debug, Clone)]
 pub struct MapleV2StopMajor {
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub onestop_feed_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub attempt_id: String,
+    #[diesel(sql_type = diesel::sql_types::Text)]
     pub structure_id: String,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
     pub stop_index: i32,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub base: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
     pub unit: i64,
+    #[diesel(sql_type = diesel::sql_types::Integer)]
     pub bit_width: i32,
+    #[diesel(sql_type = diesel::sql_types::Binary)]
     pub payload: Vec<u8>,
     // PostgreSQL integer[] can contain NULL elements even when the array is NOT NULL.
+    #[diesel(sql_type = diesel::sql_types::Array<diesel::sql_types::Nullable<diesel::sql_types::Integer>>)]
     pub exception_indices: Vec<Option<i32>>,
+    #[diesel(sql_type = diesel::sql_types::Array<diesel::sql_types::Nullable<diesel::sql_types::Integer>>)]
     pub exception_arrivals: Vec<Option<i32>>,
+    #[diesel(sql_type = diesel::sql_types::Array<diesel::sql_types::Nullable<diesel::sql_types::Integer>>)]
     pub exception_departures: Vec<Option<i32>>,
+    #[diesel(sql_type = diesel::sql_types::Array<diesel::sql_types::Nullable<diesel::sql_types::Integer>>)]
     pub exception_interpolated: Vec<Option<i32>>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
     pub min_departure_offset: Option<i32>,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
     pub max_departure_offset: Option<i32>,
 }
 

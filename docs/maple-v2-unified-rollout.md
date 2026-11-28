@@ -26,3 +26,39 @@ Unset the environment flag and restart native-reader services. The old layout ha
 ## Contract phase (separate PR)
 
 After all readers and writers are upgraded and parity is proven, update Gentian/structural/trip compatibility views and direct trip-major metadata reads, update Diesel schema/models and ingestion, replace the unified table's transitional FK with a structure FK, and only then retire the old tables. Until that phase, storage is intentionally duplicated. Do not delete original v2 rows manually to save space.
+
+## Phase 2: stable reader/writer cutover
+
+Apply the cutover migration before deploying binaries. It adds the direct
+structure FK, stable metadata/column views, updates the four public
+compatibility views in place, and adds the transactional publication function.
+It does **not** drop either original table or the transitional FK.
+
+Build and deploy every native reader/writer:
+
+```sh
+cargo build --release --bin maple --bin birch --bin ramonda --bin spruce --bin aspen --bin alpenrose
+```
+
+Restart all deployed instances, including workers and scheduled jobs. The
+new native reader always uses the stable views; the phase-1 environment flag
+is no longer needed. Unready attempts still fall back automatically. Maple
+stages unified rows in a transaction-local temp table; the database publisher
+mirrors the old layout and inserts the unified rows in global stop-ID order.
+Old binaries continue to work during this rolling deployment.
+
+On staging, run `tests/sql/maple_v2_unified_cutover.sql` with an existing
+v2 structure, the existing parity tests, and `cargo test --lib maple_v2_reader::tests`.
+Compare fixed-time nearby, single-trip and stop-board responses, and check
+EXPLAIN plans for the stable stop-column view. In particular, verify that
+the fallback branch does not fetch old payloads for ready attempts; planner
+behavior can differ from the phase-1 explicit branch query.
+
+Before the separate contract migration, stop legacy writers, ensure all
+instances have been restarted on this revision, backfill remaining attempts,
+verify exact row parity for each attempt, and verify that there are no external
+SQL consumers referencing old tables. Do not manually drop either table:
+the stable views and publisher intentionally still reference them. The
+contract migration must replace those definitions and remove the transitional
+FK before dropping the originals. Rollback of this phase requires deploying
+phase-1 binaries before reverting the migration.

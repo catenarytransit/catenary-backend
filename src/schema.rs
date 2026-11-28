@@ -814,6 +814,37 @@ pub mod gtfs {
         }
     }
 
+    diesel::table! {
+        gtfs.maple_v2_stop_unified (onestop_feed_id, attempt_id, structure_id, stop_index) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            structure_id -> Text,
+            stop_index -> Int4,
+            base -> Int8,
+            unit -> Int8,
+            bit_width -> Int4,
+            payload -> Bytea,
+            exception_indices -> Array<Nullable<Int4>>,
+            exception_arrivals -> Array<Nullable<Int4>>,
+            exception_departures -> Array<Nullable<Int4>>,
+            exception_interpolated -> Array<Nullable<Int4>>,
+            min_departure_offset -> Nullable<Int4>,
+            max_departure_offset -> Nullable<Int4>,
+            stop_id -> Text,
+            gtfs_stop_sequence -> Int8,
+            metadata -> Jsonb,
+        }
+    }
+
+    diesel::table! {
+        gtfs.maple_v2_stop_unified_attempt (onestop_feed_id, attempt_id) {
+            onestop_feed_id -> Text,
+            attempt_id -> Text,
+            ready -> Bool,
+            migrated_at -> Nullable<Timestamptz>,
+        }
+    }
+
     diesel::joinable!(osm_stations -> osm_station_imports (import_id));
     diesel::joinable!(stop_mappings -> stations (station_id));
 
@@ -840,6 +871,8 @@ pub mod gtfs {
         maple_v2_stop,
         maple_v2_trip_major,
         maple_v2_stop_major,
+        maple_v2_stop_unified,
+        maple_v2_stop_unified_attempt,
         osm_station_imports,
         osm_stations,
         osm_stations_ranked,

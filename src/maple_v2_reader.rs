@@ -171,87 +171,37 @@ fn from_json<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> QueryR
 }
 
 
-// Keep the index anchor and the exact payload lookup in a small statement.
-// Resolve the feed/attempt from the actual stop table, not the v2 allowlist.
-// Include child stops even when allowed_spatial_query is false: that flag is
-// applied by the caller when selecting the station, not its children.
+// The stable view chooses unified columns for ready attempts and falls
+// back for old writers. A later contract migration can remove the fallback
+// in SQL without requiring another application rebuild. Preserve the stop
+// lookup anchor and include child stops even if spatial querying is disabled.
 const STOP_SQL: &str = r#"
 WITH stop_keys AS MATERIALIZED (
     SELECT DISTINCT onestop_feed_id, attempt_id, gtfs_id
     FROM gtfs.stops
     WHERE chateau = $1 AND gtfs_id = ANY($2)
-), selected AS MATERIALIZED (
-    SELECT s.*
-    FROM stop_keys k
-    CROSS JOIN LATERAL (
-        SELECT s.* FROM gtfs.maple_v2_stop s
-        WHERE s.stop_id = k.gtfs_id
-          AND s.onestop_feed_id = k.onestop_feed_id
-          AND s.attempt_id = k.attempt_id
-        OFFSET 0
-    ) s
 )
-SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata
-FROM selected s
+SELECT c.*
+FROM stop_keys k
 CROSS JOIN LATERAL (
-    SELECT c.* FROM gtfs.maple_v2_stop_major c
-    WHERE c.onestop_feed_id = s.onestop_feed_id
-      AND c.attempt_id = s.attempt_id
-      AND c.structure_id = s.structure_id
-      AND c.stop_index = s.stop_index
+    SELECT c.* FROM gtfs.maple_v2_stop_columns_reader c
+    WHERE c.stop_id = k.gtfs_id
+      AND c.onestop_feed_id = k.onestop_feed_id
+      AND c.attempt_id = k.attempt_id
     OFFSET 0
 ) c
 "#;
 
-// Choose the representation per complete feed attempt in the same
-// repeatable-read snapshot. Unbackfilled attempts and older ingesters
-// must never lose stops. Only the legacy branch performs the second lookup.
-const UNIFIED_STOP_SQL: &str = r#"
-WITH stop_keys AS MATERIALIZED (
-    SELECT DISTINCT s.onestop_feed_id, s.attempt_id, s.gtfs_id,
-           COALESCE(a.ready, false) AS ready
-    FROM gtfs.stops s
-    LEFT JOIN gtfs.maple_v2_stop_unified_attempt a
-      USING (onestop_feed_id, attempt_id)
-    WHERE s.chateau = $1 AND s.gtfs_id = ANY($2)
-)
-SELECT u.onestop_feed_id, u.attempt_id, u.structure_id, u.stop_index,
-       u.base, u.unit, u.bit_width, u.payload, u.exception_indices,
-       u.exception_arrivals, u.exception_departures, u.exception_interpolated,
-       u.min_departure_offset, u.max_departure_offset,
-       u.stop_id, u.gtfs_stop_sequence, u.metadata
-FROM (SELECT * FROM stop_keys WHERE ready) k
+const TRIP_STOPS_SQL: &str = r#"
+SELECT s.*
+FROM unnest($1::text[],$2::text[],$3::text[]) AS k(onestop_feed_id,attempt_id,structure_id)
 CROSS JOIN LATERAL (
-    SELECT u.* FROM gtfs.maple_v2_stop_unified u
-    WHERE u.stop_id = k.gtfs_id
-      AND u.onestop_feed_id = k.onestop_feed_id
-      AND u.attempt_id = k.attempt_id
-    OFFSET 0
-) u
-UNION ALL
-SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata
-FROM (SELECT * FROM stop_keys WHERE NOT ready) k
-CROSS JOIN LATERAL (
-    SELECT s.* FROM gtfs.maple_v2_stop s
-    WHERE s.stop_id = k.gtfs_id
-      AND s.onestop_feed_id = k.onestop_feed_id
-      AND s.attempt_id = k.attempt_id
+    SELECT s.* FROM gtfs.maple_v2_stop_metadata_reader s
+    WHERE s.onestop_feed_id = k.onestop_feed_id
+      AND s.attempt_id = k.attempt_id AND s.structure_id = k.structure_id
     OFFSET 0
 ) s
-CROSS JOIN LATERAL (
-    SELECT c.* FROM gtfs.maple_v2_stop_major c
-    WHERE c.onestop_feed_id = s.onestop_feed_id
-      AND c.attempt_id = s.attempt_id
-      AND c.structure_id = s.structure_id
-      AND c.stop_index = s.stop_index
-    OFFSET 0
-) c
 "#;
-
-fn unified_stops_enabled() -> bool {
-    std::env::var("MAPLE_V2_USE_UNIFIED_STOPS")
-        .is_ok_and(|value| value.eq_ignore_ascii_case("true") || value == "1")
-}
 
 // Only the mapping columns are read. The primary key prefix is
 // (onestop_feed_id, attempt_id, structure_id), so each lateral lookup can
@@ -391,12 +341,11 @@ async fn load_v2_stops_inner(
     excluded_local: &[String], nearby: bool,
 ) -> QueryResult<Vec<(ItineraryPatternRow, ItineraryPatternMeta)>> {
     let started = Instant::now();
-    let unified = unified_stops_enabled();
-    let columns = diesel::sql_query(if unified { UNIFIED_STOP_SQL } else { STOP_SQL })
+    let columns = diesel::sql_query(STOP_SQL)
         .bind::<Text,_>(chateau)
         .bind::<Array<Text>,_>(stops)
         .load::<MapleV2StopColumn>(conn).await?;
-    log_stage(chateau, if unified { "stop_columns_unified" } else { "stop_columns" }, started, columns.len());
+    log_stage(chateau, "stop_columns_unified", started, columns.len());
     let payload_bytes: usize = columns.iter().map(|c| c.timing.payload.len()).sum();
     tracing::debug!(chateau, payload_bytes, "Maple v2 stop-major packed bytes");
     if columns.is_empty() { return Ok(Vec::new()); }
@@ -554,15 +503,7 @@ pub async fn load_trip_rows_scoped(
     for (f,a,s) in keys { feeds.push(f); attempts.push(a); structures.push(s); }
     let mut decoded: std::collections::HashMap<Key, Vec<Stop>> = std::collections::HashMap::new();
     if !structures.is_empty() {
-        let stops = diesel::sql_query(r#"
-            SELECT s.*
-            FROM unnest($1::text[],$2::text[],$3::text[]) AS k(onestop_feed_id,attempt_id,structure_id)
-            CROSS JOIN LATERAL (
-                SELECT s.* FROM gtfs.maple_v2_stop s WHERE s.onestop_feed_id=k.onestop_feed_id
-                  AND s.attempt_id=k.attempt_id AND s.structure_id=k.structure_id
-                OFFSET 0
-            ) s
-        "#).bind::<Array<Text>,_>(&feeds).bind::<Array<Text>,_>(&attempts).bind::<Array<Text>,_>(&structures)
+        let stops = diesel::sql_query(TRIP_STOPS_SQL).bind::<Array<Text>,_>(&feeds).bind::<Array<Text>,_>(&attempts).bind::<Array<Text>,_>(&structures)
             .load::<MapleV2Stop>(conn).await?;
         for s in stops {
             let key = (s.onestop_feed_id.clone(), s.attempt_id.clone(), s.structure_id.clone());
@@ -588,25 +529,18 @@ pub async fn load_trip_rows_scoped(
 mod tests {
     use super::*;
     #[test]
-    fn unified_query_preserves_attempt_scoped_fallback() {
-        assert!(UNIFIED_STOP_SQL.contains("COALESCE(a.ready, false)"));
-        assert!(UNIFIED_STOP_SQL.contains("WHERE ready"));
-        assert!(UNIFIED_STOP_SQL.contains("WHERE NOT ready"));
-        assert!(UNIFIED_STOP_SQL.contains("u.onestop_feed_id = k.onestop_feed_id"));
-        assert!(UNIFIED_STOP_SQL.contains("u.attempt_id = k.attempt_id"));
-        assert!(UNIFIED_STOP_SQL.contains("u.stop_id = k.gtfs_id"));
-        assert!(UNIFIED_STOP_SQL.contains("UNION ALL"));
-    }
-
-    #[test]
     fn staged_queries_keep_composite_index_anchors() {
-        assert!(STOP_SQL.contains("s.stop_id = k.gtfs_id"));
-        assert!(STOP_SQL.contains("s.onestop_feed_id = k.onestop_feed_id"));
-        assert!(STOP_SQL.contains("s.attempt_id = k.attempt_id"));
-        assert!(STOP_SQL.contains("c.stop_index = s.stop_index"));
-        assert_eq!(STOP_SQL.matches("OFFSET 0").count(), 2);
+        assert!(STOP_SQL.contains("gtfs.maple_v2_stop_columns_reader"));
+        assert!(STOP_SQL.contains("c.stop_id = k.gtfs_id"));
+        assert!(STOP_SQL.contains("c.onestop_feed_id = k.onestop_feed_id"));
+        assert!(STOP_SQL.contains("c.attempt_id = k.attempt_id"));
+        assert_eq!(STOP_SQL.matches("OFFSET 0").count(), 1);
         assert!(!STOP_SQL.contains("maple_v2_trip_major"));
         assert!(!STOP_SQL.contains("jsonb_agg"));
+        assert!(TRIP_STOPS_SQL.contains("gtfs.maple_v2_stop_metadata_reader"));
+        assert!(TRIP_STOPS_SQL.contains("s.onestop_feed_id = k.onestop_feed_id"));
+        assert!(TRIP_STOPS_SQL.contains("s.attempt_id = k.attempt_id"));
+        assert!(TRIP_STOPS_SQL.contains("s.structure_id = k.structure_id"));
         assert!(TIMING_KEYS_SQL.contains("t.structure_id = k.structure_id"));
         assert!(!TIMING_KEYS_SQL.contains("payload"));
         assert!(METADATA_SQL.contains("im.itinerary_pattern_id = k.itinerary_pattern_id"));
