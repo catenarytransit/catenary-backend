@@ -226,6 +226,30 @@ CROSS JOIN LATERAL (
 ) m
 "#;
 
+// Nearby already knows its direction patterns. Read their metadata once per
+// native stop batch using the (chateau, direction_pattern_id) index, rather
+// than probing the metadata heap for each timing variant. The explicit
+// boolean test keeps route membership as a hashed subplan (rather than
+// pulling up a correlated EXISTS into a repeated feed-wide route scan).
+// The caller intersects the result with the complete timing mapping keys
+// from the same repeatable-read snapshot.
+const NEARBY_DIRECTION_METADATA_SQL: &str = r#"
+SELECT im.onestop_feed_id, im.attempt_id, im.itinerary_pattern_id,
+       im.chateau, ARRAY[]::text[] AS trip_ids, im.trip_headsign,
+       im.trip_headsign_translations, im.shape_id, im.timezone,
+       im.route_id, im.direction_pattern_id, im.row_count
+FROM gtfs.itinerary_pattern_meta im
+WHERE im.chateau = $1
+  AND im.direction_pattern_id = ANY($2::text[])
+  AND ($3::text[] IS NULL OR im.route_id = ANY($3))
+  AND ((im.onestop_feed_id, im.attempt_id, im.route_id) IN (
+      SELECT r.onestop_feed_id, r.attempt_id, r.route_id
+      FROM gtfs.routes r
+      WHERE r.chateau = $1 AND r.route_type <> 200
+        AND (r.route_type <> ALL(ARRAY[0,1,3]::smallint[]) OR r.route_id <> ALL($4::text[]))
+  )) IS TRUE
+"#;
+
 const LOOKUP_BATCH_SIZE: usize = 512;
 
 fn key_arrays(keys: &[Key]) -> (Vec<&str>, Vec<&str>, Vec<&str>) {
@@ -272,6 +296,13 @@ pub async fn load_v2_stops(
             Box::pin(async move {
                 diesel::sql_query("SET LOCAL statement_timeout = '10s'")
                     .execute(conn).await?;
+                // These indexed, short-lived nearby queries do not benefit
+                // from compiling a fresh high-cost plan for every request.
+                // Keep this setting local to the native nearby transaction.
+                if nearby && directions.is_some() {
+                    diesel::sql_query("SET LOCAL jit = off")
+                        .execute(conn).await?;
+                }
                 load_v2_stops_inner(conn, chateau, stops, patterns, directions, routes, excluded_local, nearby).await
             })
         })
@@ -313,26 +344,48 @@ async fn load_v2_stops_inner(
     }
     log_stage(chateau, "timing_keys", started, timing_keys.len());
 
-    let mut pattern_keys: Vec<Key> = timing_keys.iter().map(|t| (
+    if timing_keys.is_empty() { return Ok(Vec::new()); }
+    let pattern_keys: HashSet<Key> = timing_keys.iter().map(|t| (
         t.onestop_feed_id.clone(), t.attempt_id.clone(), t.itinerary_pattern_id.clone()
-    )).collect::<HashSet<_>>().into_iter().collect();
-    pattern_keys.sort_unstable();
+    )).collect();
     let mut metadata = HashMap::new();
     let started = Instant::now();
-    for batch in pattern_keys.chunks(LOOKUP_BATCH_SIZE) {
-        let (feeds, attempts, ids) = key_arrays(batch);
-        let rows = diesel::sql_query(METADATA_SQL)
-            .bind::<Array<Text>,_>(&feeds)
-            .bind::<Array<Text>,_>(&attempts)
-            .bind::<Array<Text>,_>(&ids)
+    if let Some(directions) = directions.filter(|_| nearby) {
+        let rows = diesel::sql_query(NEARBY_DIRECTION_METADATA_SQL)
             .bind::<Text,_>(chateau)
-            .bind::<Nullable<Array<Text>>,_>(directions)
+            .bind::<Array<Text>,_>(directions)
             .bind::<Nullable<Array<Text>>,_>(routes)
             .bind::<Array<Text>,_>(excluded_local)
-            .bind::<Bool,_>(nearby)
             .load::<ItineraryPatternMeta>(conn).await?;
+        // A direction can contain legacy-only patterns, other feed attempts
+        // or patterns that never visit this stop batch. Keep only the exact
+        // keys represented by its timing mappings, not bare pattern IDs.
         for row in rows {
-            metadata.insert((row.onestop_feed_id.clone(), row.attempt_id.clone(), row.itinerary_pattern_id.clone()), row);
+            let key = (row.onestop_feed_id.clone(), row.attempt_id.clone(), row.itinerary_pattern_id.clone());
+            if pattern_keys.contains(&key) {
+                metadata.insert(key, row);
+            }
+        }
+    } else {
+        // Stop-board, single-trip and direction-less callers retain their
+        // pattern-first, bounded lookup and existing filter semantics.
+        let mut pattern_keys: Vec<Key> = pattern_keys.into_iter().collect();
+        pattern_keys.sort_unstable();
+        for batch in pattern_keys.chunks(LOOKUP_BATCH_SIZE) {
+            let (feeds, attempts, ids) = key_arrays(batch);
+            let rows = diesel::sql_query(METADATA_SQL)
+                .bind::<Array<Text>,_>(&feeds)
+                .bind::<Array<Text>,_>(&attempts)
+                .bind::<Array<Text>,_>(&ids)
+                .bind::<Text,_>(chateau)
+                .bind::<Nullable<Array<Text>>,_>(directions)
+                .bind::<Nullable<Array<Text>>,_>(routes)
+                .bind::<Array<Text>,_>(excluded_local)
+                .bind::<Bool,_>(nearby)
+                .load::<ItineraryPatternMeta>(conn).await?;
+            for row in rows {
+                metadata.insert((row.onestop_feed_id.clone(), row.attempt_id.clone(), row.itinerary_pattern_id.clone()), row);
+            }
         }
     }
     log_stage(chateau, "pattern_metadata", started, metadata.len());
@@ -473,6 +526,100 @@ mod tests {
         assert!(METADATA_SQL.contains("ARRAY[]::text[] AS trip_ids"));
         assert!(METADATA_SQL.contains("r.route_type <> 200"));
         assert!(!METADATA_SQL.contains("jsonb_agg"));
+    }
+
+    #[test]
+    fn nearby_metadata_uses_direction_index_and_complete_route_keys() {
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("im.direction_pattern_id = ANY($2::text[])"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("(im.onestop_feed_id, im.attempt_id, im.route_id) IN"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("SELECT r.onestop_feed_id, r.attempt_id, r.route_id"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains(")) IS TRUE"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("r.route_type <> 200"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("r.route_id <> ALL($4::text[])"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("im.route_id = ANY($3)"));
+        assert!(NEARBY_DIRECTION_METADATA_SQL.contains("ARRAY[]::text[] AS trip_ids"));
+        assert!(!NEARBY_DIRECTION_METADATA_SQL.contains("CROSS JOIN LATERAL"));
+    }
+
+    // Exercise the actual SQL constants against isolated PostgreSQL temp
+    // tables. Run with MAPLE_V2_TEST_DATABASE_URL and --ignored.
+    #[test]
+    #[ignore = "requires MAPLE_V2_TEST_DATABASE_URL (PostgreSQL)"]
+    fn nearby_direction_metadata_postgres_parity() {
+        let url = std::env::var("MAPLE_V2_TEST_DATABASE_URL")
+            .expect("set MAPLE_V2_TEST_DATABASE_URL");
+        let mut db = postgres::Client::connect(&url, postgres::NoTls).unwrap();
+        db.batch_execute(r#"
+            CREATE TEMP TABLE itinerary_pattern_meta (
+                onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+                itinerary_pattern_id text NOT NULL, chateau text NOT NULL,
+                trip_headsign text, trip_headsign_translations jsonb,
+                shape_id text, timezone text, route_id text NOT NULL,
+                direction_pattern_id text, row_count integer,
+                PRIMARY KEY (onestop_feed_id, attempt_id, itinerary_pattern_id)
+            );
+            CREATE TEMP TABLE routes (
+                onestop_feed_id text NOT NULL, attempt_id text NOT NULL,
+                route_id text NOT NULL, chateau text NOT NULL, route_type smallint,
+                PRIMARY KEY (onestop_feed_id, attempt_id, route_id)
+            );
+            INSERT INTO routes VALUES
+                ('f','a','rail','c',2), ('f','b','rail','c',200),
+                ('g','a','rail','c',3), ('f','a','local','c',3),
+                ('f','a','other','c',2), ('f','a','foreign','other-c',2);
+            INSERT INTO itinerary_pattern_meta
+                (onestop_feed_id,attempt_id,itinerary_pattern_id,chateau,route_id,direction_pattern_id)
+            VALUES
+                ('f','a','p','c','rail','d'),
+                ('f','b','p','c','rail','d'),
+                ('g','a','p','c','rail','d'),
+                ('f','a','q','c','local','d'),
+                ('f','a','z','c','other','d'),
+                ('f','a','unmapped','c','rail','d'),
+                ('f','a','wrong-direction','c','rail','other-d'),
+                ('f','a','missing-route','c','missing','d'),
+                ('f','a','foreign-route','c','foreign','d'),
+                ('f','a','wrong-chateau','other-c','rail','d');
+        "#).unwrap();
+
+        let keys: Vec<Key> = vec![
+            ("f".into(),"a".into(),"p".into()),
+            ("f".into(),"b".into(),"p".into()),
+            ("g".into(),"a".into(),"p".into()),
+            ("f".into(),"a".into(),"q".into()),
+            ("f".into(),"a".into(),"z".into()),
+            ("f".into(),"a".into(),"wrong-direction".into()),
+            ("f".into(),"a".into(),"missing-route".into()),
+            ("f".into(),"a".into(),"foreign-route".into()),
+            ("f".into(),"a".into(),"wrong-chateau".into()),
+        ];
+        let (feeds, attempts, ids) = key_arrays(&keys);
+        let wanted: HashSet<_> = keys.iter().cloned().collect();
+        let old_sql = METADATA_SQL.replace("gtfs.", "pg_temp.");
+        let new_sql = NEARBY_DIRECTION_METADATA_SQL.replace("gtfs.", "pg_temp.");
+        let directions = vec!["d".to_string()];
+        let old_directions = Some(directions.clone());
+        let row_key = |r: &postgres::Row| -> Key { (r.get(0), r.get(1), r.get(2)) };
+        for (priority, excluded, expected) in [
+            (None, vec![], vec![("f","a","p"), ("f","a","q"), ("f","a","z"), ("g","a","p")]),
+            (None, vec!["local".to_string(),"rail".to_string()], vec![("f","a","p"), ("f","a","z")]),
+            (Some(vec!["rail".to_string()]), vec![], vec![("f","a","p"), ("g","a","p")]),
+            (Some(vec![]), vec![], vec![]),
+        ] {
+            let mut original: Vec<Key> = db.query(&old_sql,
+                &[&feeds, &attempts, &ids, &"c", &old_directions, &priority, &excluded, &true])
+                .unwrap().iter().map(row_key).collect();
+            let mut optimized: Vec<Key> = db.query(&new_sql,
+                &[&"c", &directions, &priority, &excluded])
+                .unwrap().iter().map(row_key).filter(|k| wanted.contains(k)).collect();
+            let mut expected: Vec<Key> = expected.into_iter()
+                .map(|(f,a,p)| (f.into(),a.into(),p.into())).collect();
+            original.sort_unstable();
+            optimized.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(optimized, original);
+            assert_eq!(optimized, expected);
+        }
     }
 
     #[test]
