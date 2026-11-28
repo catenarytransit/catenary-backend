@@ -1940,17 +1940,24 @@ async fn fetch_chateau_data(
         let itin_rows_all: Vec<crate::models::ItineraryPatternRow> = load_pattern_batches(
             &filtered_itinerary_ids,
             &query_slots,
-            |itinerary_batch| async {
-                let checkout_started = Instant::now();
-                let mut conn = pool.get().await.unwrap();
-                let sql_started = Instant::now();
-                let result = crate::maple_v2_reader::load_trip_rows(&mut conn, &chateau, &itinerary_batch).await;
-                record_sql_timing(
-                    &sql_timings, request_started, Some(chateau.to_string()),
-                    "paris_terminal_itinerary_rows", itinerary_batch.len(),
-                    checkout_started, sql_started, &result,
-                );
-                result
+            |itinerary_batch| {
+                let pool = &pool;
+                let chateau = &chateau;
+                let sql_timings = &sql_timings;
+                async move {
+                    let checkout_started = Instant::now();
+                    let mut conn = pool.get().await.unwrap();
+                    let sql_started = Instant::now();
+                    let result = crate::maple_v2_reader::load_trip_rows(
+                        &mut conn, chateau, &itinerary_batch,
+                    ).await;
+                    record_sql_timing(
+                        sql_timings, request_started, Some(chateau.to_string()),
+                        "paris_terminal_itinerary_rows", itinerary_batch.len(),
+                        checkout_started, sql_started, &result,
+                    );
+                    result
+                }
             },
         )
         .await

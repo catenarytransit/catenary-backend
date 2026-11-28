@@ -1,7 +1,7 @@
 //! Native Maple Syrup v2 readers. Fetch each packed payload once per selected
 //! stop column / timing variant; decode in Rust, not in compatibility views.
-use crate::models::{ItineraryPatternMeta, ItineraryPatternRow};
-use diesel::{QueryableByName, QueryResult, sql_types::*};
+use crate::models::{ItineraryPatternMeta, ItineraryPatternRow, MapleV2Stop, MapleV2StopColumn, MapleV2StopMajor, MapleV2TimingMapping, MapleV2TripMajor};
+use diesel::{QueryResult, prelude::*, sql_types::*};
 use diesel_async::{AsyncPgConnection, RunQueryDsl};
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -28,19 +28,32 @@ fn invalid(message: &'static str) -> diesel::result::Error {
     )))
 }
 
-#[derive(QueryableByName, Debug)]
-struct Exceptions {
-    #[diesel(sql_type = Array<Integer>)]
-    exception_indices: Vec<i32>,
-    #[diesel(sql_type = Array<Nullable<Integer>>)]
-    exception_arrivals: Vec<Option<i32>>,
-    #[diesel(sql_type = Array<Nullable<Integer>>)]
-    exception_departures: Vec<Option<i32>>,
-    #[diesel(sql_type = Array<Nullable<Integer>>)]
-    exception_interpolated: Vec<Option<i32>>,
+#[derive(Debug)]
+struct Exceptions<'a> {
+    exception_indices: &'a [i32],
+    exception_arrivals: &'a [Option<i32>],
+    exception_departures: &'a [Option<i32>],
+    exception_interpolated: &'a [Option<i32>],
 }
 
-impl Exceptions {
+macro_rules! exceptions_from {
+    ($model:ty) => {
+        impl<'a> From<&'a $model> for Exceptions<'a> {
+            fn from(value: &'a $model) -> Self {
+                Self {
+                    exception_indices: &value.exception_indices,
+                    exception_arrivals: &value.exception_arrivals,
+                    exception_departures: &value.exception_departures,
+                    exception_interpolated: &value.exception_interpolated,
+                }
+            }
+        }
+    };
+}
+exceptions_from!(MapleV2TripMajor);
+exceptions_from!(MapleV2StopMajor);
+
+impl Exceptions<'_> {
     fn times(&self, idx: i32, primary: impl FnOnce() -> QueryResult<i32>) -> QueryResult<Times> {
         if let Ok(pos) = self.exception_indices.binary_search(&idx) {
             let a = self.exception_arrivals.get(pos).ok_or_else(|| invalid("v2 arrival exception"))?;
@@ -93,12 +106,25 @@ struct StopMetadata {
     drop_off_type: i16,
 }
 
-#[derive(Deserialize)]
 struct Stop {
     stop_index: i32,
     stop_id: String,
     gtfs_stop_sequence: u32,
     metadata: StopMetadata,
+}
+
+impl TryFrom<MapleV2Stop> for Stop {
+    type Error = diesel::result::Error;
+
+    fn try_from(stop: MapleV2Stop) -> QueryResult<Self> {
+        Ok(Self {
+            stop_index: stop.stop_index,
+            stop_id: stop.stop_id,
+            gtfs_stop_sequence: u32::try_from(stop.gtfs_stop_sequence)
+                .map_err(|_| invalid("v2 GTFS stop sequence out of range"))?,
+            metadata: from_json(stop.metadata)?,
+        })
+    }
 }
 
 fn make_row(feed: &str, attempt: &str, pattern: &str, chateau: &str, stop: &Stop, times: Times) -> ItineraryPatternRow {
@@ -117,33 +143,6 @@ fn from_json<T: serde::de::DeserializeOwned>(value: serde_json::Value) -> QueryR
     serde_json::from_value(value).map_err(|e| diesel::result::Error::DeserializationError(Box::new(e)))
 }
 
-#[derive(Deserialize)]
-struct Mapping {
-    timing_index: i32,
-    metadata: ItineraryPatternMeta,
-}
-
-#[derive(QueryableByName)]
-struct Column {
-    #[diesel(sql_type = Text)]
-    onestop_feed_id: String,
-    #[diesel(sql_type = Text)]
-    attempt_id: String,
-    #[diesel(sql_type = Jsonb)]
-    stop: serde_json::Value,
-    #[diesel(sql_type = Jsonb)]
-    mappings: serde_json::Value,
-    #[diesel(sql_type = BigInt)]
-    base: i64,
-    #[diesel(sql_type = BigInt)]
-    unit: i64,
-    #[diesel(sql_type = Integer)]
-    bit_width: i32,
-    #[diesel(sql_type = Binary)]
-    payload: Vec<u8>,
-    #[diesel(embed)]
-    exceptions: Exceptions,
-}
 
 // Anchor on indexed stop IDs before touching payloads. Filter metadata and
 // route phase policy inside the lateral mapping lookup. Do not select t.payload
@@ -181,9 +180,7 @@ WITH selected AS MATERIALIZED (
     ) a
     WHERE a.mappings IS NOT NULL
 )
-SELECT s.onestop_feed_id, s.attempt_id, to_jsonb(s) AS stop, m.mappings,
-       c.base, c.unit, c.bit_width, c.payload,
-       c.exception_indices, c.exception_arrivals, c.exception_departures, c.exception_interpolated
+SELECT c.*, s.stop_id, s.gtfs_stop_sequence, s.metadata, m.mappings
 FROM selected s
 JOIN mappings m USING (onestop_feed_id, attempt_id, structure_id)
 JOIN gtfs.maple_v2_stop_major c USING (onestop_feed_id, attempt_id, structure_id, stop_index)
@@ -201,14 +198,16 @@ pub async fn load_v2_stops(
         .bind::<Nullable<Array<Text>>,_>(directions)
         .bind::<Nullable<Array<Text>>,_>(routes)
         .bind::<Array<Text>,_>(excluded_local).bind::<Bool,_>(nearby)
-        .load::<Column>(conn).await?;
+        .load::<MapleV2StopColumn>(conn).await?;
     let mut out = Vec::new();
     for c in columns {
-        let stop: Stop = from_json(c.stop)?;
-        let mappings: Vec<Mapping> = from_json(c.mappings)?;
+        let stop = Stop::try_from(c.stop)?;
+        let mappings: Vec<MapleV2TimingMapping> = from_json(c.mappings)?;
+        let timing = c.timing;
+        let exceptions = Exceptions::from(&timing);
         for m in mappings {
-            let times = c.exceptions.times(m.timing_index, || column(&c.payload, c.base, c.unit, c.bit_width, m.timing_index))?;
-            let row = make_row(&c.onestop_feed_id, &c.attempt_id, &m.metadata.itinerary_pattern_id, chateau, &stop, times);
+            let times = exceptions.times(m.timing_index, || column(&timing.payload, timing.base, timing.unit, timing.bit_width, m.timing_index))?;
+            let row = make_row(&timing.onestop_feed_id, &timing.attempt_id, &m.metadata.itinerary_pattern_id, chateau, &stop, times);
             out.push((row, m.metadata));
         }
     }
@@ -219,43 +218,18 @@ pub async fn load_stop_rows(
     conn: &mut AsyncPgConnection, chateau: &str, patterns: &[String], stops: &[String],
 ) -> QueryResult<Vec<ItineraryPatternRow>> {
     if patterns.is_empty() || stops.is_empty() { return Ok(Vec::new()); }
-    let legacy = diesel::sql_query("SELECT * FROM gtfs.itinerary_pattern WHERE chateau=$1 AND itinerary_pattern_id=ANY($2) AND stop_id=ANY($3)")
-        .bind::<Text,_>(chateau).bind::<Array<Text>,_>(patterns).bind::<Array<Text>,_>(stops)
+    use crate::schema::gtfs::itinerary_pattern as ip;
+    let legacy = ip::table
+        .filter(ip::chateau.eq(chateau))
+        .filter(ip::itinerary_pattern_id.eq_any(patterns))
+        .filter(ip::stop_id.eq_any(stops))
+        .select(ItineraryPatternRow::as_select())
         .load::<ItineraryPatternRow>(conn).await?;
     let native = load_v2_stops(conn, chateau, stops, Some(patterns), None, None, &[], false)
         .await?.into_iter().map(|(row, _)| row).collect();
     Ok(merge(legacy, native, |r| r))
 }
 
-#[derive(QueryableByName)]
-struct Trip {
-    #[diesel(sql_type = Text)]
-    onestop_feed_id: String,
-    #[diesel(sql_type = Text)]
-    attempt_id: String,
-    #[diesel(sql_type = Text)]
-    itinerary_pattern_id: String,
-    #[diesel(sql_type = Text)]
-    structure_id: String,
-    #[diesel(sql_type = Integer)]
-    byte_width: i32,
-    #[diesel(sql_type = Binary)]
-    payload: Vec<u8>,
-    #[diesel(embed)]
-    exceptions: Exceptions,
-}
-
-#[derive(QueryableByName)]
-struct Structure {
-    #[diesel(sql_type = Text)]
-    onestop_feed_id: String,
-    #[diesel(sql_type = Text)]
-    attempt_id: String,
-    #[diesel(sql_type = Text)]
-    structure_id: String,
-    #[diesel(sql_type = Jsonb)]
-    stops: serde_json::Value,
-}
 
 const TRIP_SQL: &str = r#"
 SELECT t.* FROM gtfs.itinerary_pattern_meta m
@@ -278,38 +252,49 @@ pub async fn load_trip_rows_scoped(
     feed: Option<&str>, attempt: Option<&str>,
 ) -> QueryResult<Vec<ItineraryPatternRow>> {
     if patterns.is_empty() { return Ok(Vec::new()); }
-    let legacy = diesel::sql_query("SELECT * FROM gtfs.itinerary_pattern WHERE chateau=$1 AND itinerary_pattern_id=ANY($2) AND ($3::text IS NULL OR onestop_feed_id=$3) AND ($4::text IS NULL OR attempt_id=$4)")
-        .bind::<Text,_>(chateau).bind::<Array<Text>,_>(patterns)
-        .bind::<Nullable<Text>,_>(feed).bind::<Nullable<Text>,_>(attempt)
-        .load::<ItineraryPatternRow>(conn).await?;
+    use crate::schema::gtfs::itinerary_pattern as ip;
+    let mut legacy_query = ip::table
+        .filter(ip::chateau.eq(chateau))
+        .filter(ip::itinerary_pattern_id.eq_any(patterns))
+        .select(ItineraryPatternRow::as_select())
+        .into_boxed::<diesel::pg::Pg>();
+    if let Some(feed) = feed {
+        legacy_query = legacy_query.filter(ip::onestop_feed_id.eq(feed));
+    }
+    if let Some(attempt) = attempt {
+        legacy_query = legacy_query.filter(ip::attempt_id.eq(attempt));
+    }
+    let legacy = legacy_query.load::<ItineraryPatternRow>(conn).await?;
     let trips = diesel::sql_query(TRIP_SQL).bind::<Text,_>(chateau).bind::<Array<Text>,_>(patterns)
         .bind::<Nullable<Text>,_>(feed).bind::<Nullable<Text>,_>(attempt)
-        .load::<Trip>(conn).await?;
+        .load::<MapleV2TripMajor>(conn).await?;
     let keys: HashSet<_> = trips.iter().map(|t| (t.onestop_feed_id.clone(),t.attempt_id.clone(),t.structure_id.clone())).collect();
     let (mut feeds, mut attempts, mut structures) = (Vec::new(), Vec::new(), Vec::new());
     for (f,a,s) in keys { feeds.push(f); attempts.push(a); structures.push(s); }
-    let mut decoded = std::collections::HashMap::new();
+    let mut decoded: std::collections::HashMap<Key, Vec<Stop>> = std::collections::HashMap::new();
     if !structures.is_empty() {
         let stops = diesel::sql_query(r#"
-            SELECT k.onestop_feed_id,k.attempt_id,k.structure_id,a.stops
+            SELECT s.*
             FROM unnest($1::text[],$2::text[],$3::text[]) AS k(onestop_feed_id,attempt_id,structure_id)
             CROSS JOIN LATERAL (
-                SELECT jsonb_agg(to_jsonb(s) ORDER BY s.stop_index) AS stops
-                FROM gtfs.maple_v2_stop s WHERE s.onestop_feed_id=k.onestop_feed_id
+                SELECT s.* FROM gtfs.maple_v2_stop s WHERE s.onestop_feed_id=k.onestop_feed_id
                   AND s.attempt_id=k.attempt_id AND s.structure_id=k.structure_id
-            ) a WHERE a.stops IS NOT NULL
+                OFFSET 0
+            ) s
         "#).bind::<Array<Text>,_>(&feeds).bind::<Array<Text>,_>(&attempts).bind::<Array<Text>,_>(&structures)
-            .load::<Structure>(conn).await?;
+            .load::<MapleV2Stop>(conn).await?;
         for s in stops {
-            decoded.insert((s.onestop_feed_id,s.attempt_id,s.structure_id),from_json::<Vec<Stop>>(s.stops)?);
+            let key = (s.onestop_feed_id.clone(), s.attempt_id.clone(), s.structure_id.clone());
+            decoded.entry(key).or_default().push(Stop::try_from(s)?);
         }
     }
     let mut native = Vec::new();
     for t in trips {
         let stops = decoded.get(&(t.onestop_feed_id.clone(),t.attempt_id.clone(),t.structure_id.clone()))
             .ok_or_else(|| invalid("v2 missing structure"))?;
+        let exceptions = Exceptions::from(&t);
         for stop in stops {
-            let times = t.exceptions.times(stop.stop_index, || fixed(&t.payload,t.byte_width,stop.stop_index))?;
+            let times = exceptions.times(stop.stop_index, || fixed(&t.payload,t.byte_width,stop.stop_index))?;
             native.push(make_row(&t.onestop_feed_id,&t.attempt_id,&t.itinerary_pattern_id,chateau,stop,times));
         }
     }
@@ -338,8 +323,8 @@ mod tests {
     }
     #[test]
     fn nullable_signed_and_interpolated_exceptions() {
-        let e = Exceptions { exception_indices: vec![1,3], exception_arrivals: vec![None,Some(-8)],
-            exception_departures: vec![None,Some(7)], exception_interpolated: vec![Some(4),None] };
+        let e = Exceptions { exception_indices: &[1,3], exception_arrivals: &[None,Some(-8)],
+            exception_departures: &[None,Some(7)], exception_interpolated: &[Some(4),None] };
         assert_eq!(e.times(1, || panic!("exception must bypass primary")).unwrap(),(None,None,Some(4)));
         assert_eq!(e.times(3, || panic!("exception must bypass primary")).unwrap(),(Some(-8),Some(7),None));
         assert_eq!(e.times(2, || Ok(42)).unwrap(),(Some(42),Some(42),None));
